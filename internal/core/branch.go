@@ -320,23 +320,6 @@ const CodexZeusModel = "gpt-6-astra"
 // neighbours it is an exact model id, never the `fable` alias.
 const IrisModel = "claude-fable-5-1"
 
-// KronosModel is the tier the orchestrator agent runs on. Kronos is the pane
-// that reads an inbox of board transitions and carl's instructions (typed
-// through the board's kronos panel) and decides what to do about each one —
-// steer a cell, answer a question, receipt back — which is IrisModel's shape
-// rather than ZeusModel's: it holds no worktree, delegates nothing, and its
-// latency is how long carl waits for a reply on the board.
-// Its own constant rather than an alias of either neighbour for the reason
-// IrisModel gives above: the three answer different questions — how fast a
-// cell lead must turn around, what tier a Slack triage loop needs, what tier
-// steers the whole board — and pinning them separately is what lets any one of
-// them move without dragging the others. Exact model id, never the `fable`
-// alias, like all three of its neighbours. Unlike ZeusModel there is no
-// resolver in front of it: kronos belongs to no job, so no `model:` field
-// exists anywhere that could override it, and jobs.kronosSpawnCommand puts this
-// constant on the command line directly.
-const KronosModel = "claude-fable-5-1"
-
 // ThreadModels is the menu a SIDE THREAD may be branched on, alias → exact
 // model id. It is the one place in the binary where a tier alias is RESOLVED
 // to an id: the board's branch overlay sends one of these four keys and

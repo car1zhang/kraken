@@ -21,8 +21,6 @@ import Observation
 ///                                     stays `.graph`: only the tab's visible
 ///                                     label renamed, so links in shipped
 ///                                     builds keep working.
-///   kraken://kronos                → Kronos tab (the orchestrator's
-///                                     conversation + context meter)
 ///   kraken://job/<slug>            → Board tab, open that job's detail
 ///                                     (waits for the board to load if needed)
 ///   kraken://job/<slug>/answer     → …and open the answer sheet
@@ -38,7 +36,7 @@ import Observation
 @Observable
 final class AppRouter {
     enum Tab: Hashable {
-        case board, kronos, sessions, graph, settings
+        case board, sessions, graph, settings
     }
 
     var selectedTab: Tab = .board
@@ -87,8 +85,6 @@ final class AppRouter {
             pendingDream = true
         case "graph":
             selectedTab = .graph
-        case "kronos":
-            selectedTab = .kronos
         case "job":
             selectedTab = .board
             if let slug = components.first, !slug.isEmpty {

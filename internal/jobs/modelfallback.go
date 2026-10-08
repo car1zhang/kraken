@@ -12,7 +12,7 @@ import (
 )
 
 // The Fable fallback is the limit rescue's cheapest arm: when a Fable-tier
-// agent (a cell's zeus, kronos, iris) stops on the account's FABLE window
+// agent (a cell's zeus, iris) stops on the account's FABLE window
 // while the account's session, weekly and Opus windows still have room,
 // nothing is wrong with the account — only with the tier. Claude Code's own
 // banner names the remedy ("You've reached your Fable limit. Run
@@ -28,8 +28,8 @@ import (
 // nowhere to go: the rotation candidate gate excludes any slot at Fable ≥ 80%,
 // and Fable is a weekly window that tends to drain across the whole pool
 // together (measured 2026-09-30: every usable slot at Fable 100% with session
-// and weekly well short of their caps, and kronos parked-no-target on this
-// exact banner).
+// and weekly well short of their caps, and a standing agent parked-no-target
+// on this exact banner).
 //
 // It is not an ACCOUNT decision, so the manual rotation pin does not gate it:
 // the pin protects the machine's login from being moved, and this moves no

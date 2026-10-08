@@ -361,7 +361,6 @@ describe("the view tabs", () => {
     const tabs = [...container.querySelectorAll(".viewtab")];
     expect(tabs.map((t) => t.textContent)).toEqual([
       "BOARD",
-      "KRONOS",
       // the graph view's tab reads MEMORY — a label change only, everything
       // internal (the view id, the `graph-` classes, /api/graph) keeps `graph`
       "MEMORY",
@@ -372,7 +371,7 @@ describe("the view tabs", () => {
       "DREAM",
     );
     await userEvent.click(tabs[1]!);
-    expect(onNavigate).toHaveBeenCalledWith("kronos");
+    expect(onNavigate).toHaveBeenCalledWith("memory");
   });
 });
 

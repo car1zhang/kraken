@@ -687,12 +687,6 @@ func (d *daemonState) tick(mirror bool) (int, error) {
 			if d.Notified[key] == 0 && !anyCellSessionAlive(j) {
 				if !mirror {
 					notify("kraken ⚠ "+j.Slug, "cell session is gone — reactivate to resume; done/kill discard the worktree")
-					// kronos' inbox (orch.go), at the same transition and
-					// under the same Notified key: one row per streak, never
-					// one per tick. Inside the !mirror arm with the
-					// notification for the same reason — a mirror board
-					// neither notifies nor drives the real kronos.
-					enqueueOrchNotice(orchKindCellGone, j.Slug, "cell session is gone — reactivate to resume; done/kill discard the worktree")
 				}
 				dlogEvent("error", "cell-gone", "%s: cell %s is gone (was %s)", j.Slug, CellSession(j), j.State)
 				d.Notified[key] = now.Unix()
@@ -739,11 +733,6 @@ func (d *daemonState) tick(mirror bool) (int, error) {
 						suffix = " — will auto-retry; also on the board"
 					}
 					notify("kraken ⚠ "+j.Slug, reason+suffix)
-					// kronos' inbox, under the health key's own dedup: a
-					// STANDING stall keeps the same reason at the tail of the
-					// transcript indefinitely, so this fires on the streak
-					// rather than on the tick.
-					enqueueOrchNotice(orchKindCellUnhealth, j.Slug, reason+suffix)
 					d.Notified[key] = now.Unix()
 					dlogEvent("error", "cell-unhealthy", "unhealthy %s: %s", j.Slug, reason)
 				}
@@ -912,11 +901,6 @@ func (d *daemonState) tick(mirror bool) (int, error) {
 				if d.Notified[key] == 0 {
 					if !mirror {
 						notify("kraken ⏸ "+j.Slug, "blocked — see the board")
-						// kronos' inbox, under the same key — which is
-						// deleted whenever the derived state reads working
-						// again, so a job that blocks, unblocks and blocks
-						// again enqueues once per block rather than once ever.
-						enqueueOrchNotice(orchKindJobBlocked, j.Slug, "blocked — the cell is waiting; the board carries the question")
 					}
 					d.Notified[key] = now.Unix()
 				}
@@ -1002,14 +986,14 @@ func (d *daemonState) tick(mirror bool) (int, error) {
 		for _, j := range jobs {
 			d.limitRescue(j, all, live)
 		}
-		// the same two passes for the STANDING agents — kronos and iris, the
-		// long-lived claudes that belong to no job (standingrescue.go). They
-		// sit in this block for its two reasons exactly: a rotate makes a
-		// machine-wide credential change, and a resume destroys and recreates a
-		// live pane's process. They consume the snapshots this tick already
-		// holds rather than sweeping again, like every pass above, and each row
-		// is gated on its own feature switch — a machine that runs neither
-		// agent pays one stat and one config read.
+		// the same two passes for the STANDING agent — iris, the long-lived
+		// claude that belongs to no job (standingrescue.go). They sit in this
+		// block for its two reasons exactly: a rotate makes a machine-wide
+		// credential change, and a resume destroys and recreates a live
+		// pane's process. They consume the snapshots this tick already holds
+		// rather than sweeping again, like every pass above, and each row is
+		// gated on its own feature switch — a machine that never configured
+		// iris pays one Slack config read.
 		//
 		// Health first, then rescue, so a limit the health pass records this
 		// tick is acted on this tick rather than one interval later. Both are
@@ -1096,34 +1080,6 @@ func (d *daemonState) tick(mirror bool) (int, error) {
 		}
 		slackPass(ActiveStore(), all, now)
 		deliverSlack(ActiveStore(), all)
-	}
-
-	// Orchestrator (kronos.go, orch.go, kronosctx.go): keep kronos alive
-	// while the feature is on, bump it when inbox rows are waiting, and warn
-	// carl before his orchestrator's context fills. Each takes a snapshot
-	// THIS tick already holds — EnsureKronos the `live` session map,
-	// deliverOrch the discovered `all` peers — for the reason the Slack block
-	// above states: a discovery sweep costs a `ps` plus a `tmux list-panes`
-	// and one per tick is the budget.
-	//
-	// Skipped under mirror for both of that block's reasons at once (real
-	// store writes, and typing into a pane belonging to the live deployment),
-	// and gated on KronosEnabled() so a machine that never opted in pays one
-	// stat. Each pass re-checks that gate itself — the gate here is the cheap
-	// early exit, not the guarantee.
-	if !mirror && KronosEnabled() {
-		if err := EnsureKronos(ActiveStore(), live); err != nil {
-			// Deduped like irisfail: a spawn that fails because tmux or claude
-			// is unavailable will fail identically four times a minute.
-			if d.Notified["kronosfail"] == 0 {
-				dlogErr("kronos: %v", err)
-				d.Notified["kronosfail"] = now.Unix()
-			}
-		} else {
-			delete(d.Notified, "kronosfail")
-		}
-		deliverOrch(ActiveStore(), all)
-		ctxPass(ActiveStore())
 	}
 
 	// linear pass (self-paced internally — see LinearPass): poll Linear for
@@ -1235,11 +1191,6 @@ func (d *daemonState) startCreatedJob(j *Job) bool {
 	if err := SubmitJob(j); err != nil {
 		dlogEvent("error", "start-failed", "start %s failed: %v", j.Slug, err)
 		notify("kraken ⚠ "+j.Slug, "created but could not start: "+err.Error())
-		// kronos' inbox. No dedup key: this fires once per job the tick
-		// CREATED (dream, graph), nothing retries it, and the job stays draft
-		// — so the transition happens at most once for that job ever. Its one
-		// caller sits inside the tick's !mirror block.
-		enqueueOrchNotice(orchKindStartFailed, j.Slug, "created but could not start: "+err.Error())
 		return false
 	}
 	dlogEvent("info", "cell-start", "started %s (cell %s)", j.Slug, CellSession(j))
@@ -1465,17 +1416,11 @@ func (d *daemonState) trackPRs(j *Job, all []*core.Peer, live map[string]bool) {
 			msg = "PR merged — job already accepted; recorded"
 		}
 		notify("kraken ✓ "+j.Slug, msg)
-		// kronos' inbox. No Notified key here because the transition itself is
-		// the dedup: newlyMerged is what reconcilePRs reports as a state
-		// CHANGE, and writeJobPRs has already committed the new state above,
-		// so a PR is newly-merged exactly once ever. trackPRs runs only inside
-		// the daemon's !mirror block, so the mirror gate is already upstream.
-		enqueueOrchNotice(orchKindPRMerged, j.Slug, msg+" — "+url)
-		// zeus' pane. Carl and kronos both hear about the merge above; the
+		// zeus' pane. Carl hears about the merge above; the
 		// one party that did not was the agent still working the branch,
 		// which has no other way to learn its PR closed — it keeps pushing
 		// to the dead branch, re-running its checks and reporting it as
-		// awaiting review. Best-effort like the two notices beside it: the
+		// awaiting review. Best-effort like the notification beside it: the
 		// merge is already on disk, there is no per-PR watermark to retry
 		// from, and a cell with no live zeus (torn down, or the job idle)
 		// has nobody to tell. The one send that fails deterministically is

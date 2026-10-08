@@ -2159,92 +2159,9 @@ Errors: 405 (non-GET), 500 (no store wired, or the counts query failed). A GET i
 
 ---
 
-## kronos
+## Agent-side board and cell verbs
 
-kronos' five routes (api/orch.go). Their client is **kronos** — a long-running claude outside any cell, iris' sibling — through the `kraken orch inbox|ack`, `kraken board get` and `kraken cell steer|submit|answer` verbs, plus two hooks its own pane installs (`kraken ctx-hook` on the statusline, `kraken rearm-hook` on PostCompact). iOS consumes only `GET /api/kronos` (the KRONOS tab's `KronosStatus` in Models.swift via `APIClient.kronosStatus`); the web UI consumes `GET /api/kronos` (its KRONOS view and board dock) and `GET /api/orch/inbox` (the KRONOS view renders the unacked items beside the conversation) — the other three routes have no UI client, and the conversation itself rides the existing peers routes on both platforms. (An iMessage bridge — a sixth route, an `imsg` row kind and an `imsg_configured` key — shipped briefly in this same unmerged change and was removed whole at the manual gate.)
-
-The cell verbs are deliberately **not** routes of their own: `kraken cell steer|submit|answer` post to the board's existing `/api/steer`, `/api/queue`, `/api/question` and `/api/doc-question`, so every guard carl's own clicks go through applies to kronos unchanged and there is no second, weaker door onto a live cell. Each logs an audit line through `/api/logevent` with `src: "kronos"` on success.
-
-### `GET /api/orch/inbox`
-
-The **unacked** orchestrator items, in `id` order (which is arrival order) — one row per transition the daemon enqueued (`job-blocked`, `cell-gone`, `cell-unhealthy`, `pr-merged`, `start-failed`). This is kronos' working set: an item stays here until kronos acks it, so a crash, a compaction or a respawn loses nothing — the row is the durable state, kronos' context is not.
-
-Unacked rather than undelivered: an item whose bump into kronos' pane failed to send is still kronos' to handle, and a read keyed on delivery would make it unreachable from the one surface that exists to reach it.
-
-The response is **capped at the oldest 100 rows** (`orchInboxMax`, orch.go). The oldest end because the read is oldest-first and the oldest item has waited longest; capped at all because this body lands whole in kronos' context as one tool result — a backlog built up while kronos was down would blow the context of the one agent whose context this same feature exists to meter. Truncation is recoverable (the rows are durable; the next call returns the next hundred as acks retire these), a blown context is not.
-
-Response: `{"items": [webOrchItem], "total": number}`. The array is always present and never null. `total` is the FULL unacked count, **not** `items.length` — it is what makes the cap visible rather than silent, so a kronos holding 100 of 900 rows can say so instead of believing it has seen the inbox.
-
-`webOrchItem` (orch.go):
-
-| key | type | optionality |
-|---|---|---|
-| `id` | number | always |
-| `kind` | string | always — `job-blocked`, `cell-gone`, `cell-unhealthy`, `pr-merged` or `start-failed` |
-| `slug` | string | always (may be empty — a row can belong to no job) |
-| `summary` | string | always |
-| `seen_at` | number | always (unix millis) |
-
-The row's `delivered_at`, `acked_at` and `disposition` columns are deliberately absent — kraken's delivery bookkeeping, not the item, exactly as on `/api/slack/inbox`.
-
-Errors: 405 (non-GET), 500 (no store wired, or the read failed). A GET is a read, so it stays reachable under `--mirror`. **Additive, no contract bump.**
-
-### `POST /api/orch/ack`
-
-kronos retiring a batch of items, with one line saying what it did with them. This is the only thing that removes an item from the inbox read above — explicit rather than implied by the read, so an item kronos looked at and never resolved comes back on the next call.
-
-Request: `{"ids": [number], "disposition": string}`.
-
-- `ids` are inbox row ids. The store call is **all-or-nothing**: an unknown id, or one already acked, fails the whole batch and applies nothing.
-- `disposition` is a free string carrying what happened (`steered:<slug>`, `answered:<slug>`, `ignored:<reason>`). It is one-lined and truncated to **200 runes** server-side rather than refused, the same treatment `/api/slack/ack`'s disposition gets. An EMPTY one (after trim) IS refused: "acked, reason unknown" is indistinguishable from a bug that acks everything.
-- The body is decoded with **unknown fields rejected**: `ids`, `disposition`, and nothing else.
-
-Response: `{"ok": true}`.
-
-Errors: 405 (non-POST), 400 (bad json; an unrecognized field; empty or absent `ids`; empty `disposition`), 409 carrying the store's own sentence — which names the offending id — for an unknown or already-acked id, 413 (body over 1 MiB), 500 (no store wired). Gated under `--mirror` with the standard plain-text 403. **Additive, no contract bump.**
-
-### `POST /api/orch/context` — localhost-only (not called by the iOS app or web UI; not modeled in Models.swift/APIClient.swift)
-
-kronos' statusline hook (`kraken ctx-hook`) reporting how full its own context window is, once per statusline render. A WRITE despite reading like telemetry: the report is persisted, and the daemon's ctx pass fires carl a warning off its upward crossings of 50/75/90%.
-
-Request: `{"session_id": string, "used_percentage": number, "context_window_size": number}`.
-
-- `used_percentage` is a **pointer** server-side, and all three keys are required. An absent percentage is refused rather than read as `0`: zero is in range, so a body that merely failed to carry the number would record a full window as an empty one at exactly the moment the report went missing — the same coercion `/api/job/load` refuses for `unblock`/`scope`. The hook itself never sends one, skipping the POST entirely when the statusline reports null.
-- The body is decoded with **unknown fields rejected**.
-
-Response: `{"ok": true}`.
-
-Errors: 405 (non-POST), 400 (bad json; an unrecognized field; blank `session_id`; absent or out-of-range `used_percentage`), 413, 500 (no store wired, or the write failed). Gated under `--mirror`. **Additive, no contract bump.**
-
-### `POST /api/graph/recall-rearm` — localhost-only (not called by the iOS app or web UI; not modeled in Models.swift/APIClient.swift)
-
-kronos' PostCompact hook (`kraken rearm-hook`) dropping the session's `kg_recall` marks, so the facts its compacted-away context used to hold can be delivered again.
-
-Request: `{"session_id": string}`. Response: `{"cleared": number}` — a count rather than a bare ack, since the hook has no other way to learn whether the compaction re-armed anything, and `0` is a real answer (a session that had been told nothing yet).
-
-The **403** is the whole safety property of the route: `kg_recall` is per-session state for every conversation in the binary — every cell's zeus, every teammate — so a session id accepted freely would let any caller wipe another conversation's delivery marks and burn its once-per-fact budget over again. The server answers only for the session it has recorded as kronos'; "not that session" and "no kronos recorded at all" are one refusal.
-
-Errors: 405 (non-POST), 400 (bad json; an unrecognized field; blank `session_id`), 403 (session mismatch, or no kronos recorded), 413, 500 (no store wired). Gated under `--mirror`. **Additive, no contract bump.**
-
-### `GET /api/kronos`
-
-Whether the feature is on, whether there is a kronos right now and in which pane, which session it is, and what it last said about its own context — the board's KRONOS view's whole status read, and the one place to look when "kronos said nothing all day" needs to be told apart from "nothing arrived".
-
-Response (`webKronos`, orch.go):
-
-| key | type | optionality |
-|---|---|---|
-| `enabled` | bool | always — `~/.kraken/kronos.env` exists |
-| `live` | bool | always — a kronos pane is up right now |
-| `session_id` | string | always (empty until kronos has ever been spawned) |
-| `pane` | string | always (empty when `live` is false) |
-| `spawned_at` | number | always (unix millis; `0` when never spawned) |
-| `context` | object | **omitted** when kronos has never reported its context |
-
-- `live` and `pane` come from the discovery snapshot, not from the recorded session: a session id says only that kronos was spawned once, and a resumable id outlives the process every time. The peer is resolved by the delivery pass' own finder (`jobs.FindKronos`), so the pane this route names is by construction the pane a bump would reach.
-- `context` is `{"pct": number, "window": number, "at": number}` — the last `/api/orch/context` report. The **absence of the key** is the wire's only spelling of "never reported"; a zeroed object would instead claim a report OF zero, which is a freshly compacted window and the opposite reading. It carries no `session_id`: the top level already names the session, and two ids in one payload invite a client to render a mismatch this route has no opinion about.
-
-Errors: 405 (non-GET), 500 (no store wired). A GET is a read, so it stays reachable under `--mirror`. **Additive, no contract bump.**
+`kraken board get [slug]` and `kraken cell steer|submit|answer <slug>` are agent-side CLI verbs with no routes of their own: `board get` reads `GET /api/board`, and the cell verbs post to the board's existing `/api/steer`, `/api/queue`, `/api/question` and `/api/doc-question`, so every guard carl's own clicks go through applies to an agent unchanged and there is no second, weaker door onto a live cell. Each cell verb logs an audit line through `/api/logevent` with `src: "cell"` on success. (They were introduced as the kronos orchestrator's control surface; kronos and its five routes under `/api/orch/*`, `/api/graph/recall-rearm` and `/api/kronos` were removed in job 549, and the verbs were kept as general agent-side verbs.)
 
 ---
 
@@ -2403,10 +2320,11 @@ The endpoint jobs/limithook.go's `kraken limit-hook` POSTs to when a claude
 dies on a usage limit — a cell's (the `StopFailure` hook, matcher
 `rate_limit`, installed into the cell's own `.claude/settings.json` beside
 the `PostToolUse` pr-hook entry, naming its job by `slug`) or a STANDING
-agent's (`kraken limit-hook --agent kronos`, the same hook installed into
-kronos' settings, naming its fixed agent id by `agent`; iris is on the
-accepted list too but has no hook — its hits arrive through the daemon's
-transcript arm). The hook process never opens kraken.db; it reports, and
+agent's (`kraken limit-hook --agent iris`, naming its fixed agent id by
+`agent`; iris is the only id on the accepted list since the kronos
+orchestrator was removed, and it has no hook today — its hits arrive
+through the daemon's transcript arm, so the arm is the door a future hook
+would use). The hook process never opens kraken.db; it reports, and
 `kraken serve` records, the same split `/api/pr-attach` above draws. The
 recorded hit is what the daemon's rescue passes read to decide whether to
 swap the main login to a healthier pool account.
@@ -2416,7 +2334,7 @@ a usage limit. It is the rescue, not the observation, that a mirror never
 performs, and that gate lives in the daemon's own `!mirror` block.
 
 Request (`limitHitReq`): exactly one of `slug` (string — a job's slug) or
-`agent` (string — a standing agent id from the closed list `kronos`, `iris`);
+`agent` (string — a standing agent id from the closed list, today only `iris`);
 both set or neither set is refused. Plus `error` (string, required
 — Claude Code's error-enum value verbatim, e.g. `rate_limit`), `details`
 (string, optional — the failure's message text; one-lined and capped at 200
@@ -2438,7 +2356,7 @@ hit with no time window (resolution, not time, is the event boundary — the
 old 2-minute window is gone), and a resolved hit starts a fresh record.
 
 Errors: 400 (bad JSON; neither or both of `slug`/`agent`; an `agent` outside
-the closed list — the body names the refused id; missing `error`; **no such
+the closed list — the body names the refused id and the accepted ids; missing `error`; **no such
 job** on the slug form), 405 (non-POST), 500 (store write failure).
 
 The unknown-slug 400 is where this route deliberately differs from

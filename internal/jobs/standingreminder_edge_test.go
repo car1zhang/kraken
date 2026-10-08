@@ -1,9 +1,8 @@
 package jobs
 
 // Edge tests for contract slice 3, "standing-agent reminder line": the
-// `## Your pane text` section appended at the END of kronosBrief() (after
-// `## When in doubt, escalate`) and of irisBrief() (after `## Credentials in
-// messages`), plus kronos' unchanged 16000-byte size cap.
+// `## Your pane text` section appended at the END of irisBrief() (after
+// `## Credentials in messages`).
 
 import (
 	"strings"
@@ -54,42 +53,12 @@ func edgeReminderCheck(t *testing.T, name, brief, after string) {
 	}
 }
 
-// TestEdgeKronosReminderSectionIsLastAfterEscalate pins kronos' section shape.
-func TestEdgeKronosReminderSectionIsLastAfterEscalate(t *testing.T) {
-	edgeKronosEnv(t)
-	edgeReminderCheck(t, "kronosBrief", kronosBrief(), "## When in doubt, escalate")
-}
-
 // TestEdgeIrisReminderSectionIsLastAfterCredentials pins iris' section shape.
 // irisBrief reads no environment, but HOME is sandboxed anyway so a regression
 // that makes it read one can never touch the real ~/.kraken.
 func TestEdgeIrisReminderSectionIsLastAfterCredentials(t *testing.T) {
 	useTestStore(t)
 	edgeReminderCheck(t, "irisBrief", irisBrief(), "## Credentials in messages")
-}
-
-// TestEdgeReminderSectionIdenticalLiteralsInBoth: the two briefs carry the
-// same four literals verbatim — case and punctuation included — so a reword
-// in one standing agent cannot drift from the other unnoticed.
-func TestEdgeReminderSectionIdenticalLiteralsInBoth(t *testing.T) {
-	edgeKronosEnv(t)
-	briefs := map[string]string{"kronosBrief": kronosBrief(), "irisBrief": irisBrief()}
-	for name, b := range briefs {
-		for _, lit := range append([]string{edgeReminderHeading}, edgeReminderLiterals...) {
-			if !strings.Contains(b, lit) {
-				t.Errorf("%s lacks verbatim %q", name, lit)
-			}
-		}
-	}
-}
-
-// TestEdgeKronosReminderBriefUnderSizeCap: appending the section must keep
-// kronos' brief within the 16000-byte cap.
-func TestEdgeKronosReminderBriefUnderSizeCap(t *testing.T) {
-	edgeKronosEnv(t)
-	if n := len(kronosBrief()); n > 16000 {
-		t.Errorf("len(kronosBrief()) = %d, want <= 16000", n)
-	}
 }
 
 // TestEdgeIrisReminderKeepsPreexistingObligations: the pre-existing iris

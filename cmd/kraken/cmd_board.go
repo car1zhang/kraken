@@ -8,12 +8,12 @@ import (
 	"kraken/internal/util"
 )
 
-// cmd_board.go — `k board get [slug]`: kronos' read of the job board,
+// cmd_board.go — `k board get [slug]`: an agent-side read of the job board,
 // proxying to kraken serve's GET /api/board.
 //
-// It is the verb kronos answers "what is the state of everything?" with, and
-// with a slug "what is the state of THIS?". Both print the server's own JSON,
-// so kronos reads exactly the object the web board and the phone render —
+// It is the verb an agent answers "what is the state of everything?" with,
+// and with a slug "what is the state of THIS?". Both print the server's own
+// JSON, so the caller reads exactly the object the web board and the phone render —
 // there is no second, thinner board shape maintained here that could drift
 // from the one everything else agrees on.
 //
@@ -76,7 +76,7 @@ func runBoardGet(args []string) ([]byte, error) {
 // It decodes only as far as it must — the "jobs" array as raw elements, then
 // each element's "slug" — so every key of the job it returns is untouched,
 // including ones this binary has never heard of. An unknown slug is an ERROR
-// naming it rather than an empty print: kronos asks about a job because it
+// naming it rather than an empty print: a caller asks about a job because it
 // intends to act on it, and silence would read as "the job exists and has
 // nothing to say".
 func selectBoardJob(body []byte, slug string) ([]byte, error) {

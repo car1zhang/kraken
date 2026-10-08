@@ -15,7 +15,8 @@ import (
 // the recall block's re-arm on a link change.
 //
 // Written from the contract text alone. The working-tree versions of
-// internal/jobs/{goalctx,recall,kronos}.go were never read; every piece of
+// internal/jobs/{goalctx,recall}.go (and the since-removed orchestrator's
+// file) were never read; every piece of
 // context here is PRE-EXISTING package state at the base commit (HEAD =
 // 66eb71a) — graphctx_test.go's storeForGraph/withFacts, the prior round's
 // goalctx_contract_test.go and goalrecall_pin_test.go, and the three

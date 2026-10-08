@@ -1414,7 +1414,7 @@ func limitRescueApply(hit LimitHit, action limitRescueAction, outcome, toEmail s
 			// Two success words for one arm, split by OWNER: "rebound" is the
 			// cell path (rescueLimitedCell moved one job's binding), "swapped"
 			// is the standing path (rescueSwap moved the main login for
-			// kronos/iris). The record treats them identically — the account
+			// iris). The record treats them identically — the account
 			// this owner bills has moved, the resume is owed.
 			hit.SwappedAt = now.Unix()
 			hit.SwappedTo = toEmail

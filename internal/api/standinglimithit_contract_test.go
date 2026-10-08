@@ -82,22 +82,23 @@ func contractStandingLimitHitStored(t *testing.T, agentID string) jobs.LimitHit 
 
 // TestContractStandingLimitHitAgentFormRecords is the happy path: "A valid
 // agent body records via the keyed path under limit_hit:<agent> and answers
-// 200." Registered nowhere or keyed wrongly, kronos' StopFailure hook posts
-// into the void and the standing rescue never fires — with nothing anywhere
-// reporting a problem, because the hook is contractually silent.
+// 200." Registered nowhere or keyed wrongly, a `kraken limit-hook --agent`
+// delivery posts into the void and the standing rescue never fires — with
+// nothing anywhere reporting a problem, because the hook is contractually
+// silent.
 func TestContractStandingLimitHitAgentFormRecords(t *testing.T) {
 	useTestStore(t)
 	mux := contractStandingLimitHitMux(t)
 
 	rec := contractStandingLimitHitPost(t, mux,
-		contractStandingLimitHitAgentBody("kronos", "rate_limit", "You've hit your session limit", "kronos-sess", "sub-7"))
+		contractStandingLimitHitAgentBody("iris", "rate_limit", "You've hit your session limit", "iris-sess", "sub-7"))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200; body %s", rec.Code, rec.Body.String())
 	}
 
-	hit := contractStandingLimitHitStored(t, "kronos")
+	hit := contractStandingLimitHitStored(t, "iris")
 	if hit.At == 0 {
-		t.Fatal("nothing recorded under limit_hit:kronos")
+		t.Fatal("nothing recorded under limit_hit:iris")
 	}
 	if hit.Error != "rate_limit" {
 		t.Errorf("Error = %q, want rate_limit", hit.Error)
@@ -105,8 +106,8 @@ func TestContractStandingLimitHitAgentFormRecords(t *testing.T) {
 	if hit.Details != "You've hit your session limit" {
 		t.Errorf("Details = %q", hit.Details)
 	}
-	if hit.SessionID != "kronos-sess" {
-		t.Errorf("SessionID = %q, want kronos-sess", hit.SessionID)
+	if hit.SessionID != "iris-sess" {
+		t.Errorf("SessionID = %q, want iris-sess", hit.SessionID)
 	}
 	if hit.AgentID != "sub-7" {
 		t.Errorf("AgentID = %q, want sub-7", hit.AgentID)
@@ -126,7 +127,7 @@ func TestContractStandingLimitHitAgentFormRecords(t *testing.T) {
 func TestContractStandingLimitHitAgentFormAcceptsEveryRegisteredID(t *testing.T) {
 	useTestStore(t)
 	mux := contractStandingLimitHitMux(t)
-	for _, id := range []string{"kronos", "iris"} {
+	for _, id := range []string{"iris"} {
 		if !jobs.IsStandingAgentID(id) {
 			t.Fatalf("fixture is wrong: %q is not a registered standing agent id", id)
 		}
@@ -138,11 +139,6 @@ func TestContractStandingLimitHitAgentFormAcceptsEveryRegisteredID(t *testing.T)
 		if got := contractStandingLimitHitStored(t, id); got.At == 0 {
 			t.Fatalf("%s: nothing recorded under limit_hit:%s", id, id)
 		}
-	}
-	// The two agents' records are separate rows, or one agent's rescue reads
-	// the other's evidence and swaps the machine's login on it.
-	if contractStandingLimitHitStored(t, "kronos").SessionID == contractStandingLimitHitStored(t, "iris").SessionID {
-		t.Fatal("kronos and iris share one record row")
 	}
 }
 
@@ -158,18 +154,18 @@ func TestContractStandingLimitHitAgentFoldSemanticsMatchTheSlugPath(t *testing.T
 	mux := contractStandingLimitHitMux(t)
 
 	first := contractStandingLimitHitPost(t, mux,
-		contractStandingLimitHitAgentBody("kronos", "rate_limit", "429", "kronos-sess", ""))
+		contractStandingLimitHitAgentBody("iris", "rate_limit", "429", "iris-sess", ""))
 	if first.Code != http.StatusOK {
 		t.Fatalf("first delivery: status %d, body %s", first.Code, first.Body.String())
 	}
-	openedAt := contractStandingLimitHitStored(t, "kronos").At
+	openedAt := contractStandingLimitHitStored(t, "iris").At
 
 	second := contractStandingLimitHitPost(t, mux,
-		contractStandingLimitHitAgentBody("kronos", "rate_limit", "429", "kronos-sess", ""))
+		contractStandingLimitHitAgentBody("iris", "rate_limit", "429", "iris-sess", ""))
 	if second.Code != http.StatusOK {
 		t.Fatalf("second delivery: status %d, body %s", second.Code, second.Body.String())
 	}
-	hit := contractStandingLimitHitStored(t, "kronos")
+	hit := contractStandingLimitHitStored(t, "iris")
 	if hit.Deliveries != 2 {
 		t.Errorf("Deliveries = %d after a same-error delivery, want 2 (it must fold)", hit.Deliveries)
 	}
@@ -192,11 +188,11 @@ func TestContractStandingLimitHitAgentFoldSemanticsMatchTheSlugPath(t *testing.T
 	// the transcript arm's carry the banner verbatim, so keeping the first
 	// arrival would suppress the reset re-arm for every hook-first hit.
 	third := contractStandingLimitHitPost(t, mux, contractStandingLimitHitAgentBody(
-		"kronos", "rate_limit", "You've hit your session limit · resets 4:50am (America/New_York)", "kronos-sess", ""))
+		"iris", "rate_limit", "You've hit your session limit · resets 4:50am (America/New_York)", "iris-sess", ""))
 	if third.Code != http.StatusOK {
 		t.Fatalf("third delivery: status %d, body %s", third.Code, third.Body.String())
 	}
-	hit = contractStandingLimitHitStored(t, "kronos")
+	hit = contractStandingLimitHitStored(t, "iris")
 	if !strings.Contains(hit.Details, "resets 4:50am") {
 		t.Errorf("Details = %q, want the clause-carrying banner to have replaced the clause-less one", hit.Details)
 	}
@@ -216,12 +212,12 @@ func TestContractStandingLimitHitAgentDetailsAreCappedAndOneLined(t *testing.T) 
 
 	long := "line one\nline two\r\tline three " + strings.Repeat("é", 500)
 	rec := contractStandingLimitHitPost(t, mux,
-		contractStandingLimitHitAgentBody("kronos", "rate_limit", long, "kronos-sess", ""))
+		contractStandingLimitHitAgentBody("iris", "rate_limit", long, "iris-sess", ""))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200; body %s", rec.Code, rec.Body.String())
 	}
 
-	hit := contractStandingLimitHitStored(t, "kronos")
+	hit := contractStandingLimitHitStored(t, "iris")
 	if hit.At == 0 {
 		t.Fatal("an over-long details string lost the hit — the error TYPE is what this feature routes on")
 	}
@@ -255,7 +251,7 @@ func TestContractStandingLimitHitSlugFormIsUnchanged(t *testing.T) {
 	if hit.At == 0 || hit.Error != "rate_limit" || hit.Details != "the banner" {
 		t.Fatalf("the slug path stopped recording onto the job's own row: %+v", hit)
 	}
-	for _, id := range []string{"kronos", "iris"} {
+	for _, id := range []string{"iris"} {
 		if got := contractStandingLimitHitStored(t, id); got.At != 0 {
 			t.Fatalf("a slug delivery also wrote limit_hit:%s: %+v", id, got)
 		}
@@ -280,7 +276,7 @@ func TestContractStandingLimitHitRequiresExactlyOneOfSlugAndAgent(t *testing.T) 
 		name string
 		body string
 	}{
-		{"both", `{"slug":"` + j.Slug + `","agent":"kronos","error":"rate_limit"}`},
+		{"both", `{"slug":"` + j.Slug + `","agent":"iris","error":"rate_limit"}`},
 		{"neither", `{"error":"rate_limit","details":"429"}`},
 	}
 	for _, c := range cases {
@@ -298,8 +294,8 @@ func TestContractStandingLimitHitRequiresExactlyOneOfSlugAndAgent(t *testing.T) 
 	if got := jobs.ReadLimitHit(j); got.At != 0 {
 		t.Fatalf("a refused body still recorded onto the job: %+v", got)
 	}
-	if got := contractStandingLimitHitStored(t, "kronos"); got.At != 0 {
-		t.Fatalf("a refused body still recorded onto limit_hit:kronos: %+v", got)
+	if got := contractStandingLimitHitStored(t, "iris"); got.At != 0 {
+		t.Fatalf("a refused body still recorded onto limit_hit:iris: %+v", got)
 	}
 }
 
@@ -341,11 +337,11 @@ func TestContractStandingLimitHitAgentFormStaysMirrorUngated(t *testing.T) {
 	mux := contractStandingLimitHitMux(t)
 
 	rec := contractStandingLimitHitPost(t, mux,
-		contractStandingLimitHitAgentBody("kronos", "rate_limit", "429", "kronos-sess", ""))
+		contractStandingLimitHitAgentBody("iris", "rate_limit", "429", "iris-sess", ""))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d under --mirror, want 200; body %s", rec.Code, rec.Body.String())
 	}
-	if got := contractStandingLimitHitStored(t, "kronos"); got.At == 0 {
+	if got := contractStandingLimitHitStored(t, "iris"); got.At == 0 {
 		t.Fatal("a mirror recorded nothing — the observation is a read, only the swap is gated")
 	}
 }

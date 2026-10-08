@@ -140,10 +140,12 @@ func TestContractLegacyRowsMigrateToAnEmptyModel(t *testing.T) {
 	// otherwise migrate() replays step 23 over a database that still has the
 	// table and fails on the bare CREATE.
 	//
-	// v24 (kronos' orch_inbox), v25 (saved_artifacts, the artifact library),
-	// v26 (board_bg, the board background) and v27 (job_goals, which replaced
-	// jobs.goal_id) landed later still, and need the same treatment for the
-	// same reason: a leftover table fails that step's bare CREATE. Reversed
+	// v25 (saved_artifacts, the artifact library), v26 (board_bg, the board
+	// background) and v27 (job_goals, which replaced jobs.goal_id) landed
+	// later still, and need the same treatment for the same reason: a
+	// leftover table fails that step's bare CREATE. (v24's orch_inbox needs
+	// none: v31 dropped it again, so a freshly migrated database never holds
+	// it.) Reversed
 	// FIRST — this list unwinds newest-first, mirroring the order migrate()
 	// applies the steps. Only v27's TABLE is dropped: the goal_id column v23
 	// added is already gone, taken by v27 itself.
@@ -164,7 +166,6 @@ func TestContractLegacyRowsMigrateToAnEmptyModel(t *testing.T) {
 		`DROP TABLE job_goals`,
 		`DROP TABLE board_bg`,
 		`DROP TABLE saved_artifacts`,
-		`DROP TABLE orch_inbox`,
 		`DROP TABLE goals`,
 	} {
 		if _, err := s.db.Exec(stmt); err != nil {

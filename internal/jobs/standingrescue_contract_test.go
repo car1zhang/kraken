@@ -18,7 +18,7 @@ import (
 // standingrescue_contract_test.go — athena-logic's BLIND contract tests for
 // the standing-agent usage-limit rescue (50-contract.md, slices P and S).
 // Written from the contract text alone: none of internal/jobs/limithook.go,
-// limitrescue.go, kronos.go, rotation.go, daemon.go, standingrescue.go,
+// limitrescue.go, the orchestrator's file, rotation.go, daemon.go, standingrescue.go,
 // internal/api/limithit.go or cmd/kraken/*.go was read in its working-tree
 // state while this was open. Existing helper SHAPES were learned from
 // `git show HEAD:` (the pre-change versions) and from the package's own
@@ -160,20 +160,6 @@ func contractStandingSnapshot(t *testing.T) {
 	}
 }
 
-// contractStandingEnableKronos turns the orchestrator on the way the machine
-// does: KronosEnabled is one os.Stat of ~/.kraken/kronos.env, so the file
-// existing IS the opt-in.
-func contractStandingEnableKronos(t *testing.T) {
-	t.Helper()
-	path := KronosEnvPath()
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(path, nil, 0o600); err != nil {
-		t.Fatal(err)
-	}
-}
-
 // contractStandingEnableIris writes the credential file iris' enabled-gate
 // reads. A bare xoxp- token needs nothing beside it (an xoxc- one would also
 // need the cookie), so this is the minimal "configured" state.
@@ -286,12 +272,11 @@ func contractStandingPeer(session, pane, name, sessionID string) *core.Peer {
 // slice P — the registry's ids
 // ---------------------------------------------------------------------------
 
-// TestContractStandingAgentIDs: "Returns exactly ["kronos","iris"], stable
-// order." The order is the contract, not an accident — standingAgents() is
+// TestContractStandingAgentIDs: "Returns exactly ["iris"], stable order." The order is the contract, not an accident — standingAgents() is
 // pinned against this list, so a reorder here reorders the registry.
 func TestContractStandingAgentIDs(t *testing.T) {
 	got := standingAgentIDs()
-	want := []string{"kronos", "iris"}
+	want := []string{"iris"}
 	if len(got) != len(want) {
 		t.Fatalf("standingAgentIDs() = %v, want %v", got, want)
 	}
@@ -312,15 +297,15 @@ func TestContractStandingAgentIDs(t *testing.T) {
 
 // TestContractStandingIsStandingAgentID: "True for exactly the ids above,
 // case-sensitive; false for "", a job-looking numeric string, and anything
-// else." internal/api routes on this, so a false negative refuses kronos'
-// own hook and a false positive opens a kv row under an id nothing owns.
+// else." internal/api routes on this, so a false negative refuses a standing
+// agent's own hook and a false positive opens a kv row under an id nothing owns.
 func TestContractStandingIsStandingAgentID(t *testing.T) {
 	for _, id := range standingAgentIDs() {
 		if !IsStandingAgentID(id) {
 			t.Errorf("IsStandingAgentID(%q) = false, want true — the registry's own id is refused", id)
 		}
 	}
-	for _, id := range []string{"", "42", "0", "Kronos", "IRIS", "kronos ", "zeus", "kronos,iris"} {
+	for _, id := range []string{"", "42", "0", "Iris", "IRIS", "iris ", "zeus", "iris,iris"} {
 		if IsStandingAgentID(id) {
 			t.Errorf("IsStandingAgentID(%q) = true, want false", id)
 		}
@@ -336,24 +321,17 @@ func TestContractStandingHitKeyShape(t *testing.T) {
 			t.Errorf("standingHitKey(%q) = %q, want %q", id, got, want)
 		}
 	}
-	if standingHitKey("kronos") == standingHitKey("iris") {
-		t.Fatal("the two standing agents share one record key")
-	}
 }
 
 // TestContractStandingHitKeyNeverCollidesWithAJobKey is the collision fixture
 // the contract's Notes mandate: "one uses a job whose numeric id renders to a
-// string equal in LENGTH to "kronos"-adjacent keys to pin non-collision by
+// string equal in LENGTH to a standing agent's key to pin non-collision by
 // shape, not luck". A collision here would let a standing agent's hit and a
 // job's hit read and write one row — and the rescue swaps the machine's login
 // off that row.
 func TestContractStandingHitKeyNeverCollidesWithAJobKey(t *testing.T) {
-	// 123456 renders to six digits, exactly len("kronos"); 1234 to four,
-	// exactly len("iris"). Equal length is what makes this a shape test
-	// rather than a coincidence of digits being short.
-	if got := len(strconv.FormatInt(123456, 10)); got != len("kronos") {
-		t.Fatalf("fixture is wrong: 123456 renders to %d chars, want %d", got, len("kronos"))
-	}
+	// 1234 renders to four digits, exactly len("iris"). Equal length is what
+	// makes this a shape test rather than a coincidence of digits being short.
 	if got := len(strconv.FormatInt(1234, 10)); got != len("iris") {
 		t.Fatalf("fixture is wrong: 1234 renders to %d chars, want %d", got, len("iris"))
 	}
@@ -378,18 +356,18 @@ func TestContractStandingHitKeyNeverCollidesWithAJobKey(t *testing.T) {
 func TestContractStandingReadLimitHitByKeyIsErrorless(t *testing.T) {
 	// no store wired at all
 	UseStore(nil)
-	if got := readLimitHitByKey("limit_hit:kronos"); got != (LimitHit{}) {
+	if got := readLimitHitByKey("limit_hit:iris"); got != (LimitHit{}) {
 		t.Errorf("no store: got %+v, want the zero LimitHit", got)
 	}
 
 	rig := contractStandingRigNew(t)
-	if got := readLimitHitByKey("limit_hit:kronos"); got != (LimitHit{}) {
+	if got := readLimitHitByKey("limit_hit:iris"); got != (LimitHit{}) {
 		t.Errorf("unset key: got %+v, want the zero LimitHit", got)
 	}
-	if err := rig.st.SetKV("limit_hit:kronos", "{not json"); err != nil {
+	if err := rig.st.SetKV("limit_hit:iris", "{not json"); err != nil {
 		t.Fatal(err)
 	}
-	if got := readLimitHitByKey("limit_hit:kronos"); got != (LimitHit{}) {
+	if got := readLimitHitByKey("limit_hit:iris"); got != (LimitHit{}) {
 		t.Errorf("unparseable row: got %+v, want the zero LimitHit", got)
 	}
 }
@@ -422,21 +400,21 @@ func TestContractStandingReadLimitHitDelegatesToTheKeyedPath(t *testing.T) {
 // and At keeps meaning "when this limit first hit".
 func TestContractStandingRecordLimitHitByKeyRecordsThenFolds(t *testing.T) {
 	rig := contractStandingRigNew(t)
-	key := standingHitKey("kronos")
+	key := standingHitKey("iris")
 	first := time.Unix(1_700_000_000, 0)
 
-	hit, err := recordLimitHitByKey(key, "kronos", "", "rate_limit", "the banner", "kronos-sess", "", first)
+	hit, err := recordLimitHitByKey(key, "iris", "", "rate_limit", "the banner", "iris-sess", "", first)
 	if err != nil {
 		t.Fatalf("first delivery: %v", err)
 	}
 	if hit.At != first.Unix() || hit.Deliveries != 1 || hit.HandledAt != 0 {
 		t.Fatalf("first delivery recorded %+v", hit)
 	}
-	if hit.Error != "rate_limit" || hit.Details != "the banner" || hit.SessionID != "kronos-sess" || hit.AgentID != "" {
+	if hit.Error != "rate_limit" || hit.Details != "the banner" || hit.SessionID != "iris-sess" || hit.AgentID != "" {
 		t.Fatalf("first delivery lost a field: %+v", hit)
 	}
 
-	second, err := recordLimitHitByKey(key, "kronos", "", "rate_limit", "the banner", "kronos-sess", "", first.Add(30*time.Second))
+	second, err := recordLimitHitByKey(key, "iris", "", "rate_limit", "the banner", "iris-sess", "", first.Add(30*time.Second))
 	if err != nil {
 		t.Fatalf("second delivery: %v", err)
 	}
@@ -456,7 +434,7 @@ func TestContractStandingRecordLimitHitByKeyRecordsThenFolds(t *testing.T) {
 // re-read must open a new event rather than resurrect a finished one.
 func TestContractStandingRecordLimitHitByKeyResolvedNeverFolds(t *testing.T) {
 	rig := contractStandingRigNew(t)
-	key := standingHitKey("kronos")
+	key := standingHitKey("iris")
 	at := time.Unix(1_700_000_000, 0)
 	contractStandingPutHit(t, rig.st, key, LimitHit{
 		Error: "rate_limit", Details: "old banner", At: at.Unix(), Deliveries: 3,
@@ -465,7 +443,7 @@ func TestContractStandingRecordLimitHitByKeyResolvedNeverFolds(t *testing.T) {
 	})
 
 	later := at.Add(2 * time.Hour)
-	got, err := recordLimitHitByKey(key, "kronos", "", "rate_limit", "new banner", "kronos-sess", "", later)
+	got, err := recordLimitHitByKey(key, "iris", "", "rate_limit", "new banner", "iris-sess", "", later)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -492,7 +470,7 @@ func TestContractStandingRecordLimitHitByKeyResolvedNeverFolds(t *testing.T) {
 // first arrival would suppress the reset re-arm for every hook-first hit.
 func TestContractStandingRecordLimitHitByKeyAdoptsAResetClause(t *testing.T) {
 	rig := contractStandingRigNew(t)
-	key := standingHitKey("kronos")
+	key := standingHitKey("iris")
 	at := time.Unix(1_700_000_000, 0)
 	contractStandingPutHit(t, rig.st, key, LimitHit{
 		Error: "rate_limit", Details: "429", At: at.Unix(), Deliveries: 1,
@@ -504,7 +482,7 @@ func TestContractStandingRecordLimitHitByKeyAdoptsAResetClause(t *testing.T) {
 		t.Fatal("fixture is wrong: the incoming details carry no parseable clause")
 	}
 
-	got, err := recordLimitHitByKey(key, "kronos", "", "rate_limit", contractStandingUsageLimitText, "kronos-sess", "", at.Add(time.Minute))
+	got, err := recordLimitHitByKey(key, "iris", "", "rate_limit", contractStandingUsageLimitText, "iris-sess", "", at.Add(time.Minute))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -527,7 +505,7 @@ func TestContractStandingRecordLimitHitByKeyAdoptsAResetClause(t *testing.T) {
 // zero — uncapped machine-wide credential swapping.
 func TestContractStandingRecordLimitHitByKeySurvivesTheSwapWatermark(t *testing.T) {
 	rig := contractStandingRigNew(t)
-	key := standingHitKey("kronos")
+	key := standingHitKey("iris")
 	at := time.Unix(1_700_000_000, 0)
 	contractStandingPutHit(t, rig.st, key, LimitHit{
 		Error: "rate_limit", Details: "the banner", At: at.Unix(), Deliveries: 1,
@@ -535,7 +513,7 @@ func TestContractStandingRecordLimitHitByKeySurvivesTheSwapWatermark(t *testing.
 	})
 
 	// A DIFFERENT error type supersedes rather than folds.
-	got, err := recordLimitHitByKey(key, "kronos", "", "overloaded", "something else", "kronos-sess", "", at.Add(time.Minute))
+	got, err := recordLimitHitByKey(key, "iris", "", "overloaded", "something else", "iris-sess", "", at.Add(time.Minute))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -616,7 +594,7 @@ func contractStandingAdoptable() LimitHit {
 		At:         1_700_000_000,
 		Deliveries: 2,
 		Attempts:   1,
-		SessionID:  "kronos-sess",
+		SessionID:  "iris-sess",
 	}
 }
 
@@ -704,165 +682,6 @@ func TestContractStandingAdoptLandedSwapTouchesOnlyTheSwapStamp(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// slice P — mergeKronosSettings gains the StopFailure hook
-// ---------------------------------------------------------------------------
-
-// TestContractStandingKronosLimitHookCommand: `krakenBin + " limit-hook" +
-// hookCommandFlags() + " --agent kronos"`. The flag run is what tells a hook
-// process which serve to POST to, and the ORDER matters because the merge's
-// own dedup reads the verb out of this string.
-func TestContractStandingKronosLimitHookCommand(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
-	const bin = "/opt/kraken/bin/kraken"
-	want := bin + " limit-hook" + hookCommandFlags() + " --agent kronos"
-	if got := kronosLimitHookCommand(bin); got != want {
-		t.Fatalf("kronosLimitHookCommand(%q) = %q, want %q", bin, got, want)
-	}
-	// The merge identifies kraken's own entry by the "limit-hook" verb, so
-	// the command must actually read as running it.
-	group := map[string]any{"hooks": []any{map[string]any{"type": "command", "command": want}}}
-	if !groupRunsVerb(group, "limit-hook") {
-		t.Fatalf("groupRunsVerb cannot see the limit-hook verb in %q — the replace-merge would append forever", want)
-	}
-}
-
-// contractStandingStopFailureGroups pulls the StopFailure groups out of a
-// merged settings blob.
-func contractStandingStopFailureGroups(t *testing.T, merged []byte) []any {
-	t.Helper()
-	var parsed map[string]any
-	if err := json.Unmarshal(merged, &parsed); err != nil {
-		t.Fatalf("merged settings are not JSON: %v", err)
-	}
-	hooks, ok := parsed["hooks"].(map[string]any)
-	if !ok {
-		t.Fatalf("merged settings carry no hooks object: %s", merged)
-	}
-	groups, _ := hooks["StopFailure"].([]any)
-	return groups
-}
-
-// TestContractStandingKronosSettingsAddOneStopFailureEntry: "Adds a
-// StopFailure group shaped like a cell's limitHookEntry — matcher
-// "rate_limit", one command hook running kronosLimitHookCommand."
-func TestContractStandingKronosSettingsAddOneStopFailureEntry(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
-	const bin = "/opt/kraken/bin/kraken"
-	merged, err := mergeKronosSettings(nil, bin)
-	if err != nil {
-		t.Fatalf("mergeKronosSettings: %v", err)
-	}
-	groups := contractStandingStopFailureGroups(t, merged)
-	if len(groups) != 1 {
-		t.Fatalf("StopFailure carries %d groups, want exactly 1: %s", len(groups), merged)
-	}
-	group, ok := groups[0].(map[string]any)
-	if !ok {
-		t.Fatalf("StopFailure group is not an object: %v", groups[0])
-	}
-	if group["matcher"] != "rate_limit" {
-		t.Errorf("matcher = %v, want rate_limit", group["matcher"])
-	}
-	hookList, ok := group["hooks"].([]any)
-	if !ok || len(hookList) != 1 {
-		t.Fatalf("group carries %v hooks, want exactly one command hook", group["hooks"])
-	}
-	hook, ok := hookList[0].(map[string]any)
-	if !ok {
-		t.Fatalf("hook is not an object: %v", hookList[0])
-	}
-	if hook["type"] != "command" {
-		t.Errorf("hook type = %v, want command", hook["type"])
-	}
-	if got, want := hook["command"], kronosLimitHookCommand(bin); got != want {
-		t.Errorf("hook command = %v, want %q", got, want)
-	}
-}
-
-// TestContractStandingKronosSettingsAreIdempotentAndReplaceMerged: "Idempotent:
-// a second install yields one entry; a changed binary path replaces the old
-// entry". The documented parallel-server drill runs a scratch build from
-// /tmp, so append-if-absent would leave an entry naming a deleted binary —
-// a failing hook on every turn of the one agent that runs unattended.
-func TestContractStandingKronosSettingsAreIdempotentAndReplaceMerged(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
-	const first = "/opt/kraken/bin/kraken"
-	const second = "/tmp/kraken-test"
-
-	once, err := mergeKronosSettings(nil, first)
-	if err != nil {
-		t.Fatal(err)
-	}
-	twice, err := mergeKronosSettings(once, first)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if groups := contractStandingStopFailureGroups(t, twice); len(groups) != 1 {
-		t.Fatalf("second install with the same binary yields %d StopFailure groups, want 1", len(groups))
-	}
-
-	moved, err := mergeKronosSettings(twice, second)
-	if err != nil {
-		t.Fatal(err)
-	}
-	groups := contractStandingStopFailureGroups(t, moved)
-	if len(groups) != 1 {
-		t.Fatalf("install from a new binary path yields %d StopFailure groups, want 1 (replaced, not appended)", len(groups))
-	}
-	group := groups[0].(map[string]any)
-	hook := group["hooks"].([]any)[0].(map[string]any)
-	if got, want := hook["command"], kronosLimitHookCommand(second); got != want {
-		t.Errorf("hook command = %v, want the NEW binary's %q", got, want)
-	}
-	if strings.Contains(string(moved), first) {
-		t.Errorf("the old binary path %q survives somewhere in the merged settings: %s", first, moved)
-	}
-}
-
-// TestContractStandingKronosSettingsLeaveEverythingElseAlone: "every other
-// hook group, the statusLine rule, and unrelated user keys are byte-untouched."
-// The comparison is against the SAME merge run without this feature's
-// contribution, which is the only way to say "untouched" without transcribing
-// the whole file.
-func TestContractStandingKronosSettingsLeaveEverythingElseAlone(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
-	const bin = "/opt/kraken/bin/kraken"
-	existing := []byte(`{"env":{"CARLS_OWN":"1"},"permissions":{"allow":["Bash(ls:*)"]}}`)
-
-	merged, err := mergeKronosSettings(existing, bin)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var got map[string]any
-	if err := json.Unmarshal(merged, &got); err != nil {
-		t.Fatal(err)
-	}
-	env, _ := got["env"].(map[string]any)
-	if env["CARLS_OWN"] != "1" {
-		t.Errorf("an unrelated user key was rewritten: %s", merged)
-	}
-	if _, ok := got["permissions"]; !ok {
-		t.Errorf("an unrelated user key was dropped: %s", merged)
-	}
-	if _, ok := got["statusLine"]; !ok {
-		t.Errorf("the statusLine rule stopped installing: %s", merged)
-	}
-	hooks, _ := got["hooks"].(map[string]any)
-	for _, event := range []string{"PreToolUse", "PostCompact"} {
-		groups, _ := hooks[event].([]any)
-		if len(groups) != 1 {
-			t.Errorf("%s carries %d groups, want the 1 it carried before StopFailure was added", event, len(groups))
-		}
-	}
-	for _, event := range recallHookEvents {
-		groups, _ := hooks[event].([]any)
-		if len(groups) != 1 {
-			t.Errorf("recall event %s carries %d groups, want 1", event, len(groups))
-		}
-	}
-}
-
-// ---------------------------------------------------------------------------
 // slice S — the descriptor registry
 // ---------------------------------------------------------------------------
 
@@ -885,16 +704,15 @@ func TestContractStandingAgentsMatchStandingAgentIDs(t *testing.T) {
 }
 
 // TestContractStandingAgentsFieldValues pins the two rows' fixed fields
-// against the constants the rest of the package already uses: kronos'
-// Session/AgentName are "kronos", iris' are "iris". Session is what the pass
+// against the constants the rest of the package already uses: iris'
+// Session/AgentName are "iris". Session is what the pass
 // reads liveness off and what the resume kills; AgentName is half the kill
 // guard's identity test. A row naming a session nothing runs in is a pass
 // that silently never fires.
 func TestContractStandingAgentsFieldValues(t *testing.T) {
 	rows := standingAgents()
 	want := map[string]struct{ session, agentName string }{
-		"kronos": {KronosSessionName, KronosAgentName},
-		"iris":   {IrisSessionName, IrisAgentName},
+		"iris": {IrisSessionName, IrisAgentName},
 	}
 	for _, a := range rows {
 		w, ok := want[a.ID]
@@ -922,36 +740,24 @@ func TestContractStandingAgentsFieldValues(t *testing.T) {
 	}
 	// The constants themselves must equal the ids, or the registry's id and
 	// the tmux session it acts on are two different strings.
-	if KronosSessionName != "kronos" || IrisSessionName != "iris" {
-		t.Fatalf("session constants drifted: kronos=%q iris=%q", KronosSessionName, IrisSessionName)
+	if IrisSessionName != "iris" {
+		t.Fatalf("session constant drifted: iris=%q", IrisSessionName)
 	}
 }
 
-// TestContractStandingAgentsEnabledGates: kronos' gate is KronosEnabled (one
-// stat of ~/.kraken/kronos.env) and iris' is "core.LoadSlackConfig() returns
-// nil error". Both default OFF on a machine that has configured neither,
-// which is what keeps the whole feature inert until carl opts in.
+// TestContractStandingAgentsEnabledGates: iris' gate is
+// "core.LoadSlackConfig() returns nil error". It defaults OFF on a machine
+// that has configured nothing, which is what keeps the whole feature inert
+// until carl opts in.
 func TestContractStandingAgentsEnabledGates(t *testing.T) {
 	contractStandingRigNew(t)
 	// Neutralise any inherited slack credentials so the file is what decides.
 	t.Setenv("SLACK_USER_TOKEN", "")
 	t.Setenv("SLACK_D_COOKIE", "")
 
-	kronos := contractStandingRow(t, "kronos")
 	iris := contractStandingRow(t, "iris")
-	if kronos.Enabled() {
-		t.Error("kronos reads as enabled with no ~/.kraken/kronos.env")
-	}
 	if iris.Enabled() {
 		t.Error("iris reads as enabled with no slack credential")
-	}
-
-	contractStandingEnableKronos(t)
-	if !kronos.Enabled() {
-		t.Error("kronos reads as disabled with ~/.kraken/kronos.env present")
-	}
-	if got := KronosEnabled(); got != kronos.Enabled() {
-		t.Errorf("the row's gate (%v) disagrees with KronosEnabled() (%v)", kronos.Enabled(), got)
 	}
 
 	contractStandingEnableIris(t)
@@ -963,62 +769,43 @@ func TestContractStandingAgentsEnabledGates(t *testing.T) {
 	}
 }
 
-// TestContractStandingAgentsRecordedSessionWrapsTheKVReaders: kronos'
-// RecordedSession wraps ReadKronosAgent and iris' wraps readIrisAgent. The
-// recorded id is the ONLY id classification and the kill guard may use, so a
-// row reading the wrong kv key classifies nothing forever, silently.
+// TestContractStandingAgentsRecordedSessionWrapsTheKVReaders: iris'
+// RecordedSession wraps readIrisAgent. The recorded id is the ONLY id
+// classification and the kill guard may use, so a row reading the wrong kv
+// key classifies nothing forever, silently.
 func TestContractStandingAgentsRecordedSessionWrapsTheKVReaders(t *testing.T) {
 	rig := contractStandingRigNew(t)
-	kronos := contractStandingRow(t, "kronos")
 	iris := contractStandingRow(t, "iris")
 
-	if sid, ok := kronos.RecordedSession(rig.st); ok || sid != "" {
-		t.Errorf("kronos with no kv row: (%q, %v), want (\"\", false)", sid, ok)
-	}
 	if sid, ok := iris.RecordedSession(rig.st); ok || sid != "" {
 		t.Errorf("iris with no kv row: (%q, %v), want (\"\", false)", sid, ok)
 	}
 
-	if err := writeKronosAgent(rig.st, KronosAgent{SessionID: "kronos-sess-1", SpawnedAt: 1}); err != nil {
-		t.Fatal(err)
-	}
 	if err := writeIrisAgent(rig.st, irisAgent{SessionID: "iris-sess-1", SpawnedAt: 1}); err != nil {
 		t.Fatal(err)
-	}
-	if sid, ok := kronos.RecordedSession(rig.st); !ok || sid != "kronos-sess-1" {
-		t.Errorf("kronos: (%q, %v), want (kronos-sess-1, true)", sid, ok)
 	}
 	if sid, ok := iris.RecordedSession(rig.st); !ok || sid != "iris-sess-1" {
 		t.Errorf("iris: (%q, %v), want (iris-sess-1, true)", sid, ok)
 	}
 }
 
-// TestContractStandingAgentsFindDelegatesToTheIdentityLookups: kronos' Find
-// is findKronos and iris' is findIris. Both already encode the
-// nameless-startup fallback and the session/depth scoping, and a row doing
-// its own lookup would answer differently from the board's FindKronos.
+// TestContractStandingAgentsFindDelegatesToTheIdentityLookups: iris' Find is
+// findIris, which already encodes the nameless-startup fallback and the
+// session/depth scoping; a row doing its own lookup would answer differently.
 func TestContractStandingAgentsFindDelegatesToTheIdentityLookups(t *testing.T) {
-	kronosPeer := contractStandingPeer("kronos", "%1", KronosAgentName, "kronos-sess-1")
 	irisPeer := contractStandingPeer("iris", "%2", IrisAgentName, "iris-sess-1")
 	other := contractStandingPeer("cell-something-9", "%3", "zeus-something", "zeus-sess")
-	all := []*core.Peer{other, kronosPeer, irisPeer}
+	all := []*core.Peer{other, irisPeer}
 
-	kronos := contractStandingRow(t, "kronos")
 	iris := contractStandingRow(t, "iris")
-	if got := kronos.Find(all); got != findKronos(all) {
-		t.Errorf("kronos.Find answered %v, findKronos answered %v", got, findKronos(all))
-	}
-	if got := kronos.Find(all); got != kronosPeer {
-		t.Errorf("kronos.Find found %v, want the peer in the kronos session", got)
-	}
 	if got := iris.Find(all); got != findIris(all) {
 		t.Errorf("iris.Find answered %v, findIris answered %v", got, findIris(all))
 	}
 	if got := iris.Find(all); got != irisPeer {
 		t.Errorf("iris.Find found %v, want the peer in the iris session", got)
 	}
-	if got := kronos.Find(nil); got != nil {
-		t.Errorf("kronos.Find on an empty snapshot = %v, want nil", got)
+	if got := iris.Find(nil); got != nil {
+		t.Errorf("iris.Find on an empty snapshot = %v, want nil", got)
 	}
 }
 
@@ -1031,7 +818,7 @@ func TestContractStandingAgentsFindDelegatesToTheIdentityLookups(t *testing.T) {
 // agentID and NEVER contains the word "zeus"." The zeus rule is not cosmetic:
 // the reason is what the recorded hit's Details carries and what the
 // notification says, so a copied cell string tells carl a job is stalled when
-// it is his orchestrator.
+// it is a standing agent.
 func TestContractStandingStallReasonUsageLimit(t *testing.T) {
 	st := core.Stall{Kind: "usage-limit", Text: contractStandingUsageLimitText}
 	for _, id := range standingAgentIDs() {
@@ -1072,14 +859,14 @@ func TestContractStandingStallReasonAPIError(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			reason, isLimit, retryable := standingStallReason("kronos", c.stall)
+			reason, isLimit, retryable := standingStallReason("iris", c.stall)
 			if reason == "" {
 				t.Fatal("reason is empty for an api-error stall")
 			}
 			if !strings.Contains(reason, c.stall.Text) {
 				t.Errorf("reason %q does not embed %q", reason, c.stall.Text)
 			}
-			if !strings.Contains(reason, "kronos") {
+			if !strings.Contains(reason, "iris") {
 				t.Errorf("reason %q does not name the agent", reason)
 			}
 			if strings.Contains(strings.ToLower(reason), "zeus") {
@@ -1100,7 +887,7 @@ func TestContractStandingStallReasonAPIError(t *testing.T) {
 // healthy transcript is the overwhelmingly common tick.
 func TestContractStandingStallReasonQuietKinds(t *testing.T) {
 	for _, st := range []core.Stall{{}, {Kind: "interrupted"}, {Kind: "interrupted", Text: "[Request interrupted by user"}} {
-		reason, isLimit, retryable := standingStallReason("kronos", st)
+		reason, isLimit, retryable := standingStallReason("iris", st)
 		if reason != "" || isLimit || retryable {
 			t.Errorf("Kind %q: got (%q, %v, %v), want (\"\", false, false)", st.Kind, reason, isLimit, retryable)
 		}
@@ -1116,11 +903,11 @@ func TestContractStandingStallReasonQuietKinds(t *testing.T) {
 // the reason string here contains the literal agent id, which is exactly what
 // a naive concatenation gets wrong.
 func TestContractStandingHitTriggerKeyShape(t *testing.T) {
-	// A reason that repeats the id, the way a real one does ("kronos hit a
+	// A reason that repeats the id, the way a real one does ("iris hit a
 	// usage limit: …"), and one that also carries the separator.
 	reasons := []string{
-		"kronos hit a usage limit: You've hit your session limit",
-		"kronos|kronos",
+		"iris hit a usage limit: You've hit your session limit",
+		"iris|iris",
 		"iris",
 	}
 	for _, id := range standingAgentIDs() {
@@ -1130,15 +917,9 @@ func TestContractStandingHitTriggerKeyShape(t *testing.T) {
 			}
 		}
 	}
-	// Two agents stalling on the same banner must not share one suppression
-	// key — one of them would then never be rescued.
-	const shared = "kronos hit a usage limit: You've hit your session limit"
-	if standingHitTriggerKey("kronos", shared) == standingHitTriggerKey("iris", shared) {
-		t.Fatal("kronos and iris share a suppression key for one banner")
-	}
 	// A genuinely different banner must be able to record while an earlier
 	// one is still suppressed.
-	if standingHitTriggerKey("kronos", "weekly") == standingHitTriggerKey("kronos", "session") {
+	if standingHitTriggerKey("iris", "weekly") == standingHitTriggerKey("iris", "session") {
 		t.Fatal("two reasons share a key")
 	}
 }
@@ -1151,7 +932,7 @@ func TestContractStandingHitTriggerKeyShape(t *testing.T) {
 func TestContractStandingHitTriggerKeyPairsWithLimitHitTriggerDue(t *testing.T) {
 	now := time.Unix(1_700_000_000, 0)
 	stamps := map[string]int64{}
-	key := standingHitTriggerKey("kronos", "kronos hit a usage limit: weekly")
+	key := standingHitTriggerKey("iris", "iris hit a usage limit: weekly")
 
 	if !limitHitTriggerDue(stamps[key], now) {
 		t.Fatal("never recorded: not due, want due")
@@ -1174,10 +955,10 @@ func TestContractStandingHitTriggerKeyPairsWithLimitHitTriggerDue(t *testing.T) 
 // usage-limit banner classifies as a limit.
 func TestContractStandingHealthClassifiesTheRecordedSession(t *testing.T) {
 	contractStandingRigNew(t)
-	const sid = "kronos-sess-health"
+	const sid = "iris-sess-health"
 	contractStandingTranscript(t, sid, contractStandingUsageLimitText)
-	a := contractStandingRow(t, "kronos")
-	all := []*core.Peer{contractStandingPeer("kronos", "%1", KronosAgentName, sid)}
+	a := contractStandingRow(t, "iris")
+	all := []*core.Peer{contractStandingPeer("iris", "%1", IrisAgentName, sid)}
 
 	reason, isLimit, retryable := standingHealth(a, all, sid)
 	wantReason, wantLimit, wantRetry := standingStallReason(a.ID, core.LastStall(core.TranscriptPathForSession(sid)))
@@ -1195,10 +976,10 @@ func TestContractStandingHealthClassifiesTheRecordedSession(t *testing.T) {
 // completely different arms of the health pass — record a hit, or nudge.
 func TestContractStandingHealthClassifiesATransientAPIError(t *testing.T) {
 	contractStandingRigNew(t)
-	const sid = "kronos-sess-529"
+	const sid = "iris-sess-529"
 	contractStandingTranscript(t, sid, "API Error: 529 overloaded_error")
-	a := contractStandingRow(t, "kronos")
-	all := []*core.Peer{contractStandingPeer("kronos", "%1", KronosAgentName, sid)}
+	a := contractStandingRow(t, "iris")
+	all := []*core.Peer{contractStandingPeer("iris", "%1", IrisAgentName, sid)}
 
 	reason, isLimit, retryable := standingHealth(a, all, sid)
 	if reason == "" {
@@ -1217,9 +998,9 @@ func TestContractStandingHealthClassifiesATransientAPIError(t *testing.T) {
 // and reading a transcript for one would classify its LAST life forever.
 func TestContractStandingHealthIsEmptyWithoutAPeer(t *testing.T) {
 	contractStandingRigNew(t)
-	const sid = "kronos-sess-nopeer"
+	const sid = "iris-sess-nopeer"
 	contractStandingTranscript(t, sid, contractStandingUsageLimitText)
-	a := contractStandingRow(t, "kronos")
+	a := contractStandingRow(t, "iris")
 
 	// nothing in the snapshot at all, and a peer in someone else's session
 	for _, all := range [][]*core.Peer{
@@ -1240,10 +1021,10 @@ func TestContractStandingHealthIsEmptyWithoutAPeer(t *testing.T) {
 // PREVIOUS life's.
 func TestContractStandingHealthIsEmptyForANamelessPeer(t *testing.T) {
 	contractStandingRigNew(t)
-	const sid = "kronos-sess-nameless"
+	const sid = "iris-sess-nameless"
 	contractStandingTranscript(t, sid, contractStandingUsageLimitText)
-	a := contractStandingRow(t, "kronos")
-	all := []*core.Peer{contractStandingPeer("kronos", "%1", "", sid)}
+	a := contractStandingRow(t, "iris")
+	all := []*core.Peer{contractStandingPeer("iris", "%1", "", sid)}
 
 	reason, isLimit, retryable := standingHealth(a, all, sid)
 	if reason != "" || isLimit || retryable {
@@ -1258,10 +1039,10 @@ func TestContractStandingHealthIsEmptyForANamelessPeer(t *testing.T) {
 // nothing: a guessed id can belong to another claude entirely.
 func TestContractStandingHealthIsEmptyWithoutARecordedSession(t *testing.T) {
 	contractStandingRigNew(t)
-	const discovered = "kronos-sess-discovered"
+	const discovered = "iris-sess-discovered"
 	contractStandingTranscript(t, discovered, contractStandingUsageLimitText)
-	a := contractStandingRow(t, "kronos")
-	all := []*core.Peer{contractStandingPeer("kronos", "%1", KronosAgentName, discovered)}
+	a := contractStandingRow(t, "iris")
+	all := []*core.Peer{contractStandingPeer("iris", "%1", IrisAgentName, discovered)}
 
 	reason, isLimit, retryable := standingHealth(a, all, "")
 	if reason != "" || isLimit || retryable {
@@ -1275,12 +1056,12 @@ func TestContractStandingHealthIsEmptyWithoutARecordedSession(t *testing.T) {
 // DIFFERENTLY, so the answer says which one was read.
 func TestContractStandingHealthUsesTheRecordedIDNotThePeersOwn(t *testing.T) {
 	contractStandingRigNew(t)
-	const recorded = "kronos-sess-recorded"
-	const discovered = "kronos-sess-other"
+	const recorded = "iris-sess-recorded"
+	const discovered = "iris-sess-other"
 	contractStandingTranscript(t, recorded, "API Error: 529 overloaded_error")
 	contractStandingTranscript(t, discovered, contractStandingUsageLimitText)
-	a := contractStandingRow(t, "kronos")
-	all := []*core.Peer{contractStandingPeer("kronos", "%1", KronosAgentName, discovered)}
+	a := contractStandingRow(t, "iris")
+	all := []*core.Peer{contractStandingPeer("iris", "%1", IrisAgentName, discovered)}
 
 	reason, isLimit, retryable := standingHealth(a, all, recorded)
 	if isLimit {
@@ -1297,13 +1078,13 @@ func TestContractStandingHealthUsesTheRecordedIDNotThePeersOwn(t *testing.T) {
 // trouble.
 func TestContractStandingHealthIsEmptyWhenTheTranscriptCannotBeResolved(t *testing.T) {
 	contractStandingRigNew(t)
-	a := contractStandingRow(t, "kronos")
-	all := []*core.Peer{contractStandingPeer("kronos", "%1", KronosAgentName, "kronos-sess-gone")}
-	if got := core.TranscriptPathForSession("kronos-sess-gone"); got != "" {
+	a := contractStandingRow(t, "iris")
+	all := []*core.Peer{contractStandingPeer("iris", "%1", IrisAgentName, "iris-sess-gone")}
+	if got := core.TranscriptPathForSession("iris-sess-gone"); got != "" {
 		t.Fatalf("fixture is wrong: a transcript exists at %q", got)
 	}
 
-	reason, isLimit, retryable := standingHealth(a, all, "kronos-sess-gone")
+	reason, isLimit, retryable := standingHealth(a, all, "iris-sess-gone")
 	if reason != "" || isLimit || retryable {
 		t.Fatalf("unresolvable transcript: got (%q, %v, %v), want the empty result", reason, isLimit, retryable)
 	}
@@ -1318,16 +1099,16 @@ func TestContractStandingHealthIsEmptyWhenTheTranscriptCannotBeResolved(t *testi
 // The success reason is empty — the string is the REFUSAL's explanation, and
 // a resolution has nothing to explain.
 func TestContractStandingKillTargetMatchesByName(t *testing.T) {
-	a := contractStandingRow(t, "kronos")
-	peer := contractStandingPeer("kronos", "%1", KronosAgentName, "kronos-sess-1")
+	a := contractStandingRow(t, "iris")
+	peer := contractStandingPeer("iris", "%1", IrisAgentName, "iris-sess-1")
 	all := []*core.Peer{
 		contractStandingPeer("cell-other-9", "%9", "zeus-other", "zeus-sess"),
 		peer,
 	}
 
-	got, reason := standingKillTarget(a, all, "kronos-sess-1")
+	got, reason := standingKillTarget(a, all, "iris-sess-1")
 	if got != peer {
-		t.Fatalf("standingKillTarget = %v, want the named kronos peer (reason %q)", got, reason)
+		t.Fatalf("standingKillTarget = %v, want the named iris peer (reason %q)", got, reason)
 	}
 	if reason != "" {
 		t.Errorf("reason = %q on a resolution, want empty", reason)
@@ -1340,11 +1121,11 @@ func TestContractStandingKillTargetMatchesByName(t *testing.T) {
 // disjunct without also being the "nameless peer" the contract names as a
 // refusal — see the report for that ambiguity.
 func TestContractStandingKillTargetMatchesByRecordedSessionID(t *testing.T) {
-	a := contractStandingRow(t, "kronos")
-	peer := contractStandingPeer("kronos", "%1", "some-other-name", "kronos-sess-1")
+	a := contractStandingRow(t, "iris")
+	peer := contractStandingPeer("iris", "%1", "some-other-name", "iris-sess-1")
 	all := []*core.Peer{peer}
 
-	got, reason := standingKillTarget(a, all, "kronos-sess-1")
+	got, reason := standingKillTarget(a, all, "iris-sess-1")
 	if got != peer {
 		t.Fatalf("standingKillTarget = %v, want the peer whose SessionID is the recorded one (reason %q)", got, reason)
 	}
@@ -1358,23 +1139,23 @@ func TestContractStandingKillTargetMatchesByRecordedSessionID(t *testing.T) {
 // refusal is a deferral, never a resolution." The blast radius here is a
 // SIGKILL: a wrong answer destroys whatever process is actually in that pane.
 func TestContractStandingKillTargetRefusesWhenNeitherDisjunctHolds(t *testing.T) {
-	a := contractStandingRow(t, "kronos")
-	const recorded = "kronos-sess-1"
+	a := contractStandingRow(t, "iris")
+	const recorded = "iris-sess-1"
 	cases := []struct {
 		name string
 		all  []*core.Peer
 	}{
 		{"no peer at all", nil},
-		{"nothing in the agent's session", []*core.Peer{contractStandingPeer("cell-other-9", "%9", KronosAgentName, recorded)}},
-		{"nameless with no session id", []*core.Peer{contractStandingPeer("kronos", "%1", "", "")}},
-		{"foreign name and a different session id", []*core.Peer{contractStandingPeer("kronos", "%1", "someone-else", "someone-else-sess")}},
+		{"nothing in the agent's session", []*core.Peer{contractStandingPeer("cell-other-9", "%9", IrisAgentName, recorded)}},
+		{"nameless with no session id", []*core.Peer{contractStandingPeer("iris", "%1", "", "")}},
+		{"foreign name and a different session id", []*core.Peer{contractStandingPeer("iris", "%1", "someone-else", "someone-else-sess")}},
 		{"a nested subagent, not the agent itself", []*core.Peer{func() *core.Peer {
-			p := contractStandingPeer("kronos", "%1", KronosAgentName, recorded)
+			p := contractStandingPeer("iris", "%1", IrisAgentName, recorded)
 			p.Depth = 1
 			return p
 		}()}},
 		{"a codex pane, not a claude", []*core.Peer{func() *core.Peer {
-			p := contractStandingPeer("kronos", "%1", KronosAgentName, recorded)
+			p := contractStandingPeer("iris", "%1", IrisAgentName, recorded)
 			p.Agent = "codex"
 			return p
 		}()}},
@@ -1397,8 +1178,8 @@ func TestContractStandingKillTargetRefusesWhenNeitherDisjunctHolds(t *testing.T)
 // session must not match a peer whose SessionID is also empty. Without the
 // guard, "" == "" makes every nameless claude in that session a kill target.
 func TestContractStandingKillTargetIgnoresTheRecordedIDWhenItIsEmpty(t *testing.T) {
-	a := contractStandingRow(t, "kronos")
-	all := []*core.Peer{contractStandingPeer("kronos", "%1", "someone-else", "")}
+	a := contractStandingRow(t, "iris")
+	all := []*core.Peer{contractStandingPeer("iris", "%1", "someone-else", "")}
 	got, reason := standingKillTarget(a, all, "")
 	if got != nil {
 		t.Fatalf("an empty recorded id matched an id-less peer %+v — every nameless claude in the session becomes a target", got)
@@ -1541,7 +1322,7 @@ func TestContractStandingRescueSwapSwapsAndStampsTheWatermark(t *testing.T) {
 	rig.Target = "pool-b"
 	now := time.Unix(1_700_000_000, 0)
 
-	to, outcome, err := rescueSwap("kronos", now)
+	to, outcome, err := rescueSwap("iris", now)
 	if err != nil {
 		t.Fatalf("rescueSwap: %v", err)
 	}
@@ -1568,7 +1349,7 @@ func TestContractStandingRescueSwapNoTargetOutcome(t *testing.T) {
 	contractStandingSnapshot(t)
 	rig.Target = "" // the selector finds nobody eligible
 
-	_, outcome, err := rescueSwap("kronos", time.Unix(1_700_000_000, 0))
+	_, outcome, err := rescueSwap("iris", time.Unix(1_700_000_000, 0))
 	if err != nil {
 		t.Fatalf("rescueSwap: %v", err)
 	}
@@ -1611,7 +1392,7 @@ func TestContractStandingRescueSwapTakesTheLockBeforeSelecting(t *testing.T) {
 	}
 	defer release()
 
-	to, outcome, err := rescueSwap("kronos", time.Unix(1_700_000_000, 0))
+	to, outcome, err := rescueSwap("iris", time.Unix(1_700_000_000, 0))
 	if err != nil {
 		t.Fatalf("a contended lock is not an error: %v", err)
 	}
@@ -1640,15 +1421,15 @@ func TestContractStandingRescueSwapTakesTheLockBeforeSelecting(t *testing.T) {
 // row as it stands NOW.
 func TestContractStandingSaveLimitRescueStateByKeyMergesUnderAFreshRead(t *testing.T) {
 	rig := contractStandingRigNew(t)
-	key := standingHitKey("kronos")
+	key := standingHitKey("iris")
 	at := time.Unix(1_700_000_000, 0)
 
 	// what the pass read a moment ago
-	read := LimitHit{Error: "rate_limit", Details: "429", At: at.Unix(), Deliveries: 1, SessionID: "kronos-sess"}
+	read := LimitHit{Error: "rate_limit", Details: "429", At: at.Unix(), Deliveries: 1, SessionID: "iris-sess"}
 	// what a delivery landed in the meantime
 	contractStandingPutHit(t, rig.st, key, LimitHit{
 		Error: "rate_limit", Details: contractStandingUsageLimitText, At: at.Unix(),
-		Deliveries: 4, SessionID: "kronos-sess",
+		Deliveries: 4, SessionID: "iris-sess",
 	})
 
 	// the pass's own half, computed off its stale read
@@ -1657,7 +1438,7 @@ func TestContractStandingSaveLimitRescueStateByKeyMergesUnderAFreshRead(t *testi
 	mine.LastAttempt = at.Add(time.Minute).Unix()
 	mine.SwappedAt = at.Add(time.Minute).Unix()
 	mine.SwappedTo = "pool-b@example.com"
-	if err := saveLimitRescueStateByKey(key, "kronos", mine); err != nil {
+	if err := saveLimitRescueStateByKey(key, "iris", mine); err != nil {
 		t.Fatalf("saveLimitRescueStateByKey: %v", err)
 	}
 
@@ -1703,20 +1484,20 @@ func TestContractStandingSaveLimitRescueStateDelegates(t *testing.T) {
 // slice S — standingHealthPass
 // ---------------------------------------------------------------------------
 
-// contractStandingLiveKronos wires the world a standing health/rescue pass
-// needs for kronos: the env file, the recorded session id, a transcript for
-// it, a named peer in the kronos session, and the live map.
-func contractStandingLiveKronos(t *testing.T, rig *contractStandingRig, sid, text string) (standingAgent, []*core.Peer, map[string]bool) {
+// contractStandingLiveIris wires the world a standing health/rescue pass
+// needs for iris: the credential file, the recorded session id, a transcript
+// for it, a named peer in the iris session, and the live map.
+func contractStandingLiveIris(t *testing.T, rig *contractStandingRig, sid, text string) (standingAgent, []*core.Peer, map[string]bool) {
 	t.Helper()
-	contractStandingEnableKronos(t)
-	if err := writeKronosAgent(rig.st, KronosAgent{SessionID: sid, SpawnedAt: time.Now().UnixMilli()}); err != nil {
+	contractStandingEnableIris(t)
+	if err := writeIrisAgent(rig.st, irisAgent{SessionID: sid, SpawnedAt: time.Now().UnixMilli()}); err != nil {
 		t.Fatal(err)
 	}
 	if text != "" {
 		contractStandingTranscript(t, sid, text)
 	}
-	all := []*core.Peer{contractStandingPeer("kronos", "%1", KronosAgentName, sid)}
-	return contractStandingRow(t, "kronos"), all, map[string]bool{"kronos": true}
+	all := []*core.Peer{contractStandingPeer("iris", "%1", IrisAgentName, sid)}
+	return contractStandingRow(t, "iris"), all, map[string]bool{"iris": true}
 }
 
 // TestContractStandingHealthPassRecordsAUsageLimitHit is the transcript arm's
@@ -1726,8 +1507,8 @@ func contractStandingLiveKronos(t *testing.T, rig *contractStandingRig, sid, tex
 // describe one event in one vocabulary or their deliveries cannot fold.
 func TestContractStandingHealthPassRecordsAUsageLimitHit(t *testing.T) {
 	rig := contractStandingRigNew(t)
-	const sid = "kronos-sess-limit"
-	a, all, live := contractStandingLiveKronos(t, rig, sid, contractStandingUsageLimitText)
+	const sid = "iris-sess-limit"
+	a, all, live := contractStandingLiveIris(t, rig, sid, contractStandingUsageLimitText)
 	now := time.Unix(1_700_000_000, 0)
 	wantReason, isLimit, _ := standingStallReason(a.ID, core.LastStall(core.TranscriptPathForSession(sid)))
 	if !isLimit {
@@ -1737,9 +1518,9 @@ func TestContractStandingHealthPassRecordsAUsageLimitHit(t *testing.T) {
 	d := newDaemon()
 	d.standingHealthPass(a, rig.st, all, live, now)
 
-	stored := contractStandingGetHit(t, rig.st, standingHitKey("kronos"))
+	stored := contractStandingGetHit(t, rig.st, standingHitKey("iris"))
 	if stored.At != now.Unix() {
-		t.Fatalf("nothing recorded under %s: %+v", standingHitKey("kronos"), stored)
+		t.Fatalf("nothing recorded under %s: %+v", standingHitKey("iris"), stored)
 	}
 	if stored.Error != "rate_limit" {
 		t.Errorf("Error = %q, want rate_limit", stored.Error)
@@ -1771,8 +1552,8 @@ func TestContractStandingHealthPassRecordsAUsageLimitHit(t *testing.T) {
 // indefinitely, so this fires on the STREAK rather than on the tick.
 func TestContractStandingHealthPassNotifiesOncePerStreak(t *testing.T) {
 	rig := contractStandingRigNew(t)
-	const sid = "kronos-sess-streak"
-	a, all, live := contractStandingLiveKronos(t, rig, sid, contractStandingUsageLimitText)
+	const sid = "iris-sess-streak"
+	a, all, live := contractStandingLiveIris(t, rig, sid, contractStandingUsageLimitText)
 	now := time.Unix(1_700_000_000, 0)
 	reason, _, _ := standingStallReason(a.ID, core.LastStall(core.TranscriptPathForSession(sid)))
 	key := "standing-health:" + a.ID + "|" + strings.SplitN(reason, " idle ", 2)[0]
@@ -1799,41 +1580,18 @@ func contractStandingKeys(d *daemonState) []string {
 	return out
 }
 
-// TestContractStandingHealthPassEnqueuesNoOrchRow: "desktop notification only
-// — no orch inbox row (kronos must not be bumped about its own stall)." The
-// fixture has kronos ENABLED, which is the only state in which an orch row
-// could be written at all, so its absence here is a real assertion.
-func TestContractStandingHealthPassEnqueuesNoOrchRow(t *testing.T) {
-	rig := contractStandingRigNew(t)
-	const sid = "kronos-sess-noorch"
-	a, all, live := contractStandingLiveKronos(t, rig, sid, contractStandingUsageLimitText)
-	if !KronosEnabled() {
-		t.Fatal("fixture is wrong: kronos is not enabled, so no orch row could be written anyway")
-	}
-
-	newDaemon().standingHealthPass(a, rig.st, all, live, time.Unix(1_700_000_000, 0))
-
-	rows, err := rig.st.UnackedOrch()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(rows) != 0 {
-		t.Fatalf("the standing health arm enqueued %d orch row(s) — kronos would be bumped about its own stall: %+v", len(rows), rows)
-	}
-}
-
 // TestContractStandingHealthPassRecordsNothingForATransientAPIError: only
 // isLimit records. A 529 wave is fixed by a nudge; recording it as a
 // rate_limit would send the rescue to swap the machine's login over an
 // overload that was about to clear itself.
 func TestContractStandingHealthPassRecordsNothingForATransientAPIError(t *testing.T) {
 	rig := contractStandingRigNew(t)
-	const sid = "kronos-sess-529pass"
-	a, all, live := contractStandingLiveKronos(t, rig, sid, "API Error: 529 overloaded_error")
+	const sid = "iris-sess-529pass"
+	a, all, live := contractStandingLiveIris(t, rig, sid, "API Error: 529 overloaded_error")
 
 	newDaemon().standingHealthPass(a, rig.st, all, live, time.Unix(1_700_000_000, 0))
 
-	if got := contractStandingGetHit(t, rig.st, standingHitKey("kronos")); got.At != 0 {
+	if got := contractStandingGetHit(t, rig.st, standingHitKey("iris")); got.At != 0 {
 		t.Fatalf("a transient API error recorded a limit hit: %+v", got)
 	}
 	if len(rig.Swaps) != 0 {
@@ -1848,8 +1606,8 @@ func TestContractStandingHealthPassRecordsNothingForATransientAPIError(t *testin
 // SETS would decline the second one forever, silently.
 func TestContractStandingHealthPassDedupRearms(t *testing.T) {
 	rig := contractStandingRigNew(t)
-	const sid = "kronos-sess-dedup"
-	a, all, live := contractStandingLiveKronos(t, rig, sid, contractStandingUsageLimitText)
+	const sid = "iris-sess-dedup"
+	a, all, live := contractStandingLiveIris(t, rig, sid, contractStandingUsageLimitText)
 	now := time.Unix(1_700_000_000, 0)
 	reason, _, _ := standingStallReason(a.ID, core.LastStall(core.TranscriptPathForSession(sid)))
 	tkey := standingHitTriggerKey(a.ID, reason)
@@ -1859,13 +1617,13 @@ func TestContractStandingHealthPassDedupRearms(t *testing.T) {
 	if d.Notified[tkey] == 0 {
 		t.Fatalf("no trigger stamp under %q; keys were %v", tkey, contractStandingKeys(d))
 	}
-	if got := contractStandingGetHit(t, rig.st, standingHitKey("kronos")); got.Deliveries != 1 {
+	if got := contractStandingGetHit(t, rig.st, standingHitKey("iris")); got.Deliveries != 1 {
 		t.Fatalf("first pass recorded %+v", got)
 	}
 
 	// inside the backoff: suppressed
 	d.standingHealthPass(a, rig.st, all, live, now.Add(time.Minute))
-	if got := contractStandingGetHit(t, rig.st, standingHitKey("kronos")); got.Deliveries != 1 {
+	if got := contractStandingGetHit(t, rig.st, standingHitKey("iris")); got.Deliveries != 1 {
 		t.Fatalf("a repeat inside the backoff recorded again: %+v", got)
 	}
 
@@ -1873,7 +1631,7 @@ func TestContractStandingHealthPassDedupRearms(t *testing.T) {
 	// unresolved hit rather than opening a second one
 	later := now.Add(limitRescueRetryInterval + time.Minute)
 	d.standingHealthPass(a, rig.st, all, live, later)
-	got := contractStandingGetHit(t, rig.st, standingHitKey("kronos"))
+	got := contractStandingGetHit(t, rig.st, standingHitKey("iris"))
 	if got.Deliveries != 2 {
 		t.Fatalf("past the backoff the trigger did not re-arm: %+v", got)
 	}
@@ -1887,19 +1645,19 @@ func TestContractStandingHealthPassDedupRearms(t *testing.T) {
 // and record nothing.
 func TestContractStandingHealthPassSkipsWhenDisabled(t *testing.T) {
 	rig := contractStandingRigNew(t)
-	const sid = "kronos-sess-disabled"
-	a, all, live := contractStandingLiveKronos(t, rig, sid, contractStandingUsageLimitText)
+	const sid = "iris-sess-disabled"
+	a, all, live := contractStandingLiveIris(t, rig, sid, contractStandingUsageLimitText)
 	// turn the opt-in back off
-	if err := os.Remove(KronosEnvPath()); err != nil {
+	if err := os.Remove(core.SlackEnvPath()); err != nil {
 		t.Fatal(err)
 	}
-	if KronosEnabled() {
-		t.Fatal("fixture is wrong: kronos is still enabled")
+	if a.Enabled() {
+		t.Fatal("fixture is wrong: iris is still enabled")
 	}
 
 	newDaemon().standingHealthPass(a, rig.st, all, live, time.Unix(1_700_000_000, 0))
 
-	if got := contractStandingGetHit(t, rig.st, standingHitKey("kronos")); got.At != 0 {
+	if got := contractStandingGetHit(t, rig.st, standingHitKey("iris")); got.At != 0 {
 		t.Fatalf("a disabled agent recorded a hit: %+v", got)
 	}
 }
@@ -1910,12 +1668,12 @@ func TestContractStandingHealthPassSkipsWhenDisabled(t *testing.T) {
 // banner forever.
 func TestContractStandingHealthPassSkipsWhenTheSessionIsNotLive(t *testing.T) {
 	rig := contractStandingRigNew(t)
-	const sid = "kronos-sess-dead"
-	a, all, _ := contractStandingLiveKronos(t, rig, sid, contractStandingUsageLimitText)
+	const sid = "iris-sess-dead"
+	a, all, _ := contractStandingLiveIris(t, rig, sid, contractStandingUsageLimitText)
 
 	newDaemon().standingHealthPass(a, rig.st, all, map[string]bool{}, time.Unix(1_700_000_000, 0))
 
-	if got := contractStandingGetHit(t, rig.st, standingHitKey("kronos")); got.At != 0 {
+	if got := contractStandingGetHit(t, rig.st, standingHitKey("iris")); got.At != 0 {
 		t.Fatalf("a dead session recorded a hit: %+v", got)
 	}
 }
@@ -1926,15 +1684,15 @@ func TestContractStandingHealthPassSkipsWhenTheSessionIsNotLive(t *testing.T) {
 // banner behind it — and no kv row exists, so nothing may be recorded.
 func TestContractStandingHealthPassRecordsNothingWithoutARecordedSession(t *testing.T) {
 	rig := contractStandingRigNew(t)
-	contractStandingEnableKronos(t)
-	const discovered = "kronos-sess-guessed"
+	contractStandingEnableIris(t)
+	const discovered = "iris-sess-guessed"
 	contractStandingTranscript(t, discovered, contractStandingUsageLimitText)
-	a := contractStandingRow(t, "kronos")
-	all := []*core.Peer{contractStandingPeer("kronos", "%1", KronosAgentName, discovered)}
+	a := contractStandingRow(t, "iris")
+	all := []*core.Peer{contractStandingPeer("iris", "%1", IrisAgentName, discovered)}
 
-	newDaemon().standingHealthPass(a, rig.st, all, map[string]bool{"kronos": true}, time.Unix(1_700_000_000, 0))
+	newDaemon().standingHealthPass(a, rig.st, all, map[string]bool{"iris": true}, time.Unix(1_700_000_000, 0))
 
-	if got := contractStandingGetHit(t, rig.st, standingHitKey("kronos")); got.At != 0 {
+	if got := contractStandingGetHit(t, rig.st, standingHitKey("iris")); got.At != 0 {
 		t.Fatalf("classified a discovered session id and recorded %+v", got)
 	}
 }
@@ -1943,18 +1701,18 @@ func TestContractStandingHealthPassRecordsNothingWithoutARecordedSession(t *test
 // slice S — standingLimitRescue
 // ---------------------------------------------------------------------------
 
-// contractStandingRescueWorld wires kronos up for the rescue pass: enabled,
+// contractStandingRescueWorld wires iris up for the rescue pass: enabled,
 // with a recorded session, a named live peer, and a usage snapshot the
 // selector can be consulted against.
 func contractStandingRescueWorld(t *testing.T, rig *contractStandingRig, sid string) (standingAgent, []*core.Peer, map[string]bool) {
 	t.Helper()
-	contractStandingEnableKronos(t)
+	contractStandingEnableIris(t)
 	contractStandingSnapshot(t)
-	if err := writeKronosAgent(rig.st, KronosAgent{SessionID: sid, SpawnedAt: time.Now().UnixMilli()}); err != nil {
+	if err := writeIrisAgent(rig.st, irisAgent{SessionID: sid, SpawnedAt: time.Now().UnixMilli()}); err != nil {
 		t.Fatal(err)
 	}
-	all := []*core.Peer{contractStandingPeer("kronos", "%1", KronosAgentName, sid)}
-	return contractStandingRow(t, "kronos"), all, map[string]bool{"kronos": true}
+	all := []*core.Peer{contractStandingPeer("iris", "%1", IrisAgentName, sid)}
+	return contractStandingRow(t, "iris"), all, map[string]bool{"iris": true}
 }
 
 // TestContractStandingLimitRescueSkipsAnEmptyOrResolvedHit: "short-circuit on
@@ -1964,9 +1722,9 @@ func contractStandingRescueWorld(t *testing.T, rig *contractStandingRig, sid str
 func TestContractStandingLimitRescueSkipsAnEmptyOrResolvedHit(t *testing.T) {
 	rig := contractStandingRigNew(t)
 	rig.Target = "pool-b"
-	a, all, live := contractStandingRescueWorld(t, rig, "kronos-sess-skip")
+	a, all, live := contractStandingRescueWorld(t, rig, "iris-sess-skip")
 	now := time.Unix(1_700_000_000, 0)
-	key := standingHitKey("kronos")
+	key := standingHitKey("iris")
 
 	// empty
 	newDaemon().standingLimitRescue(a, rig.st, all, live, now)
@@ -2000,9 +1758,9 @@ func TestContractStandingLimitRescueSkipsAnEmptyOrResolvedHit(t *testing.T) {
 func TestContractStandingLimitRescueNonRateLimitIsRecordedButNeverActedOn(t *testing.T) {
 	rig := contractStandingRigNew(t)
 	rig.Target = "pool-b"
-	a, all, live := contractStandingRescueWorld(t, rig, "kronos-sess-auth")
+	a, all, live := contractStandingRescueWorld(t, rig, "iris-sess-auth")
 	now := time.Unix(1_700_000_000, 0)
-	key := standingHitKey("kronos")
+	key := standingHitKey("iris")
 	seeded := LimitHit{Error: "authentication_failed", Details: "Invalid API key", At: now.Add(-time.Minute).Unix(), Deliveries: 1}
 	contractStandingPutHit(t, rig.st, key, seeded)
 
@@ -2023,9 +1781,9 @@ func TestContractStandingLimitRescueNonRateLimitIsRecordedButNeverActedOn(t *tes
 func TestContractStandingLimitRescueSkipsWhenTheAgentSessionIsNotLive(t *testing.T) {
 	rig := contractStandingRigNew(t)
 	rig.Target = "pool-b"
-	a, all, _ := contractStandingRescueWorld(t, rig, "kronos-sess-notlive")
+	a, all, _ := contractStandingRescueWorld(t, rig, "iris-sess-notlive")
 	now := time.Unix(1_700_000_000, 0)
-	key := standingHitKey("kronos")
+	key := standingHitKey("iris")
 	seeded := LimitHit{Error: "rate_limit", Details: "429", At: now.Add(-time.Minute).Unix(), Deliveries: 1}
 	contractStandingPutHit(t, rig.st, key, seeded)
 
@@ -2048,8 +1806,8 @@ func TestContractStandingLimitRescueSkipsWhenTheAgentSessionIsNotLive(t *testing
 func TestContractStandingLimitRescueRotatesThenResumes(t *testing.T) {
 	rig := contractStandingRigNew(t)
 	rig.Target = "pool-b"
-	a, all, live := contractStandingRescueWorld(t, rig, "kronos-sess-rotate")
-	key := standingHitKey("kronos")
+	a, all, live := contractStandingRescueWorld(t, rig, "iris-sess-rotate")
+	key := standingHitKey("iris")
 	t0 := time.Unix(1_700_000_000, 0)
 	contractStandingPutHit(t, rig.st, key, LimitHit{
 		Error: "rate_limit", Details: "429", At: t0.Add(-time.Minute).Unix(), Deliveries: 1,
@@ -2095,8 +1853,8 @@ func TestContractStandingLimitRescueRotatesThenResumes(t *testing.T) {
 	if len(rig.Respawns) != 1 {
 		t.Fatalf("tick 2 respawns = %+v, want exactly one", rig.Respawns)
 	}
-	if got := rig.Respawns[0].agentID; got != "kronos" {
-		t.Errorf("respawned agent %q, want kronos", got)
+	if got := rig.Respawns[0].agentID; got != "iris" {
+		t.Errorf("respawned agent %q, want iris", got)
 	}
 	done := contractStandingGetHit(t, rig.st, key)
 	if done.HandledAt != t1.Unix() {
@@ -2114,7 +1872,7 @@ func TestContractStandingLimitRescueRotatesThenResumes(t *testing.T) {
 func TestContractStandingLimitRescueManualPinParksWithoutRotating(t *testing.T) {
 	rig := contractStandingRigNew(t)
 	rig.Target = "pool-b"
-	a, all, live := contractStandingRescueWorld(t, rig, "kronos-sess-manual")
+	a, all, live := contractStandingRescueWorld(t, rig, "iris-sess-manual")
 	if err := SetRotationMode("manual", "test"); err != nil {
 		t.Fatal(err)
 	}
@@ -2122,7 +1880,7 @@ func TestContractStandingLimitRescueManualPinParksWithoutRotating(t *testing.T) 
 		t.Fatal("fixture is wrong: rotation mode is not manual")
 	}
 	now := time.Unix(1_700_000_000, 0)
-	key := standingHitKey("kronos")
+	key := standingHitKey("iris")
 	hitAt := now.Add(-time.Minute)
 	contractStandingPutHit(t, rig.st, key, LimitHit{
 		Error: "rate_limit", Details: "429", At: hitAt.Unix(), Deliveries: 1,
@@ -2154,7 +1912,7 @@ func TestContractStandingLimitRescueManualPinParksWithoutRotating(t *testing.T) 
 	for k := range d.Notified {
 		key0 = k
 	}
-	if !strings.Contains(key0, "kronos") {
+	if !strings.Contains(key0, "iris") {
 		t.Errorf("dedup key %q does not name the agent — two agents would share one notification", key0)
 	}
 	if !strings.Contains(key0, strconv.FormatInt(hitAt.Unix(), 10)) {
@@ -2169,12 +1927,12 @@ func TestContractStandingLimitRescueManualPinParksWithoutRotating(t *testing.T) 
 func TestContractStandingLimitRescueLandedSwapOutranksTheManualPin(t *testing.T) {
 	rig := contractStandingRigNew(t)
 	rig.Target = "pool-b"
-	a, all, live := contractStandingRescueWorld(t, rig, "kronos-sess-flip")
+	a, all, live := contractStandingRescueWorld(t, rig, "iris-sess-flip")
 	if err := SetRotationMode("manual", "test"); err != nil {
 		t.Fatal(err)
 	}
 	now := time.Unix(1_700_000_000, 0)
-	key := standingHitKey("kronos")
+	key := standingHitKey("iris")
 	contractStandingPutHit(t, rig.st, key, LimitHit{
 		Error: "rate_limit", Details: "429", At: now.Add(-5 * time.Minute).Unix(), Deliveries: 1,
 		Attempts: 1, LastAttempt: now.Add(-time.Minute).Unix(),
@@ -2202,9 +1960,9 @@ func TestContractStandingLimitRescueLandedSwapOutranksTheManualPin(t *testing.T)
 func TestContractStandingLimitRescueAdoptsTheMachineWideWatermark(t *testing.T) {
 	rig := contractStandingRigNew(t)
 	rig.Target = "pool-b"
-	a, all, live := contractStandingRescueWorld(t, rig, "kronos-sess-adopt")
+	a, all, live := contractStandingRescueWorld(t, rig, "iris-sess-adopt")
 	now := time.Unix(1_700_000_000, 0)
-	key := standingHitKey("kronos")
+	key := standingHitKey("iris")
 	hitAt := now.Add(-5 * time.Minute)
 	contractStandingPutHit(t, rig.st, key, LimitHit{
 		Error: "rate_limit", Details: "429", At: hitAt.Unix(), Deliveries: 1,
@@ -2238,9 +1996,9 @@ func TestContractStandingLimitRescueAdoptsTheMachineWideWatermark(t *testing.T) 
 func TestContractStandingLimitRescueIgnoresAWatermarkPredatingTheHit(t *testing.T) {
 	rig := contractStandingRigNew(t)
 	rig.Target = "pool-b"
-	a, all, live := contractStandingRescueWorld(t, rig, "kronos-sess-oldmark")
+	a, all, live := contractStandingRescueWorld(t, rig, "iris-sess-oldmark")
 	now := time.Unix(1_700_000_000, 0)
-	key := standingHitKey("kronos")
+	key := standingHitKey("iris")
 	hitAt := now.Add(-time.Minute)
 	contractStandingPutHit(t, rig.st, key, LimitHit{
 		Error: "rate_limit", Details: "429", At: hitAt.Unix(), Deliveries: 1,
@@ -2270,9 +2028,9 @@ func TestContractStandingLimitRescueIgnoresAWatermarkPredatingTheHit(t *testing.
 func TestContractStandingLimitRescueLockBusyRecordsNothing(t *testing.T) {
 	rig := contractStandingRigNew(t)
 	rig.Target = "pool-b"
-	a, all, live := contractStandingRescueWorld(t, rig, "kronos-sess-lock")
+	a, all, live := contractStandingRescueWorld(t, rig, "iris-sess-lock")
 	now := time.Unix(1_700_000_000, 0)
-	key := standingHitKey("kronos")
+	key := standingHitKey("iris")
 	seeded := LimitHit{Error: "rate_limit", Details: "429", At: now.Add(-time.Minute).Unix(), Deliveries: 1}
 	contractStandingPutHit(t, rig.st, key, seeded)
 
@@ -2300,18 +2058,18 @@ func TestContractStandingLimitRescueLockBusyRecordsNothing(t *testing.T) {
 func TestContractStandingLimitRescueRefusedResumeNeverResolves(t *testing.T) {
 	rig := contractStandingRigNew(t)
 	rig.Target = "pool-b"
-	contractStandingEnableKronos(t)
+	contractStandingEnableIris(t)
 	contractStandingSnapshot(t)
-	if err := writeKronosAgent(rig.st, KronosAgent{SessionID: "kronos-sess-refuse", SpawnedAt: time.Now().UnixMilli()}); err != nil {
+	if err := writeIrisAgent(rig.st, irisAgent{SessionID: "iris-sess-refuse", SpawnedAt: time.Now().UnixMilli()}); err != nil {
 		t.Fatal(err)
 	}
-	a := contractStandingRow(t, "kronos")
-	// a claude in kronos' session that is NOT kronos by either disjunct
-	all := []*core.Peer{contractStandingPeer("kronos", "%1", "someone-else", "someone-else-sess")}
-	live := map[string]bool{"kronos": true}
+	a := contractStandingRow(t, "iris")
+	// a claude in iris' session that is NOT iris by either disjunct
+	all := []*core.Peer{contractStandingPeer("iris", "%1", "someone-else", "someone-else-sess")}
+	live := map[string]bool{"iris": true}
 
 	now := time.Unix(1_700_000_000, 0)
-	key := standingHitKey("kronos")
+	key := standingHitKey("iris")
 	contractStandingPutHit(t, rig.st, key, LimitHit{
 		Error: "rate_limit", Details: "429", At: now.Add(-5 * time.Minute).Unix(), Deliveries: 1,
 		Attempts: 1, LastAttempt: now.Add(-2 * time.Minute).Unix(),
@@ -2344,17 +2102,17 @@ func TestContractStandingLimitRescueRefusedResumeNeverResolves(t *testing.T) {
 func TestContractStandingLimitRescueRefusedResumesEventuallyPark(t *testing.T) {
 	rig := contractStandingRigNew(t)
 	rig.Target = "pool-b"
-	contractStandingEnableKronos(t)
+	contractStandingEnableIris(t)
 	contractStandingSnapshot(t)
-	if err := writeKronosAgent(rig.st, KronosAgent{SessionID: "kronos-sess-park", SpawnedAt: time.Now().UnixMilli()}); err != nil {
+	if err := writeIrisAgent(rig.st, irisAgent{SessionID: "iris-sess-park", SpawnedAt: time.Now().UnixMilli()}); err != nil {
 		t.Fatal(err)
 	}
-	a := contractStandingRow(t, "kronos")
-	all := []*core.Peer{contractStandingPeer("kronos", "%1", "someone-else", "someone-else-sess")}
-	live := map[string]bool{"kronos": true}
+	a := contractStandingRow(t, "iris")
+	all := []*core.Peer{contractStandingPeer("iris", "%1", "someone-else", "someone-else-sess")}
+	live := map[string]bool{"iris": true}
 
 	now := time.Unix(1_700_000_000, 0)
-	key := standingHitKey("kronos")
+	key := standingHitKey("iris")
 	contractStandingPutHit(t, rig.st, key, LimitHit{
 		Error: "rate_limit", Details: "429", At: now.Add(-time.Hour).Unix(), Deliveries: 1,
 		SwappedAt: now.Add(-30 * time.Minute).Unix(), SwappedTo: "pool-b@example.com",
@@ -2380,15 +2138,15 @@ func TestContractStandingLimitRescueRefusedResumesEventuallyPark(t *testing.T) {
 // TestContractStandingLimitRescueRespawnFailureIsTheNoAgentsOutcome: a seam
 // that returns an error is the same "reached nobody" as a refusal. The
 // contract makes the seam's error contract explicit for one reason —
-// EnsureKronos/EnsureIris return nil on their silent spawn-backoff arm, and a
+// EnsureIris returns nil on its silent spawn-backoff arm, and a
 // nil read as success would resolve a hit whose agent never came back.
 func TestContractStandingLimitRescueRespawnFailureIsTheNoAgentsOutcome(t *testing.T) {
 	rig := contractStandingRigNew(t)
 	rig.Target = "pool-b"
 	rig.RespawnErr = fmt.Errorf("tmux refused the respawn")
-	a, all, live := contractStandingRescueWorld(t, rig, "kronos-sess-respawnfail")
+	a, all, live := contractStandingRescueWorld(t, rig, "iris-sess-respawnfail")
 	now := time.Unix(1_700_000_000, 0)
-	key := standingHitKey("kronos")
+	key := standingHitKey("iris")
 	contractStandingPutHit(t, rig.st, key, LimitHit{
 		Error: "rate_limit", Details: "429", At: now.Add(-5 * time.Minute).Unix(), Deliveries: 1,
 		SwappedAt: now.Add(-2 * time.Minute).Unix(), SwappedTo: "pool-b@example.com",
@@ -2417,7 +2175,7 @@ func TestContractStandingLimitRescueRespawnFailureIsTheNoAgentsOutcome(t *testin
 func TestContractStandingLimitRescueResumesAfterTheWindowResets(t *testing.T) {
 	rig := contractStandingRigNew(t)
 	rig.Target = "" // no rotation target: the reset is the only way back
-	a, all, live := contractStandingRescueWorld(t, rig, "kronos-sess-reset")
+	a, all, live := contractStandingRescueWorld(t, rig, "iris-sess-reset")
 
 	now := time.Unix(1_700_000_000, 0)
 	anchor := now.Add(-8 * time.Hour)
@@ -2433,7 +2191,7 @@ func TestContractStandingLimitRescueResumesAfterTheWindowResets(t *testing.T) {
 		t.Fatalf("fixture is wrong: the reset at %v is not yet past %v + settle", time.Unix(resetAt, 0), now)
 	}
 
-	key := standingHitKey("kronos")
+	key := standingHitKey("iris")
 	contractStandingPutHit(t, rig.st, key, LimitHit{
 		Error: "rate_limit", Details: details, At: anchor.Unix(), Deliveries: 2,
 		Attempts: limitRescueMaxAttempts, LastAttempt: anchor.Add(30 * time.Minute).Unix(),
@@ -2467,7 +2225,7 @@ func TestContractStandingLimitRescueResumesAfterTheWindowResets(t *testing.T) {
 func TestContractStandingLimitRescueHoldsUnresolvedUntilTheResetPasses(t *testing.T) {
 	rig := contractStandingRigNew(t)
 	rig.Target = ""
-	a, all, live := contractStandingRescueWorld(t, rig, "kronos-sess-hold")
+	a, all, live := contractStandingRescueWorld(t, rig, "iris-sess-hold")
 
 	now := time.Unix(1_700_000_000, 0)
 	anchor := now.Add(-30 * time.Minute)
@@ -2477,7 +2235,7 @@ func TestContractStandingLimitRescueHoldsUnresolvedUntilTheResetPasses(t *testin
 		t.Fatalf("fixture is wrong: %q parsed to %v, want a moment still ahead of %v", details, time.Unix(resetAt, 0), now)
 	}
 
-	key := standingHitKey("kronos")
+	key := standingHitKey("iris")
 	seeded := LimitHit{
 		Error: "rate_limit", Details: details, At: anchor.Unix(), Deliveries: 2,
 		Attempts: limitRescueMaxAttempts, LastAttempt: anchor.Add(10 * time.Minute).Unix(),

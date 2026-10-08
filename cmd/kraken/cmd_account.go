@@ -36,7 +36,7 @@ func cmdAccount(args []string) {
 	case "--help", "-h", "help":
 		fmt.Println("usage: k account [auto|<slot-slug>]")
 		fmt.Println("  k account            show rotation mode + account table")
-		fmt.Println("  k account auto       release the manual pin (kraken binds each new cell to a pool account; main moves only for kronos/iris limit rescues)")
+		fmt.Println("  k account auto       release the manual pin (kraken binds each new cell to a pool account; main moves only for iris' limit rescue)")
 		fmt.Println("  k account <slug>     manually switch main to a ~/.claude-pool slot slug (pins manual)")
 		return
 	}
@@ -281,7 +281,7 @@ func cmdAccountAuto() {
 		util.Die("set rotation mode: %v", err)
 	}
 	util.LogEvent("cli", "info", "account", "k account auto")
-	fmt.Println("rotation: auto — kraken binds each new cell to its own pool account; main moves only for a standing agent's (kronos/iris) limit rescue or by hand")
+	fmt.Println("rotation: auto — kraken binds each new cell to its own pool account; main moves only for iris' limit rescue or by hand")
 }
 
 // cmdAccountSwitch is a manual main-login swap: it always executes

@@ -82,6 +82,17 @@ func undoV29(t *testing.T, s *Store) {
 
 func downgradeFreshDB(t *testing.T, s *Store, target int) {
 	t.Helper()
+	// Reverse v31: put orch_inbox back in its exact v24 shape (schemaV24 is
+	// that DDL verbatim). Shape-only, like every arm here: the five kv rows
+	// v31 deletes are not recreated, since an older SHAPE is what this helper
+	// reproduces and a kv row is data. The v24 arm below then drops the table
+	// again for any target that predates it. Reversed FIRST, since downgrades
+	// unwind newest-first.
+	if target < 31 {
+		if _, err := s.db.Exec(schemaV24); err != nil {
+			t.Fatalf("downgrade to v%d (undo v31) recreate orch_inbox: %v", target, err)
+		}
+	}
 	// Reverse v30: drop the jobs.agent column (added at v30, absent through
 	// v29). Shape-only, no data carried back — the codex/claude choice has no
 	// place to live in a pre-v30 database. Reversed FIRST, since downgrades
@@ -186,7 +197,8 @@ func downgradeFreshDB(t *testing.T, s *Store, target int) {
 			t.Fatalf("downgrade to v%d (undo v25): %v", target, err)
 		}
 	}
-	// Reverse v24: drop kronos' one table. It is brand new at v24 (schemaV24
+	// Reverse v24: drop the retired orchestrator's one table (recreated by the
+	// v31 arm above). It is brand new at v24 (schemaV24
 	// adds it and touches nothing else), so there is nothing to put back in
 	// its place and no rows to carry — the v17 arm's situation exactly, and
 	// the same ruling: this helper reproduces an older SHAPE.

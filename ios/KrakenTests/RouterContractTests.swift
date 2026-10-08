@@ -153,26 +153,24 @@ final class RouterContractTests: XCTestCase {
     // MARK: - Tab shape
     //
     // Contract row `AppRouter.Tab`: "`enum Tab: Hashable { case board,
-    // kronos, sessions, graph, settings }` — Exactly 5 cases, this order.
-    // `usage` and `log` cases are GONE (their screens become drawers);
-    // `kronos` was ADDED by 50-contract.md's round-5 amendment (the iOS
-    // kronos tab), which superseded this test's original "exactly 4" row.
+    // sessions, graph, settings }` — Exactly 4 cases, this order.
+    // `usage` and `log` cases are GONE (their screens become drawers).
 
-    /// The five cases exist, are distinct, and are the ONLY cases.
+    /// The four cases exist, are distinct, and are the ONLY cases.
     ///
-    /// "Exactly 5" is enforced at COMPILE time by the exhaustive switch below:
+    /// "Exactly 4" is enforced at COMPILE time by the exhaustive switch below:
     /// it has no `default`, so re-adding `case usage` or `case log` — or
-    /// inventing any sixth case — stops this file from compiling. That is the
+    /// inventing any fifth case — stops this file from compiling. That is the
     /// contract's stated way to assert a deleted symbol's absence: "the file
     /// must not compile references to them."
-    func testTabHasExactlyTheFiveContractCases() {
-        let cases: [AppRouter.Tab] = [.board, .kronos, .sessions, .graph, .settings]
-        XCTAssertEqual(Set(cases).count, 5, "the five Tab cases must be distinct values")
+    func testTabHasExactlyTheFourContractCases() {
+        let cases: [AppRouter.Tab] = [.board, .sessions, .graph, .settings]
+        XCTAssertEqual(Set(cases).count, 4, "the four Tab cases must be distinct values")
 
         for tab in cases {
             switch tab {
-            case .board, .kronos, .sessions, .graph, .settings:
-                break   // no `default:` — exhaustiveness IS the "exactly 5" assertion
+            case .board, .sessions, .graph, .settings:
+                break   // no `default:` — exhaustiveness IS the "exactly 4" assertion
             }
         }
     }

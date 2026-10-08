@@ -67,14 +67,6 @@ func main() {
 		cmdLimitHook(rest)
 	case "recall-hook":
 		cmdRecallHook(rest)
-	// kronos' two hooks, installed into ~/.kraken/kronos/.claude/settings.json
-	// (statusLine + PostCompact) rather than into a cell's. Kept out of
-	// usage() with the rest of the hook family: neither is a verb a human
-	// types, and both take their whole input on stdin.
-	case "ctx-hook":
-		cmdCtxHook(os.Args[2:])
-	case "rearm-hook":
-		cmdRearmHook(os.Args[2:])
 	case "questions":
 		cmdQuestions(rest)
 	case "goals":
@@ -91,8 +83,6 @@ func main() {
 		cmdMM(rest)
 	case "slack":
 		cmdSlack(rest)
-	case "orch":
-		cmdOrch(rest)
 	case "board":
 		cmdBoard(rest)
 	case "cell":
@@ -304,27 +294,14 @@ Commands:
                       status prints whether Slack is configured, when the poll
                       last ran, and how deep the backlog is. Reading Slack
                       itself is the daemon's job — no token is reachable here.
-  k orch inbox|ack ...
-                      kronos-side verbs for the orchestrator inbox, proxied
-                      the same way as 'k questions'. inbox prints the OLDEST
-                      100 unacked items as JSON, arrival order, with the full
-                      unacked count in 'total' so a deeper backlog is visible
-                      without shipping it whole — one row per transition the
-                      daemon enqueued (a job went blocked, a cell died or
-                      went unhealthy, a PR merged, a daemon-created job
-                      failed to start); ack --ids 42,43 --disposition "<what
-                      happened>" retires a batch (all-or-nothing: an unknown
-                      or already-acked id fails the whole call), and the
-                      disposition is the only record of WHY an item left, so
-                      it is required.
-  k board get [slug]  kronos-side read of the job board, proxied the same
+  k board get [slug]  agent-side read of the job board, proxied the same
                       way: with no slug it prints the whole /api/board
                       payload the web board and the phone render, with a slug
                       only that job's object (a client-side filter — there is
                       no per-job board route to drift from this one). An
                       unknown slug is an error naming it, never empty output.
   k cell steer|submit|answer <slug> ...
-                      kronos-side control of one job's cell, proxied to the
+                      agent-side control of one job's cell, proxied to the
                       BOARD's own routes so every guard carl's clicks go
                       through applies unchanged: steer <slug> sends a message
                       into the cell's zeus (the message on stdin); submit
@@ -333,7 +310,7 @@ Commands:
                       --digit N picks an option in a live AskUserQuestion
                       prompt, answer <slug> --question Qn records a doc
                       question's answer (the text on stdin). Each logs an
-                      audit line with src 'kronos' on success.
+                      audit line with src 'cell' on success.
   k job list|raw|draft <slug> ...
                       iris-side verbs for the job board, proxied the same way.
                       list prints every active job's slug, state and one-line

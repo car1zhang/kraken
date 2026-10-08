@@ -176,10 +176,10 @@ func rotationLockPath() string {
 // fetchMainUsage went with Q2's rotation gate — nothing here fetches main's
 // usage any more, since no spawn-time decision needs it. selectTarget and
 // swapMain SURVIVE, but with exactly one consumer left: rescueSwap, the
-// STANDING-agent rescue's swap half (standingrescue.go). Kronos and iris are
-// main's own tenants — they have no job row to bind, their limit evidence IS
-// main's exhaustion, and moving main for them displaces only the lane they
-// live on — so theirs is the one automated main swap that outlives Q2. The
+// STANDING-agent rescue's swap half (standingrescue.go). Iris is main's own
+// tenant — it has no job row to bind, its limit evidence IS main's
+// exhaustion, and moving main for it displaces only the lane it lives on —
+// so its rescue is the one automated main swap that outlives Q2. The
 // CELL rescue rebinds one job row instead (rescueLimitedCell) and can reach
 // neither seam; TestRetirementNoAutomatedMainSwap pins where core.SwapMainTo
 // may be named. ---
@@ -220,8 +220,8 @@ var (
 	// nothing here kicks off a real network usage pass in the background.
 	runUsagePass = UsagePass
 	// standingRespawn is the standing-agent rescue's resume half —
-	// respawnPeerPane's sibling for the agents that belong to no job (kronos,
-	// iris): kill the agent's whole tmux session and bring it back through
+	// respawnPeerPane's sibling for the agent that belongs to no job
+	// (iris): kill the agent's whole tmux session and bring it back through
 	// its own Ensure*. The body lives in standingrescue.go with the rest of
 	// the standing machinery; the seam lives HERE for this block's stated
 	// reason — one place to swap in a test.

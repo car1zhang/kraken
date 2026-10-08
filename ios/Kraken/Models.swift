@@ -1643,38 +1643,6 @@ struct PeersResponse: Decodable {
     let peers: [Peer]
 }
 
-// KronosStatus mirrors GET /api/kronos (ios/API.md § kronos). The five
-// non-context keys are documented as always present, so they are non-optional
-// here — a payload missing one is a decode error rather than a default,
-// because a default would render a half-shaped answer as a real status.
-// `context` is the one POINTER: the key is OMITTED until kronos has ever
-// reported its context, and absence is the wire's only spelling of "never
-// reported" — a zeroed object would instead claim a report OF zero, which is
-// a freshly compacted window and the opposite reading.
-struct KronosStatus: Decodable {
-    let enabled: Bool
-    let live: Bool
-    let sessionID: String
-    let pane: String
-    let spawnedAt: Int64
-    let context: KronosContext?
-
-    enum CodingKeys: String, CodingKey {
-        case enabled, live, pane, context
-        case sessionID = "session_id"
-        case spawnedAt = "spawned_at"
-    }
-}
-
-// The context sentinel's last statusline report: percentage full, the window
-// it is a percentage of, and when it was reported. Field names match the wire
-// keys verbatim.
-struct KronosContext: Decodable {
-    let pct: Double
-    let window: Int64
-    let at: Int64
-}
-
 // SpawnRequest mirrors POST /api/peers/spawn's webReq-style body: `kind` is
 // "shell" or "claude"; `dir` empty/nil lets the server default to home;
 // `name`/`prompt` are claude-only, `cmd` is shell-only. A plain struct with

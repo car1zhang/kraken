@@ -110,11 +110,9 @@ private enum SessionViewMode: String, CaseIterable, Hashable {
 struct SessionDetailView: View {
     let peer: Peer
     let baseURL: String
-    // The KRONOS tab embeds this view with allowKill false: the daemon owns
-    // kronos' lifecycle (EnsureKronos respawns a killed pane on the next
-    // tick), so a Kill button there reads as "stop kronos" while actually
-    // meaning "lose the in-flight turn and respawn" — an affordance that
-    // promises something it cannot do.
+    // Whether the toolbar offers Kill (default true). An embedder whose pane
+    // is owned by something that respawns it passes false, since Kill there
+    // would promise a stop it cannot deliver; no caller does so today.
     private let allowKill: Bool
     let onKilled: () -> Void
 
