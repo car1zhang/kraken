@@ -169,6 +169,11 @@ func Register(mux *http.ServeMux) {
 	mux.HandleFunc("/api/slack/inbox", slackInboxHandler)
 	mux.HandleFunc("/api/slack/status", slackStatusHandler)
 	mux.HandleFunc("/api/slack/ack", mirrorGated(slackAckHandler))
+	// /api/cell/context is a cell claude's statusline report (`kraken
+	// ctx-hook --slug`), feeding the daemon's auto-handoff pass. POSTed by a
+	// HOOK running inside the cell's pane rather than by an agent deciding to
+	// call it, and gated anyway because it WRITES.
+	mux.HandleFunc("/api/cell/context", mirrorGated(cellContextHandler))
 	mux.HandleFunc("/api/job/list", jobListHandler)
 	mux.HandleFunc("/api/job/draft", mirrorGated(jobDraftHandler))
 	mux.HandleFunc("/api/upload", uploadHandler)

@@ -2163,6 +2163,10 @@ Errors: 405 (non-GET), 500 (no store wired, or the counts query failed). A GET i
 
 `kraken board get [slug]` and `kraken cell steer|submit|answer <slug>` are agent-side CLI verbs with no routes of their own: `board get` reads `GET /api/board`, and the cell verbs post to the board's existing `/api/steer`, `/api/queue`, `/api/question` and `/api/doc-question`, so every guard carl's own clicks go through applies to an agent unchanged and there is no second, weaker door onto a live cell. Each cell verb logs an audit line through `/api/logevent` with `src: "cell"` on success. (They were introduced as the kronos orchestrator's control surface; kronos and its five routes under `/api/orch/*`, `/api/graph/recall-rearm` and `/api/kronos` were removed in job 549, and the verbs were kept as general agent-side verbs.)
 
+### `POST /api/cell/context` — localhost-only, agent-side (not called by the iOS app or web UI; not modeled in Models.swift/APIClient.swift)
+
+A cell claude's statusline hook (`kraken ctx-hook --slug <slug>`) reporting its context fill: body `{"slug", "session_id", "used_percentage", "context_window_size"}` (unknown fields rejected), stored per job and session for the daemon's auto-handoff pass. Once the job has a stamped zeus session, a report from any other session is answered `{"ok": true}` without being stored. Response `{"ok": true}`; errors 405, 400 (bad json, unknown field, blank `slug`/`session_id`, absent or out-of-range `used_percentage`), 404 (no such job), 413, 500. Gated under `--mirror`. **Additive, no contract bump.**
+
 ---
 
 ## Peers

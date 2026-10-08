@@ -35,9 +35,12 @@ func edgeKronosRemovalRead(t *testing.T, name string) string {
 // multi-value case (`case "orch", "o":`) or anywhere else as a literal.
 func TestKronosRemovalEdgeMainHasNoRemovedVerbLiterals(t *testing.T) {
 	src := edgeKronosRemovalRead(t, "main.go")
+	// ctx-hook is deliberately NOT in this list: it survives as every cell's
+	// statusline hook (contract amendment at the merge with main, applied by
+	// the lead after the author was stopped — a test-bug verdict).
 	for _, bad := range []string{
-		`case "orch":`, `case "ctx-hook":`, `case "rearm-hook":`,
-		`"orch"`, `"ctx-hook"`, `"rearm-hook"`, `"kronos"`,
+		`case "orch":`, `case "rearm-hook":`,
+		`"orch"`, `"rearm-hook"`, `"kronos"`,
 	} {
 		if strings.Contains(src, bad) {
 			t.Errorf("main.go still contains %s", bad)

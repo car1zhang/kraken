@@ -965,6 +965,14 @@ func (d *daemonState) tick(mirror bool) (int, error) {
 		for _, j := range jobs {
 			d.syncColor(j, all, live)
 		}
+		// auto-handoff (its own pass right after the colour reconcile, same
+		// per-tick cadence): type /handoff into a live cell's zeus once its
+		// statusline-reported context fill reaches autoHandoffThreshold
+		// (cellctx.go). It types into a live pane, which is why it sits in
+		// this block.
+		for _, j := range jobs {
+			autoHandoffPass(ActiveStore(), j, all, live, now)
+		}
 		// usage-limit rescue (its own pass, same per-tick cadence): a cell
 		// whose claudes hit their account's usage limit is REBOUND to a
 		// healthier pool slot — one job row, nothing machine-wide — and then,

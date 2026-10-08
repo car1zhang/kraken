@@ -33,33 +33,38 @@ func contractKronosRemovalReadFile(t *testing.T, name string) string {
 }
 
 // Contract: main.go contains `case "board":`, `case "cell":`, `case "job":`,
-// `case "slack":`, `case "limit-hook":` (Q2 keeps board and cell) and does
-// NOT contain `case "orch":`, `case "ctx-hook":`, `case "rearm-hook":`.
+// `case "slack":`, `case "limit-hook":`, `case "ctx-hook":` (Q2 keeps board
+// and cell; ctx-hook survives as every cell's statusline hook, per the
+// contract amendment at the merge with main) and does NOT contain
+// `case "orch":`, `case "rearm-hook":`. The ctx-hook half was rewritten by
+// the lead after the authors were stopped — a test-bug verdict against the
+// amended contract, recorded in the build report.
 func TestKronosRemovalContractDispatchCases(t *testing.T) {
 	src := contractKronosRemovalReadFile(t, "main.go")
-	for _, want := range []string{`case "board":`, `case "cell":`, `case "job":`, `case "slack":`, `case "limit-hook":`} {
+	for _, want := range []string{`case "board":`, `case "cell":`, `case "job":`, `case "slack":`, `case "limit-hook":`, `case "ctx-hook":`} {
 		if !strings.Contains(src, want) {
 			t.Errorf("main.go's dispatch lost %s — that verb must survive the removal", want)
 		}
 	}
-	for _, gone := range []string{`case "orch":`, `case "ctx-hook":`, `case "rearm-hook":`} {
+	for _, gone := range []string{`case "orch":`, `case "rearm-hook":`} {
 		if strings.Contains(src, gone) {
 			t.Errorf("main.go still dispatches %s", gone)
 		}
 	}
 }
 
-// Contract: usage()/help text in main.go contains no `orch`, `ctx-hook`,
-// `rearm-hook`, `kronos`. Asserted over the whole of main.go (the usage text
-// lives there; nothing else in main.go has a reason to say these words).
-// `orch` is matched as a whole word so an unrelated identifier containing the
-// letters cannot trip it; `kronos` case-insensitively.
+// Contract: usage()/help text in main.go contains no `orch`, `rearm-hook`,
+// `kronos` (ctx-hook survives per the amendment above). Asserted over the
+// whole of main.go (the usage text lives there; nothing else in main.go has a
+// reason to say these words). `orch` is matched as a whole word so an
+// unrelated identifier containing the letters cannot trip it; `kronos`
+// case-insensitively.
 func TestKronosRemovalContractUsageTextClean(t *testing.T) {
 	src := contractKronosRemovalReadFile(t, "main.go")
 	if regexp.MustCompile(`\borch\b`).MatchString(src) {
 		t.Error("main.go still names `orch`")
 	}
-	for _, gone := range []string{"ctx-hook", "rearm-hook"} {
+	for _, gone := range []string{"rearm-hook"} {
 		if strings.Contains(src, gone) {
 			t.Errorf("main.go still names %q", gone)
 		}

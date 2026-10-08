@@ -67,6 +67,14 @@ func main() {
 		cmdLimitHook(rest)
 	case "recall-hook":
 		cmdRecallHook(rest)
+	case "handoff-hook":
+		cmdHandoffHook(rest)
+	// A cell's statusline hook (mergeCellStatusLine installs it into every
+	// cell's settings.json as `ctx-hook --slug <slug>`), feeding the daemon's
+	// auto-handoff pass. Kept out of usage() with the rest of the hook family:
+	// not a verb a human types, and it takes its whole input on stdin.
+	case "ctx-hook":
+		cmdCtxHook(os.Args[2:])
 	case "questions":
 		cmdQuestions(rest)
 	case "goals":
