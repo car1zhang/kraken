@@ -124,7 +124,7 @@ func TestContractThreadSpawnCommandResolvesAnAliasToItsExactID(t *testing.T) {
 			// a job model is set deliberately: the per-thread choice must
 			// WIN over it, which is the whole reason row (1) precedes row (3)
 			j := contractThreadJob(t, "alias-"+alias, "claude-sonnet-5")
-			cmd, err := threadSpawnCommand(j, "t1", "why blocked", "explain", alias,
+			cmd, err := threadSpawnCommand(j, "t1", "why blocked", "explain", alias, "ask", "",
 				[]string{"--session-id", "11111111-2222-4333-8444-555555555555", "--fork-session", "-r", "zeus-sess"})
 			if err != nil {
 				t.Fatalf("threadSpawnCommand(model %q): %v", alias, err)
@@ -146,7 +146,7 @@ func TestContractThreadSpawnCommandResolvesAnAliasToItsExactID(t *testing.T) {
 func TestContractThreadSpawnCommandRefusesAnUnknownModel(t *testing.T) {
 	j := contractThreadJob(t, "bad-model", "")
 	for _, bad := range []string{"gpt-5", "claude-opus-5", "Haiku", "opus-5"} {
-		cmd, err := threadSpawnCommand(j, "t1", "why blocked", "explain", bad, []string{"-r", "sess"})
+		cmd, err := threadSpawnCommand(j, "t1", "why blocked", "explain", bad, "ask", "", []string{"-r", "sess"})
 		if err == nil {
 			t.Errorf("threadSpawnCommand(model %q) = %q, want a refusal", bad, cmd)
 			continue
@@ -164,7 +164,7 @@ func TestContractThreadSpawnCommandRefusesAnUnknownModel(t *testing.T) {
 func TestContractThreadSpawnCommandFallsBackToTheJobModel(t *testing.T) {
 	j := contractThreadJob(t, "job-model", "claude-sonnet-5")
 
-	cmd, err := threadSpawnCommand(j, "t1", "why blocked", "explain", "", []string{"-r", "sess"})
+	cmd, err := threadSpawnCommand(j, "t1", "why blocked", "explain", "", "ask", "", []string{"-r", "sess"})
 	if err != nil {
 		t.Fatalf("threadSpawnCommand: %v", err)
 	}
@@ -179,7 +179,7 @@ func TestContractThreadSpawnCommandFallsBackToTheJobModel(t *testing.T) {
 func TestContractThreadSpawnCommandFallsBackToDefaultModel(t *testing.T) {
 	j := contractThreadJob(t, "no-model", "")
 
-	cmd, err := threadSpawnCommand(j, "t1", "why blocked", "explain", "", []string{"-r", "sess"})
+	cmd, err := threadSpawnCommand(j, "t1", "why blocked", "explain", "", "ask", "", []string{"-r", "sess"})
 	if err != nil {
 		t.Fatalf("threadSpawnCommand: %v", err)
 	}
@@ -212,7 +212,7 @@ func TestContractThreadSpawnCommandCarriesExactlyOneModelFlag(t *testing.T) {
 		for shape, resume := range resumes {
 			t.Run(c.name+"/"+shape, func(t *testing.T) {
 				j := contractThreadJob(t, "count-"+strings.ReplaceAll(c.name, " ", "-")+"-"+shape, c.jobModel)
-				cmd, err := threadSpawnCommand(j, "t1", "why blocked", "", c.model, resume)
+				cmd, err := threadSpawnCommand(j, "t1", "why blocked", "", c.model, "ask", "", resume)
 				if err != nil {
 					t.Fatalf("threadSpawnCommand: %v", err)
 				}

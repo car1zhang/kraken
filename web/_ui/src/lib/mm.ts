@@ -1,17 +1,14 @@
-// The mental model's client-side leaf: the wire types, the two pure decisions
-// the capture surfaces make, and the one post-render DOM sweep.
+// The mental model's client-side leaf: the wire types and two small pure
+// helpers.
 //
-// A LEAF module — no React, no fetch, no imports at all. Everything here is
-// exported for lib/library.ts's reason: a pure function nobody can name is a
-// pure function nobody can test, and each consumer lives in a different slice
-// of the tree — the artifact viewer's ✓ read head button is
-// `artifactReadMatch(items, url) !== null`, its selection affordance is
-// `selectionText() !== ""`, and its body sweep is `decorateMMTables`.
-//
-// Every mark is SERVER state, exactly as ☆ save is: there is no local "I
-// clicked it" latch anywhere, so a refused POST leaves the control reading
-// unmarked and an invalidation made by the daemon's verify pass drops the
-// button back to "not read" on the next poll without anything here noticing.
+// A LEAF module — no React, no fetch, no imports at all. The board's one-shot
+// marks (the artifact viewer's ✓ read / mark selection, the per-table ✓ sweep
+// `decorateMMTables`, the steer detail's ○ mark known, the questions panel's
+// ◆ decision) are RETIRED (Q10): capture now goes through the mind button
+// (lib/mind.ts, components/chrome/MindButton.tsx) into a mind thread that
+// commits the item. `artifactReadMatch` and `selectionText` stay exported
+// because they are still pure and still pinned by their own tests; no board
+// surface calls them any more.
 
 /**
  * A code reading's anchor — where in which repo the frozen text was read, and
@@ -69,6 +66,86 @@ export type MMItem = {
   invalid_reason?: string;
   invalid_detail?: string;
   anchor?: MMAnchor;
+  // ---- schema v33, the mind layer. Optional on this side because a legacy
+  // server omits them and a test fixture need not spell them; the v33 server
+  // sends every key on every row ("" / 0 / null for a legacy row).
+  /** A one-line claim; "" on a legacy row, which then headlines its content. */
+  title?: string;
+  /** universal | repo. */
+  scope?: string;
+  repo?: string;
+  /** Repo-relative; "" is the repo root. */
+  dir?: string;
+  /** The highlighted text the item was captured from, verbatim. */
+  quote?: string;
+  /** The mind thread's session that committed it. */
+  thread_session?: string;
+  /** unix MILLIS; 0 = never revised. */
+  revised_at?: number;
+  /**
+   * Where the captured text came from (`jobs.CaptureSource`), or null on a
+   * legacy row. A key of its own because `source` above is already the item's
+   * source KIND string.
+   */
+  capture_source?: MMCaptureSource | null;
+};
+
+/** `jobs.CaptureSource` as `/api/mm` serves it — lib/mind.ts's CaptureSource. */
+export type MMCaptureSource = {
+  kind: string;
+  slug?: string;
+  home?: string;
+  name?: string;
+  sha?: string;
+  session?: string;
+  uuid?: string;
+  tid?: string;
+  repo?: string;
+  dir?: string;
+  item_id?: number;
+};
+
+/** One contradiction flag, `GET /api/mm/flags`. Every `store.MMFlag` field. */
+export type MMFlag = {
+  id: number;
+  item_id: number;
+  against_id: number;
+  job_id: number;
+  slug: string;
+  session: string;
+  note: string;
+  /** pending | raised | dismissed | resolved (amendment 2). */
+  state: string;
+  raised_by: string;
+  raise_note: string;
+  raised_at: number;
+  resolved_at: number;
+  /** "" | drop | keep. */
+  resolution: string;
+  created_at: number;
+};
+
+/** GET /api/mm/flags. */
+export type MMFlagsPage = {
+  flags: MMFlag[];
+};
+
+/** GET /api/mm/source?id=. Never a 5xx for a missing source. */
+export type MMSourceView = {
+  kind: string;
+  available: boolean;
+  changed: boolean;
+  text: string;
+  ext: string;
+};
+
+/** The query `GET /api/mm` takes beyond the bare list. Empty = no filter. */
+export type MMQuery = {
+  q?: string;
+  repo?: string;
+  dir?: string;
+  scope?: string;
+  live?: boolean;
 };
 
 /** GET /api/mm. Always an array, never null; newest first. */
@@ -143,198 +220,3 @@ export const selectionText = (): string => {
   return (window.getSelection()?.toString() ?? "").trim();
 };
 
-/**
- * The text one element mark freezes.
- *
- * `innerText` is what the contract names — it is the RENDERED text, so a table
- * comes out row-per-line with cells tab-separated rather than as the run of
- * markup whitespace `textContent` yields. jsdom implements no layout and so
- * has no `innerText` at all, which is why the fallback exists: the two agree
- * on which table is which, and the sweep's mark/compare pair uses one
- * derivation, so a run under either engine is self-consistent.
- */
-const elementText = (el: HTMLElement): string => {
-  // typed through a widening cast, not `el.innerText`: the DOM lib declares it
-  // non-optional, and it is genuinely absent under jsdom.
-  const rendered = (el as { innerText?: string }).innerText;
-  return rendered ?? el.textContent ?? "";
-};
-
-/**
- * Keep only unicode letters and digits, in order, case preserved.
- *
- * The exact mirror of `core.ProjectAlnum` (internal/core/anchor.go), down to
- * the two categories: `\p{L}` is Go's `unicode.IsLetter` and `\p{Nd}` is its
- * `unicode.IsDigit` — `\p{N}` would additionally admit Nl/No and put the two
- * projections out of step on exactly the characters nobody would think to
- * test.
- *
- * It exists here because the SERVER now stores something different from what
- * the browser handed it. `POST /api/mm/element` locates the rendered capture in
- * the artifact's markdown SOURCE and stores those source lines, so a marked
- * table comes back as `| tier | cells |\n|---|---|\n…` while the rendered
- * `<table>` in front of the reader still says `tier\tcells\n…`. The two can
- * never be equal as strings — the projection is the only comparison they can
- * both pass, which is why the server's own verify pass compares through it too
- * (`jobs.mmElementPresent`).
- */
-export const projectAlnum = (s: string): string =>
-  s.replace(/[^\p{L}\p{Nd}]/gu, "");
-
-/** The one line-ending policy the strict fallback shares with `jobs.mmNormalize`. */
-const normalizeEOL = (s: string) => s.replace(/\r\n/g, "\n");
-
-/**
- * Do `want`'s code points appear in `have`, in order, not necessarily adjacent?
- *
- * `jobs.mmSubsequence` in TypeScript, iterated by CODE POINT (`for…of`) rather
- * than by UTF-16 unit, so a surrogate pair is one character on this side too.
- */
-const subsequence = (have: string, want: string): boolean => {
-  const w = Array.from(want);
-  if (w.length === 0) return true;
-  let i = 0;
-  for (const r of have) {
-    if (r !== w[i]) continue;
-    if (++i === w.length) return true;
-  }
-  return false;
-};
-
-/**
- * Is `text` — one element's RENDERED text — the passage that `content` froze?
- *
- * `jobs.mmElementPresent` with its two arguments swapped, and the swap is the
- * whole idea. The verify pass asks "is the marked content still somewhere in
- * the current artifact?"; this asks "is what I am looking at inside what was
- * marked?". Both are the same containment through the same projection, run in
- * opposite directions, and one predicate covers both shapes a stored content
- * can have:
- *
- *   LOCATED (today's writes) — content is the markdown SOURCE. The renderer
- *   only ever DELETES alphanumerics on the way to the screen (a fence's
- *   language tag, an ordered-list marker, a link's url), so the rendered
- *   projection is a SUBSEQUENCE of the source's, which is the second rung.
- *   LEGACY (marks made before the locate shipped) — content IS the rendered
- *   text, so the two projections are equal and the first rung answers.
- *
- * The subsequence rung is deliberately permissive in one direction: a small
- * table whose projection happens to thread through a much larger marked block
- * reads as marked. That is the trade the server already makes on the same
- * comparison, and it errs toward "you have read this", which is recoverable by
- * looking at the memory pane — where the opposite error, the one this replaces,
- * was a ✓ that could never light for any table at all.
- */
-const markedBy = (content: string, text: string): boolean => {
-  const want = projectAlnum(text);
-  if (want === "") {
-    // No letters and no digits to compare — fall back to the strict form, and
-    // never let an element with NO text at all match: nothing could have
-    // frozen it, and `"".includes` would light every empty table in the
-    // document the moment any mark existed.
-    return text.trim() !== "" && normalizeEOL(content).includes(normalizeEOL(text));
-  }
-  const have = projectAlnum(content);
-  return have.includes(want) || subsequence(have, want);
-};
-
-/**
- * The click handler's current callback, per affordance button.
- *
- * A WeakMap rather than a listener re-bound on each sweep: the sweep is
- * idempotent by contract ("running twice adds nothing"), and a second
- * `addEventListener` would fire one click twice. The listener is hung once,
- * when the button is created, and reads whatever this map holds — so a later
- * sweep can hand it a fresh closure without touching the DOM.
- */
-const tableMarkers = new WeakMap<HTMLElement, (text: string) => void>();
-
-/**
- * Dress every `<table>` under `bodyEl` with a corner ✓ that marks exactly that
- * table's text internalized.
- *
- * The `decorateArtifactRefs` shape: a post-render sweep, because the markdown
- * renderer is pure and cannot know which of its tables carl has already read.
- * IDEMPOTENT in both directions — a second run over the same body adds no
- * second wrapper, no second button and no second listener, and a table that
- * has LEFT `markedTexts` (its mark was removed, or the verify pass invalidated
- * it) is undressed back to the unmarked state in the same pass, so the
- * affordance never outlives the fact it claims.
- *
- * `markedTexts` carries what the SERVER stored, which since the locate
- * amendment is markdown source rather than the rendered text this sweep hands
- * over — so membership is `markedBy`'s projected containment, never string
- * equality. Read that function before touching the comparison.
- *
- * The wrapper exists because a `<button>` is not valid content inside a
- * `<table>` — the parser hoists one out — so the affordance is positioned
- * against a `<div>` the sweep inserts around the table on first contact.
- */
-export const decorateMMTables = (
-  bodyEl: HTMLElement,
-  markedTexts: string[],
-  onMark: (text: string) => void,
-): void => {
-  // A Set of raw strings used to live here, on the premise that what came back
-  // in `markedTexts` was the text this sweep had handed over. The server no
-  // longer keeps that promise: it locates the capture in the artifact's
-  // markdown SOURCE and stores the source lines, so a raw comparison against
-  // the rendered table is one the two sides can never pass. `markedBy` is the
-  // comparison that survives it, and it is a scan rather than a lookup because
-  // containment has no hash — with a handful of tables and a handful of marks
-  // per artifact, on a sweep that is already fingerprinted against re-running.
-  for (const table of Array.from(bodyEl.querySelectorAll("table"))) {
-    // A table INSIDE another table gets no affordance. Markdown cannot nest
-    // tables, but raw HTML in a `.md` artifact can, and the wrapper plus its
-    // button would land in the outer table's own `<td>`: document order makes
-    // the first sweep clean, and every sweep after it reads the outer table's
-    // text with a stray ✓ in it — so a marked outer table silently stops
-    // matching `markedTexts`, and a click on it freezes text carrying a glyph
-    // that is in no document.
-    if (table.parentElement?.closest("table")) continue;
-    const host = table.parentElement;
-    let wrap: HTMLElement;
-    let btn: HTMLButtonElement;
-    if (host && host.classList.contains("mm-tblwrap")) {
-      wrap = host;
-      const found = wrap.querySelector<HTMLButtonElement>(".mm-tblmark");
-      if (!found) continue; // hand-mangled DOM; leave it alone
-      btn = found;
-    } else {
-      wrap = bodyEl.ownerDocument.createElement("div");
-      wrap.className = "mm-tblwrap";
-      table.parentNode?.insertBefore(wrap, table);
-      wrap.appendChild(table);
-      btn = bodyEl.ownerDocument.createElement("button");
-      btn.type = "button";
-      btn.className = "mm-tblmark";
-      btn.textContent = "✓";
-      btn.addEventListener("click", (ev) => {
-        // The body carries ONE delegated click handler for code and artifact
-        // refs (ArtifactOverlay's onBodyClick) — this press is neither.
-        ev.preventDefault();
-        ev.stopPropagation();
-        tableMarkers.get(btn)?.(elementText(table));
-      });
-      wrap.insertBefore(btn, table);
-    }
-    tableMarkers.set(btn, onMark);
-    const text = elementText(table);
-    const on = markedTexts.some((content) => markedBy(content, text));
-    wrap.classList.toggle("mm-marked", on);
-    btn.classList.toggle("on", on);
-    btn.setAttribute("aria-pressed", on ? "true" : "false");
-    // The marked state is a STATEMENT, not a toggle: this affordance's only
-    // verb is `onMark`, which re-posts and gets `already` back, and dropping a
-    // mark needs an item id this sweep is never handed. Unmarking lives in the
-    // memory view's pane, and the strings say so rather than promising a click
-    // that changes nothing.
-    btn.title = on
-      ? "you have read this table — already marked; drop it from the memory pane"
-      : "mark this table internalized";
-    btn.setAttribute(
-      "aria-label",
-      on ? "this table is already marked read" : "mark this table read",
-    );
-  }
-};

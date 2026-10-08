@@ -9,6 +9,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -192,6 +194,24 @@ type webMMItem struct {
 	InvalidReason string       `json:"invalid_reason,omitempty"`
 	InvalidDetail string       `json:"invalid_detail,omitempty"`
 	Anchor        *webMMAnchor `json:"anchor,omitempty"`
+
+	// The schema-v33 half, all additive and never omitempty: a legacy row
+	// carries them as "" / 0 / null, so a client can read every key off every
+	// item without first asking which generation the row is from.
+	Title         string `json:"title"`
+	Scope         string `json:"scope"`
+	Repo          string `json:"repo"`
+	Dir           string `json:"dir"`
+	Quote         string `json:"quote"`
+	ThreadSession string `json:"thread_session"`
+	RevisedAt     int64  `json:"revised_at"` // unix millis, 0 = never revised
+	// CaptureSource is the parsed `source_json` pointer — where the captured
+	// text came from — or null when the row has none (every legacy row). It is
+	// a key of its own rather than `source` because `source` is already the
+	// item's source KIND string above, decoded non-optionally as a String by
+	// shipped iOS builds; serving an object there would be a retype, i.e. a
+	// breaking change, which apiContract 6 rules out.
+	CaptureSource *jobs.CaptureSource `json:"capture_source"`
 }
 
 func webMMAnchorFrom(a store.MMCodeAnchor) *webMMAnchor {
@@ -211,11 +231,30 @@ func webMMItemFrom(it store.MMItem, anchor *store.MMCodeAnchor) webMMItem {
 		CreatedAt: it.CreatedAt, EpisodeID: it.EpisodeID,
 		InvalidatedAt: it.InvalidatedAt, InvalidReason: it.InvalidReason,
 		InvalidDetail: it.InvalidDetail,
+		Title:         it.Title, Scope: it.Scope, Repo: it.Repo, Dir: it.Dir,
+		Quote: it.Quote, ThreadSession: it.ThreadSession, RevisedAt: it.RevisedAt,
+		CaptureSource: mmParseSource(it.SourceJSON),
 	}
 	if anchor != nil {
 		out.Anchor = webMMAnchorFrom(*anchor)
 	}
 	return out
+}
+
+// mmParseSource decodes a row's source_json into the pointer the wire
+// carries. Empty and malformed both read as nil: the column is written only by
+// jobs.CommitMMItem from a validated struct, so a value that does not decode
+// is not something a client can act on, and failing the whole list over one
+// row's decoration would be the worse answer.
+func mmParseSource(raw string) *jobs.CaptureSource {
+	if strings.TrimSpace(raw) == "" {
+		return nil
+	}
+	var s jobs.CaptureSource
+	if err := json.Unmarshal([]byte(raw), &s); err != nil {
+		return nil
+	}
+	return &s
 }
 
 // --- request bodies ---
@@ -505,7 +544,9 @@ func mmListHandler(w http.ResponseWriter, r *http.Request) {
 	// agent makes before explaining a file, citing it, or briefing a diagram
 	// over it ("which exact lines has carl read here"). Notes and artifact
 	// marks have no path, so under the filter they are simply not the
-	// question being asked. ?worktree= (an absolute local path) resolves the
+	// question being asked. Captured items have no anchor but do have a place,
+	// so they are admitted too when their repo/dir covers the file
+	// (mmItemCoversFile — needs ?worktree=). ?worktree= (an absolute local path) resolves the
 	// repo half through mmRepoName — the SAME identity rule the mark route
 	// applies to its own worktree — so a filtered read from a cell worktree
 	// matches marks made in the primary checkout, exactly as the marks
@@ -518,7 +559,18 @@ func mmListHandler(w http.ResponseWriter, r *http.Request) {
 			repoFilter = mmRepoName(wt)
 		}
 	}
-	rows, err := st.ListMMItems(!live)
+	// ?q=, ?repo=, ?dir= and ?scope= pass straight into the store's filter —
+	// the store owns their semantics (Q substring over title/content/quote,
+	// Dir matching the dir itself or any ancestor of it), so this layer only
+	// carries them. They compose with ?file= above, which narrows afterwards.
+	q := r.URL.Query()
+	rows, err := st.ListMMItemsFiltered(store.MMFilter{
+		Live:  live,
+		Q:     strings.TrimSpace(q.Get("q")),
+		Repo:  strings.TrimSpace(q.Get("repo")),
+		Dir:   strings.TrimSpace(q.Get("dir")),
+		Scope: strings.TrimSpace(q.Get("scope")),
+	})
 	if err != nil {
 		util.LogEvent("web", "error", "mm-list", "mm-list: "+err.Error())
 		webJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
@@ -560,7 +612,8 @@ func mmListHandler(w http.ResponseWriter, r *http.Request) {
 		if a, ok := byItem[it.ID]; ok {
 			anchor = &a
 		}
-		if fileFilter != "" && (anchor == nil || !mmAnchorMatchesFile(*anchor, repoFilter, fileFilter)) {
+		if fileFilter != "" && !(anchor != nil && mmAnchorMatchesFile(*anchor, repoFilter, fileFilter)) &&
+			!mmItemCoversFile(it, repoFilter, fileFilter) {
 			continue
 		}
 		items = append(items, webMMItemFrom(it, anchor))
@@ -578,6 +631,27 @@ func mmAnchorMatchesFile(a store.MMCodeAnchor, repo, file string) bool {
 		return a.Repo == repo && a.Path == file
 	}
 	return a.Path == file || a.Repo+"/"+a.Path == file
+}
+
+// mmItemCoversFile is `?file=`'s second admission rule (amendment 8): a LIVE
+// item placed in the worktree's repo at the file's directory or any ancestor
+// of it — the same inheritance MMFilter.Dir applies — so a captured item
+// scoped to `internal/jobs` answers for `internal/jobs/cell.go` and for
+// `internal/jobs/x/y.go`, and one at the repo root (dir "") for every file.
+// The comparison is on whole path SEGMENTS, so `internal/job` does not cover
+// `internal/jobs/cell.go`. The repo half comes only from ?worktree=: an item
+// with no repo, or a query with no worktree to derive one from, never matches,
+// since a bare dir names a place in no particular checkout.
+func mmItemCoversFile(it store.MMItem, repo, file string) bool {
+	if repo == "" || it.Repo != repo || it.InvalidatedAt != 0 {
+		return false
+	}
+	dir := strings.Trim(it.Dir, "/")
+	if dir == "" {
+		return true
+	}
+	fileDir := filepath.ToSlash(filepath.Dir(file))
+	return fileDir == dir || strings.HasPrefix(fileDir, dir+"/")
 }
 
 // --- GET /api/mm/snapshot?id=N ---
@@ -1021,8 +1095,18 @@ func mmLineAt(path string, row int) (string, bool) {
 // from a cell must be the same identity as one made from the primary checkout,
 // which is exactly what makes carl's model survive the cell that produced it.
 func mmRepoName(worktree string) string {
-	if url, err := mmGit(worktree, "remote", "get-url", "origin"); err == nil && url != "" {
-		return strings.TrimSuffix(filepath.Base(strings.TrimSuffix(url, "/")), ".git")
+	// The checkout's directory name under ~/Developer — the common git dir's
+	// parent, so a cell worktree names its primary checkout — never the
+	// origin remote's basename: a commit stores the checkout name
+	// (mmValidateCommit) and the render pass files under it (mmCheckoutRepo),
+	// and `monolith-pr-10498` is a different checkout from `monolith` to both,
+	// so `?file=` must spell the identity the same way or captured items
+	// never answer from their own checkout.
+	if common, err := mmGit(worktree, "rev-parse", "--git-common-dir"); err == nil && common != "" {
+		if !filepath.IsAbs(common) {
+			common = filepath.Join(worktree, common)
+		}
+		return filepath.Base(filepath.Dir(filepath.Clean(common)))
 	}
 	return filepath.Base(worktree)
 }
@@ -1257,4 +1341,725 @@ func mmPost(w http.ResponseWriter, r *http.Request) bool {
 		return false
 	}
 	return true
+}
+
+// mmGetOnly is mmPost's read-side twin for the routes added with the mind
+// layer.
+func mmGetOnly(w http.ResponseWriter, r *http.Request) bool {
+	if r.Method != http.MethodGet {
+		webJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "GET only"})
+		return false
+	}
+	return true
+}
+
+// ===========================================================================
+// The mind layer (schema v33): capture → mind thread → commit/revise, the
+// drill-down reads (show, source), and contradiction flags. Every judgement
+// lives in internal/jobs (capture routing, the commit gate and validation, the
+// flag lead rule); these handlers decode, call, and pick a status code.
+// ===========================================================================
+
+// mmErr writes one error body, logging it under the route's action name.
+func mmErr(w http.ResponseWriter, action string, status int, msg string) {
+	if status >= 500 {
+		util.LogEvent("web", "error", action, action+": "+msg)
+	}
+	webJSON(w, status, map[string]string{"error": msg})
+}
+
+// mmQueryID reads a positive `id` query parameter, answering 400 itself when
+// it is absent or not a whole number.
+func mmQueryID(w http.ResponseWriter, r *http.Request) (int64, bool) {
+	id, err := strconv.ParseInt(strings.TrimSpace(r.URL.Query().Get("id")), 10, 64)
+	if err != nil || id <= 0 {
+		webJSON(w, http.StatusBadRequest, map[string]string{"error": "missing or non-numeric id"})
+		return 0, false
+	}
+	return id, true
+}
+
+// --- POST /api/mm/capture ---
+
+// mmCaptureHandler routes highlighted text to the job's mind thread: the
+// existing one forked at zeus' current last message, else a freshly branched
+// one (jobs.CaptureToMind decides). The board's thread chips change when a
+// thread is branched, so a success invalidates the board cache.
+func mmCaptureHandler(w http.ResponseWriter, r *http.Request) {
+	if !mmPost(w, r) {
+		return
+	}
+	var req jobs.CaptureRequest
+	if !mmDecode(w, r, &req, "slug, text and source") {
+		return
+	}
+	if !mmRequire(w, "slug", req.Slug) {
+		return
+	}
+	if jobs.ActiveStore() == nil {
+		mmErr(w, "mm-capture", http.StatusInternalServerError, "no store wired")
+		return
+	}
+	j, _, err := webJobFor(strings.TrimSpace(req.Slug))
+	if err != nil {
+		mmErr(w, "mm-capture", http.StatusNotFound, err.Error())
+		return
+	}
+	res, err := jobs.CaptureToMind(j, req)
+	if err != nil {
+		mmErr(w, "mm-capture", mmCaptureStatus(err), err.Error())
+		return
+	}
+	util.LogEvent("web", "info", "mm-capture", "mm-capture "+j.Slug+" "+res.TID)
+	webBoardCache.invalidate()
+	webJSON(w, http.StatusOK, res)
+}
+
+// mmCaptureStatus maps CaptureToMind's sentinels (slice B), falling back to
+// the side-thread mapping for whatever the branch/send half returns — those
+// are the same jobs/thread.go errors POST /api/threads already maps.
+func mmCaptureStatus(err error) int {
+	switch {
+	case errors.Is(err, jobs.ErrCaptureNoCell):
+		return http.StatusConflict
+	case errors.Is(err, jobs.ErrCaptureTooLong), errors.Is(err, jobs.ErrCaptureBadSource):
+		return http.StatusBadRequest
+	default:
+		return threadErrStatus(err)
+	}
+}
+
+// --- POST /api/mm/commit, /api/mm/revise ---
+
+type mmCommitReq struct {
+	ThreadSession string        `json:"thread_session"`
+	Item          jobs.MMCommit `json:"item"`
+}
+
+type mmReviseReq struct {
+	ThreadSession string        `json:"thread_session"`
+	ID            int64         `json:"id"`
+	Item          jobs.MMCommit `json:"item"`
+}
+
+// mmNotMindThread is the 403 body, spelled exactly once: a CLI or a mind
+// thread reading it should see the same sentence every time.
+const mmNotMindThread = "not a mind thread"
+
+// mmCommitHandler finalizes one item from a mind thread. The caller's thread
+// session is the whole authorization: jobs.CommitMMItem refuses any session
+// that is not a live mind thread's before it validates a single field.
+func mmCommitHandler(w http.ResponseWriter, r *http.Request) {
+	if !mmPost(w, r) {
+		return
+	}
+	var req mmCommitReq
+	if !mmDecode(w, r, &req, "thread_session and item") {
+		return
+	}
+	st := mmStore(w)
+	if st == nil {
+		return
+	}
+	id, err := jobs.CommitMMItem(st, req.Item, strings.TrimSpace(req.ThreadSession))
+	if err != nil {
+		switch {
+		case errors.Is(err, jobs.ErrNotMindThread):
+			mmErr(w, "mm-commit", http.StatusForbidden, mmNotMindThread)
+		case errors.Is(err, jobs.ErrCommitInvalid):
+			mmErr(w, "mm-commit", http.StatusBadRequest, err.Error())
+		default:
+			mmErr(w, "mm-commit", http.StatusInternalServerError, err.Error())
+		}
+		return
+	}
+	webJSON(w, http.StatusOK, map[string]any{"id": id})
+}
+
+// mmReviseHandler rewrites one live item from a mind thread. jobs'
+// ErrMMItemNotFound/ErrMMItemDead (not in the frozen contract, which names no
+// sentinel for these) map to 404/409, and ErrReviseLegacy (amendment 7: a
+// non-captured item is never revised) to 409 with jobs' own sentence, which
+// names `kraken mm commit` as the move; any other failure reads the item back so
+// an unforeseen path still tells 404 from 409 from a real server failure.
+func mmReviseHandler(w http.ResponseWriter, r *http.Request) {
+	if !mmPost(w, r) {
+		return
+	}
+	var req mmReviseReq
+	if !mmDecode(w, r, &req, "thread_session, id and item") {
+		return
+	}
+	if req.ID <= 0 {
+		mmErr(w, "mm-revise", http.StatusBadRequest, "missing id")
+		return
+	}
+	st := mmStore(w)
+	if st == nil {
+		return
+	}
+	err := jobs.ReviseMMItem(st, req.ID, req.Item, strings.TrimSpace(req.ThreadSession))
+	if err != nil {
+		switch {
+		case errors.Is(err, jobs.ErrNotMindThread):
+			mmErr(w, "mm-revise", http.StatusForbidden, mmNotMindThread)
+		case errors.Is(err, jobs.ErrCommitInvalid):
+			mmErr(w, "mm-revise", http.StatusBadRequest, err.Error())
+		case errors.Is(err, jobs.ErrMMItemNotFound), errors.Is(err, store.ErrNotFound):
+			mmErr(w, "mm-revise", http.StatusNotFound, "unknown mental-model item")
+		case errors.Is(err, jobs.ErrMMItemDead), errors.Is(err, jobs.ErrReviseLegacy):
+			mmErr(w, "mm-revise", http.StatusConflict, err.Error())
+		default:
+			it, gerr := st.GetMMItem(req.ID)
+			switch {
+			case errors.Is(gerr, store.ErrNotFound):
+				mmErr(w, "mm-revise", http.StatusNotFound, "unknown mental-model item")
+			case gerr == nil && it.InvalidatedAt != 0:
+				mmErr(w, "mm-revise", http.StatusConflict, err.Error())
+			default:
+				mmErr(w, "mm-revise", http.StatusInternalServerError, err.Error())
+			}
+		}
+		return
+	}
+	webJSON(w, http.StatusOK, map[string]any{"id": req.ID})
+}
+
+// --- the flags ---
+
+// webMMFlag is one mm_flags row on the wire: every store.MMFlag field in
+// snake_case, none omitempty, so a client reads the same keys off a pending,
+// a raised and a resolved flag alike.
+type webMMFlag struct {
+	ID         int64  `json:"id"`
+	ItemID     int64  `json:"item_id"`
+	AgainstID  int64  `json:"against_id"`
+	JobID      int64  `json:"job_id"`
+	Slug       string `json:"slug"`
+	Session    string `json:"session"`
+	Note       string `json:"note"`
+	State      string `json:"state"`
+	RaisedBy   string `json:"raised_by"`
+	RaiseNote  string `json:"raise_note"`
+	RaisedAt   int64  `json:"raised_at"`
+	ResolvedAt int64  `json:"resolved_at"`
+	Resolution string `json:"resolution"`
+	CreatedAt  int64  `json:"created_at"`
+}
+
+func webMMFlagFrom(f store.MMFlag) webMMFlag {
+	return webMMFlag{
+		ID: f.ID, ItemID: f.ItemID, AgainstID: f.AgainstID, JobID: f.JobID,
+		Slug: f.Slug, Session: f.Session, Note: f.Note, State: f.State,
+		RaisedBy: f.RaisedBy, RaiseNote: f.RaiseNote, RaisedAt: f.RaisedAt,
+		ResolvedAt: f.ResolvedAt, Resolution: f.Resolution, CreatedAt: f.CreatedAt,
+	}
+}
+
+type mmFlagReq struct {
+	Session   string `json:"session"`
+	Slug      string `json:"slug"`
+	ItemID    int64  `json:"item_id"`
+	AgainstID int64  `json:"against_id"`
+	Note      string `json:"note"`
+}
+
+type mmFlagStepReq struct {
+	Session string `json:"session"`
+	ID      int64  `json:"id"`
+	Note    string `json:"note"`
+}
+
+type mmFlagResolveReq struct {
+	ID         int64  `json:"id"`
+	Resolution string `json:"resolution"`
+}
+
+// mmFlagHandler records one contradiction an agent noticed. Whether it is
+// born `raised` (the caller is the job's lead) or `pending` (anyone else) is
+// jobs.FlagMMItem's call; the response says which, so the CLI can print it.
+func mmFlagHandler(w http.ResponseWriter, r *http.Request) {
+	if !mmPost(w, r) {
+		return
+	}
+	var req mmFlagReq
+	if !mmDecode(w, r, &req, "session, slug, item_id, against_id and note") {
+		return
+	}
+	st := mmStore(w)
+	if st == nil {
+		return
+	}
+	f, err := jobs.FlagMMItem(st, jobs.MMFlagRequest{
+		Slug: mmResolveFlagSlug(st, strings.TrimSpace(req.Slug)), ItemID: req.ItemID, AgainstID: req.AgainstID, Note: req.Note,
+	}, strings.TrimSpace(req.Session))
+	if err != nil {
+		switch {
+		case errors.Is(err, jobs.ErrFlagInvalid):
+			mmErr(w, "mm-flag", http.StatusBadRequest, err.Error())
+		case errors.Is(err, jobs.ErrFlagNoItem), errors.Is(err, jobs.ErrFlagNoJob):
+			mmErr(w, "mm-flag", http.StatusNotFound, err.Error())
+		default:
+			mmErr(w, "mm-flag", http.StatusInternalServerError, err.Error())
+		}
+		return
+	}
+	webJSON(w, http.StatusOK, map[string]any{"id": f.ID, "state": f.State})
+}
+
+// mmResolveFlagSlug maps the slug a `kraken mm flag` caller sent to the job's
+// CURRENT slug. The CLI derives it from the cell dir name, which is
+// `util.Slugify(slug)-<id>` and is never renamed with the job, so four forms
+// arrive: the cell-dir spelling resolved by its id (first, below), the
+// current slug itself (exact GetJobBySlug), the slugified form
+// — with or without the `-<id>` suffix — of an active job whose slug has
+// characters Slugify rewrites (accepted only when exactly one active job
+// matches, since two jobs can slugify alike), and a FORMER slug after a rename
+// (GetJobByFormerSlug). A string that resolves nowhere passes through
+// unchanged, so jobs.FlagMMItem's own 404 still answers it.
+func mmResolveFlagSlug(st *store.Store, sent string) string {
+	if sent == "" {
+		return sent
+	}
+	// the cell-dir spelling `<slugified>-<id>` carries the one immutable key,
+	// and the CLI sends it unstripped: a renamed job whose old slug Slugify
+	// rewrote matches no other rung. It runs FIRST — ahead of the exact-slug
+	// rung — so a cell dir `foo-25` names job 25 rather than a job that
+	// happens to be called `foo-25`. The id decides; the prefix only has to
+	// be one of the job's names, current or former, so a stray number after
+	// an unrelated word cannot pick a job
+	if i := strings.LastIndex(sent, "-"); i > 0 {
+		if id, err := strconv.ParseInt(sent[i+1:], 10, 64); err == nil && id > 0 {
+			if j, err := st.GetJobByID(id); err == nil && j != nil && j.ArchivedAt == 0 {
+				names := append([]string{j.Slug}, j.FormerSlugs...)
+				if slices.ContainsFunc(names, func(n string) bool { return util.Slugify(n) == sent[:i] }) {
+					return j.Slug
+				}
+			}
+		}
+	}
+	if j, err := st.GetJobBySlug(sent); err == nil {
+		return j.Slug
+	}
+	if active, err := st.ListJobs(); err == nil {
+		var hit *store.Job
+		n := 0
+		for _, j := range active {
+			s := util.Slugify(j.Slug)
+			if s == sent || s+"-"+strconv.FormatInt(j.ID, 10) == sent {
+				hit, n = j, n+1
+			}
+		}
+		if n == 1 {
+			return hit.Slug
+		}
+	}
+	if j, err := st.GetJobByFormerSlug(sent); err == nil {
+		return j.Slug
+	}
+	return sent
+}
+
+// mmFlagStepStatus maps a raise/dismiss/resolve failure: jobs' sentinels
+// first, then — for anything unforeseen — the flag is read back, an unknown id
+// being a 404 and a flag that exists a 409 (it was not in the state the step
+// needs), with a failed read back the server's 500.
+func mmFlagStepStatus(st *store.Store, id int64, err error) (int, string) {
+	switch {
+	case errors.Is(err, jobs.ErrFlagNoItem), errors.Is(err, store.ErrNotFound):
+		return http.StatusNotFound, "unknown flag"
+	case errors.Is(err, jobs.ErrFlagState):
+		return http.StatusConflict, err.Error()
+	case errors.Is(err, jobs.ErrFlagInvalid):
+		return http.StatusBadRequest, err.Error()
+	}
+	if _, gerr := st.GetMMFlag(id); gerr != nil {
+		if errors.Is(gerr, store.ErrNotFound) {
+			return http.StatusNotFound, "unknown flag"
+		}
+		return http.StatusInternalServerError, err.Error()
+	}
+	return http.StatusConflict, err.Error()
+}
+
+// mmFlagStep is raise and dismiss, which differ only in the jobs verb: both
+// are the lead's move on a pending flag.
+func mmFlagStep(action string, step func(*store.Store, int64, string, string) error) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if !mmPost(w, r) {
+			return
+		}
+		var req mmFlagStepReq
+		if !mmDecode(w, r, &req, "session, id and note") {
+			return
+		}
+		if req.ID <= 0 {
+			mmErr(w, action, http.StatusBadRequest, "missing id")
+			return
+		}
+		st := mmStore(w)
+		if st == nil {
+			return
+		}
+		if err := step(st, req.ID, strings.TrimSpace(req.Session), req.Note); err != nil {
+			if errors.Is(err, jobs.ErrNotLead) {
+				mmErr(w, action, http.StatusForbidden, err.Error())
+				return
+			}
+			status, msg := mmFlagStepStatus(st, req.ID, err)
+			mmErr(w, action, status, msg)
+			return
+		}
+		webJSON(w, http.StatusOK, map[string]bool{"ok": true})
+	}
+}
+
+var (
+	mmFlagRaiseHandler   = mmFlagStep("mm-flag-raise", jobs.RaiseMMFlag)
+	mmFlagDismissHandler = mmFlagStep("mm-flag-dismiss", jobs.DismissMMFlag)
+)
+
+// mmFlagResolveHandler is carl's verb on a raised flag: `drop` invalidates
+// the flagged item, `keep` only closes the flag. The resolution is checked
+// here so a misspelling is a 400 about the value rather than a 409 about
+// state.
+func mmFlagResolveHandler(w http.ResponseWriter, r *http.Request) {
+	if !mmPost(w, r) {
+		return
+	}
+	var req mmFlagResolveReq
+	if !mmDecode(w, r, &req, "id and resolution") {
+		return
+	}
+	if req.ID <= 0 {
+		mmErr(w, "mm-flag-resolve", http.StatusBadRequest, "missing id")
+		return
+	}
+	res := strings.TrimSpace(req.Resolution)
+	if res != "drop" && res != "keep" {
+		mmErr(w, "mm-flag-resolve", http.StatusBadRequest, "resolution must be drop or keep")
+		return
+	}
+	st := mmStore(w)
+	if st == nil {
+		return
+	}
+	if err := jobs.ResolveMMFlag(st, req.ID, res); err != nil {
+		status, msg := mmFlagStepStatus(st, req.ID, err)
+		mmErr(w, "mm-flag-resolve", status, msg)
+		return
+	}
+	webJSON(w, http.StatusOK, map[string]bool{"ok": true})
+}
+
+// mmFlagsHandler lists flags newest first, optionally narrowed to one state.
+// A state outside the three is refused rather than answered with an empty
+// list that would read as "nothing flagged".
+func mmFlagsHandler(w http.ResponseWriter, r *http.Request) {
+	if !mmGetOnly(w, r) {
+		return
+	}
+	state := strings.TrimSpace(r.URL.Query().Get("state"))
+	switch state {
+	case "", "pending", "raised", "dismissed", "resolved":
+	default:
+		mmErr(w, "mm-flags", http.StatusBadRequest, "state must be pending, raised, dismissed or resolved")
+		return
+	}
+	st := mmStore(w)
+	if st == nil {
+		return
+	}
+	fs, err := st.ListMMFlags(state)
+	if err != nil {
+		mmErr(w, "mm-flags", http.StatusInternalServerError, err.Error())
+		return
+	}
+	out := make([]webMMFlag, 0, len(fs))
+	for _, f := range fs {
+		out = append(out, webMMFlagFrom(f))
+	}
+	webJSON(w, http.StatusOK, map[string]any{"flags": out})
+}
+
+// --- GET /api/mm/show ---
+
+// webMMShow is one item in full plus the next rung of the drill-down ladder.
+type webMMShow struct {
+	webMMItem
+	SourceHint string `json:"source_hint"`
+}
+
+// mmShowHandler serves one item, anchor included, whether live or not.
+func mmShowHandler(w http.ResponseWriter, r *http.Request) {
+	if !mmGetOnly(w, r) {
+		return
+	}
+	id, ok := mmQueryID(w, r)
+	if !ok {
+		return
+	}
+	st := mmStore(w)
+	if st == nil {
+		return
+	}
+	it, err := st.GetMMItem(id)
+	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			mmErr(w, "mm-show", http.StatusNotFound, "unknown mental-model item")
+			return
+		}
+		mmErr(w, "mm-show", http.StatusInternalServerError, err.Error())
+		return
+	}
+	var anchor *store.MMCodeAnchor
+	if a, found, aerr := st.GetMMCodeAnchor(id); aerr == nil && found {
+		anchor = &a
+	}
+	webJSON(w, http.StatusOK, webMMShow{
+		webMMItem:  webMMItemFrom(it, anchor),
+		SourceHint: "kraken mm source " + strconv.FormatInt(id, 10),
+	})
+}
+
+// --- GET /api/mm/source ---
+
+// mmSourceResp is the source material behind one item. `available:false` is
+// an ANSWER (the material is gone or never existed), never a failure, so a
+// missing source is a 200 everywhere on this route.
+type mmSourceResp struct {
+	Kind      string `json:"kind"`
+	Available bool   `json:"available"`
+	Changed   bool   `json:"changed"`
+	Text      string `json:"text"`
+	Ext       string `json:"ext"`
+}
+
+// mmTranscriptRadius is how many blocks either side of the captured record
+// /api/mm/source serves.
+const mmTranscriptRadius = 10
+
+// mmSourceHandler resolves an item's source pointer to the material itself.
+// A row with no source_json (every pre-v33 row) is read through its legacy
+// columns: an artifact or artifact-element mark points at its artifact, a
+// code mark at its anchor, everything else has no material to serve.
+func mmSourceHandler(w http.ResponseWriter, r *http.Request) {
+	if !mmGetOnly(w, r) {
+		return
+	}
+	id, ok := mmQueryID(w, r)
+	if !ok {
+		return
+	}
+	st := mmStore(w)
+	if st == nil {
+		return
+	}
+	it, err := st.GetMMItem(id)
+	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			mmErr(w, "mm-source", http.StatusNotFound, "unknown mental-model item")
+			return
+		}
+		mmErr(w, "mm-source", http.StatusInternalServerError, err.Error())
+		return
+	}
+	src := mmParseSource(it.SourceJSON)
+	if src == nil {
+		src = mmLegacySource(it)
+	}
+	var resp mmSourceResp
+	switch src.Kind {
+	case "artifact":
+		resp = mmArtifactSource(st, it, *src)
+	case "transcript":
+		resp = mmTranscriptSource(*src)
+	case "dir":
+		resp = mmDirSource(*src)
+	case "code":
+		resp = mmCodeSource(st, it.ID)
+	default:
+		resp = mmSourceResp{Kind: src.Kind}
+	}
+	webJSON(w, http.StatusOK, resp)
+}
+
+// mmLegacySource synthesizes a pointer for a row that predates source_json.
+func mmLegacySource(it store.MMItem) *jobs.CaptureSource {
+	switch it.Source {
+	case mmSourceArtifact, mmSourceArtifactElement:
+		return &jobs.CaptureSource{Kind: "artifact", Slug: it.Slug, Name: it.SourceRef}
+	case mmSourceCode:
+		return &jobs.CaptureSource{Kind: "code"}
+	case mmSourceManual:
+		return &jobs.CaptureSource{Kind: "manual"}
+	default:
+		return &jobs.CaptureSource{Kind: it.Source}
+	}
+}
+
+// mmJobByIDAnyHome finds a capture's owning job by its immutable id, active
+// or archived, or nil for 0 / a hard-deleted job — the id-first rule the
+// verify pass applies (jobs.mmVerifyCapture), so the read and the pass name
+// the same job after an archive frees the slug for a new one.
+func mmJobByIDAnyHome(id int64) *jobs.Job {
+	if id <= 0 {
+		return nil
+	}
+	for _, cand := range jobs.LoadJobs() {
+		if cand.ID == id {
+			return cand
+		}
+	}
+	for _, cand := range jobs.LoadArchivedJobs() {
+		if cand.ID == id {
+			return cand
+		}
+	}
+	return nil
+}
+
+// mmArtifactSource serves the FROZEN snapshot when the item has one (what
+// carl was looking at), else the artifact's current bytes. `changed` compares
+// the current bytes against the sha the capture recorded — or, for a row that
+// recorded none, against the snapshot's own sha — and is true for an artifact
+// that has since disappeared.
+func mmArtifactSource(st *store.Store, it store.MMItem, src jobs.CaptureSource) mmSourceResp {
+	resp := mmSourceResp{Kind: "artifact", Ext: strings.TrimPrefix(filepath.Ext(src.Name), ".")}
+	ref := strings.ToLower(strings.TrimSpace(src.SHA))
+	snap, snapExt, serr := st.GetMMSnapshot(it.ID)
+	haveSnap := serr == nil
+	if haveSnap {
+		resp.Available, resp.Text = true, string(snap)
+		if snapExt != "" {
+			resp.Ext = snapExt
+		}
+		if ref == "" {
+			ref = store.SHA256Hex(snap)
+		}
+	}
+	var cur []byte
+	curOK := false
+	if src.Name != "" && src.Slug != "" {
+		// the owning job by its immutable id first, exactly as the verify pass
+		// (jobs.mmVerifyCapture) resolves it: archiving frees a slug, and a
+		// slug-first read would answer `changed` against a later job's
+		// same-named artifact while the pass says nothing moved
+		j := mmJobByIDAnyHome(it.JobID)
+		if j == nil && src.Home != "" {
+			j = resolveJobForHome(src.Slug, src.Home)
+		} else if j == nil {
+			j = resolveJobBySlug(src.Slug)
+		}
+		if j != nil {
+			// read from where the artifact lives NOW, never the home the
+			// capture recorded: every capture records `cell`, and once the
+			// cell is torn down that read fails and would answer `changed`
+			// for every item of the job while the verify pass sees no change
+			cur, _, curOK = resolveArtifact(j, currentArtifactHome(j), src.Name)
+		}
+	}
+	if !haveSnap && curOK {
+		resp.Available, resp.Text = true, string(cur)
+	}
+	if ref != "" {
+		resp.Changed = !curOK || !mmSHAMatches(store.SHA256Hex(cur), ref)
+	}
+	return resp
+}
+
+// mmSHAMatches compares a full sha256 hex against a recorded one, accepting
+// an abbreviated recorded sha (≥ 7 hex digits, git's own floor) as a prefix.
+func mmSHAMatches(full, ref string) bool {
+	full = strings.ToLower(full)
+	if full == ref {
+		return true
+	}
+	return len(ref) >= 7 && strings.HasPrefix(full, ref)
+}
+
+// mmSessionIDRe is the only session-id shape mmTranscriptSource will look up:
+// a Claude Code session id is a uuid, and anything else is refused unread.
+var mmSessionIDRe = regexp.MustCompile(`(?i)^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
+
+// mmTranscriptSource serves the blocks around the captured record. The scan
+// is core.BlocksAround's forward stream over the WHOLE transcript (amendment
+// 10), not LastBlocks' tail: a captured record can sit anywhere in a
+// many-MB file, and a tail window would answer an old one as unavailable.
+// Memory stays bounded by one line plus the ±mmTranscriptRadius blocks kept.
+//
+// The session id is checked against the uuid shape before it goes anywhere
+// near the filesystem: it comes from source_json, which a mind thread wrote,
+// and core.TranscriptPathForSession globs `projects/*/<session>.jsonl`, so a
+// `*` or `../` in it would reach files that are not a transcript at all.
+func mmTranscriptSource(src jobs.CaptureSource) mmSourceResp {
+	resp := mmSourceResp{Kind: "transcript"}
+	if !mmSessionIDRe.MatchString(src.Session) || src.UUID == "" {
+		return resp
+	}
+	path := core.TranscriptPathForSession(src.Session)
+	if path == "" {
+		return resp
+	}
+	blocks, first, last, found, err := core.BlocksAround(path, src.UUID, mmTranscriptRadius)
+	if err != nil || !found {
+		return resp
+	}
+	var sb strings.Builder
+	for i := range blocks {
+		b := blocks[i]
+		if sb.Len() > 0 {
+			sb.WriteString("\n\n")
+		}
+		if i >= first && i <= last {
+			sb.WriteString("▶ ")
+		}
+		sb.WriteString("[" + b.Kind)
+		if b.From != "" {
+			sb.WriteString(" " + b.From)
+		}
+		sb.WriteString("] " + b.Text)
+	}
+	resp.Available, resp.Text = true, sb.String()
+	return resp
+}
+
+// mmDirSource lists one repo-relative directory of the PRIMARY checkout, one
+// level deep, directories suffixed with "/". A dir that climbs out of the
+// repo is unavailable rather than listed.
+func mmDirSource(src jobs.CaptureSource) mmSourceResp {
+	resp := mmSourceResp{Kind: "dir"}
+	root, err := jobs.ResolveRepo(src.Repo)
+	if err != nil {
+		return resp
+	}
+	rel := filepath.Clean(strings.TrimPrefix(src.Dir, "/"))
+	if rel == ".." || strings.HasPrefix(rel, "../") || filepath.IsAbs(src.Dir) {
+		return resp
+	}
+	entries, err := os.ReadDir(filepath.Join(root, rel))
+	if err != nil {
+		return resp
+	}
+	names := make([]string, 0, len(entries))
+	for _, e := range entries {
+		n := e.Name()
+		if e.IsDir() {
+			n += "/"
+		}
+		names = append(names, n)
+	}
+	resp.Available, resp.Text = true, strings.Join(names, "\n")
+	return resp
+}
+
+// mmCodeSource serves a code mark's anchored text — what carl read, frozen.
+func mmCodeSource(st *store.Store, id int64) mmSourceResp {
+	resp := mmSourceResp{Kind: "code"}
+	a, found, err := st.GetMMCodeAnchor(id)
+	if err != nil || !found {
+		return resp
+	}
+	resp.Available, resp.Text, resp.Ext = true, a.Text, a.Lang
+	return resp
 }

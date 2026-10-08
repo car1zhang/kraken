@@ -14,6 +14,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -1369,6 +1370,7 @@ var webThreadSpec = map[string]fieldSpec{
 	"state":      {kind: wireString, required: true},
 	"pane":       {kind: wireString, required: false},
 	"model":      {kind: wireString, required: false},
+	"role":       {kind: wireString, required: true},
 	"created_at": {kind: wireNumber, required: true},
 	"closed_at":  {kind: wireNumber, required: false},
 }
@@ -1385,7 +1387,7 @@ func TestWebThreadWireShape(t *testing.T) {
 
 	data, err = json.Marshal(webThread{
 		TID: "t2", Title: "why the retry loop", State: "live", Pane: "%42",
-		Model: "haiku", CreatedAt: 1234567890, ClosedAt: 1234567899,
+		Model: "haiku", Role: "mind", CreatedAt: 1234567890, ClosedAt: 1234567899,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -2269,6 +2271,7 @@ var threadReadSpec = map[string]fieldSpec{
 	"pane":      {kind: wireString, required: true},
 	"fork_uuid": {kind: wireString, required: true},
 	"source":    {kind: wireString, required: true},
+	"session":   {kind: wireString, required: true},
 }
 
 // threadReadBlockSpec is /api/thread/read's block element: /api/peers/read's
@@ -2279,6 +2282,9 @@ var threadReadBlockSpec = map[string]fieldSpec{
 	"text":      {kind: wireString, required: true},
 	"from":      {kind: wireString, required: false},
 	"inherited": {kind: wireBool, required: false},
+	// uuid (schema v33, additive): the source record, what a mind-button
+	// capture sends as its transcript anchor.
+	"uuid": {kind: wireString, required: true},
 }
 
 func TestThreadReadWireShape(t *testing.T) {
@@ -2890,6 +2896,143 @@ var webMMItemSpec = map[string]fieldSpec{
 	"invalid_reason": {kind: wireString, required: false},
 	"invalid_detail": {kind: wireString, required: false},
 	"anchor":         {kind: wireObject, required: false},
+	// The schema-v33 half: always present, so a legacy row carries "" / 0 /
+	// null and a client never branches on absence. capture_source is its own
+	// key rather than a retyped `source`, which shipped iOS decodes as String.
+	"title":          {kind: wireString, required: true},
+	"scope":          {kind: wireString, required: true},
+	"repo":           {kind: wireString, required: true},
+	"dir":            {kind: wireString, required: true},
+	"quote":          {kind: wireString, required: true},
+	"thread_session": {kind: wireString, required: true},
+	"revised_at":     {kind: wireNumber, required: true},
+	"capture_source": {kind: wireObject, required: true, nullable: true},
+}
+
+// webMMShowSpec is GET /api/mm/show: the whole item plus the next rung of the
+// drill-down ladder.
+var webMMShowSpec = func() map[string]fieldSpec {
+	m := map[string]fieldSpec{"source_hint": {kind: wireString, required: true}}
+	for k, v := range webMMItemSpec {
+		m[k] = v
+	}
+	return m
+}()
+
+// webCaptureSourceSpec covers a populated capture_source object; every key but
+// kind is omitempty, since each kind carries its own subset.
+var webCaptureSourceSpec = map[string]fieldSpec{
+	"kind":    {kind: wireString, required: true},
+	"slug":    {kind: wireString, required: false},
+	"home":    {kind: wireString, required: false},
+	"name":    {kind: wireString, required: false},
+	"sha":     {kind: wireString, required: false},
+	"session": {kind: wireString, required: false},
+	"uuid":    {kind: wireString, required: false},
+	"tid":     {kind: wireString, required: false},
+	"repo":    {kind: wireString, required: false},
+	"dir":     {kind: wireString, required: false},
+	"item_id": {kind: wireNumber, required: false},
+}
+
+// webMMFlagSpec covers GET /api/mm/flags' elements: every store.MMFlag field,
+// always present.
+var webMMFlagSpec = map[string]fieldSpec{
+	"id":          {kind: wireNumber, required: true},
+	"item_id":     {kind: wireNumber, required: true},
+	"against_id":  {kind: wireNumber, required: true},
+	"job_id":      {kind: wireNumber, required: true},
+	"slug":        {kind: wireString, required: true},
+	"session":     {kind: wireString, required: true},
+	"note":        {kind: wireString, required: true},
+	"state":       {kind: wireString, required: true},
+	"raised_by":   {kind: wireString, required: true},
+	"raise_note":  {kind: wireString, required: true},
+	"raised_at":   {kind: wireNumber, required: true},
+	"resolved_at": {kind: wireNumber, required: true},
+	"resolution":  {kind: wireString, required: true},
+	"created_at":  {kind: wireNumber, required: true},
+}
+
+var mmSourceRespSpec = map[string]fieldSpec{
+	"kind":      {kind: wireString, required: true},
+	"available": {kind: wireBool, required: true},
+	"changed":   {kind: wireBool, required: true},
+	"text":      {kind: wireString, required: true},
+	"ext":       {kind: wireString, required: true},
+}
+
+var jobTranscriptSpec = map[string]fieldSpec{
+	"session": {kind: wireString, required: true},
+	"blocks":  {kind: wireArray, required: true},
+}
+
+// TestMMMindLayerWireShapes pins the schema-v33 additions: a captured item's
+// populated capture_source, /api/mm/show, the flag row, /api/mm/source's
+// unavailable answer, and /api/job/transcript's empty envelope.
+func TestMMMindLayerWireShapes(t *testing.T) {
+	useTestStore(t)
+	st := jobs.ActiveStore()
+	captured := store.MMItem{
+		Kind: "reading", Source: "capture", Content: "why the tick gates the pass",
+		Title: "the render pass runs at most once a minute", Scope: "repo", Repo: "kraken",
+		Dir: "internal/jobs", Quote: "stamped before any bail", ThreadSession: "sess-1",
+		SourceJSON: `{"kind":"transcript","session":"sess-0","uuid":"u1","tid":"t2"}`,
+		CreatedAt:  1769040000000,
+	}
+	id, err := st.AddMMItem(captured)
+	if err != nil {
+		t.Fatal(err)
+	}
+	captured.ID = id
+	data, err := json.Marshal(webMMItemFrom(captured, nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertShape(t, "webMMItem (captured)", data, webMMItemSpec)
+	var withSrc struct {
+		CaptureSource json.RawMessage `json:"capture_source"`
+	}
+	if err := json.Unmarshal(data, &withSrc); err != nil {
+		t.Fatal(err)
+	}
+	assertShape(t, "capture_source", withSrc.CaptureSource, webCaptureSourceSpec)
+
+	rec := httptest.NewRecorder()
+	mmShowHandler(rec, httptest.NewRequest(http.MethodGet, "/api/mm/show?id="+strconv.FormatInt(id, 10), nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("show status %d, body %s", rec.Code, rec.Body.String())
+	}
+	assertShape(t, "/api/mm/show", rec.Body.Bytes(), webMMShowSpec)
+
+	// The transcript source names a session with no transcript on disk: an
+	// answer (available:false), never an error.
+	rec = httptest.NewRecorder()
+	mmSourceHandler(rec, httptest.NewRequest(http.MethodGet, "/api/mm/source?id="+strconv.FormatInt(id, 10), nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("source status %d, body %s", rec.Code, rec.Body.String())
+	}
+	assertShape(t, "/api/mm/source", rec.Body.Bytes(), mmSourceRespSpec)
+
+	flag, err := json.Marshal(webMMFlagFrom(store.MMFlag{ID: 1, Note: "contradicts #2", State: "pending", CreatedAt: 1}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertShape(t, "webMMFlag", flag, webMMFlagSpec)
+
+	rec = httptest.NewRecorder()
+	mmFlagsHandler(rec, httptest.NewRequest(http.MethodGet, "/api/mm/flags", nil))
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"flags":[]`) {
+		t.Fatalf("flags = %d %s, want 200 with an empty array", rec.Code, rec.Body.String())
+	}
+
+	mustCreateStoreJob(t, st, store.Job{Slug: "contract-transcript", Repo: "monolith"})
+	rec = httptest.NewRecorder()
+	jobTranscriptHandler(rec, httptest.NewRequest(http.MethodGet, "/api/job/transcript?slug=contract-transcript", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("transcript status %d, body %s", rec.Code, rec.Body.String())
+	}
+	assertShape(t, "/api/job/transcript", rec.Body.Bytes(), jobTranscriptSpec)
 }
 
 // webMMAnchorSpec covers the `anchor` object — its own spec because

@@ -51,35 +51,6 @@ func mmMatch(items: [WebMMItem], slug: String, name: String) -> WebMMItem? {
     }
 }
 
-/// The LIVE decision recorded for one answered doc question, or nil.
-///
-/// Matched on the pair the route writes — the job's display slug and the
-/// question's own id, which the server stores verbatim as `source_ref`. A
-/// question id is unique only within its job, so the slug is not decoration
-/// here: `Q1` exists on every job that has any questions at all.
-func mmDecisionMatch(items: [WebMMItem], slug: String, qid: String) -> WebMMItem? {
-    items.first {
-        $0.source == "question" && $0.live && $0.slug == slug && $0.sourceRef == qid
-    }
-}
-
-/// The LIVE mark on one rendered agent detail, or nil.
-///
-/// Matched on the CONTENT rather than on the `source_ref` the server derives,
-/// because that ref is the first 16 hex of the text's sha256 and hashing it
-/// here would be a second implementation of a server-side derivation — one
-/// that can only ever disagree. The content of an `agent-output` item IS the
-/// detail text (there is nowhere else it lives), so comparing it is comparing
-/// the same thing the hash was taken over, after the same two normalizations
-/// the route applies: trim, then `\r\n` → `\n`.
-func mmDetailMatch(items: [WebMMItem], slug: String, text: String) -> WebMMItem? {
-    let want = mmNormalizeText(text)
-    guard !want.isEmpty else { return nil }
-    return items.first {
-        $0.source == "agent-output" && $0.live && $0.slug == slug && $0.content == want
-    }
-}
-
 /// The server stores `source_ref` with its leading slashes trimmed; so does
 /// every comparison against one.
 func mmTrimLeadingSlashes(_ s: String) -> String {
@@ -88,12 +59,6 @@ func mmTrimLeadingSlashes(_ s: String) -> String {
     return String(out)
 }
 
-/// `mmNormalize(strings.TrimSpace(text))` in Swift — the exact pair the detail
-/// route applies before it stores or hashes anything.
-func mmNormalizeText(_ s: String) -> String {
-    s.trimmingCharacters(in: .whitespacesAndNewlines)
-        .replacingOccurrences(of: "\r\n", with: "\n")
-}
 
 // MARK: - filters
 
@@ -210,6 +175,46 @@ func mmHeadline(_ it: WebMMItem) -> String {
     return it.content
 }
 
+/// The row's title line: the committed `title` when the item has one, else
+/// the first non-empty line of its content.
+///
+/// Two legacy sources keep their old headline instead of a content line,
+/// because their content is not prose: a whole-artifact reading's content is
+/// the artifact's NAME (the headline already says `slug/name`), and a code
+/// reading's is a block of source whose first line is rarely what carl would
+/// recognize — its coordinates are. Everything else (decisions, notes, agent
+/// output, selections) leads with its first line, cut like a selection's.
+func mmRowTitle(_ it: WebMMItem) -> String {
+    if let title = it.title?.trimmingCharacters(in: .whitespacesAndNewlines), !title.isEmpty {
+        return title
+    }
+    if it.source == "code" || it.source == "artifact" { return mmHeadline(it) }
+    let first = it.content
+        .split(separator: "\n", omittingEmptySubsequences: false)
+        .map { $0.trimmingCharacters(in: .whitespaces) }
+        .first { !$0.isEmpty }
+    guard let first else { return mmHeadline(it) }
+    guard first.count > mmHeadlineRuneCap else { return first }
+    return String(first.prefix(mmHeadlineRuneCap)) + "…"
+}
+
+/// The scope chip's text: `universal`, `<repo>/<dir>`, or `<repo>` alone for
+/// the repo root. nil for a row with no scope to show — a legacy row reads
+/// scope `repo` (the column default) with no repo named, and a chip saying
+/// nothing would be noise.
+func mmScopeLabel(_ it: WebMMItem) -> String? {
+    switch it.scope {
+    case "universal":
+        return "universal"
+    case "repo":
+        guard let repo = it.repo, !repo.isEmpty else { return nil }
+        let dir = mmTrimLeadingSlashes(it.dir ?? "")
+        return dir.isEmpty ? repo : repo + "/" + dir
+    default:
+        return nil
+    }
+}
+
 /// A marked selection's one-line headline: its FIRST non-empty line, trimmed
 /// and hard-truncated.
 ///
@@ -291,10 +296,8 @@ final class MMViewModel {
     ///
     /// The Bool is about the WRITE and nothing else — deliberately captured
     /// before the refetch, because `refresh` rewrites `errorMessage` and a
-    /// caller reading that flag afterwards would be told a successful mark
-    /// failed whenever the re-read did. Its one consumer is the artifact
-    /// viewer, which clears the WKWebView's selection on a mark that landed
-    /// and leaves it standing on one that did not.
+    /// caller reading that flag afterwards would be told a successful write
+    /// failed whenever the re-read did.
     @discardableResult
     private func write(baseURL: String, _ body: () async throws -> Void) async -> Bool {
         guard !writing else { return false }
@@ -313,42 +316,44 @@ final class MMViewModel {
     }
 
     @discardableResult
-    func markArtifact(baseURL: String, ref: ArtifactRef) async -> Bool {
-        await write(baseURL: baseURL) {
-            _ = try await APIClient.shared.markArtifactRead(
-                baseURL: baseURL, slug: ref.slug, home: ref.home, name: ref.name
-            )
-        }
-    }
-
-    @discardableResult
-    func markElement(baseURL: String, ref: ArtifactRef, text: String) async -> Bool {
-        await write(baseURL: baseURL) {
-            _ = try await APIClient.shared.markElementRead(
-                baseURL: baseURL, slug: ref.slug, home: ref.home, name: ref.name, text: text
-            )
-        }
-    }
-
-    @discardableResult
-    func markDecision(baseURL: String, slug: String, qid: String) async -> Bool {
-        await write(baseURL: baseURL) {
-            _ = try await APIClient.shared.markDecision(baseURL: baseURL, slug: slug, qid: qid)
-        }
-    }
-
-    @discardableResult
-    func markDetail(baseURL: String, slug: String, text: String) async -> Bool {
-        await write(baseURL: baseURL) {
-            _ = try await APIClient.shared.markDetail(baseURL: baseURL, slug: slug, text: text)
-        }
-    }
-
-    @discardableResult
     func addNote(baseURL: String, text: String, context: String) async -> Bool {
         await write(baseURL: baseURL) {
             _ = try await APIClient.shared.addMMNote(baseURL: baseURL, text: text, context: context)
         }
+    }
+
+    /// Contradiction flags an agent raised to carl, newest first — the
+    /// pane's Flags section. Only `raised` ones: a pending flag is still
+    /// zeus' to raise or dismiss, and a resolved one needs nothing from carl.
+    var flags: [WebMMFlag] = []
+    /// Flag ids with a resolve in flight — both buttons on that flag disable.
+    var resolving: Set<Int64> = []
+
+    /// A failed flag read leaves the section as it was and says nothing: the
+    /// item list's own error line already covers an unreachable server.
+    func refreshFlags(baseURL: String) async {
+        guard let page = try? await APIClient.shared.fetchMMFlags(baseURL: baseURL, state: "raised") else { return }
+        flags = page.flags.filter { $0.resolution.isEmpty }
+    }
+
+    /// Carl's verdict on one raised flag. Re-reads BOTH lists afterwards,
+    /// whatever happened: `drop` invalidates the flagged item, so the item
+    /// list moves too.
+    func resolveFlag(baseURL: String, id: Int64, resolution: String) async {
+        guard !resolving.contains(id) else { return }
+        resolving.insert(id)
+        var failure: String?
+        do {
+            try await APIClient.shared.resolveMMFlag(baseURL: baseURL, id: id, resolution: resolution)
+        } catch {
+            failure = (error as? KrakenError)?.errorDescription ?? error.localizedDescription
+        }
+        resolving.remove(id)
+        await refreshFlags(baseURL: baseURL)
+        await refresh(baseURL: baseURL)
+        // After the re-read, which rewrites `errorMessage` on its own: a
+        // refused resolve (a 409 on a flag already settled) must still say so.
+        if let failure { errorMessage = failure }
     }
 
     /// Drops one mark. Per-row guard rather than `write`'s single flag: a
@@ -395,6 +400,7 @@ struct MentalModelList: View {
 
     var body: some View {
         List {
+            if !vm.flags.isEmpty { flagsSection }
             chipsSection
             if noteOpen { noteSection }
             if let errorMessage = vm.errorMessage {
@@ -403,7 +409,7 @@ struct MentalModelList: View {
             if !rows.isEmpty {
                 kSection("\(filter.label) · \(rows.count)") {
                     ForEach(rows) { it in
-                        MMRowView(item: it, busy: vm.inFlight.contains(it.id)) {
+                        MMRowView(item: it, baseURL: baseURL, busy: vm.inFlight.contains(it.id)) {
                             Task { await vm.remove(baseURL: baseURL, id: it.id) }
                         }
                     }
@@ -413,8 +419,33 @@ struct MentalModelList: View {
             }
         }
         .kListStyle()
-        .refreshable { await vm.refresh(baseURL: baseURL) }
-        .task(id: baseURL) { await vm.refresh(baseURL: baseURL) }
+        .refreshable {
+            await vm.refreshFlags(baseURL: baseURL)
+            await vm.refresh(baseURL: baseURL)
+        }
+        .task(id: baseURL) {
+            await vm.refreshFlags(baseURL: baseURL)
+            await vm.refresh(baseURL: baseURL)
+        }
+    }
+
+    /// Contradictions an agent found and zeus raised: each names the item it
+    /// is about and, when there is one, the item or transcript it disagrees
+    /// with. Above the rows because it is the one thing on this pane asking
+    /// carl for a decision.
+    private var flagsSection: some View {
+        kSection("flags · \(vm.flags.count)") {
+            ForEach(vm.flags) { flag in
+                MMFlagRowView(
+                    flag: flag,
+                    item: vm.items.first { $0.id == flag.itemId },
+                    busy: vm.resolving.contains(flag.id),
+                    onResolve: { resolution in
+                        Task { await vm.resolveFlag(baseURL: baseURL, id: flag.id, resolution: resolution) }
+                    }
+                )
+            }
+        }
     }
 
     /// An endpoint failure says so IN PLACE OF the empty state — "nothing
@@ -423,7 +454,7 @@ struct MentalModelList: View {
     private var emptyMessage: String {
         if !vm.loaded { return "loading…" }
         if vm.items.isEmpty {
-            return "Nothing marked yet — ✓ read in the artifact viewer, ◆ decision on an answered question, or + note here."
+            return "Nothing in the mental model yet — select text in an artifact and tap ◆ mind, or + note here."
         }
         return "nothing in that filter"
     }
@@ -507,10 +538,15 @@ struct MentalModelList: View {
 /// more line in it.
 struct MMRowView: View {
     let item: WebMMItem
+    let baseURL: String
     let busy: Bool
     let onRemove: () -> Void
 
     @State private var open = false
+    /// The item's source as `GET /api/mm/source` answered it, once asked for.
+    @State private var source: MMSource?
+    @State private var sourceError: String?
+    @State private var loadingSource = false
 
     /// A note's or a decision's headline IS its content, so repeating it in
     /// the expansion would be an empty gesture; the context is what is left.
@@ -523,7 +559,7 @@ struct MMRowView: View {
     /// the row exists to show, so it always renders.
     private var bodyText: String {
         if item.source == "artifact-element" { return item.content }
-        let head = mmHeadline(item)
+        let head = mmRowTitle(item)
         return head == item.content ? "" : item.content
     }
 
@@ -586,8 +622,8 @@ struct MMRowView: View {
                     .disabled(!item.live)
                     .accessibilityLabel(
                         item.live
-                            ? "drop the mark on \(mmHeadline(item))"
-                            : "\(mmHeadline(item)) is already invalidated"
+                            ? "drop the mark on \(mmRowTitle(item))"
+                            : "\(mmRowTitle(item)) is already invalidated"
                     )
                 }
             }
@@ -606,11 +642,20 @@ struct MMRowView: View {
                     .padding(.horizontal, 7)
                     .padding(.vertical, 2)
                     .background(badgeColor.opacity(0.15), in: Capsule())
-                Text(mmHeadline(item))
+                Text(mmRowTitle(item))
                     .font(.data(12, weight: .semibold))
                     .foregroundStyle(KTheme.text)
                     .lineLimit(2)
                     .multilineTextAlignment(.leading)
+            }
+            if let scope = mmScopeLabel(item) {
+                Text(scope)
+                    .font(.data(9, weight: .semibold))
+                    .foregroundStyle(KTheme.text2)
+                    .padding(.horizontal, 7)
+                    .padding(.vertical, 2)
+                    .background(KTheme.raised, in: Capsule())
+                    .accessibilityLabel("scope \(scope)")
             }
             if !item.live {
                 Text(deadLine)
@@ -664,10 +709,9 @@ struct MMRowView: View {
         VStack(alignment: .leading, spacing: 6) {
             // The FROZEN text — for an invalidated row this is the whole
             // payoff: what carl knew, kept exactly as it was on the day he
-            // read it, which the source it came from no longer says. The "and
-            // now" half is deliberately absent: the current bytes are not on
-            // this wire, and inventing a diff from a list payload would be a
-            // claim this pane cannot make.
+            // read it, which the source it came from no longer says. The
+            // source itself is one tap further (`source` below), fetched on
+            // demand rather than carried on the list payload.
             if asMarkdown {
                 MarkdownText(markdown: bodyText)
             } else if !bodyText.isEmpty {
@@ -683,6 +727,26 @@ struct MMRowView: View {
                     .foregroundStyle(KTheme.text2)
                     .fixedSize(horizontal: false, vertical: true)
             }
+            // The highlighted text a capture started from — what carl was
+            // looking at, as distinct from the claim the mind thread wrote.
+            if let quote = item.quote, !quote.isEmpty {
+                Text(quote)
+                    .font(.voice(11))
+                    .italic()
+                    .foregroundStyle(KTheme.text2)
+                    .textSelection(.enabled)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.leading, 8)
+                    .overlay(alignment: .leading) {
+                        Rectangle().fill(KTheme.text2.opacity(0.4)).frame(width: 2)
+                    }
+            }
+            if let summary = captureSummary {
+                Text(summary)
+                    .font(.data(10))
+                    .foregroundStyle(KTheme.text2)
+            }
+            sourceView
             Text(stamps)
                 .font(.data(10))
                 .foregroundStyle(KTheme.text2)
@@ -692,11 +756,165 @@ struct MMRowView: View {
         .background(KTheme.ground, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
     }
 
+    /// One line naming where a capture's quote came from, or nil for a row
+    /// with no capture source.
+    private var captureSummary: String? {
+        guard let src = item.captureSource else { return nil }
+        switch src.kind {
+        case "artifact":
+            return "from " + [src.slug, src.name].compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: "/")
+        case "transcript":
+            let session = src.session ?? ""
+            return session.isEmpty ? "from transcript" : "from transcript \(session.prefix(8))"
+        case "dir":
+            return "from " + [src.repo, src.dir].compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: "/")
+        case "item":
+            return src.itemId.map { "from mm #\($0)" } ?? "from an item"
+        default:
+            return "from " + src.kind
+        }
+    }
+
+    /// The `source` action and, once fetched, what it answered. Asked for on
+    /// demand: a source can be a whole artifact or a transcript window, far
+    /// too much to carry on every row of the list payload.
+    @ViewBuilder
+    private var sourceView: some View {
+        if let source {
+            if source.available {
+                if source.changed {
+                    Text("the source has changed since this was captured")
+                        .font(.data(10))
+                        .foregroundStyle(KTheme.revealed)
+                }
+                ScrollView {
+                    Text(source.text)
+                        .font(.data(10))
+                        .foregroundStyle(KTheme.text)
+                        .textSelection(.enabled)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .frame(maxHeight: 240)
+            } else {
+                Text("source not available")
+                    .font(.data(10))
+                    .foregroundStyle(KTheme.text2)
+            }
+        } else {
+            Button {
+                Task { await loadSource() }
+            } label: {
+                Label(loadingSource ? "loading source…" : "source", systemImage: "doc.text.magnifyingglass")
+                    .font(.data(10, weight: .semibold))
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(KTheme.accent)
+            .disabled(loadingSource)
+            if let sourceError {
+                Text(sourceError)
+                    .font(.data(10))
+                    .foregroundStyle(KTheme.counter)
+            }
+        }
+    }
+
+    private func loadSource() async {
+        guard !loadingSource else { return }
+        loadingSource = true
+        defer { loadingSource = false }
+        do {
+            source = try await APIClient.shared.fetchMMSource(baseURL: baseURL, id: item.id)
+            sourceError = nil
+        } catch {
+            sourceError = (error as? KrakenError)?.errorDescription ?? error.localizedDescription
+        }
+    }
+
     private var stamps: String {
         var s = item.createdAt > 0 ? "marked " + memoryShortDate(ms: item.createdAt) : ""
         if let at = item.invalidatedAt, at > 0 {
             s += (s.isEmpty ? "" : " · ") + "invalidated " + memoryShortDate(ms: at)
         }
         return s
+    }
+}
+
+/// One raised contradiction flag: what it is about, the note the agent and
+/// zeus left, and carl's two verdicts — `drop item` (resolve AND invalidate
+/// the flagged item) or `keep` (resolve only).
+struct MMFlagRowView: View {
+    let flag: WebMMFlag
+    /// The flagged item when it is in the loaded list, for its title.
+    let item: WebMMItem?
+    let busy: Bool
+    let onResolve: (String) -> Void
+
+    private var subject: String {
+        if let item { return "#\(item.id) " + mmRowTitle(item) }
+        if flag.itemId != 0 { return "item #\(flag.itemId)" }
+        return "no item named"
+    }
+
+    private var meta: String {
+        var parts: [String] = []
+        if flag.againstId != 0 { parts.append("against #\(flag.againstId)") }
+        if !flag.slug.isEmpty { parts.append(flag.slug) }
+        let at = flag.raisedAt > 0 ? flag.raisedAt : flag.createdAt
+        if at > 0 {
+            let now = Int64(Date().timeIntervalSince1970 * 1000)
+            parts.append(compactAgeLabel(secondsElapsed: Int((now - at) / 1000)) + " ago")
+        }
+        return parts.joined(separator: " · ")
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 5) {
+            HStack(spacing: 6) {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .font(.system(size: 10))
+                    .foregroundStyle(KTheme.counter)
+                Text(subject)
+                    .font(.data(12, weight: .semibold))
+                    .foregroundStyle(KTheme.text)
+                    .lineLimit(2)
+            }
+            Text(flag.note)
+                .font(.voice(12))
+                .foregroundStyle(KTheme.text)
+                .fixedSize(horizontal: false, vertical: true)
+            if !flag.raiseNote.isEmpty {
+                Text(flag.raiseNote)
+                    .font(.voice(11))
+                    .foregroundStyle(KTheme.text2)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            if !meta.isEmpty {
+                Text(meta)
+                    .font(.data(10))
+                    .foregroundStyle(KTheme.text2)
+            }
+            HStack(spacing: 8) {
+                if busy {
+                    ProgressView().controlSize(.small)
+                } else {
+                    // `drop item` only when there is an item to drop: a flag
+                    // naming none would resolve with nothing invalidated,
+                    // which is what `keep` already says.
+                    if flag.itemId != 0 {
+                        Button("drop item", role: .destructive) { onResolve("drop") }
+                            .font(.data(11, weight: .semibold))
+                            .buttonStyle(.glass)
+                            .tint(KTheme.counter)
+                            .accessibilityLabel("drop item \(flag.itemId) and resolve the flag")
+                    }
+                    Button("keep") { onResolve("keep") }
+                        .font(.data(11, weight: .semibold))
+                        .buttonStyle(.glass)
+                        .tint(KTheme.accent)
+                        .accessibilityLabel("keep the item and resolve the flag")
+                }
+            }
+        }
+        .padding(.vertical, 4)
     }
 }

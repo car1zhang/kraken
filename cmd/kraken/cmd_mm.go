@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -16,15 +17,21 @@ import (
 
 // cmd_mm.go — `k mm mark|drop|note|get|lsp`: carl's own verbs for the mental
 // model, proxying to kraken serve's /api/mm routes (internal/api/mm.go).
-// `mark` records a range of code he has just read, `drop` unmarks one, `note`
-// records something he thought, `get` prints the model back, and `lsp` is the
+//
+// The mind layer (schema v33) adds the AGENT side, below the original verbs:
+// `show`/`source` (the drill-down reads every agent may run), `commit`/
+// `revise` (a mind thread's only writes — the server refuses any other
+// caller), and `flag`/`flags` (any agent records a contradiction; only the
+// lead raises or dismisses one). Of the original verbs, `mark` records a
+// range of code carl has just read, `drop` unmarks one, `note` records
+// something he thought, `get` prints the model back, and `lsp` is the
 // long-running odd one out — a language server (mmlsp.go) that draws the marks
 // back into Zed and offers a code action to drop one from there.
 //
-// These are CARL's verbs, not a cell's, and that is the whole posture of the
-// feature (Q5): agents never write the mental model, so no pipeline skill
-// documents these and nothing in a cell brief points at them. The callers are
-// carl's own shell and the Zed capture task.
+// `mark`, `drop` and `note` are CARL's verbs, not a cell's: their callers are
+// carl's own shell and the Zed capture task, and no skill or brief points at
+// them. `get` is shared — carl's read, and the first rung of the ladder every
+// pipeline skill and zeus' brief mandate (`get --q` → `show` → `source`).
 //
 // `mark` is shaped by what an editor can actually hand over. Zed's task
 // runner exports the worktree root, the file relative to it and the 1-based
@@ -53,7 +60,7 @@ import (
 // going through util.Die's os.Exit — the same shape cmd_load.go uses.
 func cmdMM(args []string) {
 	if len(args) == 0 {
-		util.Die("usage: k mm mark|drop|note|get|lsp ...")
+		util.Die("usage: kraken mm %s ...", mmOps)
 	}
 	op, rest := args[0], args[1:]
 	switch op {
@@ -93,6 +100,43 @@ func cmdMM(args []string) {
 			util.Die("%v", err)
 		}
 		writeStdout(out)
+	case "show", "source":
+		out, err := runMMRead(op, rest)
+		if err != nil {
+			util.Die("%v", err)
+		}
+		writeStdout(out)
+	case "commit":
+		if len(rest) != 0 {
+			util.Die("%s", mmCommitUsage)
+		}
+		line, err := runMMCommit(os.Stdin, mmCallerSession)
+		if err != nil {
+			util.Die("%v", err)
+		}
+		fmt.Fprintln(os.Stderr, line)
+	case "revise":
+		id, err := parseMMID(rest, mmReviseUsage)
+		if err != nil {
+			util.Die("%v", err)
+		}
+		line, err := runMMRevise(id, os.Stdin, mmCallerSession)
+		if err != nil {
+			util.Die("%v", err)
+		}
+		fmt.Fprintln(os.Stderr, line)
+	case "flag":
+		line, err := runMMFlag(rest, mmCallerSession)
+		if err != nil {
+			util.Die("%v", err)
+		}
+		fmt.Fprintln(os.Stderr, line)
+	case "flags":
+		out, err := runMMFlags(rest)
+		if err != nil {
+			util.Die("%v", err)
+		}
+		writeStdout(out)
 	case "lsp":
 		// The one verb here that is a SERVER rather than a round trip: it
 		// holds stdio for as long as Zed keeps it alive, so it takes no
@@ -110,7 +154,7 @@ func cmdMM(args []string) {
 			util.Die("%v", err)
 		}
 	default:
-		util.Die("usage: k mm mark|drop|note|get|lsp ... (unknown op %q)", op)
+		util.Die("usage: kraken mm %s ... (unknown op %q)", mmOps, op)
 	}
 }
 
@@ -419,7 +463,7 @@ func runMMNote(f mmNoteFields) (string, error) {
 	return mmWriteLine(raw, "noted", "noted"), nil
 }
 
-const mmGetUsage = "usage: k mm get [--all] [--file <path>]"
+const mmGetUsage = "usage: kraken mm get [--all] [--file <path>] [--q <text>] [--repo <r>] [--dir <d>] [--scope universal|repo]"
 
 // runMMGet is `k mm get [--all] [--file <path>]`: GET /api/mm — prints
 // {"items": [...]} straight through, newest first.
@@ -436,24 +480,40 @@ const mmGetUsage = "usage: k mm get [--all] [--file <path>]"
 // path is resolved exactly the way `k mm mark` resolves its capture pair
 // (mmGetFileQuery), so the query asks about the same identity the marks were
 // stored under.
+//
+// --q, --repo, --dir and --scope (the mind layer) become the same-named query
+// parameters VERBATIM — the server owns their meaning (store.MMFilter), so the
+// CLI neither trims nor validates them.
 func runMMGet(args []string) ([]byte, error) {
 	all := false
 	file := ""
+	q := url.Values{}
 	for i := 0; i < len(args); i++ {
-		switch args[i] {
+		name, raw, inline := strings.Cut(args[i], "=")
+		if !inline {
+			name = args[i]
+		}
+		switch name {
 		case "--all":
-			all = true
-		case "--file":
-			if i+1 >= len(args) {
-				return nil, fmt.Errorf("%s (--file needs a value)", mmGetUsage)
+			if inline {
+				return nil, fmt.Errorf("%s (--all takes no value)", mmGetUsage)
 			}
-			i++
-			file = args[i]
+			all = true
+		case "--file", "--q", "--repo", "--dir", "--scope":
+			v, next, err := mmFlagValue(args, i, name, raw, inline, mmGetUsage)
+			if err != nil {
+				return nil, err
+			}
+			i = next
+			if name == "--file" {
+				file = v
+			} else {
+				q.Set(strings.TrimPrefix(name, "--"), v)
+			}
 		default:
 			return nil, fmt.Errorf("%s (unexpected argument %q)", mmGetUsage, args[i])
 		}
 	}
-	q := url.Values{}
 	if !all {
 		q.Set("live", "1")
 	}
@@ -514,4 +574,299 @@ func mmWriteLine(raw []byte, created, already string) string {
 		line += " (mm " + strconv.FormatInt(resp.ID, 10) + ")"
 	}
 	return line
+}
+
+// ===========================================================================
+// The mind layer's verbs.
+// ===========================================================================
+
+// mmOps is the op list every usage line names.
+const mmOps = "mark|drop|note|get|show|source|commit|revise|flag|flags|lsp"
+
+const (
+	mmShowUsage   = "usage: kraken mm show <id>"
+	mmSourceUsage = "usage: kraken mm source <id>"
+	mmCommitUsage = "usage: kraken mm commit  (item JSON {title, scope, repo, dir, kind, body, quote, source} on stdin)"
+	mmReviseUsage = "usage: kraken mm revise <id>  (item JSON on stdin, same shape as commit)"
+	mmFlagUsage   = "usage: kraken mm flag [--item <id>] [--against <id>] --note \"<text>\" [--slug <slug>]  |  kraken mm flag raise|dismiss <id> --note \"<text>\""
+	mmFlagsUsage  = "usage: kraken mm flags [--state pending|raised|dismissed|resolved]"
+)
+
+// mmThreadSessionEnv is the variable a mind thread's spawn command stages
+// (jobs.threadEnvPrefix), naming the thread's own claude session — the
+// identity /api/mm/commit authorizes against.
+const mmThreadSessionEnv = "KRAKEN_THREAD_SESSION"
+
+// mmCallerSession resolves which session is calling: the staged variable
+// first, then the nearest claude/codex ancestor's session file
+// (core.CallerSessionID). It is a variable so the run functions take it as a
+// parameter rather than reaching for the process environment themselves.
+func mmCallerSession() (string, bool) {
+	if s := strings.TrimSpace(os.Getenv(mmThreadSessionEnv)); s != "" {
+		return s, true
+	}
+	return core.CallerSessionID()
+}
+
+// parseMMID reads the single positional item/flag id, refusing anything that
+// is not a positive whole number locally (parseMMDrop's reasoning).
+func parseMMID(args []string, usage string) (int64, error) {
+	if len(args) != 1 {
+		return 0, fmt.Errorf("%s", usage)
+	}
+	id, err := strconv.ParseInt(strings.TrimSpace(args[0]), 10, 64)
+	if err != nil || id < 1 {
+		return 0, fmt.Errorf("bad id %q: want a whole number 1 or greater (%s)", args[0], usage)
+	}
+	return id, nil
+}
+
+// runMMRead is `show <id>` and `source <id>`: one GET, the server's JSON
+// printed verbatim. A source that is gone answers `available:false` with a
+// 200, so it exits 0 — a missing source is information, not a failure.
+func runMMRead(op string, args []string) ([]byte, error) {
+	usage := mmShowUsage
+	if op == "source" {
+		usage = mmSourceUsage
+	}
+	id, err := parseMMID(args, usage)
+	if err != nil {
+		return nil, err
+	}
+	return qfGet("/api/mm/" + op + "?id=" + strconv.FormatInt(id, 10))
+}
+
+// mmReadItem reads the item JSON a commit/revise carries on stdin. It is
+// forwarded as raw JSON rather than decoded here, so the server's strict
+// decode is the only judge of its keys — a local struct would silently drop
+// a key the server would have refused.
+func mmReadItem(stdin io.Reader, usage string) (json.RawMessage, error) {
+	if stdinIsInteractiveTTY(stdin) {
+		return nil, fmt.Errorf("%s (refusing to wait on an interactive terminal — pipe the JSON in)", usage)
+	}
+	data, err := io.ReadAll(stdin)
+	if err != nil {
+		return nil, fmt.Errorf("read stdin: %w", err)
+	}
+	data = []byte(strings.TrimSpace(string(data)))
+	if len(data) == 0 {
+		return nil, fmt.Errorf("%s (stdin was empty)", usage)
+	}
+	if !json.Valid(data) || data[0] != '{' {
+		return nil, fmt.Errorf("%s (stdin is not a JSON object)", usage)
+	}
+	return json.RawMessage(data), nil
+}
+
+// mmRequireSession resolves the commit/revise caller, failing BEFORE any HTTP
+// call when there is none: without a session the server can only answer 403,
+// and the useful sentence is which variable was missing.
+func mmRequireSession(session func() (string, bool)) (string, error) {
+	if s, ok := session(); ok && s != "" {
+		return s, nil
+	}
+	return "", fmt.Errorf("no thread session: $%s is unset and no claude/codex session was found above this process — only a mind thread may commit to the mental model", mmThreadSessionEnv)
+}
+
+// runMMCommit posts one finalized item and returns `committed mm <id>`.
+func runMMCommit(stdin io.Reader, session func() (string, bool)) (string, error) {
+	sid, err := mmRequireSession(session)
+	if err != nil {
+		return "", err
+	}
+	item, err := mmReadItem(stdin, mmCommitUsage)
+	if err != nil {
+		return "", err
+	}
+	raw, err := qfPost("/api/mm/commit", map[string]any{"thread_session": sid, "item": item})
+	if err != nil {
+		return "", err
+	}
+	return "committed mm " + strconv.FormatInt(mmResponseID(raw), 10), nil
+}
+
+// runMMRevise rewrites one live item and returns `revised mm <id>`.
+func runMMRevise(id int64, stdin io.Reader, session func() (string, bool)) (string, error) {
+	sid, err := mmRequireSession(session)
+	if err != nil {
+		return "", err
+	}
+	item, err := mmReadItem(stdin, mmReviseUsage)
+	if err != nil {
+		return "", err
+	}
+	if _, err := qfPost("/api/mm/revise", map[string]any{"thread_session": sid, "id": id, "item": item}); err != nil {
+		return "", err
+	}
+	return "revised mm " + strconv.FormatInt(id, 10), nil
+}
+
+// mmResponseID reads `id` out of a write's response, 0 when it cannot.
+func mmResponseID(raw []byte) int64 {
+	var resp struct {
+		ID int64 `json:"id"`
+	}
+	_ = json.Unmarshal(raw, &resp)
+	return resp.ID
+}
+
+// runMMFlag is `flag …` and its two sub-verbs `flag raise|dismiss <id>`. The
+// session is optional here, unlike commit: an unknown caller still records a
+// PENDING flag, and only the lead's session makes one raised.
+func runMMFlag(args []string, session func() (string, bool)) (string, error) {
+	sid, _ := session()
+	if len(args) > 0 && (args[0] == "raise" || args[0] == "dismiss") {
+		return runMMFlagStep(args[0], args[1:], sid)
+	}
+	var itemID, againstID int64
+	note, slug, haveSlug := "", "", false
+	for i := 0; i < len(args); i++ {
+		name, raw, inline := strings.Cut(args[i], "=")
+		if !inline {
+			name = args[i]
+		}
+		switch name {
+		case "--item", "--against", "--note", "--slug":
+		default:
+			return "", fmt.Errorf("%s (unexpected argument %q)", mmFlagUsage, args[i])
+		}
+		v, next, err := mmFlagValue(args, i, name, raw, inline, mmFlagUsage)
+		if err != nil {
+			return "", err
+		}
+		i = next
+		switch name {
+		case "--item", "--against":
+			n, err := strconv.ParseInt(strings.TrimSpace(v), 10, 64)
+			if err != nil || n < 1 {
+				return "", fmt.Errorf("bad %s %q: want an item id, a whole number 1 or greater (%s)", name, v, mmFlagUsage)
+			}
+			if name == "--item" {
+				itemID = n
+			} else {
+				againstID = n
+			}
+		case "--note":
+			note = v
+		case "--slug":
+			slug, haveSlug = strings.TrimSpace(v), true
+		}
+	}
+	if strings.TrimSpace(note) == "" {
+		return "", fmt.Errorf("%s (--note is required)", mmFlagUsage)
+	}
+	if !haveSlug {
+		slug = cellSlugFromCwd()
+	}
+	raw, err := qfPost("/api/mm/flag", map[string]any{
+		"session": sid, "slug": slug, "item_id": itemID, "against_id": againstID, "note": note,
+	})
+	if err != nil {
+		return "", err
+	}
+	var resp struct {
+		ID    int64  `json:"id"`
+		State string `json:"state"`
+	}
+	_ = json.Unmarshal(raw, &resp)
+	return fmt.Sprintf("flagged mm #%d (%s)", resp.ID, resp.State), nil
+}
+
+// runMMFlagStep is `flag raise|dismiss <id> --note "<text>"`: the lead's move
+// on a pending flag. A non-lead caller gets the server's 403 message back.
+func runMMFlagStep(step string, args []string, sid string) (string, error) {
+	var id int64
+	note := ""
+	for i := 0; i < len(args); i++ {
+		name, raw, inline := strings.Cut(args[i], "=")
+		if !inline {
+			name = args[i]
+		}
+		if name == "--note" {
+			v, next, err := mmFlagValue(args, i, name, raw, inline, mmFlagUsage)
+			if err != nil {
+				return "", err
+			}
+			i, note = next, v
+			continue
+		}
+		if id != 0 || strings.HasPrefix(args[i], "-") {
+			return "", fmt.Errorf("%s (unexpected argument %q)", mmFlagUsage, args[i])
+		}
+		n, err := strconv.ParseInt(strings.TrimSpace(args[i]), 10, 64)
+		if err != nil || n < 1 {
+			return "", fmt.Errorf("bad flag id %q: want a whole number 1 or greater (%s)", args[i], mmFlagUsage)
+		}
+		id = n
+	}
+	if id == 0 {
+		return "", fmt.Errorf("%s (flag %s needs the flag id)", mmFlagUsage, step)
+	}
+	if strings.TrimSpace(note) == "" {
+		return "", fmt.Errorf("%s (--note is required)", mmFlagUsage)
+	}
+	if _, err := qfPost("/api/mm/flag/"+step, map[string]any{"session": sid, "id": id, "note": note}); err != nil {
+		return "", err
+	}
+	verb := "raised"
+	if step == "dismiss" {
+		verb = "dismissed"
+	}
+	return verb + " flag " + strconv.FormatInt(id, 10), nil
+}
+
+// runMMFlags is `flags [--state s]`: GET /api/mm/flags, printed verbatim.
+func runMMFlags(args []string) ([]byte, error) {
+	q := url.Values{}
+	for i := 0; i < len(args); i++ {
+		name, raw, inline := strings.Cut(args[i], "=")
+		if !inline {
+			name = args[i]
+		}
+		if name != "--state" {
+			return nil, fmt.Errorf("%s (unexpected argument %q)", mmFlagsUsage, args[i])
+		}
+		v, next, err := mmFlagValue(args, i, name, raw, inline, mmFlagsUsage)
+		if err != nil {
+			return nil, err
+		}
+		i = next
+		q.Set("state", v)
+	}
+	path := "/api/mm/flags"
+	if len(q) > 0 {
+		path += "?" + q.Encode()
+	}
+	return qfGet(path)
+}
+
+// cellSlugFromCwd derives the job's name from a cell worktree cwd: cells live
+// at ~/.kraken/cells/<slug>-<job id>/wt-<repo>/…, and the cell dir's name is
+// sent AS IS — `<slugified slug>-<id>` — because the server's slug ladder
+// (api's mmResolveFlagSlug) resolves that spelling by the id, the one key a
+// rename or a Slugify rewrite cannot move; stripping the id here would hand
+// it only the half that can. No helper for this existed — the hooks are
+// handed their slug explicitly (`--slug`) — so this is the one rule. A cwd
+// outside the cells dir yields "" — never an error, since the server accepts
+// a flag with no slug.
+func cellSlugFromCwd() string {
+	cwd, err := os.Getwd()
+	if err != nil {
+		return ""
+	}
+	return cellSlugFromPath(cwd)
+}
+
+func cellSlugFromPath(dir string) string {
+	cells := filepath.Join(util.Home(), ".kraken", "cells")
+	if real, err := filepath.EvalSymlinks(cells); err == nil {
+		if rd, derr := filepath.EvalSymlinks(dir); derr == nil {
+			cells, dir = real, rd
+		}
+	}
+	rel, err := filepath.Rel(cells, dir)
+	if err != nil || rel == "." || strings.HasPrefix(rel, "..") {
+		return ""
+	}
+	return strings.SplitN(filepath.ToSlash(rel), "/", 2)[0]
 }

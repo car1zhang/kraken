@@ -1174,9 +1174,11 @@ func TestEdgeMMMigrationV29CarriesOnlyLiveWatchedEdges(t *testing.T) {
 	// orch_inbox; downgradeFreshDB's v31 arm recreates it, and it is then
 	// present in the v28 shape exactly as a real v28 database held it. v32
 	// dropped the kg_* tables; its arm puts them back, so the graph rows below
-	// are seeded through raw SQL AFTER the downgrade — the accessors are gone.)
-	if schemaVersion != 32 {
-		t.Fatalf("schemaVersion = %d, want 32 — this fixture seeds a v28 shape and walks it forward", schemaVersion)
+	// are seeded through raw SQL AFTER the downgrade — the accessors are gone.
+	// v33 rebuilt mm_items and added threads.role and mm_flags; its arm,
+	// undoV33, reverses all three.)
+	if schemaVersion != 33 {
+		t.Fatalf("schemaVersion = %d, want 33 — this fixture seeds a v28 shape and walks it forward", schemaVersion)
 	}
 	s := edgeMMOpen(t)
 

@@ -6,6 +6,7 @@ import { BoardView, type BoardActions } from "./components/board/BoardView.tsx";
 import { JobCard } from "./components/board/JobCard.tsx";
 import { DragProvider } from "./components/board/DragProvider.tsx";
 import { Chrome } from "./components/chrome/Chrome.tsx";
+import MindButton from "./components/chrome/MindButton.tsx";
 import { DreamView } from "./components/dream/DreamView.tsx";
 import { LogView } from "./components/log/LogView.tsx";
 import { MemoryView } from "./components/memory/MemoryView.tsx";
@@ -37,10 +38,6 @@ import {
   deleteFeedback,
   deleteJob,
   editFeedback,
-  markArtifactRead,
-  markDecision,
-  markDetail,
-  markElementRead,
   openTmux,
   removeFromLibrary,
   removeMM,
@@ -243,19 +240,11 @@ export function App() {
 
   // -------------------------------------------------------- mental model
   //
-  // ONE poll for what carl has read, hoisted for the library's reason and one
-  // more of its own: FOUR surfaces read it — the artifact viewer's ✓ read and
-  // its per-table ✓s, the steer modal's → decision and detail mark, and the
-  // memory view's MENTAL MODEL pane — and every one of them is a membership
-  // test rather than a latch, so two polls would be two answers to "have I
-  // read this" and the buttons would contradict the pane they were opened
-  // from.
-  //
-  // Gated on any of the three surfaces being up: the memory view showing, the
-  // artifact viewer open over anything at all, or the steer modal open. The
-  // board itself carries no mm keys (the hot payload is deliberately
-  // untouched), so with all three shut this poll costs nothing.
-  const mm = useMM(view === "memory" || artifact !== null || steer !== null);
+  // ONE unfiltered poll, read by the memory view's Model pane alone now that
+  // the board's one-shot marks are retired — gated on that view showing, so
+  // with it shut this poll costs nothing (the board payload carries no mm
+  // keys).
+  const mm = useMM(view === "memory");
 
   // Every write takes the shared mutation path so a refusal lands in the clock
   // corner like all the others, then pulls the list back at once rather than
@@ -270,24 +259,9 @@ export function App() {
     },
     [mutate, mm.refetch],
   );
-  const markRead = useCallback(
-    (slug: string, home: string, name: string) =>
-      afterMM(() => markArtifactRead(slug, home, name)),
-    [afterMM],
-  );
-  const markElement = useCallback(
-    (slug: string, home: string, name: string, text: string) =>
-      afterMM(() => markElementRead(slug, home, name, text)),
-    [afterMM],
-  );
-  const markQuestionDecision = useCallback(
-    (slug: string, qid: string) => afterMM(() => markDecision(slug, qid)),
-    [afterMM],
-  );
-  const markCellDetail = useCallback(
-    (slug: string, text: string) => afterMM(() => markDetail(slug, text)),
-    [afterMM],
-  );
+  // The board's one-shot marks (✓ read, mark selection, table ✓, ○ mark
+  // known, → decision) were retired in PR 2 (Q10): capture goes through the
+  // ◆ mind button below into a mind thread, which commits the item itself.
   const addNote = useCallback(
     (text: string) => afterMM(() => addMMNote(text)),
     [afterMM],
@@ -421,6 +395,9 @@ export function App() {
         mm={mm}
         onAddNote={addNote}
         onRemoveMM={dropMark}
+        // a raised flag's `open job` — the steer modal of the job whose zeus
+        // raised it, which stacks over the memory view like any overlay
+        onOpenJob={(slug) => openSteer(slug, "steer")}
       />
 
       <SteerOverlay
@@ -456,11 +433,6 @@ export function App() {
           setSteer((s) => (s ? { ...s, slug } : s));
           void board.refetch();
         }}
-        // the modal's two mental-model affordances: → decision on an answered
-        // question, and the mark on what the cell last said about itself
-        mm={mm.items}
-        onMarkDetail={markCellDetail}
-        onMarkDecision={markQuestionDecision}
         mutate={mutate}
       />
 
@@ -516,12 +488,6 @@ export function App() {
         library={library.items}
         onSaveArtifact={saveArtifact}
         onRemoveSaved={removeSaved}
-        // the mental model's three artifact-side affordances: the head's
-        // ✓ read, the selection mark, and the per-table ✓s in the body
-        mm={mm.items}
-        onMarkRead={markRead}
-        onDropMark={dropMark}
-        onMarkElement={markElement}
         mutate={mutate}
       />
 
@@ -535,6 +501,18 @@ export function App() {
           setThread((t) => (t ? { slug: t.slug, tid } : t))
         }
         mutate={mutate}
+      />
+
+      {/* ◆ mind — once, over every view. A capture lands in a mind thread:
+          the thread overlay opens on it, and the artifact viewer (z-index
+          30, above the thread overlay's 25) is closed first for the reason
+          onAskBranched gives — a thread opened underneath it is invisible. */}
+      <MindButton
+        onOpened={(slug, tid) => {
+          setArtifact(null);
+          setThread({ slug, tid });
+          void board.refetch();
+        }}
       />
 
       <UsageOverlay

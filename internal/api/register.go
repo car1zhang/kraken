@@ -69,6 +69,18 @@ func Register(mux *http.ServeMux) {
 	mux.HandleFunc("/api/mm/note", mirrorGated(mmNoteHandler))
 	mux.HandleFunc("/api/mm/detail", mirrorGated(mmDetailHandler))
 	mux.HandleFunc("/api/mm/remove", mirrorGated(mmRemoveHandler))
+	// The mind layer (schema v33). Same posture: the three reads open, every
+	// write POST-only and therefore gated at registration.
+	mux.HandleFunc("/api/mm/show", mmShowHandler)
+	mux.HandleFunc("/api/mm/source", mmSourceHandler)
+	mux.HandleFunc("/api/mm/flags", mmFlagsHandler)
+	mux.HandleFunc("/api/mm/capture", mirrorGated(mmCaptureHandler))
+	mux.HandleFunc("/api/mm/commit", mirrorGated(mmCommitHandler))
+	mux.HandleFunc("/api/mm/revise", mirrorGated(mmReviseHandler))
+	mux.HandleFunc("/api/mm/flag", mirrorGated(mmFlagHandler))
+	mux.HandleFunc("/api/mm/flag/raise", mirrorGated(mmFlagRaiseHandler))
+	mux.HandleFunc("/api/mm/flag/dismiss", mirrorGated(mmFlagDismissHandler))
+	mux.HandleFunc("/api/mm/flag/resolve", mirrorGated(mmFlagResolveHandler))
 	// Mid-conversation recall (recall.go): the cell hook's POST. Gated like
 	// every other agent-side write, because a firing records what it
 	// delivered (the per-job notes record) — it reads like a query and is not
@@ -104,6 +116,9 @@ func Register(mux *http.ServeMux) {
 	mux.HandleFunc("/api/job/goal", jobGoalHandler)
 	mux.HandleFunc("/api/threads", threadsHandler)
 	mux.HandleFunc("/api/thread/read", threadReadHandler)
+	// Zeus' own conversation tail for the steer modal's transcript panel
+	// (transcript.go). A read, so ungated.
+	mux.HandleFunc("/api/job/transcript", jobTranscriptHandler)
 	mux.HandleFunc("/api/retry", webAction("retry", webRetry))
 	mux.HandleFunc("/api/kill", webAction("kill", webKill))
 	mux.HandleFunc("/api/steer", webAction("steer", webSteer))

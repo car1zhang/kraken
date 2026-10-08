@@ -237,11 +237,11 @@ Commands:
                       Both numbers or neither — a half estimate has no ratio,
                       and 'clear' is how an estimate is removed. get prints
                       the pair as JSON ({"load": null} when unestimated).
-  k mm mark|drop|note|get|lsp ...
+  k mm mark|drop|note|get|show|source|commit|revise|flag|flags|lsp ...
                       CARL's verbs for the mental model — what he has read,
                       decided and noted — proxied the same way as 'k questions'.
-                      Agents never write it: these are for carl's own shell
-                      and the Zed capture task, and no skill documents them.
+                      mark/drop/note are carl's own: for his shell and the
+                      Zed capture task.
                       mark --worktree <dir> --file <path> --start-row <n>
                       [--note "..."] records a range of code as read, taking
                       the selected text from $KRAKEN_MM_SELECTION (an empty
@@ -255,6 +255,19 @@ Commands:
                       language server that draws live code marks back into
                       Zed as hints and offers a code action to drop one (run
                       by the zed/kraken-mm extension, not by hand).
+                      The mind layer's AGENT-side verbs: get also takes
+                      --q <text> --repo <r> --dir <d> --scope universal|repo;
+                      show <id> prints one item, source <id> the material
+                      behind it (available:false still exits 0); commit and
+                      revise <id> post an item JSON from stdin as a mind
+                      thread ($KRAKEN_THREAD_SESSION, else the calling
+                      claude's session — refused before any HTTP when there
+                      is neither); flag [--item <id>] [--against <id>]
+                      --note "..." [--slug <slug>] records a contradiction
+                      (slug defaults to the cell this runs in); flag
+                      raise|dismiss <id> --note "..." is the lead's verdict;
+                      flags [--state pending|raised|dismissed|resolved]
+                      lists them.
   k watchlist get|add|update|remove ...
                       cell-side verb the nightly dream pass uses to track
                       recurring observations, proxied the same way. A watch

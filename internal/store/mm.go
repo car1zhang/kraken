@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"path"
 	"strings"
 )
 
@@ -72,6 +73,16 @@ type MMItem struct {
 	SnapshotExt                         string
 	EpisodeID, CreatedAt, InvalidatedAt int64
 	InvalidReason, InvalidDetail        string
+
+	// The schema-v33 half. Title is the one line the rules files carry, and
+	// Content is the body behind it. Scope is "universal" or "repo" (empty is
+	// stored as "repo"); Repo and Dir place a repo-scoped item, Dir
+	// repo-relative with "" meaning the whole repo. Quote is the verbatim text
+	// carl highlighted, SourceJSON where it came from, ThreadSession the mind
+	// thread session that committed it, and RevisedAt the last ReviseMMItem
+	// (0 = never revised).
+	Title, Scope, Repo, Dir, Quote, SourceJSON, ThreadSession string
+	RevisedAt                                                 int64
 }
 
 // MMCodeAnchor is the 1:1 companion of a source=code item: where the lines
@@ -113,9 +124,23 @@ type MMCodeAnchor struct {
 // accepted set.
 var (
 	validMMKind       = map[string]bool{"decision": true, "reading": true, "note": true}
-	validMMSource     = map[string]bool{"question": true, "artifact": true, "artifact-element": true, "code": true, "agent-output": true, "manual": true}
+	validMMSource     = map[string]bool{"question": true, "artifact": true, "artifact-element": true, "code": true, "agent-output": true, "manual": true, "capture": true}
 	validMMAnchorKind = map[string]bool{"origin-main": true, "merge-base": true, "head": true, "dirty": true}
+	validMMScope      = map[string]bool{"universal": true, "repo": true}
 )
+
+// normalizeMMScope applies the one default both writers share — an empty
+// scope is "repo", the column's DEFAULT — and refuses anything else outside
+// the two values.
+func normalizeMMScope(scope string) (string, error) {
+	if scope == "" {
+		return "repo", nil
+	}
+	if !validMMScope[scope] {
+		return "", fmt.Errorf("bad mm scope %q: want universal or repo", scope)
+	}
+	return scope, nil
+}
 
 // SHA256Hex is the identity hash this subsystem compares payloads with: hex
 // sha256. The token watermarks are NOT a precedent for it — a
@@ -140,14 +165,19 @@ func SHA256Hex(b []byte) string {
 const mmItemColumns = `SELECT id, COALESCE(kind,''), COALESCE(source,''), COALESCE(job_id,0),
 	COALESCE(slug,''), COALESCE(source_ref,''), COALESCE(content,''), COALESCE(context,''),
 	COALESCE(snapshot_ext,''), COALESCE(episode_id,0), COALESCE(created_at,0),
-	COALESCE(invalidated_at,0), COALESCE(invalid_reason,''), COALESCE(invalid_detail,'')
+	COALESCE(invalidated_at,0), COALESCE(invalid_reason,''), COALESCE(invalid_detail,''),
+	COALESCE(title,''), COALESCE(scope,'repo'), COALESCE(repo,''), COALESCE(dir,''),
+	COALESCE(quote,''), COALESCE(source_json,''), COALESCE(thread_session,''),
+	COALESCE(revised_at,0)
 	FROM mm_items`
 
 func scanMMItem(row interface{ Scan(...any) error }) (MMItem, error) {
 	var it MMItem
 	err := row.Scan(&it.ID, &it.Kind, &it.Source, &it.JobID, &it.Slug, &it.SourceRef,
 		&it.Content, &it.Context, &it.SnapshotExt, &it.EpisodeID, &it.CreatedAt,
-		&it.InvalidatedAt, &it.InvalidReason, &it.InvalidDetail)
+		&it.InvalidatedAt, &it.InvalidReason, &it.InvalidDetail,
+		&it.Title, &it.Scope, &it.Repo, &it.Dir, &it.Quote, &it.SourceJSON,
+		&it.ThreadSession, &it.RevisedAt)
 	return it, err
 }
 
@@ -178,8 +208,13 @@ func (s *Store) AddMMItem(it MMItem) (int64, error) {
 		return 0, fmt.Errorf("bad mm kind %q: want decision, reading, or note", it.Kind)
 	}
 	if !validMMSource[it.Source] {
-		return 0, fmt.Errorf("bad mm source %q: want question, artifact, artifact-element, code, agent-output, or manual", it.Source)
+		return 0, fmt.Errorf("bad mm source %q: want question, artifact, artifact-element, code, agent-output, manual, or capture", it.Source)
 	}
+	scope, err := normalizeMMScope(it.Scope)
+	if err != nil {
+		return 0, err
+	}
+	it.Scope = scope
 	if strings.TrimSpace(it.Content) == "" {
 		return 0, errors.New("mm item content is empty")
 	}
@@ -193,11 +228,13 @@ func (s *Store) AddMMItem(it MMItem) (int64, error) {
 	res, err := s.db.Exec(
 		`INSERT INTO mm_items (kind, source, job_id, slug, source_ref, content, context,
 			content_sha, snapshot_ext, episode_id, created_at, invalidated_at,
-			invalid_reason, invalid_detail)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			invalid_reason, invalid_detail, title, scope, repo, dir, quote,
+			source_json, thread_session, revised_at)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		it.Kind, it.Source, it.JobID, it.Slug, it.SourceRef, it.Content, it.Context,
 		SHA256Hex([]byte(it.Content)), it.SnapshotExt, it.EpisodeID, it.CreatedAt,
-		invalidatedAt, it.InvalidReason, it.InvalidDetail,
+		invalidatedAt, it.InvalidReason, it.InvalidDetail, it.Title, it.Scope,
+		it.Repo, it.Dir, it.Quote, it.SourceJSON, it.ThreadSession, it.RevisedAt,
 	)
 	if err != nil {
 		return 0, fmt.Errorf("add mm item (%s/%s): %w", it.Kind, it.Source, err)
@@ -314,6 +351,157 @@ func (s *Store) GetMMItem(id int64) (MMItem, error) {
 		return MMItem{}, fmt.Errorf("get mm item %d: %w", id, err)
 	}
 	return it, nil
+}
+
+// MMFilter narrows ListMMItemsFiltered. Every empty field is no filter, so the
+// zero value lists everything, dead items included.
+//
+// Dir is the one field that is not an exact match: an item placed at a
+// directory applies to everything beneath it, so asking about `a/b` must also
+// return the items placed at `a` and at the repo root (the empty dir).
+type MMFilter struct {
+	Live                bool
+	Repo, Dir, Q, Scope string
+}
+
+// mmDirAncestors returns dir and every ancestor of it, ending at "" (the repo
+// root), for MMFilter.Dir's inheritance. The asked dir is cleaned by the SAME
+// rule jobs' mmValidateCommit applies to a stored dir (path.Clean under a
+// leading "/", which drops it again), so `./a/b`, `a/b/` and `/a//b/` ask
+// about the same place as `a/b`, and `.`, `./` and `""` all mean the root —
+// a filter spelled differently from the stored form would otherwise miss
+// every item at it.
+func mmDirAncestors(dir string) []string {
+	dir = path.Clean("/" + dir)[1:]
+	var parts []string
+	for _, p := range strings.Split(dir, "/") {
+		if p != "" {
+			parts = append(parts, p)
+		}
+	}
+	out := make([]string, 0, len(parts)+1)
+	for i := len(parts); i > 0; i-- {
+		out = append(out, strings.Join(parts[:i], "/"))
+	}
+	return append(out, "")
+}
+
+// ListMMItemsFiltered is ListMMItems with MMFilter's narrowing, in the same
+// newest-first order.
+//
+// Q is applied in Go rather than in SQL on purpose: SQLite's lower() and LIKE
+// fold ASCII only, so an item titled in anything else would be invisible to a
+// differently-cased query. It is a substring over title, content and quote,
+// any one matching — the three places carl's own words can be.
+func (s *Store) ListMMItemsFiltered(f MMFilter) ([]MMItem, error) {
+	var where []string
+	var args []any
+	if f.Live {
+		where = append(where, `invalidated_at IS NULL`)
+	}
+	if f.Repo != "" {
+		where = append(where, `repo = ?`)
+		args = append(args, f.Repo)
+	}
+	if f.Scope != "" {
+		where = append(where, `scope = ?`)
+		args = append(args, f.Scope)
+	}
+	if f.Dir != "" {
+		dirs := mmDirAncestors(f.Dir)
+		where = append(where, `dir IN (?`+strings.Repeat(`, ?`, len(dirs)-1)+`)`)
+		for _, d := range dirs {
+			args = append(args, d)
+		}
+	}
+	query := mmItemColumns
+	if len(where) > 0 {
+		query += ` WHERE ` + strings.Join(where, ` AND `)
+	}
+	query += ` ORDER BY created_at DESC, id DESC`
+	rows, err := s.db.Query(query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("list mm items filtered: %w", err)
+	}
+	defer rows.Close()
+	q := strings.ToLower(f.Q)
+	out := []MMItem{}
+	for rows.Next() {
+		it, err := scanMMItem(rows)
+		if err != nil {
+			return nil, fmt.Errorf("list mm items filtered: %w", err)
+		}
+		if q != "" && !strings.Contains(strings.ToLower(it.Title), q) &&
+			!strings.Contains(strings.ToLower(it.Content), q) &&
+			!strings.Contains(strings.ToLower(it.Quote), q) {
+			continue
+		}
+		out = append(out, it)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("list mm items filtered: %w", err)
+	}
+	return out, nil
+}
+
+// MMRevision is the whole of what ReviseMMItem may change: the item's words
+// and its placement. At is the revise time, stamped into revised_at.
+type MMRevision struct {
+	Title, Content, Quote, Scope, Repo, Dir string
+	At                                      int64
+}
+
+// ReviseMMItem rewrites a LIVE item's six revisable columns in place and
+// stamps revised_at, re-stamping content_sha from the new content.
+//
+// Revising in place is deliberately the opposite of SupersedeLiveMMItems: a
+// supersede records that the SOURCE moved on, so the old row stays true about
+// what carl read; a revise is carl correcting his own statement of what he
+// knows, and the old wording is not a fact worth keeping. What the item came
+// from — created_at, source_json, thread_session, and every other column — is
+// provenance, and never moves.
+//
+// Refused with nothing changed: an empty content or a bad scope (validated
+// before any write, AddMMItem's rule; an empty scope is "repo" as on insert),
+// an unknown id (ErrNotFound), and an invalidated item — a dead item is a
+// frozen record of what carl knew, and one-way invalidation means nothing
+// edits it back to life.
+func (s *Store) ReviseMMItem(id int64, r MMRevision) error {
+	scope, err := normalizeMMScope(r.Scope)
+	if err != nil {
+		return fmt.Errorf("revise mm item %d: %w", id, err)
+	}
+	if strings.TrimSpace(r.Content) == "" {
+		return fmt.Errorf("revise mm item %d: content is empty", id)
+	}
+	res, err := s.db.Exec(
+		`UPDATE mm_items SET title = ?, content = ?, quote = ?, scope = ?, repo = ?, dir = ?,
+			content_sha = ?, revised_at = ?
+			WHERE id = ? AND invalidated_at IS NULL`,
+		r.Title, r.Content, r.Quote, scope, r.Repo, r.Dir,
+		SHA256Hex([]byte(r.Content)), r.At, id,
+	)
+	if err != nil {
+		return fmt.Errorf("revise mm item %d: %w", id, err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("revise mm item %d: %w", id, err)
+	}
+	if n > 0 {
+		return nil
+	}
+	// Zero rows is "no such item" or "already dead"; the probe tells them
+	// apart only on the miss, InvalidateMMItem's shape.
+	var exists int64
+	err = s.db.QueryRow(`SELECT id FROM mm_items WHERE id = ?`, id).Scan(&exists)
+	if errors.Is(err, sql.ErrNoRows) {
+		return fmt.Errorf("revise mm item %d: %w", id, ErrNotFound)
+	}
+	if err != nil {
+		return fmt.Errorf("revise mm item %d: %w", id, err)
+	}
+	return fmt.Errorf("revise mm item %d: the item is invalidated, and a dead item is never edited", id)
 }
 
 // FindLiveMMItem answers "has carl already marked exactly this?", matching all

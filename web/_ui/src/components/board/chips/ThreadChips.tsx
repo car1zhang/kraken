@@ -67,7 +67,7 @@ export function ThreadChips({
     const title = list
       .map(
         (t) =>
-          `${t.tid}${t.title ? " · " + t.title : ""} — ${t.state === "live" ? "live" : "closed"}`,
+          `${t.tid}${t.title ? " · " + t.title : ""}${t.role === "mind" ? " (mind)" : ""} — ${t.state === "live" ? "live" : "closed"}`,
       )
       .join("\n");
     return (
@@ -103,6 +103,11 @@ export function ThreadChips({
           >
             <span className="dot" />
             {label}
+            {t.role === "mind" ? (
+              <span className="thread-role mind" title="a mind thread — commits mental-model items">
+                mind
+              </span>
+            ) : null}
           </button>
         );
       })}

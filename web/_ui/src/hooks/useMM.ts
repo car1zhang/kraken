@@ -1,27 +1,21 @@
-// The mental model's ONE poll, hoisted to App for the reason `useLibrary` is:
-// four surfaces read the same list and must never disagree about it. The
-// artifact viewer's ✓ read button IS `artifactReadMatch(items, url) !== null`,
-// its table ✓s are a membership test over the same items, the steer modal's
-// → decision and detail marks are two more, and the memory view's MENTAL MODEL
-// pane renders the whole list beside them. Two polls would be two answers to
-// "have I read this", and a button would go on claiming a mark the pane it
-// sits beside had just dropped.
+// The mental model's polls.
+//
+// `useMM` is App's ONE unfiltered list (the Model pane renders it), hoisted
+// there for `useLibrary`'s reason; the pane runs a second, FILTERED instance of
+// the same hook while its filter box holds text, because a `?q=` result is a
+// different list rather than a view of the first. `useMMFlags` is the raised
+// contradiction flags the pane lists above its rows.
 
-import { fetchMM } from "../api/client.ts";
-import type { MMItem, MMPage } from "../lib/mm.ts";
+import { fetchMM, fetchMMFlags } from "../api/client.ts";
+import type { MMFlag, MMFlagsPage, MMItem, MMPage, MMQuery } from "../lib/mm.ts";
 import { usePoll } from "./usePoll.ts";
 
 /**
- * 30s, the library poll's interval and its argument verbatim.
+ * 30s, the library poll's interval.
  *
- * Almost nothing writes this table on its own: a row appears when carl marks
- * something and every one of those goes through `refetch` below, which lands
- * the change at once. The interval is the backstop for the two writers that
- * are NOT a click in this tab — another tab (or `k mm mark`, fired from the
- * editor by a keystroke), and the daemon's verify pass, which invalidates a
- * mark when the thing it was made against moves. The second one is why the
- * interval matters more here than it does for the library: a ✓ that has
- * silently gone stale is a claim, not just an absence.
+ * Almost nothing writes this table on a click in this tab any more: a row is
+ * committed by a mind thread (`kraken mm commit`), and the daemon's verify
+ * pass invalidates or flags. The interval is what brings either in.
  */
 export const MM_POLL_MS = 30000;
 
@@ -31,28 +25,26 @@ export interface MMModel {
   error: Error | undefined;
   /** True once any response has landed — distinguishes "empty" from "loading". */
   loaded: boolean;
-  /** Pull the list now. Every mark/remove awaits this so the control flips at once. */
+  /** Pull the list now. Every write awaits this so the pane moves at once. */
   refetch: () => Promise<boolean>;
 }
 
 /**
- * Poll the mental model while `active`.
+ * Poll the mental model while `active`, narrowed by `query` (`?q=&repo=&dir=
+ * &scope=`; empty fields are no filter).
  *
  * Every absence is tolerated rather than thrown on — a route that 404s (an
  * older server), a `{}` body, or an `items` that arrived null all come out as
- * an empty list plus the error, never as a crashed view. An empty list is
- * also the honest degradation for the capture surfaces: nothing reads as
- * marked, and pressing a control posts, which is the same behaviour as a
- * genuinely empty mental model.
+ * an empty list plus the error, never as a crashed view. The last good list
+ * stays up under a failed tick rather than blanking.
  *
- * The last good list stays up under a failed tick rather than blanking, which
- * is `useLibrary`'s trade for `useLibrary`'s reason: blanking swaps a list
- * that is at worst one tick stale for no list at all, over a read this client
- * can neither confirm nor deny.
+ * The query is read through the fetcher on each tick (usePoll holds the
+ * fetcher in a ref), so a caller whose query changes should `refetch` to land
+ * the new list without waiting out the interval.
  */
-export const useMM = (active: boolean): MMModel => {
+export const useMM = (active: boolean, query: MMQuery = {}): MMModel => {
   const { data, error, refetch } = usePoll<MMPage>(
-    (signal) => fetchMM(signal),
+    (signal) => fetchMM(signal, query),
     MM_POLL_MS,
     { enabled: active },
   );
@@ -60,6 +52,36 @@ export const useMM = (active: boolean): MMModel => {
     items: Array.isArray(data?.items) ? data.items : [],
     error,
     loaded: data !== undefined,
+    refetch,
+  };
+};
+
+export interface MMFlagsModel {
+  flags: MMFlag[];
+  error: Error | undefined;
+  refetch: () => Promise<boolean>;
+}
+
+/**
+ * Poll the RAISED contradiction flags while `active` — the ones zeus put in
+ * front of carl. Pending flags are zeus' business and dismissed ones are
+ * closed, so neither reaches the pane. Same tolerance rules as `useMM`.
+ */
+export const useMMFlags = (active: boolean): MMFlagsModel => {
+  const { data, error, refetch } = usePoll<MMFlagsPage>(
+    (signal) => fetchMMFlags("raised", signal),
+    MM_POLL_MS,
+    { enabled: active },
+  );
+  return {
+    // A resolved flag moves to `state: "resolved"` server-side (contract
+    // amendment 2), so `?state=raised` should serve open flags only. This
+    // filter is a belt-and-braces guard: a flag carrying a `resolution` is
+    // closed whatever its state says.
+    flags: Array.isArray(data?.flags)
+      ? data.flags.filter((f) => !f.resolution)
+      : [],
+    error,
     refetch,
   };
 };

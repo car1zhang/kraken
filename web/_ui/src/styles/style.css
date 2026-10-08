@@ -3137,58 +3137,115 @@ input[type="text"], input:not([type]), input[type="search"], input[type="number"
 .mm-snap { font: 9px var(--mono); color: var(--skill-graph); text-decoration: none; }
 .mm-snap:hover { text-decoration: underline; }
 
-/* ---- the capture affordances, outside the memory view ----
-   One button shape shared by the steer modal's detail mark and anything else
-   that grows one, plus the per-table ✓ the artifact body's post-render sweep
-   inserts (lib/mm.ts decorateMMTables). */
-.mm-markbtn {
-  background: transparent; border: 1px solid var(--border);
-  font: 500 9px var(--mono); letter-spacing: 0.05em;
-  color: var(--muted); padding: 2px 8px;
+/* ---- the Model pane's mind-layer additions ----
+   The scope chip, the text actions (source / drop) that replaced the ✕
+   column, the quote line, and the raised-flags block above the rows. */
+.mm-scope {
+  display: inline-block; margin-right: 6px; padding: 0 6px;
+  border: 1px solid color-mix(in srgb, var(--skill-graph) 45%, var(--border));
+  color: var(--skill-graph); border-radius: 999px;
 }
-.mm-markbtn:hover:not(:disabled) { color: var(--skill-graph); border-color: var(--skill-graph); }
-.mm-markbtn.on {
-  color: var(--skill-graph);
-  border-color: color-mix(in srgb, var(--skill-graph) 50%, transparent);
-  background: color-mix(in srgb, var(--skill-graph) 12%, transparent);
+.mm-act {
+  flex: none; background: none; border: 0; border-left: 1px solid var(--divider);
+  padding: 0 9px; color: var(--muted); font: 500 8.5px var(--mono); letter-spacing: 0.05em;
 }
-.steer-detail-mark { display: flex; justify-content: flex-end; margin-top: -4px; }
-.dq-decide {
-  flex: none; background: transparent; border: 1px solid var(--border);
-  font: 500 8.5px var(--mono); letter-spacing: 0.05em;
-  color: var(--muted); padding: 1px 6px; white-space: nowrap;
+.mm-act:hover:not(:disabled) { color: var(--skill-graph); }
+.mm-act:disabled { opacity: 0.35; }
+.mm-row .mm-rm { width: auto; font-size: 8.5px; }
+.mm-row .mm-rm:hover:not(:disabled) { color: var(--ac2); }
+.mm-quote { font: 9.5px/1.5 var(--mono); color: var(--body); overflow-wrap: anywhere; }
+.mm-ctxlbl { color: var(--muted); margin-right: 4px; }
+.mm-filter { width: 150px; }
+.mm-flags { margin-bottom: 12px; display: flex; flex-direction: column; gap: 6px; }
+.mm-flagslbl { margin: 0 0 2px; }
+.mm-flag {
+  display: flex; align-items: stretch;
+  border: 1px solid color-mix(in srgb, var(--warn) 45%, var(--border));
+  background: color-mix(in srgb, var(--warn) 7%, var(--b0));
 }
-.dq-decide:hover:not(:disabled) { color: var(--skill-graph); border-color: var(--skill-graph); }
-.dq-decide.on {
-  color: var(--skill-graph);
-  border-color: color-mix(in srgb, var(--skill-graph) 50%, transparent);
-  opacity: 1;
-}
-.dq-decide:disabled:not(.on) { opacity: 0.4; }
+.mm-flagbody { flex: 1; min-width: 0; padding: 8px 10px; display: flex; flex-direction: column; gap: 3px; }
+.mm-flagnote { font: 500 10px/1.5 var(--mono); color: var(--warn); overflow-wrap: anywhere; }
+.mm-flagacts { display: flex; }
+.mm-flag .mm-act { border-left-color: color-mix(in srgb, var(--warn) 30%, var(--divider)); }
+.mm-flag .mm-flagdrop:hover:not(:disabled) { color: var(--ac2); }
+.mm-flag .mm-flagkeep:hover:not(:disabled) { color: var(--ok); }
+.mm-flagerr { color: var(--ac2); }
 
-/* The table wrapper the mm sweep inserts around every <table> in a rendered
-   artifact body. The wrapper exists because a <button> is not valid content
-   inside a <table>; it scrolls a wide table on its own so the ✓ stays put. */
-.mm-tblwrap { position: relative; overflow-x: auto; }
-.mm-tblmark {
-  position: absolute; top: 2px; right: 2px; z-index: 1;
-  width: 18px; height: 18px; padding: 0; line-height: 1;
-  display: grid; place-items: center;
-  background: color-mix(in srgb, var(--ac) 8%, var(--b1));
-  border: 1px solid var(--border); color: var(--muted); font-size: 10px;
-  opacity: 0; transition: opacity 120ms ease;
+/* ---- ◆ mind — the global capture button (components/chrome/MindButton) ----
+   Fixed bottom-right ABOVE the goals dock (z 6, bottom 14px) and above every
+   overlay (20/25/30) — it has to be reachable while an artifact or the steer
+   modal is open, since that is where most highlighting happens — but under
+   the toast (40), which reports on it. Dim until a selection exists. */
+.mind-btn {
+  position: fixed; right: 14px; bottom: 64px; z-index: 35;
+  display: inline-flex; align-items: center; gap: 8px;
+  padding: 7px 13px; border-radius: 999px;
+  font: 700 10px var(--mono); letter-spacing: 0.06em;
+  background: color-mix(in srgb, var(--skill-graph) 14%, var(--b0));
+  color: var(--skill-graph);
+  border: 1px solid color-mix(in srgb, var(--skill-graph) 40%, var(--border));
+  opacity: 0.4;
+  transition: opacity 120ms var(--ease), background 120ms var(--ease);
 }
-.mm-tblwrap:hover .mm-tblmark, .mm-tblmark:focus-visible { opacity: 1; }
-.mm-tblmark:hover { color: var(--skill-graph); border-color: var(--skill-graph); }
-/* a marked table keeps its ✓ visible — the persistent tick the mockup shows */
-.mm-tblmark.on {
-  opacity: 1; color: var(--skill-graph);
-  border-color: color-mix(in srgb, var(--skill-graph) 50%, transparent);
-  background: color-mix(in srgb, var(--skill-graph) 14%, var(--b1));
+.mind-btn.on {
+  opacity: 1;
+  background: var(--skill-graph); color: var(--b0);
+  box-shadow: 0 6px 20px color-mix(in srgb, var(--skill-graph) 35%, transparent);
 }
-.mm-tblwrap.mm-marked > table {
-  box-shadow: inset 2px 0 0 color-mix(in srgb, var(--skill-graph) 60%, transparent);
+.mind-btn .mind-key {
+  font-weight: 500; font-size: 8.5px; opacity: 0.75;
+  border: 1px solid currentColor; border-radius: 4px; padding: 0 4px;
 }
+/* a box-less wrapper that only carries data-mind-* attributes */
+.mind-src { display: contents; }
+
+/* the `mind` role chip — on a thread chip in the steer modal and in the
+   thread overlay's head */
+.thread-role.mind {
+  display: inline-block; margin-left: 6px; padding: 0 5px;
+  font: 600 8px var(--mono); letter-spacing: 0.08em; text-transform: uppercase;
+  color: var(--skill-graph);
+  border: 1px solid color-mix(in srgb, var(--skill-graph) 50%, transparent);
+  border-radius: 999px;
+}
+
+/* ---- the steer modal's zeus transcript panel (Q5) ----
+   The thread overlay's block styles, re-scoped: #thread-convo's rules are id
+   selectors and so do not reach this second conversation. */
+.steer-transcript { display: flex; flex-direction: column; gap: 6px; }
+.steer-transcript-head {
+  align-self: flex-start; background: none; border: 0; padding: 0;
+  font: 600 9px var(--display); letter-spacing: 0.08em; color: var(--muted);
+}
+.steer-transcript-head:hover { color: var(--fg); }
+.steer-transcript-body {
+  max-height: 40vh; overflow-y: auto;
+  padding: 9px 11px; background: var(--raised); border: 1px solid var(--divider);
+}
+.steer-transcript-body .blk { margin-bottom: 11px; font-size: 10.5px; line-height: 1.6; color: var(--body); }
+.steer-transcript-body .blk:last-child { margin-bottom: 0; }
+.steer-transcript-body .who {
+  font: 600 9px var(--display); letter-spacing: 0.08em;
+  color: var(--muted); margin-bottom: 2px;
+}
+.steer-transcript-body .blk.user .who { color: var(--polling); }
+.steer-transcript-body .blk.user {
+  background: color-mix(in srgb, var(--polling) 8%, transparent);
+  border-left: 2px solid var(--polling);
+  padding: 7px 9px;
+}
+.steer-transcript-body .blk.asst .who { color: var(--ac); }
+.steer-transcript-body .blk.tool { font: 9px var(--mono); color: var(--muted); white-space: pre-wrap; word-break: break-word; }
+.steer-transcript-body .blk.think { color: var(--muted); font-style: italic; }
+.steer-transcript-body .blk-body { overflow-wrap: anywhere; }
+.steer-transcript-body .blk-body p,
+.steer-transcript-body .blk-body ul,
+.steer-transcript-body .blk-body ol,
+.steer-transcript-body .blk-body pre { margin: 0 0 8px; }
+.steer-transcript-body .blk-body ul, .steer-transcript-body .blk-body ol { padding-left: 20px; }
+.steer-transcript-body .blk-body :last-child { margin-bottom: 0; }
+.steer-transcript-body .blk-body code { background: color-mix(in srgb, var(--warn) 8%, var(--b1)); color: var(--warn); padding: 1px 4px; font: 10px var(--mono); }
+.steer-transcript-body .blk-body pre { background: color-mix(in srgb, var(--ac) 2%, var(--b0)); border: 1px solid var(--divider); padding: 8px 10px; white-space: pre-wrap; }
 
 @media (max-width: 900px) {
   .memoryview { height: auto; }

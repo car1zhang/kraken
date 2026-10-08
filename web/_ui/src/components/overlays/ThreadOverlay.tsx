@@ -54,6 +54,7 @@ export function threadBlockHTML(
   b: ThreadBlock,
   inherited: boolean,
   tid: string,
+  mind?: BlockMindAttrs,
 ): string {
   const known = Object.prototype.hasOwnProperty.call(
     THREAD_BLOCK_KINDS,
@@ -67,14 +68,45 @@ export function threadBlockHTML(
   };
   const cls = `blk ${spec.cls}${inherited ? " inherited" : ""}`;
   const text = b.text || "";
+  const attrs = mind ? blockMindAttrs(mind, b) : "";
   if (kind === "tool") {
     // tool lines are already terse and mono — no speaker row, no markdown
-    return `<div class="${cls}">${spec.icon} ${esc(text)}</div>`;
+    return `<div class="${cls}"${attrs}>${spec.icon} ${esc(text)}</div>`;
   }
   const from = typeof b.from === "string" ? b.from : "";
-  const who = from || spec.who || (kind === "text" ? "thread " + tid : kind);
+  const who =
+    from ||
+    spec.who ||
+    (kind === "text" ? (mind?.speaker ?? "thread " + tid) : kind);
   // renderMD escapes before transforming, so agent-authored text is inert
-  return `<div class="${cls}"><div class="who">${spec.icon} ${esc(who)}</div><div class="blk-body">${renderMD(text)}</div></div>`;
+  return `<div class="${cls}"${attrs}><div class="who">${spec.icon} ${esc(who)}</div><div class="blk-body">${renderMD(text)}</div></div>`;
+}
+
+/**
+ * What a rendered block stamps for the mind button (lib/mind.ts): each block
+ * is a `transcript` source carrying the session it was read from and its own
+ * record uuid (taken off the block), plus the thread's tid when it is one.
+ */
+export interface BlockMindAttrs {
+  session?: string;
+  tid?: string;
+  /** The assistant speaker label, in place of "thread <tid>" (zeus' panel). */
+  speaker?: string;
+}
+
+/** ` data-mind-…="…"` for one block; values escaped, empty ones omitted. */
+function blockMindAttrs(m: BlockMindAttrs, b: ThreadBlock): string {
+  const uuid = typeof b.uuid === "string" ? b.uuid : "";
+  const pairs: [string, string | undefined][] = [
+    ["data-mind-kind", "transcript"],
+    ["data-mind-session", m.session],
+    ["data-mind-uuid", uuid],
+    ["data-mind-tid", m.tid],
+  ];
+  return pairs
+    .filter(([, v]) => !!v)
+    .map(([k, v]) => ` ${k}="${esc(v as string)}"`)
+    .join("");
 }
 
 /**
@@ -91,7 +123,11 @@ export function threadSplitIndex(blocks: ThreadBlock[]): number {
   return last + 1;
 }
 
-export function threadConvoRender(data: ThreadRead, tid: string): string {
+export function threadConvoRender(
+  data: ThreadRead,
+  tid: string,
+  mind?: BlockMindAttrs,
+): string {
   const blocks = data.blocks || [];
   if (!blocks.length) return '<div class="thread-empty">no messages yet</div>';
   const split = threadSplitIndex(blocks);
@@ -103,7 +139,7 @@ export function threadConvoRender(data: ThreadRead, tid: string): string {
         `<div class="thread-divider">⑂ branched here${esc(forkLabel)}</div>`,
       );
     }
-    out.push(threadBlockHTML(b, i < split, tid));
+    out.push(threadBlockHTML(b, i < split, tid, mind));
   });
   // a thread whose every block is inherited (branched, nothing asked yet)
   // still gets its divider — at the very end, which is exactly where it is
@@ -294,7 +330,14 @@ function ThreadBody({
       }
       return;
     }
-    const html = threadConvoRender(read.data, tid);
+    // Every block is a mind-capture source: the session it was read from (the
+    // THREAD's own transcript, which carries the inherited records too — the
+    // read's top-level `session`, contract amendment 3) and its record uuid,
+    // plus this thread's tid.
+    const html = threadConvoRender(read.data, tid, {
+      session: read.data.session,
+      tid,
+    });
     if (html === lastHTML.current) return;
     const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 24;
     const prevTop = el.scrollTop;
@@ -413,6 +456,16 @@ function ThreadBody({
         <span className="panel-title" id="thread-tid">
           {tid ? "⑂ " + tid : "⑂ branch — " + jobSlug}
         </span>
+        {/* A mind thread (forked by the ◆ mind button) is the one writer of
+            the mental model; the chip says which kind of thread this is. */}
+        {tid && rec?.role === "mind" ? (
+          <span
+            className="thread-role mind"
+            title="a mind thread — drafts and commits mental-model items"
+          >
+            mind
+          </span>
+        ) : null}
         <span
           className="thread-name-label"
           id="thread-name-label"
@@ -621,7 +674,14 @@ function ThreadBody({
         </div>
 
         <div className="thread-view" id="thread-view" hidden={!tid}>
-          <div className="convo" id="thread-convo" ref={convoRef} />
+          <div
+            className="convo"
+            id="thread-convo"
+            ref={convoRef}
+            // the job a selection in this conversation belongs to (lib/mind.ts
+            // selectionSlug); each block below carries its own source
+            data-mind-slug={jobSlug}
+          />
           {/* the panehead IS the mirror's toggle: capture-pane runs on every
               3s tick while it is open, so it is opt-in and sticky */}
           <div

@@ -1168,8 +1168,13 @@ struct WebThread: Decodable, Identifiable {
     let model: String?
     let createdAt: Int64
     let closedAt: Int64?
+    /// `ask` | `mind` — additive; nil from a server predating thread roles.
+    var role: String? = nil
 
     var id: String { tid }
+
+    /// A mind thread: the one a capture routes highlighted text to.
+    var isMind: Bool { role == "mind" }
 
     /// "live" means a claude is actually running in the thread's window;
     /// anything else (closed) is a conversation waiting to be revived —
@@ -1184,7 +1189,7 @@ struct WebThread: Decodable, Identifiable {
     }
 
     enum CodingKeys: String, CodingKey {
-        case tid, title, state, pane, model
+        case tid, title, state, pane, model, role
         case createdAt = "created_at"
         case closedAt = "closed_at"
     }
@@ -2010,7 +2015,8 @@ struct WebMMItem: Decodable, Identifiable {
     let id: Int64
     /// decision | reading | note.
     let kind: String
-    /// question | artifact | artifact-element | code | agent-output | manual.
+    /// question | artifact | artifact-element | code | agent-output | manual
+    /// | capture (an item a mind thread committed).
     let source: String
     /// The job's DISPLAY slug at mark time, or "" for the two sources that
     /// belong to no job (code, manual). Display only — the job may since have
@@ -2040,6 +2046,28 @@ struct WebMMItem: Decodable, Identifiable {
     /// Present on `source: "code"` only.
     let anchor: WebMMAnchor?
 
+    // The schema-v33 capture fields. Every one Optional: a row marked before
+    // the mind thread existed carries none of them (or "" for each), and a
+    // server predating them sends no key at all.
+    /// The one-line claim a mind thread committed; nil/"" for a legacy row.
+    let title: String?
+    /// `universal` | `repo`.
+    let scope: String?
+    let repo: String?
+    /// Repo-relative; "" is the repo root.
+    let dir: String?
+    /// The highlighted text the capture started from.
+    let quote: String?
+    /// The mind thread's claude session that committed the item.
+    let threadSession: String?
+    /// Unix millis of the last `mm revise`; 0 or absent means never revised.
+    let revisedAt: Int64?
+    /// Where a capture's quote came from: the parsed `CaptureSource`, served
+    /// as `capture_source` (null for a row with none). Its own key because
+    /// `source` above is already the string provenance — `capture` for an
+    /// item a mind thread committed.
+    let captureSource: WebCaptureSource?
+
     /// Live is the ABSENCE of `invalidated_at`, per the paragraph above. Every
     /// predicate in the app tests this rather than a stamp's value, so a
     /// server that ever sent an explicit 0 would still read as live.
@@ -2055,7 +2083,107 @@ struct WebMMItem: Decodable, Identifiable {
         case invalidReason = "invalid_reason"
         case invalidDetail = "invalid_detail"
         case anchor
+        case title, scope, repo, dir, quote
+        case threadSession = "thread_session"
+        case revisedAt = "revised_at"
+        case captureSource = "capture_source"
     }
+}
+
+// Where a captured quote came from — `jobs.CaptureSource` / web's
+// `CaptureSource` (lib/mind.ts). Encodable because the artifact viewer's
+// ◆ mind sends one; JSONEncoder omits every nil, so an artifact capture goes
+// out as exactly `{kind, slug, home, name}`.
+struct WebCaptureSource: Codable, Equatable {
+    /// artifact | transcript | dir | item | manual.
+    let kind: String
+    var slug: String? = nil
+    var home: String? = nil
+    var name: String? = nil
+    var sha: String? = nil
+    var session: String? = nil
+    var uuid: String? = nil
+    var tid: String? = nil
+    var repo: String? = nil
+    var dir: String? = nil
+    var itemId: Int64? = nil
+
+    enum CodingKeys: String, CodingKey {
+        case kind, slug, home, name, sha, session, uuid, tid, repo, dir
+        case itemId = "item_id"
+    }
+}
+
+// POST /api/mm/capture — highlighted text routed to the job's mind thread.
+struct MMCaptureRequest: Encodable {
+    let slug: String
+    let text: String
+    let source: WebCaptureSource
+}
+
+// What /api/mm/capture answers: the mind thread's tid, and whether this
+// capture branched it (`created`) or was sent to the live one.
+struct MMCaptured: Decodable {
+    let tid: String
+    let created: Bool
+}
+
+// One contradiction flag, as GET /api/mm/flags lists it. Every field is the
+// store row's, snake_case on the wire; `against_id`/`item_id` are 0 when the
+// flag names no item on that side.
+struct WebMMFlag: Decodable, Identifiable {
+    let id: Int64
+    let itemId: Int64
+    let againstId: Int64
+    let jobId: Int64
+    let slug: String
+    let session: String
+    let note: String
+    /// pending | raised | dismissed.
+    let state: String
+    let raisedBy: String
+    let raiseNote: String
+    let raisedAt: Int64
+    let resolvedAt: Int64
+    /// "" | drop | keep.
+    let resolution: String
+    let createdAt: Int64
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case itemId = "item_id"
+        case againstId = "against_id"
+        case jobId = "job_id"
+        case slug, session, note, state
+        case raisedBy = "raised_by"
+        case raiseNote = "raise_note"
+        case raisedAt = "raised_at"
+        case resolvedAt = "resolved_at"
+        case resolution
+        case createdAt = "created_at"
+    }
+}
+
+// GET /api/mm/flags — newest first.
+struct MMFlagsPage: Decodable {
+    let flags: [WebMMFlag]
+}
+
+// POST /api/mm/flag/resolve — carl's verdict on a raised flag.
+struct MMFlagResolveRequest: Encodable {
+    let id: Int64
+    /// drop | keep.
+    let resolution: String
+}
+
+// GET /api/mm/source — an item's source, best effort. `available: false` is
+// an answer, not an error.
+struct MMSource: Decodable {
+    let kind: String
+    let available: Bool
+    let changed: Bool
+    let text: String
+    let ext: String
 }
 
 // GET /api/mm — `items` is always an array, never null; newest first

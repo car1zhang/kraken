@@ -32,7 +32,7 @@ import (
 // dropped or retyped parameter fails the build here rather than surfacing as
 // an assertion failure below (a same-type transposition is beyond any
 // signature pin — the assertions are what hold the argument ORDER).
-var edgeThreadSpawnSig func(*Job, string, string, string, string, []string) (string, error) = threadSpawnCommand
+var edgeThreadSpawnSig func(*Job, string, string, string, string, string, string, []string) (string, error) = threadSpawnCommand
 
 // edgeBranchThreadSig pins BranchThread's frozen 4-arg signature the same
 // way, against a dropped or retyped parameter — the same caveat about
@@ -112,7 +112,7 @@ func TestEdgeThreadSpawnCommandRefusesUnknownModel(t *testing.T) {
 			j := &Job{Slug: "edge-badmodel"}
 			edgeThreadCellDir(t, j)
 
-			cmd, err := threadSpawnCommand(j, "t1", "why is it blocked", "explain", c.model,
+			cmd, err := threadSpawnCommand(j, "t1", "why is it blocked", "explain", c.model, "ask", "",
 				[]string{"-r", "zeus-sess"})
 			if err == nil {
 				t.Fatalf("threadSpawnCommand(model=%q) = %q, nil; want a refusal", c.model, cmd)
@@ -134,7 +134,7 @@ func TestEdgeThreadSpawnCommandRefusesUnknownModelEvenWithAJobModel(t *testing.T
 	j := &Job{Slug: "edge-badmodel-fallback", Model: "claude-sonnet-4-5"}
 	edgeThreadCellDir(t, j)
 
-	cmd, err := threadSpawnCommand(j, "t1", "title", "seed", "haiuk", []string{"-r", "zeus-sess"})
+	cmd, err := threadSpawnCommand(j, "t1", "title", "seed", "haiuk", "ask", "", []string{"-r", "zeus-sess"})
 	if err == nil {
 		t.Fatalf("threadSpawnCommand fell back instead of refusing a typo'd alias: %q", cmd)
 	}
@@ -180,7 +180,7 @@ func TestEdgeThreadSpawnCommandModelResolutionOrder(t *testing.T) {
 			j := &Job{Slug: "edge-resolve", Model: c.jobModel}
 			edgeThreadCellDir(t, j)
 
-			cmd, err := threadSpawnCommand(j, "t1", "the title", "the seed", c.model,
+			cmd, err := threadSpawnCommand(j, "t1", "the title", "the seed", c.model, "ask", "",
 				[]string{"--session-id", "11111111-2222-4333-8444-555555555555", "--fork-session", "-r", "zeus-sess"})
 			if err != nil {
 				t.Fatalf("threadSpawnCommand: %v", err)
@@ -215,7 +215,7 @@ func TestEdgeThreadSpawnCommandOneModelFlagOnReviveArgs(t *testing.T) {
 			j := &Job{Slug: "edge-revive-model"}
 			edgeThreadCellDir(t, j)
 
-			cmd, err := threadSpawnCommand(j, "t2", "the title", "", model, []string{"-r", "thread-sess"})
+			cmd, err := threadSpawnCommand(j, "t2", "the title", "", model, "ask", "", []string{"-r", "thread-sess"})
 			if err != nil {
 				t.Fatalf("threadSpawnCommand: %v", err)
 			}

@@ -527,7 +527,7 @@ func TestEdgeThreadSpawnCommandAppliesTheIdenticalRule(t *testing.T) {
 	j := edgeAcctCellJob(t, "thread-bound", "")
 	resume := []string{"-r", "zeus-sess"}
 
-	unbound, err := threadSpawnCommand(j, "t1", "why blocked", "explain", "", resume)
+	unbound, err := threadSpawnCommand(j, "t1", "why blocked", "explain", "", "ask", "", resume)
 	if err != nil {
 		t.Fatalf("threadSpawnCommand (unbound): %v", err)
 	}
@@ -536,7 +536,7 @@ func TestEdgeThreadSpawnCommandAppliesTheIdenticalRule(t *testing.T) {
 	}
 
 	j.AccountSlug = "slot-a"
-	bound, err := threadSpawnCommand(j, "t1", "why blocked", "explain", "", resume)
+	bound, err := threadSpawnCommand(j, "t1", "why blocked", "explain", "", "ask", "", resume)
 	if err != nil {
 		t.Fatalf("threadSpawnCommand (bound): %v", err)
 	}

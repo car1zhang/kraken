@@ -268,6 +268,7 @@ window of the same cell):
 | `state` | string | always | `live` \| `closed`. `closed` = the tmux window is gone; the row (and the transcript it points at) survives, and `revive` resumes the same claude session |
 | `pane` | string | omitempty | the live thread's tmux pane, e.g. `%42` — usable with `GET /api/peers/capture`. Cleared on close (tmux recycles pane ids), so it is absent for a closed thread rather than stale |
 | `model` | string | omitempty | the tier this thread was branched on — `haiku` \| `sonnet` \| `opus` \| `fable`, the alias rather than the resolved id. Absent for a thread branched with no pick (and for every thread branched before the field existed), which falls back to the job's `model` and then kraken's default; a revive re-reads this row, so a thread never changes tier mid-conversation |
+| `role` | string | always | `ask` (an ordinary side thread — every row branched before schema v33 reads back as `ask`) \| `mind` (the job's mind thread, branched by `POST /api/mm/capture`: the one thread allowed to write carl's mental model). Clients show a `mind` chip. Additive |
 | `created_at` | number | always | unix millis the thread was branched |
 | `closed_at` | number | omitempty | unix millis the thread was closed; absent (0) while live |
 
@@ -826,6 +827,7 @@ Every side-thread mutation, one body shape across all five ops
 | `title` | string | required for `branch`/`rename` | |
 | `text` | string | required for `send`; optional for `branch` | |
 | `model` | string | optional for `branch`, ignored by every other op | `haiku` \| `sonnet` \| `opus` \| `fable` — the tier the new thread's claude runs on, matched EXACTLY (not trimmed, not case-folded). Omit or send `""` for the pre-existing behaviour: the job's own `model`, then kraken's default. Anything else is a 400. The web board's branch overlay sends it; the iOS client has no picker, which is why `ThreadActionRequest` in Models.swift carries no `model` field |
+| `role` | string | optional for `branch`, ignored by every other op | `ask` (default when omitted or `""`) \| `mind`, matched exactly; anything else is a 400 `bad role — want ask or mind`, nothing spawned. Stored on the row and kept across a `revive`. Clients normally reach a mind thread through `POST /api/mm/capture` rather than this field |
 
 - **`branch`** — `{slug, op:"branch", title, text?, model?}`: forks zeus' session
   into a new claude in a fresh window of the same cell, in the same worktree, under
@@ -879,6 +881,7 @@ Response:
 | `pane` | string | always | the live thread's pane (`""` when closed) — feed it to `/api/peers/capture` to mirror the window |
 | `fork_uuid` | string | always | the transcript uuid the fork hangs off (`""` when none was recorded) |
 | `source` | string | always | `transcript` when the fork's transcript was readable, `none` when there is nothing to read yet |
+| `session` | string | always | the thread's OWN claude session id (`""` before one is recorded) — what a mind-button capture of one of this thread's blocks sends as the transcript source's `session`. Additive (schema v33) |
 
 Each block is `/api/peers/read`'s shape — `kind` (string, always:
 `user`\|`text`\|`thinking`\|`tool`\|`teammate`), `text` (string, always),
@@ -887,6 +890,7 @@ Each block is `/api/peers/read`'s shape — `kind` (string, always:
 | key | type | optionality | notes |
 |---|---|---|---|
 | `inherited` | bool | omitempty | `true` on the pre-fork turns this thread inherited from zeus' session |
+| `uuid` | string | always | the transcript RECORD the block came from (several blocks can share one); `""` when the record carried none. What a mind-button capture of the block sends as its transcript source's `uuid`. Additive |
 
 A fork's transcript opens with zeus' whole history copied in, and forks
 preserve message uuids — so every block whose source record is at or before
@@ -1176,6 +1180,16 @@ Nine routes over the `mm_items` + `mm_code_anchors` tables
 is a NEW PATH, never a key added to, retyped in, or removed from an existing
 shape, so a client that predates them decodes nothing differently.
 
+Schema v33 (the mind layer) adds ten more — `mm/show`, `mm/source`,
+`mm/flags` (reads) and `mm/capture`, `mm/commit`, `mm/revise`, `mm/flag`,
+`mm/flag/raise`, `mm/flag/dismiss`, `mm/flag/resolve` (writes) — plus
+`GET /api/job/transcript`, and ADDS keys to the `GET /api/mm` item (`title`,
+`scope`, `repo`, `dir`, `quote`, `thread_session`, `revised_at`,
+`capture_source`). Also additive, so still `apiContract` 6. They are
+documented under "The mind layer" below. A client reaches only `capture`,
+`flags`, `flag/resolve`, `source` and `job/transcript`; `commit`, `revise`,
+`flag`, `flag/raise` and `flag/dismiss` are agent-side (`kraken mm …`).
+
 **Seven of the nine ARE modeled in `Models.swift` and `APIClient.swift`** — the
 phone has full parity with the board, writes included (carl, gate R2: "I need
 ios parity even in v1 with full writes"). `GET /api/mm` decodes as
@@ -1242,14 +1256,29 @@ file, citing it, or briefing a diagram over it. `?worktree=` (an absolute
 local path) resolves the repo half of the identity through the same rule the
 mark route uses, so a filtered read from any checkout of a repo matches marks
 made in any other; without it the path matches alone, with the combined
-`repo/path` spelling accepted. `k mm get --file <path>` is the CLI front and
-does the worktree resolution itself. iOS does not send these params.
+`repo/path` spelling accepted. `file` also returns dir-scoped captured items:
+a LIVE item whose `repo` is the one `?worktree=` resolves to and whose `dir`
+is the file's directory or an ancestor of it (`""` covers every file;
+`internal/jobs` covers `internal/jobs/cell.go` and `internal/jobs/x/y.go`;
+`internal/job` does not — the comparison is per path segment). Without
+`?worktree=`, or for an item with no `repo`, only the code-anchor match
+applies. `kraken mm get --file <path>` is the CLI front and does the worktree
+resolution itself. iOS does not send these params.
+
+`?q=`, `?repo=`, `?dir=`, `?scope=` (schema v33, additive, contract unchanged)
+pass straight into the store's filter, and an empty one is no filter: `q` is a
+case-insensitive substring over `title`, `content` and `quote` (any one
+matching qualifies); `repo` is exact; `dir` matches an item whose `dir` is that
+directory OR any ancestor of it (`dir=a/b` matches items at `a/b`, `a` and the
+repo root `""`); `scope` is exact (`universal`\|`repo`). They compose with
+`live` and `file`. `kraken mm get --q/--repo/--dir/--scope` sends them
+verbatim; the web Model pane binds its filter box to `q`.
 
 | key | type | optionality | notes |
 |---|---|---|---|
 | `id` | number | always | the row id — what `POST /api/mm/remove` and `GET /api/mm/snapshot` address |
 | `kind` | string | always | `decision`\|`reading`\|`note` |
-| `source` | string | always | `question`\|`artifact`\|`artifact-element`\|`code`\|`agent-output`\|`manual` |
+| `source` | string | always | `question`\|`artifact`\|`artifact-element`\|`code`\|`agent-output`\|`manual`\|`capture` (`capture` = committed by a mind thread, schema v33). Stays a STRING: the capture's source pointer rides `capture_source` below, because retyping this key would break every shipped build that decodes it as `String` |
 | `slug` | string | always | the job's DISPLAY slug at mark time, or `""` for the two sources that belong to no job (`code`, `manual`). Display only — the job may since have been renamed, archived or deleted |
 | `source_ref` | string | always | what was marked, per source: a `Q<n>` for a question, the artifact name for an artifact or element, `<repo>/<path>:<start>-<end>` for code, the first 16 hex of the text's sha256 for an agent detail, `""` for a note |
 | `content` | string | always | served WHOLE, never cut — it is what carl read, and the invalidated view exists to show it back in full. For an artifact mark it is the source ref: an artifact's content is its snapshot, which rides its own route |
@@ -1260,6 +1289,24 @@ does the worktree resolution itself. iOS does not send these params.
 | `invalid_reason` | string | omitempty | `removed` (carl unmarked it), `content-changed`, `artifact-deleted`, `file-deleted` |
 | `invalid_detail` | string | omitempty | free text |
 | `anchor` | object | omitempty | present on `source: "code"` only — the table below |
+| `title` | string | always | schema v33: the one-line claim the rules files carry; `""` on every legacy row (clients fall back to the first line of `content`) |
+| `scope` | string | always | `universal` \| `repo` (legacy rows read `repo`) |
+| `repo` | string | always | the repo a `repo`-scoped item belongs to; `""` for universal and legacy rows |
+| `dir` | string | always | repo-relative directory, `""` = the repo root |
+| `quote` | string | always | the verbatim text carl highlighted when capturing; `""` on legacy rows |
+| `thread_session` | string | always | the mind thread's claude session that committed the item; `""` on legacy rows |
+| `revised_at` | number | always | unix millis of the last `POST /api/mm/revise`; `0` = never revised |
+| `capture_source` | object \| null | always | the parsed source pointer (`CaptureSource`, table below), or `null` when the row has none — every legacy row. Decode as optional |
+
+`CaptureSource` (the same object `POST /api/mm/capture` takes as `source`):
+
+| key | type | optionality | notes |
+|---|---|---|---|
+| `kind` | string | always | `artifact` \| `transcript` \| `dir` \| `item` \| `manual` |
+| `slug` / `home` / `name` / `sha` | string | omitempty | `artifact`: the job, artifact home (`cell`\|`pluto`\|`archive`), artifact name (required for this kind) and the sha256 hex of the bytes the viewer had loaded |
+| `session` / `uuid` / `tid` | string | omitempty | `transcript`: the claude session (required), the record uuid, and the side thread's tid when the text came from a thread |
+| `repo` / `dir` | string | omitempty | `dir`: the repo (required) and repo-relative directory |
+| `item_id` | number | omitempty | `item`: the mental-model item the text was highlighted in |
 
 `anchor`:
 
@@ -1322,6 +1369,123 @@ field, an over-long text, a non-absolute worktree, a file path that escapes it,
 (no such job, question, artifact or item), 405 for non-POST, 413 for a body
 over 1 MB, 500 (no store wired, or a store write failed). Re-removing an already-invalidated item is a **200**, and the earlier
 reason is left in place: the caller asked for it to be gone and it is gone.
+
+### The mind layer (schema v33) — all additive, `apiContract` stays 6
+
+Capture routes highlighted text to the job's **mind thread** — a side thread
+(`role: "mind"`) forked from zeus — which drafts an item with carl and
+finalizes it through `kraken mm commit`. The writes share the seven writes'
+decode discipline (1 MB cap → 413, `DisallowUnknownFields` → 400, nested
+objects included), are POST-only (405 otherwise) and are gated under
+`--mirror` (plain-text 403 `disabled in mirror mode`). The three GETs stay
+reachable under `--mirror`. Every error body is `{"error": string}`.
+
+#### `POST /api/mm/capture` → `{"tid": string, "created": bool}`
+
+Request `{slug, text, source}` — `source` is a `CaptureSource` (above). The
+server finds the job's LIVE mind thread forked at zeus' current last message
+and sends it the capture (`created: false`), or branches a new one
+(`created: true`); either way the client opens the thread overlay on `tid`.
+
+Errors: 400 `missing slug`, a text over 32,000 runes, an empty text, or an
+invalid source (unknown `kind`; an `artifact` with no `name`, a `transcript`
+with no `session`, a `dir` with no `repo`); 404 unknown slug; 409 no live cell
+or forkable zeus (codex jobs too) — show the message as a toast; 500 a store
+or spawn failure.
+
+#### `POST /api/mm/commit` → `{"id": number}`
+
+Request `{"thread_session": string, "item": {title, scope, repo, dir, kind, body, quote, source}}`.
+Agent-side only (`kraken mm commit`); no client UI sends it. 403
+`{"error":"not a mind thread"}` unless `thread_session` names a live mind
+thread; 400 with the reason for an invalid item (title 1–120 runes, body
+1–8,000 runes, kind `decision`\|`reading`\|`note`, scope `universal`\|`repo`
+with `repo` naming a resolvable repo and `dir` repo-relative). The item is
+stored with `source: "capture"`.
+
+#### `POST /api/mm/revise` → `{"id": number}`
+
+Request `{"thread_session": string, "id": number, "item": {…same as commit}}`.
+Same 403/400 as commit; 400 `missing id` for `id` ≤ 0; 404 unknown item; 409
+an invalidated item; 409 an item whose `source` is not `capture` (a legacy
+one-shot mark is never revised — the message names `kraken mm commit` as the
+move: commit a new item instead).
+
+#### `POST /api/mm/flag` → `{"id": number, "state": "pending"|"raised"}`
+
+Request `{session, slug, item_id, against_id, note}` — an agent recording that
+item `item_id` contradicts item `against_id` or the transcript (either id may
+be 0). Born `raised` when `session` is the job's lead (zeus) session, else
+`pending` until zeus raises or dismisses it. `slug` may be the job's current
+slug, its cell-dir spelling (`Slugify(slug)`, with or without `-<id>`, when
+exactly one active job matches), or a former slug after a rename; the server
+resolves it to the current one. 400 empty note; 404 a slug that resolves to no
+active job or a named item that does not exist.
+
+#### `POST /api/mm/flag/raise`, `POST /api/mm/flag/dismiss` → `{"ok": true}`
+
+Request `{session, id, note}` — the lead's verdict on a pending flag. 400
+`missing id`; 403 when `session` is not the flag's job's lead session; 404
+unknown flag; 409 the flag is not `pending`. A raise fires one macOS
+notification and puts the flag in the board's Flags section.
+
+#### `POST /api/mm/flag/resolve` → `{"ok": true}`
+
+Request `{id, resolution}` with `resolution` `drop` \| `keep` (400 otherwise)
+— carl's answer to a raised flag: `drop` also invalidates the flagged item
+(reason `contradicted`), `keep` only closes the flag. Either way the flag's
+`state` becomes `resolved`. 404 unknown flag; 409 a flag that is not `raised`.
+This is the Flags section's `drop item` / `keep` buttons.
+
+#### `GET /api/mm/flags[?state=pending|raised|dismissed|resolved]` → `{"flags": [MMFlag]}`
+
+Newest first; always an array. 400 for a `state` outside the four. The Flags
+section reads `?state=raised` — a resolved flag has left that state, so every
+row it gets is still awaiting carl.
+
+| key | type | optionality | notes |
+|---|---|---|---|
+| `id` | number | always | |
+| `item_id` / `against_id` | number | always | `0` = none |
+| `job_id` | number | always | `0` for a flag tied to no job |
+| `slug` | string | always | the job's slug at flag time (`open job` opens its steer modal) |
+| `session` | string | always | the session that recorded the flag |
+| `note` | string | always | what contradicts what |
+| `state` | string | always | `pending` (recorded, awaiting the lead) \| `raised` (awaiting carl) \| `dismissed` (the lead rejected it) \| `resolved` (carl answered — see `resolution`) |
+| `raised_by` | string | always | the session that raised/dismissed it, `verify` for one raised by the artifact verify pass, `""` while pending |
+| `raise_note` | string | always | the lead's note on raising/dismissing |
+| `raised_at` / `resolved_at` / `created_at` | number | always | unix millis, `0` = not yet |
+| `resolution` | string | always | `""` \| `drop` \| `keep` — carl's |
+
+#### `GET /api/mm/show?id=N` → `MMItem` + `source_hint`
+
+One item in full (the `MMItem` shape above, `anchor` included, live or not)
+plus `"source_hint": "kraken mm source <id>"`. 400 bad id; 404 unknown item.
+
+#### `GET /api/mm/source?id=N` → `{kind, available, changed, text, ext}`
+
+The material behind an item. `available: false` is an answer, never an error —
+a missing source is always a 200.
+
+| `kind` | `text` |
+|---|---|
+| `artifact` | the frozen snapshot when the item has one, else the artifact's current bytes. `changed` is true when the current bytes' sha differs from the capture's `sha` (or, with none recorded, the snapshot's), or the artifact is gone. Legacy `artifact`/`artifact-element` rows resolve through their `slug` + `source_ref` |
+| `transcript` | ±10 blocks around the record `uuid` in the session's transcript (a forward scan of the whole file), one per paragraph as `[kind] text` (`[kind from] text` for a block with a sender), the captured record's blocks prefixed `▶ `. Unavailable when the session is not uuid-shaped, or the transcript or the uuid is not found |
+| `dir` | a one-level listing of the directory in the repo's primary checkout, one name per line, directories suffixed `/` |
+| `code` | a legacy code mark's anchored text; `ext` is the file's language extension |
+| anything else (`item`, `manual`, `question`, `agent-output`) | none — `available: false` |
+
+`ext` is the artifact's extension (`md`, `html`, …) or `""`. 400 bad id; 404
+unknown item.
+
+#### `GET /api/job/transcript?slug=&n=` → `{"session": string, "blocks": [TranscriptBlock]}` (api/transcript.go)
+
+The tail of zeus' own conversation for the steer modal's transcript panel. `n`
+defaults to 50 and is clamped to 1…200. Each block is `{kind, text, from?,
+uuid}` — `/api/thread/read`'s block shape with `uuid` always present and no
+`inherited`. A job with no stamped session or no transcript yet answers
+`{"session": "", "blocks": []}`. 400 missing slug; 404 unknown slug. A read,
+so reachable under `--mirror`.
 
 ---
 
