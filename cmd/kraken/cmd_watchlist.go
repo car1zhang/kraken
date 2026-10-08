@@ -28,8 +28,7 @@ import (
 //
 //   - Every `id` here is a WATCH-ROW id. It briefly was a graph edge id (the
 //     watchlist lived in the knowledge graph for one release); Q9 moved it
-//     back out, since the graph is now compiled from carl's own mental-model
-//     marks rather than from anything an agent observed.
+//     back out, and the graph itself has since been removed.
 //   - `add` may name endpoints — src, dst and an optional predicate beside
 //     observation and class — but none of them is required any more, and
 //     there is no `strength`: that was the edge's confidence and the row has

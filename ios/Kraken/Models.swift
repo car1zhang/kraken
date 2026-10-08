@@ -501,8 +501,8 @@ struct WebJob: Decodable, Identifiable {
     // zeus' own refined status (running/polling/waiting/question), distinct
     // from `state` — absent when zeus isn't resolvable yet.
     let zeusStatus: String?
-    // The pipeline skill zeus most recently used (info/aim/do/pr/dream/
-    // graph), read off zeus' transcript server-side — see webJob.Stage
+    // The pipeline skill zeus most recently used (info/aim/do/pr/dream),
+    // read off zeus' transcript server-side — see webJob.Stage
     // (internal/api/board.go) for what absence covers. Additive key, no
     // contract bump.
     let stage: String?
@@ -1849,98 +1849,6 @@ struct LogReadResponse: Decodable {
     let entries: [LogEntry]
 }
 
-// MARK: - knowledge graph
-
-// The two READ routes of the knowledge graph (internal/api/graph.go), which
-// the native GRAPH screen decodes directly — see ios/API.md § Knowledge graph.
-// Additive endpoints, `apiContract` stays 5.
-//
-// `Codable` rather than the file's usual `Decodable`: nothing here is ever
-// POSTed (both routes are GETs and the graph is corrected by a `/graph`
-// revision job, never by the phone), but the encode half is what lets a test
-// build a payload as values and round-trip it instead of hand-writing JSON
-// for every case. Equatable for the same reason.
-
-// One entity. `x`/`y` are the server's cached ForceAtlas2 layout, and `0,0`
-// means "not laid out yet" rather than "at the origin" — the API documents
-// that quirk and graphPositions() is what acts on it.
-struct GraphNode: Codable, Identifiable, Equatable {
-    let id: Int64
-    let name: String
-    let type: String
-    let description: String
-    let x: Double
-    let y: Double
-    // Populated by GET /api/graph/node, and by GET /api/graph via one bulk
-    // join (the nightly ingest's canonicalization inventory reads that
-    // route and was alias-blind without it). A node with no aliases omits
-    // the key rather than sending an empty array, so nil means "none
-    // recorded", never a distinct route shape.
-    let aliases: [String]?
-}
-
-// One bi-temporal fact edge. Both time axes are unix millis and both are
-// ALWAYS on the wire (no omitempty on the Go side), so both are non-optional
-// per this file's rule atop — `0` is the recorded answer for "not set", never
-// an absent key.
-struct GraphEdge: Codable, Identifiable, Equatable {
-    let id: Int64
-    let src: Int64
-    let dst: Int64
-    let predicate: String
-    let fact: String
-    let strength: Int64
-    let occurrences: Int64
-    /// WORLD time: when the fact stopped holding. `0` = still true.
-    let validUntil: Int64
-    /// SYSTEM time: when the row was retired. `0` = live.
-    let expiredAt: Int64
-    let episode: Int64
-
-    enum CodingKeys: String, CodingKey {
-        case id, src, dst, predicate, fact, strength, occurrences
-        case validUntil = "valid_until"
-        case expiredAt = "expired_at"
-        case episode
-    }
-}
-
-// The header line's counts. `liveEdges` is the SERVER's own liveness (system
-// time only, `expired_at = 0`); the screen's "current" figure is counted
-// client-side with graphIsInvalidated instead, which also retires facts whose
-// world validity has ended — quoting this one there put a bigger number in
-// the header than there were edges on the canvas.
-struct GraphStats: Codable, Equatable {
-    let nodes: Int64
-    let edges: Int64
-    let liveEdges: Int64
-    let episodes: Int64
-    let pending: Int64
-    let missingEmbeddings: Int64
-
-    enum CodingKeys: String, CodingKey {
-        case nodes, edges
-        case liveEdges = "live_edges"
-        case episodes, pending
-        case missingEmbeddings = "missing_embeddings"
-    }
-}
-
-// GET /api/graph — the whole viewer payload in one response. `nodes` and
-// `edges` are always arrays, never null.
-struct GraphPayload: Codable, Equatable {
-    let nodes: [GraphNode]
-    let edges: [GraphEdge]
-    let stats: GraphStats
-}
-
-// GET /api/graph/node?id=N — one node (with its aliases) and EVERY edge
-// touching it, live and invalidated both.
-struct GraphNodeDetail: Codable, Equatable {
-    let node: GraphNode
-    let edges: [GraphEdge]
-}
-
 // MARK: - artifact library
 
 // The saved-artifact library (internal/api/library.go) — a snapshot table, so
@@ -1948,8 +1856,8 @@ struct GraphNodeDetail: Codable, Equatable {
 // artifact stays readable after its job is torn down, archived or hard
 // deleted. Additive endpoints, `apiContract` stays 6.
 //
-// `Codable` rather than this file's usual `Decodable`, for the reason the
-// graph types above give: the encode half is what lets a test build a payload
+// `Codable` rather than this file's usual `Decodable`: nothing here is ever
+// POSTed, but the encode half is what lets a test build a payload
 // as values and round-trip it instead of hand-writing JSON. Equatable for the
 // same reason.
 
@@ -2031,7 +1939,7 @@ struct LibraryRemoveRequest: Encodable {
 // resurrects it. The invalidated rows are therefore half the payload rather
 // than debris, which is why nothing here filters them out on the way in.
 //
-// `Decodable` only, and no `Equatable`: unlike the graph and library types
+// `Decodable` only, and no `Equatable`: unlike the library types
 // above, nothing here round-trips a payload through an encode — the tests
 // build wire JSON as literals (per the contract), and every write sends its
 // own small request struct instead.
@@ -2118,8 +2026,11 @@ struct WebMMItem: Decodable, Identifiable {
     let context: String?
     /// Unix millis.
     let createdAt: Int64
-    /// The layer-2 episode minted with the item.
-    let episodeId: Int64
+    /// Legacy: the knowledge-graph episode once minted with the item. The
+    /// server still emits the key (0 for every new row) because shipped builds
+    /// decode it non-optional; optional here so a server that drops it still
+    /// decodes. Nothing reads it.
+    let episodeId: Int64?
     /// Unix millis. **The absence of these three keys is the wire's only
     /// spelling of "live"** — there is no boolean to read.
     let invalidatedAt: Int64?

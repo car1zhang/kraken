@@ -28,17 +28,15 @@ import (
 // always ABOUT that note, so the note belongs in the context the message
 // lands in.
 //
-// The shape is the goals block's: a third block riding the one hook every
-// cell already wires — UserPromptSubmit → `kraken recall-hook` → POST
-// /api/graph/recall → Recall — prefixed onto whatever the graph and goals
-// halves produced. No new hook, no new route, no settings.json re-merge: a
-// cell already running gets it on its next prompt once the serve binary
-// carries this file.
+// The shape is the goals block's: a block riding the one hook every cell
+// already wires — UserPromptSubmit → `kraken recall-hook` → POST /api/recall
+// → Recall — prefixed onto the goals block. No new hook, no settings.json
+// re-merge: a cell already running gets it on its next prompt once the serve
+// binary carries this file.
 //
-// What makes it a THIRD kind of block rather than a variant of either
-// sibling is its delivery rule. A graph fact is delivered once per session
-// and never changes; a goals block is state, re-delivered whenever it
-// differs. A note is an INSTRUCTION: it is delivered exactly once per
+// What makes it a different kind of block from goals is its delivery rule. A
+// goals block is state, re-delivered whenever it differs. A note is an
+// INSTRUCTION: it is delivered exactly once per
 // (job, note-as-written), and an edit to the note or a re-answer of the
 // question is a new instruction, so the key below hashes the text. The record
 // is per JOB rather than per session, kept in one kv row

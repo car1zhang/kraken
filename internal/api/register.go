@@ -55,7 +55,7 @@ func Register(mux *http.ServeMux) {
 	// The two GETs are ungated: a read is a read, and a mirror board must be
 	// able to SHOW the model it may not write. The seven writes are gated via
 	// mirrorGated at registration rather than inline, which is available here
-	// for the reason it is on /api/graph/add and /api/slack/ack: every one of
+	// for the reason it is on /api/slack/ack: every one of
 	// them is a POST-ONLY path, so there is no GET on the same path that a
 	// route wrapper would take down with it — which is also why the list and
 	// the snapshot were given paths of their own rather than a GET arm on
@@ -69,31 +69,11 @@ func Register(mux *http.ServeMux) {
 	mux.HandleFunc("/api/mm/note", mirrorGated(mmNoteHandler))
 	mux.HandleFunc("/api/mm/detail", mirrorGated(mmDetailHandler))
 	mux.HandleFunc("/api/mm/remove", mirrorGated(mmRemoveHandler))
-	// The knowledge graph. Every one of these is an exact pattern, so none
-	// shadows another and none is a subtree — the same property that lets
-	// "/api/feedback" and "/api/feedback/sweep" coexist above, and the reason
-	// "/api/graph/episode" and "/api/graph/episode-done" are two routes rather
-	// than a collision. The six GET reads plus POST /api/graph/search stay
-	// open under --mirror (a read is a read; search is a POST only because a
-	// query is arbitrary user text, and it writes nothing); the three writes
-	// are gated with the same 403 every other agent-side write gets.
-	mux.HandleFunc("/api/graph", graphHandler)
-	mux.HandleFunc("/api/graph/stats", graphStatsHandler)
-	mux.HandleFunc("/api/graph/node", graphNodeHandler)
-	// The dereference pair behind `k graph get`: an injected memory line's
-	// [F# E#] handle back to the whole fact, or to the episode it came from.
-	// Ungated with the other reads — following a handle records nothing, so
-	// there is nothing for a mirror to refuse.
-	mux.HandleFunc("/api/graph/fact", graphFactHandler)
-	mux.HandleFunc("/api/graph/episode", graphEpisodeHandler)
-	mux.HandleFunc("/api/graph/pending", graphPendingHandler)
-	mux.HandleFunc("/api/graph/search", graphSearchHandler)
-	// Recall is a THIRD write despite reading like a search: it records what
-	// it delivered in kg_recall, so it is gated with add and episode-done
-	// rather than left open with the reads (recall.go).
-	mux.HandleFunc("/api/graph/recall", mirrorGated(graphRecallHandler))
-	mux.HandleFunc("/api/graph/add", mirrorGated(graphAddHandler))
-	mux.HandleFunc("/api/graph/episode-done", mirrorGated(graphEpisodeDoneHandler))
+	// Mid-conversation recall (recall.go): the cell hook's POST. Gated like
+	// every other agent-side write, because a firing records what it
+	// delivered (the per-job notes record) — it reads like a query and is not
+	// one.
+	mux.HandleFunc("/api/recall", mirrorGated(recallHandler))
 	mux.HandleFunc("/api/questions", questionsHandler)
 	// The artifact library (library.go). The first two are exact patterns, so
 	// neither shadows the other — the same property that lets "/api/feedback"
@@ -159,9 +139,8 @@ func Register(mux *http.ServeMux) {
 	// property that lets "/api/job/raw" and "/api/job/load" coexist above.
 	// The three reads stay open under --mirror (a read is a read); the two
 	// WRITES are gated via mirrorGated at registration rather than inline,
-	// which is available here for the reason it is on /api/graph/add: both
-	// are POST-ONLY paths, so there is no GET on the same path that a route
-	// wrapper would take down with them.
+	// which is available here because both are POST-ONLY paths, so there is
+	// no GET on the same path that a route wrapper would take down with them.
 	//
 	// /api/job/draft is iris' only write surface on a job, and its gate list
 	// is the safety property of the whole feature rather than a validation

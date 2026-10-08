@@ -115,20 +115,19 @@ struct KrakenApp: App {
 
 /// Four tabs, in this order: Board · Sessions · Memory · Settings.
 ///
-/// "Memory" is the third tab's LABEL only — it is the graph screen, its tag is
-/// still `AppRouter.Tab.graph`, and `kraken://graph` still selects it.
+/// "Memory" is the third tab: the saved-artifact library and the mental model
+/// (`MemoryRootView`). Its tag is still `AppRouter.Tab.graph`, and
+/// `kraken://graph` still selects it — names kept from when the tab hosted the
+/// knowledge graph, so older deep links keep working.
 ///
 /// Usage and Log used to be tabs three and four. They are drawers now — Usage
-/// off the Board's toolbar, Log off a Settings row — which bought the slot
-/// GRAPH moved into. The graph was a Board-toolbar sheet only because five
-/// tabs was the ceiling before iOS collapses a TabView into a "More" list;
-/// with two screens demoted to drawers it fits as a peer, which is what it
-/// always read as.
+/// off the Board's toolbar, Log off a Settings row — which bought the slot the
+/// Memory tab took. Five tabs is the ceiling before iOS collapses a TabView
+/// into a "More" list.
 struct RootTabView: View {
     @Environment(AppRouter.self) private var router
-    // The graph talks to the same Mac as every other screen; it takes its base
-    // as a plain `let` (it predates the tab), so the tab root reads the stored
-    // URL and hands it over.
+    // The Memory tab talks to the same Mac as every other screen; the tab root
+    // reads the stored URL and hands MemoryRootView a validated one.
     @AppStorage("serverURL") private var serverURL = KrakenDefaults.serverURL
 
     var body: some View {
@@ -141,17 +140,17 @@ struct RootTabView: View {
                 .tabItem { Label("Sessions", systemImage: "terminal") }
                 .tag(AppRouter.Tab.sessions)
             NavigationStack {
-                GraphView(baseURL: serverURL)
+                if let base = memoryServerBase(serverURL) {
+                    MemoryRootView(baseURL: base)
+                } else {
+                    MemoryNoServerView()
+                }
             }
-            // The board toolbar's own graph glyph, carried over with the
-            // screen it opened — carl on the alternative: "this brain is
-            // kinda buns".
+            // The glyph is the old graph tab's, kept so the tab bar looks the
+            // same — carl on the alternative: "this brain is kinda buns".
             //
-            // The LABEL says Memory: the tab holds two things kraken keeps —
-            // the knowledge graph and the saved-artifact library — and "Graph"
-            // named only one of them. Nothing internal renamed with it:
-            // `AppRouter.Tab.graph`, `kraken://graph` and the file names all
-            // stay, so a deep link shipped in an older build still lands here.
+            // The tag stays `AppRouter.Tab.graph` and `kraken://graph` still
+            // selects it, so a deep link shipped in an older build lands here.
             .tabItem { Label("Memory", systemImage: "point.3.connected.trianglepath.dotted") }
             .tag(AppRouter.Tab.graph)
             SettingsView()

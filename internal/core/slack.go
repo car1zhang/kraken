@@ -12,8 +12,7 @@ import (
 )
 
 // slack.go — typed wrappers over the six Slack Web API methods the intake
-// poller needs. Stdlib net/http only, per the house rule; this is kraken's
-// second outbound API client after the embedder and follows its shape.
+// poller needs. Stdlib net/http only, per the house rule.
 //
 // Every Slack method here is a form-encoded POST carrying the xoxp user token
 // as a Bearer header, and every Slack response is JSON with a top-level `ok`

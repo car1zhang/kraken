@@ -22,7 +22,7 @@ Three outputs, three destinations. Getting this wrong is the only mistake here t
 | Output | Destination | May contain |
 |---|---|---|
 | A hardened change | a PR carl reviews | **the diff only** — never findings, evidence, quotes, or transcript excerpts |
-| An observation not yet worth acting on | the standalone watch store (`kraken watchlist` verbs — its own `watch_items` table since v29, outside the graph) | anything useful; it is local and never committed |
+| An observation not yet worth acting on | the standalone watch store (`kraken watchlist` verbs — its own `watch_items` table since v29) | anything useful; it is local and never committed |
 | The night's report | `00-dream-report.md` in the artifacts dir | anything, including carl's own words quoted back to him |
 
 **Findings never enter git.** Not in a commit, not in a PR body, not in a file. The repo gets the
@@ -202,9 +202,9 @@ unbounded — a single line can be an entire inlined skill body — so a page si
 one can blow the Read tool's token ceiling on page two: say to page large views in modest chunks
 (a few hundred lines) and to shrink the page on a ceiling error rather than switching to grep. And
 the brief carries a short **already-established list** — the known cross-cutting costs and facts
-from the watch overlay and the graph that touch this scout's assignment — marked "measure, don't
-re-derive": six scouts in one night each independently re-derived from raw a cost the graph
-already held as an entity, because nothing in any brief said what was already known.
+from the watch store and carl's mental model (`kraken mm get`) that touch this scout's assignment — marked "measure, don't
+re-derive": six scouts in one night each independently re-derived from raw a cost kraken's memory
+already held, because nothing in any brief said what was already known.
 
 **The scouts** are one subagent per transcript, each reading that session's reduced view plus its
 digest. They are read-only exploration — they change nothing in the repo and judge nothing — so they are
@@ -276,10 +276,9 @@ same failure for review fleets; it applies to scout briefs identically. And the 
 do when BOTH paths are closed — `Write` refused and the heredoc blocked by a hook: report the
 refusal in the reply and stop, never trim or reword the findings until the hook passes. One more
 brief clause, and it binds you as much as any scout: `kraken.db` is read through the verbs —
-`kraken watchlist get`, `kraken feedback sweep`, `k graph search|get` — never by opening the file
-(`kraken serve` is its single writer, and a second handle would run migrations — `graph/SKILL.md`
-bans the direct open outright for its own jobs, and what follows is this pass's one narrower
-carve-out). Where a read genuinely has no verb, open it READ-ONLY and never
+`kraken watchlist get`, `kraken feedback sweep`, `kraken mm get` — never by opening the file
+(`kraken serve` is its single writer, and a second handle would run migrations; what follows is
+this pass's one narrower carve-out). Where a read genuinely has no verb, open it READ-ONLY and never
 otherwise — `sqlite3 -readonly`, or Python's `sqlite3.connect('file:<path>?mode=ro', uri=True)`,
 where `uri=True` is what guarantees the URI is PARSED rather than taken as a filename: sqlite
 honours `file:` URIs only when URI handling is on, and whether it is on by default depends on how
@@ -425,11 +424,11 @@ You may go below it on judgment, but only in two cases, and you must name it whe
 Anything touching Go, orchestration, or a brief needs the full bar regardless of how obvious it
 feels. Every sub-default ship goes in the report's **judgment calls** section, saying why.
 
-Everything else becomes a **watched observation in the standalone watch store** (`watch_items` — since the v29 cutover of job 349 this is the dream loop's OWN table, outside the knowledge graph: the graph is now a compilation of carl's mental model, and kraken's self-observations no longer enter it). A row is the observation sentence plus this loop's bookkeeping (class, state, sightings, evidence, suggested fix, and carl's verdict trio). Add it with `kraken watchlist add`, whose item is `observation`, `class`, and optionally `src`, `dst`, `predicate` (default `concerns`) — plain-text context labels now, no longer graph nodes — plus the optional `state`, `evidence`, `suggested_fix`, `pr_url` (`strength` is retired with the edge model; a still-sent value is ignored). **Folding is automatic**: re-adding the same wording (byte-identical after one-line normalization) bumps the existing row's sighting count server-side and replaces its evidence with what you sent, so there is no find-then-bump dance and never a second row for the same thing. To REWORD an observation, remove it and add it again — `update` changes bookkeeping fields only, never the sentence. Two things a fold does NOT do on its own, and both are yours when re-adding a SHIPPED observation whose fix did not take: it does not reset `state` unless you SEND one — a re-sighted row left `shipped` drops out of the DREAM view and tomorrow's pass reads it as settled, so include `state: watching` in the re-add itself (add forwards a non-empty state on a fold), or follow with `kraken watchlist update` — and `pr_url` is single-valued, so before a second ship overwrites it, write the earlier PR into the `evidence` text you send with the fold; nine sightings and one url is a shape that cannot express "fixed, recurred, fixed again", and the report is the only other place that history survives.
+Everything else becomes a **watched observation in the standalone watch store** (`watch_items` — since the v29 cutover of job 349 this is the dream loop's OWN table, and since the graph's removal in job 542 the only memory kraken keeps beside carl's mental model; kraken's self-observations never enter the mental model). A row is the observation sentence plus this loop's bookkeeping (class, state, sightings, evidence, suggested fix, and carl's verdict trio). Add it with `kraken watchlist add`, whose item is `observation`, `class`, and optionally `src`, `dst`, `predicate` (default `concerns`) — plain-text context labels now, no longer graph nodes — plus the optional `state`, `evidence`, `suggested_fix`, `pr_url` (`strength` is retired with the edge model; a still-sent value is ignored). **Folding is automatic**: re-adding the same wording (byte-identical after one-line normalization) bumps the existing row's sighting count server-side and replaces its evidence with what you sent, so there is no find-then-bump dance and never a second row for the same thing. To REWORD an observation, remove it and add it again — `update` changes bookkeeping fields only, never the sentence. Two things a fold does NOT do on its own, and both are yours when re-adding a SHIPPED observation whose fix did not take: it does not reset `state` unless you SEND one — a re-sighted row left `shipped` drops out of the DREAM view and tomorrow's pass reads it as settled, so include `state: watching` in the re-add itself (add forwards a non-empty state on a fold), or follow with `kraken watchlist update` — and `pr_url` is single-valued, so before a second ship overwrites it, write the earlier PR into the `evidence` text you send with the fold; nine sightings and one url is a shape that cannot express "fixed, recurred, fixed again", and the report is the only other place that history survives.
 
-`src` and `dst`, when you send them, name the two real things the observation is ABOUT — a component, an agent, a tool, a convention, a failure mode — not a restatement of the sentence. "Scouts keep going to the raw transcript after being handed the reduced view" concerns `dream scout` and `kraken mine reduce`; it does not concern `observation 1` and `the loop`. They are plain-text labels on the watch row now, not graph nodes: they buy scan-ability in the DREAM view and consistency across nights (reuse the spelling earlier rows used — `kraken watchlist get` shows them), and nothing else — no retrieval leg anchors on them, no future cell is injected with them, and a row with imperfect endpoints costs a shrug rather than unreachability. The OBSERVATION SENTENCE is what must carry the finding on its own, since the sentence and the report are the only places a future pass meets it.
+`src` and `dst`, when you send them, name the two real things the observation is ABOUT — a component, an agent, a tool, a convention, a failure mode — not a restatement of the sentence. "Scouts keep going to the raw transcript after being handed the reduced view" concerns `dream scout` and `kraken mine reduce`; it does not concern `observation 1` and `the loop`. They are plain-text labels on the watch row: they buy scan-ability in the DREAM view and consistency across nights (reuse the spelling earlier rows used — `kraken watchlist get` shows them), and nothing else — no retrieval leg anchors on them, no future cell is injected with them, and a row with imperfect endpoints costs a shrug rather than unreachability. The OBSERVATION SENTENCE is what must carry the finding on its own, since the sentence and the report are the only places a future pass meets it.
 
-The move to the standalone store cuts the other way too: a watched observation is NOT a graph fact any more — it is not searchable by `k graph search`, never injected into a cell's spawn context, and invisible to the graph viewer. It lives exactly as long as this loop cares, in the DREAM view and `kraken watchlist get`. `kraken watchlist remove` **closes the row** (expiry, not deletion): the observation stops being watched and stays readable by id, with carl's verdict trio preserved on it. If an observation deserves to become durable knowledge — a fact future agents should be handed — that is a decision for CARL's mental model (`k mm note` is his, never yours) or for a shipped fix whose skill text carries it; the dream loop itself never writes the graph.
+The move to the standalone store cuts the other way too: a watched observation is NOT a mental-model item — it is not returned by `kraken mm get`, never injected into a cell's spawn context, and invisible to the Memory view's Model pane. It lives exactly as long as this loop cares, in the DREAM view and `kraken watchlist get`. `kraken watchlist remove` **closes the row** (expiry, not deletion): the observation stops being watched and stays readable by id, with carl's verdict trio preserved on it. If an observation deserves to become durable knowledge — a fact future agents should be handed — that is a decision for CARL's mental model (`kraken mm note` is his, never yours) or for a shipped fix whose skill text carries it; the dream loop itself never writes the mental model.
 
 ## What you may change
 
@@ -483,8 +482,8 @@ specific, and it is the only place the cell's real paths appear:
   directory is the only board-visible one, and the report is the deliverable; it is also what the
   board's `DREAM` view renders, so a pass that ships changes but writes no report is invisible.
 - **Read and write watched observations with `kraken watchlist get|add|update|remove`** — the same four
-  verbs, now backed by graph edges: an item's `id` IS its edge id, `add` folds server-side on a repeat
-  wording, and `remove` unwatches without deleting the fact. Sweep feedback with
+  verbs, backed by the standalone `watch_items` table: `add` folds server-side on a repeat
+  wording, and `remove` closes the row without deleting it. Sweep feedback with
   `kraken feedback sweep --since <ts>`. Run `kraken feedback addressed <slug> <id> <text>` **only for
   a note you shipped a change for**, naming the PR in the text — see Evidence 1. **No other cell runs
   that verb at all**, so nothing closes a note if you do not. The slug is the one the note was left on,
@@ -502,8 +501,8 @@ specific, and it is the only place the cell's real paths appear:
   `dream swept: <set root>/00-dream-report.md (N shipped, M watching, K transcripts)`
 
   followed by the PR urls if any, then one clause per still-owed human action from the report's Owed
-  section, and STOP (end the turn). The three counts are DEFINED, not chosen per night — the sibling
-  graph line ran three conventions in three nights before its counts were pinned, and this line had
+  section, and STOP (end the turn). The three counts are DEFINED, not chosen per night — the retired
+  /graph job's closing line ran three conventions in three nights before its counts were pinned, and this line had
   started the same drift (one pass counted only its new rows as "watching"): **N is PRs this pass
   OPENED** (opened, not merged), **M is watch rows this pass WROTE** — new adds, folds onto existing
   rows, and overlay updates, each row counted once — and **K is the digest envelope's `scanned`

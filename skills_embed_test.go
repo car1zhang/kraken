@@ -29,7 +29,6 @@ func TestSkillsFSContainsExpectedSkills(t *testing.T) {
 		"do":    "do",
 		"pr":    "pr",
 		"dream": "dream",
-		"graph": "graph",
 		// `load` governs no phase — it is the ladders zeus looks a rung up in
 		// mid-phase — so TestSkillsOwnTheCellContract has nothing to say about
 		// it and this is the only test that would notice it failing to embed.
@@ -313,32 +312,6 @@ func TestSkillsOwnTheCellContract(t *testing.T) {
 			// the never-hard-wrap rule; see the same token on aim above
 			"ONE source line",
 		}},
-		// graph owns both agent-side graph jobs. Everything here is a rule the
-		// daemon's graphPass deliberately does NOT enforce — it enqueues
-		// episodes and never extracts — so a rule dropped from this file is a
-		// rule that exists nowhere, and the symptom is a graph that quietly
-		// learns the wrong things and then injects them into the next cell's
-		// system prompt via graphContext.
-		{"graph", []string{
-			"Inside A Kraken Cell", "<cellDir>/artifacts/", "graph updated:",
-			"Use `0` where a count is zero", "Never declare the job done",
-			"00-graph-report.md", "opens no PR",
-			// the two modes the job spec selects between
-			"Ingest mode", "Revision mode",
-			// the extraction contract: delimited tuples, the seed types with
-			// open extension, and the CLI it writes through
-			"ENTITY|", "FACT|", "never strict JSON",
-			"person", "convention", "component", "failure-mode", "external-system",
-			"k graph pending", "k graph add", "k graph done",
-			// the three rules that are easy to drop and expensive to lose:
-			// canonicalize late, the judge only ever REFUSES a merge, and a
-			// contradiction closes a window instead of overwriting a row
-			"Canonicalize AFTER extraction", "merge VETO, never a merge PROPOSER",
-			"Never delete", "occurrences",
-			// see the same token on aim/info/dream above — this skill fans
-			// extraction out too, and hits the same wall
-			"never `Explore`",
-		}},
 		// handoff owns the self/spawn/resume procedure and the two queued
 		// commands that make a self-handoff land after the turn ends. The
 		// brief says nothing about any of it (carl or the daemon types the
@@ -507,7 +480,7 @@ func TestJobsSkillsFSWiredByInit(t *testing.T) {
 	for _, e := range entries {
 		names[e.Name()] = true
 	}
-	for _, want := range []string{"info", "aim", "do", "pr", "dream", "graph", "load", "handoff"} {
+	for _, want := range []string{"info", "aim", "do", "pr", "dream", "load", "handoff"} {
 		if !names[want] {
 			t.Errorf("jobs.SkillsFS root missing skill dir %q, got %v", want, names)
 		}

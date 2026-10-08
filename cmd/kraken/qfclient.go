@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"kraken/internal/jobs"
+	"kraken/internal/util"
 )
 
 // qfclient.go — shared HTTP plumbing for `kraken questions` and `kraken
@@ -195,4 +196,14 @@ func stdinIsInteractiveTTY(r io.Reader) bool {
 		return false
 	}
 	return true
+}
+
+// writeStdout prints a server response byte-for-byte. Kept as one helper so
+// no proxy verb silently re-encodes the server's JSON on the way through — a
+// re-marshal would reorder keys and drop the server's own formatting for no
+// gain.
+func writeStdout(out []byte) {
+	if _, err := os.Stdout.Write(out); err != nil {
+		util.Die("write stdout: %v", err)
+	}
 }

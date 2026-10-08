@@ -16,8 +16,8 @@ import (
 // agree — the queue action refused an empty spec, the other two did not, so a
 // job with no spec could start a cell with an empty prompt from two of the
 // three doors. Submitting IS starting now, so the validation has exactly one
-// home and every caller (POST /api/queue, the viewer's `s`, the dream and
-// graph tick creators) goes through it.
+// home and every caller (POST /api/queue, the viewer's `s`, the dream tick
+// creator) goes through it.
 //
 // SubmitJob writes NO job state of its own. StartCell owns the `working`
 // write, and it makes it only once the cell is actually up — so a refusal

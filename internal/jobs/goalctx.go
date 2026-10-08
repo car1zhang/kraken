@@ -7,12 +7,11 @@ import (
 	"kraken/internal/store"
 )
 
-// goalctx.go — the second system-prompt injection: what a new cell's zeus is
-// told about carl's CURRENT goals, staged beside graphctx.go's block.
+// goalctx.go — the system-prompt injection that tells a new cell's zeus about
+// carl's CURRENT goals, appended after zeusBrief by zeusLaunchBrief.
 //
-// It runs on the same SPAWN path graphctx.go does, so it inherits that file's
-// three rules verbatim (graphctx.go:13-34), and each one is why a piece of
-// this file looks the way it does:
+// It runs on the SPAWN path, and three rules follow from that; each one is why
+// a piece of this file looks the way it does:
 //
 //  1. It NEVER calls a network. A goalContext call is five local reads, all
 //     of them indexed — the job row (jobs_active_slug, or the id), its goal
@@ -36,15 +35,14 @@ import (
 //
 // The renderer below has TWO call sites — goalContext here (spawn time) and
 // Recall (recall.go, mid-conversation) — and it is one function rather than
-// two for the reason keepRelevantFacts is: a second copy of the nesting, the
-// exclusion rules and the marker would drift silently, and the injected block
-// would start meaning slightly different things depending on which path
-// produced it, with nothing that fails when it does.
+// two because a second copy of the nesting, the exclusion rules and the
+// marker would drift silently, and the injected block would start meaning
+// slightly different things depending on which path produced it, with
+// nothing that fails when it does.
 
 // goalContextBytes caps the whole block including its header. The brief has a
-// 13,500-byte ceiling of its own (TestZeusBriefStaysLean) and the graph block
-// spends another 682 beside this one, so every byte here is a byte of
-// attention spent before the job's own spec.
+// byte ceiling of its own (TestZeusBriefStaysLean), so every byte here is a
+// byte of attention spent before the job's own spec.
 //
 // 700 is roughly a dozen goal lines at realistic lengths — a list zeus reads
 // at a glance, which is what a goals list is for. A week that needs more than
@@ -56,7 +54,7 @@ const goalContextBytes = 700
 // snapshot, the verb is how zeus re-reads it after carl edits the board, and a
 // snapshot that does not say where the live copy lives is a snapshot zeus has
 // to trust forever. The leading newline separates it from whatever the brief's
-// own last line was, exactly as graphContextHeader's does.
+// own last line was.
 const goalContextHeader = "\nCarl's goals right now (re-read any time: `kraken goals get <slug>`):\n"
 
 // goalContextMarker is the literal that flags a goal THIS job was linked to on
@@ -92,9 +90,9 @@ var goalByID = func(st *store.Store, id int64) *store.Goal {
 // goalContext returns the block appended to zeus' brief for job j, or "" when
 // there is no store and when carl has no goals worth stating.
 //
-// "" is the important answer and the common one, for graphContext's reason: a
-// cell started in a week with nothing written down must get the brief it would
-// have got before this feature existed, byte for byte.
+// "" is the important answer and the common one: a cell started in a week
+// with nothing written down must get the brief it would have got before
+// this feature existed, byte for byte.
 func goalContext(j *Job) string {
 	if j == nil {
 		return ""
@@ -262,9 +260,9 @@ func renderGoalsBlock(st *store.Store, linkedIDs []int64) string {
 	// and the asymmetry is the point:
 	//
 	//   - A top-level goal that does not fit is SKIPPED and the next group is
-	//     tried, exactly as renderGraphBlock skips an over-long fact. Breaking
-	//     here would let ONE goal written as a paragraph blank every goal
-	//     ranked below it — and, when it is the first, blank the whole block.
+	//     tried. Breaking here would let ONE goal written as a paragraph blank
+	//     every goal ranked below it — and, when it is the first, blank the
+	//     whole block.
 	//     Its children go with it: a nested line whose parent line was never
 	//     written would read as nesting under whatever line precedes it.
 	//   - Inside a group the loop BREAKS, because there the lines are not
@@ -306,8 +304,8 @@ func renderGoalsBlock(st *store.Store, linkedIDs []int64) string {
 // here are ones this job is linked to, and "a goal this cell serves is already
 // ticked off" is exactly the kind of thing zeus must not have to infer.
 //
-// The text is ONE-LINED first (goalOneLine), for factLine's reason: a newline
-// inside a goal forges extra block lines, and a forged line can carry the
+// The text is ONE-LINED first (goalOneLine): a newline inside a goal forges
+// extra block lines, and a forged line can carry the
 // nesting arrow or the linked-goal marker while belonging to neither.
 func goalLine(g store.Goal, nested, linked bool) string {
 	var b strings.Builder

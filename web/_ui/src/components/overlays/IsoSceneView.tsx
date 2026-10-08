@@ -34,8 +34,8 @@ export function IsoSceneView({
   html: string;
   onOpenRef: (t: CodeRefTarget) => void;
 }) {
-  // Read once per mount — deliberately NOT GraphView's live listener: that
-  // view lives for the whole session, while this one remounts on every toggle
+  // Read once per mount — deliberately NOT a live listener: this view
+  // remounts on every toggle
   // and every pager step, so a mid-view System Settings flip lands at the
   // next card anyway and a live listener would only re-compile the scene
   // under the reader.

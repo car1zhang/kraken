@@ -161,7 +161,7 @@ func TestContractMMAddGetRoundTripsEveryStoredField(t *testing.T) {
 			got.InvalidatedAt, got.InvalidReason, got.InvalidDetail)
 	}
 	if got.EpisodeID != 0 {
-		t.Errorf("EpisodeID = %d on a just-created item, want 0 until MintMMEpisode stamps it", got.EpisodeID)
+		t.Errorf("EpisodeID = %d on a just-created item, want 0 (nothing writes it)", got.EpisodeID)
 	}
 }
 
@@ -464,28 +464,6 @@ func TestContractMMInvalidateIsOneWayAndTerminal(t *testing.T) {
 	}
 	if again := contractMMGet(t, s, id); again.InvalidReason != "content-changed" || again.InvalidatedAt != 500 {
 		t.Fatalf("a supersede pass rewrote the dead row's verdict: (%d, %q)", again.InvalidatedAt, again.InvalidReason)
-	}
-}
-
-// TestContractMMSetItemEpisodeStampsTheLink: the mint's back-stamp, and the
-// only writer of MMItem.EpisodeID.
-func TestContractMMSetItemEpisodeStampsTheLink(t *testing.T) {
-	s := contractMMStore(t)
-	id := contractMMAdd(t, s, contractMMNote("linked", 10))
-	if err := s.SetMMItemEpisode(id, 4242); err != nil {
-		t.Fatalf("SetMMItemEpisode: %v", err)
-	}
-	if got := contractMMGet(t, s, id); got.EpisodeID != 4242 {
-		t.Fatalf("EpisodeID = %d, want 4242", got.EpisodeID)
-	}
-	// The mint is idempotent (AddEpisode's hash dedupe returns the existing id
-	// and the stamp is written again), so re-stamping the same value must be a
-	// plain success rather than a conflict.
-	if err := s.SetMMItemEpisode(id, 4242); err != nil {
-		t.Fatalf("re-stamping the same episode id: %v", err)
-	}
-	if got := contractMMGet(t, s, id); got.EpisodeID != 4242 {
-		t.Fatalf("EpisodeID = %d after a re-stamp, want 4242", got.EpisodeID)
 	}
 }
 
@@ -823,9 +801,6 @@ func TestContractMMWritesNeverBumpJobRevOrUpdatedAt(t *testing.T) {
 	})
 	if err := s.SetMMSnapshot(id, []byte("frozen"), ".md"); err != nil {
 		t.Fatalf("SetMMSnapshot: %v", err)
-	}
-	if err := s.SetMMItemEpisode(id, 7); err != nil {
-		t.Fatalf("SetMMItemEpisode: %v", err)
 	}
 	anchorItem := contractMMAdd(t, s, MMItem{
 		Kind: "reading", Source: "code", JobID: job, SourceRef: "kraken/a.go:1-1", Content: "x", CreatedAt: 20,
@@ -1285,9 +1260,9 @@ func contractMMCount(t *testing.T, s *Store, table string) int {
 }
 
 // TestContractMMV29ShapeOnAFreshDatabase pins the migration's structural half
-// against a database opened from nothing: the three new tables exist, kg_watch
-// is gone, and the episode-kind CHECK admits `mental-model` alongside the
-// legacy five.
+// against a database opened from nothing: the three new tables exist and
+// kg_watch is gone. (The rebuilt kg_episodes CHECK this test also pinned went
+// with the table at v32.)
 func TestContractMMV29ShapeOnAFreshDatabase(t *testing.T) {
 	s := contractMMStore(t)
 
@@ -1298,24 +1273,6 @@ func TestContractMMV29ShapeOnAFreshDatabase(t *testing.T) {
 	}
 	if contractMMTableExists(t, s, "kg_watch") {
 		t.Error("kg_watch still exists after v29 — Q9 moves the watchlist out of the graph entirely")
-	}
-
-	// "kg_episodes.kind admits `mental-model` AND the legacy five" — measured
-	// through AddEpisode, since the CHECK is what would refuse the insert.
-	for i, kind := range []string{
-		"mental-model", "transcript", "feedback", "watchlist", "artifact", "job",
-	} {
-		_, added, err := s.AddEpisode(Episode{
-			Kind: kind, Ref: fmt.Sprintf("ref-%d", i), Content: "c",
-			Hash: fmt.Sprintf("hash-%d", i), TS: 1,
-		})
-		if err != nil {
-			t.Errorf("AddEpisode(kind=%q): %v — the rebuilt CHECK must admit it", kind, err)
-			continue
-		}
-		if !added {
-			t.Errorf("AddEpisode(kind=%q) reported the row as a duplicate on a fresh db", kind)
-		}
 	}
 }
 
@@ -1547,14 +1504,14 @@ func TestContractMMV29CopiesEveryLiveWatchedEdgeIntoWatchItems(t *testing.T) {
 		t.Errorf("the second row = %+v", second)
 	}
 
-	// "kg_edges, kg_episodes, kg_nodes, kg_node_aliases, kg_recall, kg_layout,
-	// kg_ingest_cursor are EMPTY; kg_edges_fts is empty"
+	// v29 emptied every kg_* table; the walk continues to v32, which drops
+	// them, so on the far side of Open they are absent rather than empty.
 	for _, table := range []string{
 		"kg_edges", "kg_episodes", "kg_nodes", "kg_node_aliases",
 		"kg_recall", "kg_layout", "kg_ingest_cursor", "kg_edges_fts",
 	} {
-		if n := contractMMCount(t, s, table); n != 0 {
-			t.Errorf("%s has %d rows after v29, want 0 — the cutover WIPES the graph", table, n)
+		if contractMMTableExists(t, s, table) {
+			t.Errorf("%s still exists after the walk to v%d", table, schemaVersion)
 		}
 	}
 
@@ -1566,12 +1523,6 @@ func TestContractMMV29CopiesEveryLiveWatchedEdgeIntoWatchItems(t *testing.T) {
 	}
 	if !folded || again != got.ID {
 		t.Fatalf("a re-sighting of a migrated observation = (%d, %t), want (%d, true)", again, folded, got.ID)
-	}
-	if n := contractMMCount(t, s, "kg_edges"); n != 0 {
-		t.Errorf("a watch add created %d graph edges — watch adds no longer touch the graph at all", n)
-	}
-	if n := contractMMCount(t, s, "kg_episodes"); n != 0 {
-		t.Errorf("a watch add created %d episodes — watch adds no longer mint one", n)
 	}
 }
 

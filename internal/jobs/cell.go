@@ -856,14 +856,12 @@ func codexZeusLaunch(j *Job, wt, brief, prompt, resumeSession string) (string, e
 }
 
 // zeusLaunch is the agent-aware launch builder both spawn paths (StartCell and
-// ReactivateJob) route through. It composes the brief the same way both call
-// sites did inline — zeusBrief + goalContext + graphContext — then dispatches on
-// the job's agent: a codex job goes through codexZeusLaunch, everything else
-// takes the claude path unchanged (spawnCommand over zeusSpawnArgv, with an
-// `-r <session>` resume when resumeSession is set). A claude job's command is
-// therefore byte-identical to what the two call sites produced before.
+// ReactivateJob) route through. It takes the brief from zeusLaunchBrief, then
+// dispatches on the job's agent: a codex job goes through codexZeusLaunch,
+// everything else takes the claude path (spawnCommand over zeusSpawnArgv, with
+// an `-r <session>` resume when resumeSession is set).
 func zeusLaunch(j *Job, wt, prompt, resumeSession string) (string, error) {
-	brief := zeusBrief(j) + goalContext(j) + graphContext(j)
+	brief := zeusLaunchBrief(j)
 	if j.Agent == "codex" {
 		return codexZeusLaunch(j, wt, brief, prompt, resumeSession)
 	}
@@ -872,6 +870,19 @@ func zeusLaunch(j *Job, wt, prompt, resumeSession string) (string, error) {
 		resume = []string{"-r", resumeSession}
 	}
 	return spawnCommand(j, zeusSpawnArgv(j, resume...), brief, prompt)
+}
+
+// zeusLaunchBrief is the staged brief every zeus spawn carries — zeusLaunch
+// (StartCell, ReactivateJob) and the limit rescue's respawn all obtain it here,
+// so the three cannot drift: the policy brief, then carl's goals.
+//
+// goalContext is appended HERE rather than inside zeusBrief because two tests
+// pin that function (TestZeusBriefDoesNotRestateSkills, TestZeusBriefStaysLean's
+// byte ceiling), and the goals block is variable-length and board-dependent;
+// it returns "" on any failure or when there is nothing to say, so a job with
+// no goals gets zeusBrief(j) byte for byte.
+func zeusLaunchBrief(j *Job) string {
+	return zeusBrief(j) + goalContext(j)
 }
 
 // cellSpawnEnv is the environment the `tmux new-session` that creates a cell
@@ -979,17 +990,6 @@ func StartCell(j *Job, repo string) error {
 	installHookSettings(wt, j)
 	installSkills(wt, j)
 	linkDevEnv(repo, wt, j)
-	// graphContext appends what the knowledge graph already knows about this
-	// job, or "" — which is the common case and the one that matters: a job
-	// with no match gets a byte-identical brief. It is concatenated HERE
-	// rather than inside zeusBrief because two tests pin that function
-	// (TestZeusBriefDoesNotRestateSkills, TestZeusBriefStaysLean's 13,500-byte
-	// ceiling), and retrieved facts are variable-length and job-dependent:
-	// folding them in would make the lean ceiling start failing on graph
-	// content rather than on the policy creep it exists to catch.
-	// goalContext rides in the same position and for the same reasons — it is
-	// carl's week, so it is variable-length, board-dependent, and holds the
-	// identical ""-on-any-failure guarantee (goalctx.go's rule 2).
 	launch, err := zeusLaunch(j, wt, jobPrompt(j), "")
 	if err != nil {
 		return fmt.Errorf("%v (worktree left at %s)", err, wt)
@@ -1100,13 +1100,12 @@ func krakenHookEntry(slug, krakenBin string) map[string]any {
 // recall-hook invocation is a brand new OS process spawned by this string,
 // inheriting none of serve's flags or env.
 //
-// It DOES carry the cell's slug, as a trailing argument, and the slug is not
-// the recall key: graph recall is still keyed on the SESSION named in the hook
-// payload, because a cell's zeus, its side threads and its teammates all fire
-// this hook from the same worktree with different sessions. What the slug adds
-// is the GOALS half (goalctx.go): a goals block is about the JOB, and every
-// agent in the cell — including the ones whose sessions nothing has ever
-// stamped onto the job row — should see the goal its cell was pointed at. An
+// It DOES carry the cell's slug, as a trailing argument. A cell's zeus, its
+// side threads and its teammates all fire this hook from the same worktree
+// with different sessions, and the slug is what the GOALS half (goalctx.go)
+// keys on: a goals block is about the JOB, and every agent in the cell —
+// including the ones whose sessions nothing has ever stamped onto the job
+// row — should see the goal its cell was pointed at. An
 // old settings.json written before this argument existed keeps working: the
 // slug arrives empty and recall falls back to the session match.
 func recallHookCommand(slug, krakenBin string) string {
@@ -1217,18 +1216,17 @@ func mergeCellStatusLine(parsed map[string]any, slug, krakenBin string) {
 }
 
 // recallHookEvents are the hook events mid-conversation recall rides on: one,
-// UserPromptSubmit, which queries on carl's new message and lands in front of
-// the agent before it starts thinking. Carl's prompt is real evidence of what
-// he is currently thinking about, which is the whole basis on which unsolicited
-// text may enter someone else's conversation. The same firing carries carl's
-// goals and, for the lead session, his unread feedback rows and question
-// answers (recall.go, recallnotes.go) — all three blocks ride this one event,
-// which is why no cell needs a second hook installed for them.
+// UserPromptSubmit, which lands in front of the agent before it starts
+// thinking. The firing carries carl's goals and, for the lead session, his
+// unread feedback rows and question answers (recall.go, recallnotes.go) —
+// both blocks ride this one event, which is why no cell needs a second hook
+// installed for them.
 //
-// POSTTOOLUSE IS RETIRED, and it is retired on measurement rather than on
-// taste. It queried the graph with the ASSISTANT'S OWN LAST TEXT after every
-// tool call, which makes it an echo machine independent of what the corpus
-// holds: the sibling memory-usefulness job classified 2,556 fact deliveries
+// POSTTOOLUSE IS RETIRED, and it was retired on measurement rather than on
+// taste. It queried the (since removed) knowledge graph with the ASSISTANT'S
+// OWN LAST TEXT after every tool call, which makes it an echo machine
+// independent of what the corpus holds: the sibling memory-usefulness job
+// classified 2,556 fact deliveries
 // across 15 days and found 4 ever used, with 68-79% of them echoing work the
 // agent had just finished and every measured arrival 20s to 6h late to matter.
 // Query-on-own-output cannot do better than that by construction — the query
@@ -1242,14 +1240,14 @@ func mergeCellStatusLine(parsed map[string]any, slug, krakenBin string) {
 // injection is not an injection, it is a resume. Wired, it would resume every
 // agent straight past zeus' own stop-gates (the manual-test gate, the /do
 // gate), hold blocked cells at "working" in the daemon's roll call by keeping
-// their zeus running, and chain paid model calls until retrieval finally ran
-// dry. A feature whose whole contract is "invisible when it has nothing to
-// say" cannot be wired to an event where saying something restarts the
-// conversation.
+// their zeus running, and chain paid model calls for as long as there was
+// anything to deliver. A feature whose whole contract is "invisible when it
+// has nothing to say" cannot be wired to an event where saying something
+// restarts the conversation.
 //
 // It is a list rather than a constant because RunRecallHook is event-agnostic
-// (it echoes hook_event_name verbatim and Recall never reads it): wiring or
-// unwiring an event is a change here and nowhere else — plus, for an event
+// (it echoes hook_event_name verbatim): wiring or unwiring an event is a
+// change here and nowhere else — plus, for an event
 // being UNwired, one entry in retiredRecallHookEvents below, since a merge
 // that only writes the events it wants leaves the old ones installed forever.
 var recallHookEvents = []string{"UserPromptSubmit"}
@@ -1605,9 +1603,9 @@ var krakenHookVerbs = map[string]bool{
 // compact-matcher SessionStart group running `kraken handoff-hook` with the
 // cell's artifacts dir (only when the slug resolves to a job); and a
 // matcher-less recall group under each of recallHookEvents (UserPromptSubmit)
-// so every prompt in the cell asks `kraken recall-hook` whether the knowledge
-// graph has anything to add (recall.go) — and, on an older cell's file, the
-// removal of the retired PostToolUse recall entry. It also installs the
+// so every prompt in the cell asks `kraken recall-hook` for carl's goals and
+// unread notes (recall.go) — and, on an older cell's file, the removal of the
+// retired PostToolUse recall entry. It also installs the
 // `kraken ctx-hook --slug <slug>` statusLine per mergeCellStatusLine. Called
 // from StartCell after the worktree is up and before claude launches in it.
 //
@@ -2776,12 +2774,9 @@ func ReactivateJob(j *Job, session, message string) error {
 	// roll-call does not look at tiers at all, and the one surface that does —
 	// the board's crew chip, which renders each teammate's model — is not
 	// something anyone reads as an alarm.
-	// Same graphContext append as StartCell's, and for a sharper reason: a
-	// REACTIVATED job is by definition returning after time passed, which is
-	// exactly when the graph is most likely to know something its zeus does
-	// not. Same ""-on-no-match guarantee. goalContext rides beside it with the
-	// sharper version of the same argument: a job reactivated days later is a
-	// job whose week has almost certainly turned over.
+	// The same goalContext append as StartCell's (zeusLaunchBrief), and for a
+	// sharper reason: a job reactivated days later is a job whose week has
+	// almost certainly turned over.
 	launch, err := zeusLaunch(j, wt, prompt, session)
 	if err != nil {
 		return fmt.Errorf("%v (worktree left at %s)", err, wt)

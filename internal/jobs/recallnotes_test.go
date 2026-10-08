@@ -42,8 +42,7 @@ func leadNotesFire(t *testing.T, st *store.Store, slug, session, prompt string) 
 }
 
 func TestLeadNotesRecallDeliversFeedbackAndAnswersOnce(t *testing.T) {
-	st := storeForGraph(t)
-	withFacts(t, nil)
+	st := storeForRecall(t)
 	const slug, sess = "notes-once", "sess-notes-once"
 	j := leadNotesJob(t, st, slug, sess)
 
@@ -77,8 +76,7 @@ func TestLeadNotesRecallDeliversFeedbackAndAnswersOnce(t *testing.T) {
 }
 
 func TestLeadNotesRecallGoesOnlyToTheLeadSession(t *testing.T) {
-	st := storeForGraph(t)
-	withFacts(t, nil)
+	st := storeForRecall(t)
 	const slug = "notes-lead"
 	j := leadNotesJob(t, st, slug, "sess-zeus")
 	if _, err := st.AddFeedback(store.Feedback{JobID: j.ID, JobSlug: slug, Note: "a note"}); err != nil {
@@ -95,8 +93,7 @@ func TestLeadNotesRecallGoesOnlyToTheLeadSession(t *testing.T) {
 }
 
 func TestLeadNotesRecallUnstampedJobDeliversNothing(t *testing.T) {
-	st := storeForGraph(t)
-	withFacts(t, nil)
+	st := storeForRecall(t)
 	const slug = "notes-unstamped"
 	j := leadNotesJob(t, st, slug, "")
 	if _, err := st.AddFeedback(store.Feedback{JobID: j.ID, JobSlug: slug, Note: "a note"}); err != nil {
@@ -108,8 +105,7 @@ func TestLeadNotesRecallUnstampedJobDeliversNothing(t *testing.T) {
 }
 
 func TestLeadNotesRecallEditedNoteIsDeliveredAgain(t *testing.T) {
-	st := storeForGraph(t)
-	withFacts(t, nil)
+	st := storeForRecall(t)
 	const slug, sess = "notes-edit", "sess-notes-edit"
 	j := leadNotesJob(t, st, slug, sess)
 	id, err := st.AddFeedback(store.Feedback{JobID: j.ID, JobSlug: slug, Note: "first wording"})
@@ -143,8 +139,7 @@ func TestLeadNotesRecallEditedNoteIsDeliveredAgain(t *testing.T) {
 }
 
 func TestLeadNotesRecallReAnswerIsDeliveredAgainAndUnansweredIsNot(t *testing.T) {
-	st := storeForGraph(t)
-	withFacts(t, nil)
+	st := storeForRecall(t)
 	const slug, sess = "notes-reanswer", "sess-notes-reanswer"
 	j := leadNotesJob(t, st, slug, sess)
 	if err := st.SetQuestions(j.ID, []store.DocQuestion{
@@ -173,8 +168,7 @@ func TestLeadNotesRecallReAnswerIsDeliveredAgainAndUnansweredIsNot(t *testing.T)
 }
 
 func TestLeadNotesRecallIsChronologicalAcrossKinds(t *testing.T) {
-	st := storeForGraph(t)
-	withFacts(t, nil)
+	st := storeForRecall(t)
 	const slug, sess = "notes-order", "sess-notes-order"
 	j := leadNotesJob(t, st, slug, sess)
 	base := time.Date(2026, 10, 8, 9, 0, 0, 0, time.UTC)
@@ -198,8 +192,7 @@ func TestLeadNotesRecallIsChronologicalAcrossKinds(t *testing.T) {
 }
 
 func TestLeadNotesRecallDefersWhatTheCapCannotCarry(t *testing.T) {
-	st := storeForGraph(t)
-	withFacts(t, nil)
+	st := storeForRecall(t)
 	const slug, sess = "notes-cap", "sess-notes-cap"
 	j := leadNotesJob(t, st, slug, sess)
 	// Ten notes of ~3,900 runes each: the block carries as many as fit under
@@ -242,8 +235,7 @@ func TestLeadNotesRecallDefersWhatTheCapCannotCarry(t *testing.T) {
 }
 
 func TestLeadNotesRecallCutsAnOversizedItemWithAMarker(t *testing.T) {
-	st := storeForGraph(t)
-	withFacts(t, nil)
+	st := storeForRecall(t)
 	const slug, sess = "notes-long", "sess-notes-long"
 	j := leadNotesJob(t, st, slug, sess)
 	if _, err := st.AddFeedback(store.Feedback{JobID: j.ID, JobSlug: slug, Note: strings.Repeat("y", notesItemRunes+500)}); err != nil {
@@ -260,8 +252,7 @@ func TestLeadNotesRecallCutsAnOversizedItemWithAMarker(t *testing.T) {
 }
 
 func TestLeadNotesRecallMultilineNoteStaysOneItem(t *testing.T) {
-	st := storeForGraph(t)
-	withFacts(t, nil)
+	st := storeForRecall(t)
 	const slug, sess = "notes-multi", "sess-notes-multi"
 	j := leadNotesJob(t, st, slug, sess)
 	if _, err := st.AddFeedback(store.Feedback{JobID: j.ID, JobSlug: slug, Note: "line one\nline two\n\nline four"}); err != nil {
@@ -274,8 +265,7 @@ func TestLeadNotesRecallMultilineNoteStaysOneItem(t *testing.T) {
 }
 
 func TestLeadNotesRecallMarksNothingForACallerThatIsGone(t *testing.T) {
-	st := storeForGraph(t)
-	withFacts(t, nil)
+	st := storeForRecall(t)
 	const slug, sess = "notes-gone", "sess-notes-gone"
 	j := leadNotesJob(t, st, slug, sess)
 	if _, err := st.AddFeedback(store.Feedback{JobID: j.ID, JobSlug: slug, Note: "still owed"}); err != nil {
@@ -293,8 +283,7 @@ func TestLeadNotesRecallMarksNothingForACallerThatIsGone(t *testing.T) {
 }
 
 func TestLeadNotesRecallRidesOnlyUserPromptSubmit(t *testing.T) {
-	st := storeForGraph(t)
-	withFacts(t, nil)
+	st := storeForRecall(t)
 	const slug, sess = "notes-event", "sess-notes-event"
 	j := leadNotesJob(t, st, slug, sess)
 	if _, err := st.AddFeedback(store.Feedback{JobID: j.ID, JobSlug: slug, Note: "a note"}); err != nil {
@@ -307,10 +296,9 @@ func TestLeadNotesRecallRidesOnlyUserPromptSubmit(t *testing.T) {
 }
 
 func TestLeadNotesRecallSurvivesARepeatedPrompt(t *testing.T) {
-	// The graph half's same-query short-circuit must not swallow a note that
-	// arrived between two identical prompts.
-	st := storeForGraph(t)
-	withFacts(t, nil)
+	// A repeated, identical prompt must not swallow a note that arrived
+	// between the two firings.
+	st := storeForRecall(t)
 	const slug, sess = "notes-repeat", "sess-notes-repeat"
 	j := leadNotesJob(t, st, slug, sess)
 	if got := leadNotesFire(t, st, slug, sess, "same"); got != "" {
@@ -320,13 +308,12 @@ func TestLeadNotesRecallSurvivesARepeatedPrompt(t *testing.T) {
 		t.Fatal(err)
 	}
 	if got := leadNotesFire(t, st, slug, sess, "same"); !strings.Contains(got, "arrived between") {
-		t.Fatalf("a note was swallowed by the same-query short-circuit:\n%s", got)
+		t.Fatalf("a note was swallowed on a repeated prompt:\n%s", got)
 	}
 }
 
-func TestLeadNotesRecallPrecedesGoalsAndGraph(t *testing.T) {
-	st := storeForGraph(t)
-	withFacts(t, nil)
+func TestLeadNotesRecallPrecedesGoals(t *testing.T) {
+	st := storeForRecall(t)
 	const slug, sess = "notes-first", "sess-notes-first"
 	j := leadNotesJob(t, st, slug, sess)
 	week, _ := store.GoalPeriods(time.Now())
@@ -344,8 +331,7 @@ func TestLeadNotesRecallPrecedesGoalsAndGraph(t *testing.T) {
 }
 
 func TestLeadNotesRecallDeletedRowIsPrunedFromTheRecord(t *testing.T) {
-	st := storeForGraph(t)
-	withFacts(t, nil)
+	st := storeForRecall(t)
 	const slug, sess = "notes-prune", "sess-notes-prune"
 	j := leadNotesJob(t, st, slug, sess)
 	id, err := st.AddFeedback(store.Feedback{JobID: j.ID, JobSlug: slug, Note: "doomed"})
@@ -367,8 +353,7 @@ func TestLeadNotesRecallDeletedRowIsPrunedFromTheRecord(t *testing.T) {
 }
 
 func TestLeadNotesRecallIgnoresAnUndecodableRecord(t *testing.T) {
-	st := storeForGraph(t)
-	withFacts(t, nil)
+	st := storeForRecall(t)
 	const slug, sess = "notes-corrupt", "sess-notes-corrupt"
 	j := leadNotesJob(t, st, slug, sess)
 	if err := st.SetKV(notesDeliveredKey(j.ID), "not json"); err != nil {
@@ -389,8 +374,7 @@ func TestLeadNotesRecallBacklogIsDeliveredInOrderWithTheCaveat(t *testing.T) {
 	// A job live when the feature ships, or reactivated after it, has a
 	// backlog zeus may already have pulled by hand: it arrives, oldest
 	// first, under the first-contact caveat, and never again after that.
-	st := storeForGraph(t)
-	withFacts(t, nil)
+	st := storeForRecall(t)
 	const slug, sess = "notes-backlog", "sess-notes-backlog"
 	j := leadNotesJob(t, st, slug, sess)
 	base := time.Date(2026, 10, 1, 9, 0, 0, 0, time.UTC)
@@ -423,7 +407,7 @@ func TestLeadNotesRecallBacklogIsDeliveredInOrderWithTheCaveat(t *testing.T) {
 }
 
 func TestLeadNotesRecallRecordReadDistinguishesMissingFromCorrupt(t *testing.T) {
-	st := storeForGraph(t)
+	st := storeForRecall(t)
 	j := leadNotesJob(t, st, "notes-read", "sess-notes-read")
 	rec, present, err := readNotesDelivered(st, j.ID)
 	if err != nil || present || len(rec) != 0 {
@@ -446,8 +430,7 @@ func TestLeadNotesRecallRecordReadDistinguishesMissingFromCorrupt(t *testing.T) 
 }
 
 func TestLeadNotesRecallControlCharactersAndCRLF(t *testing.T) {
-	st := storeForGraph(t)
-	withFacts(t, nil)
+	st := storeForRecall(t)
 	const slug, sess = "notes-ctl", "sess-notes-ctl"
 	j := leadNotesJob(t, st, slug, sess)
 	if _, err := st.AddFeedback(store.Feedback{JobID: j.ID, JobSlug: slug, Note: "one\r\ntwo\x1b[0m\tthree\x00"}); err != nil {
@@ -460,8 +443,7 @@ func TestLeadNotesRecallControlCharactersAndCRLF(t *testing.T) {
 }
 
 func TestLeadNotesRecallEmptyAnsweredAtRendersNoParens(t *testing.T) {
-	st := storeForGraph(t)
-	withFacts(t, nil)
+	st := storeForRecall(t)
 	const slug, sess = "notes-noat", "sess-notes-noat"
 	j := leadNotesJob(t, st, slug, sess)
 	if err := st.SetQuestions(j.ID, []store.DocQuestion{{QID: "Q1", Text: "q", Importance: "P1"}}); err != nil {

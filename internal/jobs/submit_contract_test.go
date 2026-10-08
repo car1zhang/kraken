@@ -474,7 +474,7 @@ func TestSubmitContractTeardownFinalFieldsNeverWritesReady(t *testing.T) {
 	}
 }
 
-// --- programmatic creators: dream and graph ---
+// --- programmatic creators: dream ---
 
 // contractRetiredLine reports whether src carries a frontmatter line for one of
 // the retired keys. The generated text is what ParseJob sees, so a key at the
@@ -509,34 +509,5 @@ func TestSubmitContractDreamJobContentCarriesNeitherRetiredLine(t *testing.T) {
 		if got := DisplayState(j); got != "draft" {
 			t.Errorf("a freshly created dream job reads as %q, want draft — the tick starts it, the board does not queue it", got)
 		}
-	}
-}
-
-// TestSubmitContractGraphJobCarriesNeitherRetiredLine is the graph half of the
-// same obligation, reached through CreateGraphJob (see the report's silences:
-// the contract names `graphJobContent` but states no signature, so a blind
-// author cannot call it — this covers the created job's spec text instead).
-func TestSubmitContractGraphJobCarriesNeitherRetiredLine(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
-	st, err := store.Open(filepath.Join(t.TempDir(), "kraken.db"))
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
-	t.Cleanup(func() { st.Close() })
-
-	j, err := CreateGraphJob(st, "graph-logic", GraphModeIngest, "", 25)
-	if err != nil {
-		t.Fatalf("CreateGraphJob: %v", err)
-	}
-	if j.Err != "" {
-		t.Fatalf("created graph job does not parse: %s", j.Err)
-	}
-	for _, retired := range []string{"ready", "prereqs"} {
-		if contractRetiredLine(j.Body, retired) {
-			t.Errorf("the graph job's spec still carries a %q line:\n%s", retired, j.Body)
-		}
-	}
-	if got := DisplayState(j); got != "draft" {
-		t.Errorf("a freshly created graph job reads as %q, want draft", got)
 	}
 }

@@ -19,7 +19,7 @@ import (
 // Written blind from the frozen contract. internal/jobs/{goalctx,recall}.go
 // (and the since-removed orchestrator's file) were never read in their
 // working-tree state; the harness idioms
-// (UseStore, JobBySlug/LoadJobs, the graphFacts seam, RecallRequest) are
+// (UseStore, JobBySlug/LoadJobs, RecallRequest) are
 // pre-existing package state read at the base commit.
 //
 // The sibling blind author (athena-logic) owns the stated rendering
@@ -39,13 +39,8 @@ import (
 // of it by construction.
 const edgeMGMarker = " ← this job's goal"
 
-// edgeMGEnv opens a scratch store, wires it as the active one, and puts the
-// embedder out of reach.
-//
-// The HOME override is not cosmetic: core.NewEmbedder falls back to
-// ~/.kraken/openai.env, which EXISTS on the machine this suite runs on, so
-// without it every Recall case below would make a live OpenAI call on the path
-// under test.
+// edgeMGEnv opens a scratch store and wires it as the active one, under a
+// scratch HOME so nothing on the path under test reads the real ~/.kraken.
 func edgeMGEnv(t *testing.T) *store.Store {
 	t.Helper()
 	t.Setenv("HOME", t.TempDir())
@@ -57,15 +52,6 @@ func edgeMGEnv(t *testing.T) *store.Store {
 	UseStore(st)
 	t.Cleanup(func() { UseStore(nil); st.Close() })
 	return st
-}
-
-// edgeMGNoFacts silences the knowledge graph for one test, so whatever a
-// Recall case observes is the GOALS block and nothing else.
-func edgeMGNoFacts(t *testing.T) {
-	t.Helper()
-	prev := graphFacts
-	graphFacts = func(*store.Store, []float32, string) ([]store.GraphEdge, map[int64]bool) { return nil, nil }
-	t.Cleanup(func() { graphFacts = prev })
 }
 
 func edgeMGJob(t *testing.T, st *store.Store, slug, session string) *Job {
@@ -400,7 +386,6 @@ func edgeMGRecallReq(slug, session string) RecallRequest {
 // when links are non-empty" would pass the first assertion of and fail here.
 func TestEdgeMGRecallReArmsOncePerLinkChange(t *testing.T) {
 	st := edgeMGEnv(t)
-	edgeMGNoFacts(t)
 	j := edgeMGJob(t, st, "mg-recall", "sess-mg-recall")
 	_, day := edgeMGPeriods()
 	a := edgeMGAdd(t, st, store.GoalAdd{Scope: "day", Period: day, Text: "the first goal"})
@@ -455,7 +440,6 @@ func TestEdgeMGRecallReArmsOncePerLinkChange(t *testing.T) {
 // every board fiddle carl undoes.
 func TestEdgeMGRecallStaysSuppressedWhenTheLinkSetRoundTrips(t *testing.T) {
 	st := edgeMGEnv(t)
-	edgeMGNoFacts(t)
 	j := edgeMGJob(t, st, "mg-roundtrip", "sess-mg-roundtrip")
 	_, day := edgeMGPeriods()
 	g := edgeMGAdd(t, st, store.GoalAdd{Scope: "day", Period: day, Text: "a current goal"})

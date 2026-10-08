@@ -45,7 +45,7 @@ var mirrorGatedRoutes = []string{
 	// inline because its GET must stay reachable — the phone's drawer and
 	// `kraken goals get` are both reads, and a mirror refusing a read would be
 	// a new policy rather than this one. /api/job/goal is POST-only and could
-	// have taken a mirrorGated wrapper at registration like /api/graph/add,
+	// have taken a mirrorGated wrapper at registration like /api/recall,
 	// but gates inline anyway so a caller reaching the handler directly still
 	// hits the refusal. Both are here because a mirror board must never write
 	// the live deployment's goals or relabel its jobs.
@@ -55,7 +55,7 @@ var mirrorGatedRoutes = []string{
 	// reachable — reading the library is a read, and a mirror refusing one
 	// would be a new policy rather than this one. /api/library/remove is
 	// POST-only and could have taken a mirrorGated wrapper at registration
-	// like /api/graph/add, but gates inline anyway so a caller reaching the
+	// like /api/recall, but gates inline anyway so a caller reaching the
 	// handler directly still hits the refusal. Both ride this shared table
 	// safely in BOTH sweeps: with mirror off, against this table's
 	// {"slug":"nonexistent"} body, the save 400s on the missing `home` and the
@@ -71,8 +71,8 @@ var mirrorGatedRoutes = []string{
 	// moves preserved artifact files under PlutoDir.
 	"/api/job/rename",
 	// The mental model's seven WRITES (mm.go), gated via mirrorGated at
-	// registration rather than inline for the reason the graph writes below
-	// are: every one is a POST-ONLY path, so there is no GET on the same path
+	// registration rather than inline for the reason recall below is: every
+	// one is a POST-ONLY path, so there is no GET on the same path
 	// that a route wrapper would take down with them. Its two reads —
 	// GET /api/mm and GET /api/mm/snapshot — stay open, like every other read
 	// on this surface: a mirror board must be able to SHOW the model it may
@@ -86,17 +86,13 @@ var mirrorGatedRoutes = []string{
 	// or invalidated by this test.
 	"/api/mm/decision", "/api/mm/artifact", "/api/mm/element", "/api/mm/code",
 	"/api/mm/note", "/api/mm/detail", "/api/mm/remove",
-	// The knowledge graph's three WRITES (graph.go, recall.go), gated via
-	// mirrorGated at registration rather than inline — unlike
-	// feedback/questions/load these are POST-only routes, so there is no GET
-	// on the same path that a route wrapper would take down with them. Its
-	// six GET reads (/api/graph, /api/graph/stats, /api/graph/node,
-	// /api/graph/fact, /api/graph/episode, /api/graph/pending) and
-	// /api/graph/search stay open: search is a POST only because a query is
-	// arbitrary user text, and it writes nothing.
-	// /api/graph/recall is the one that reads like search and is gated
-	// anyway — it records every fact it delivers in kg_recall.
-	"/api/graph/add", "/api/graph/episode-done", "/api/graph/recall",
+	// Mid-conversation recall (recall.go), gated via mirrorGated at
+	// registration — a POST-only route, so there is no GET on the same path
+	// that a route wrapper would take down with it. It reads like a query and
+	// is gated anyway: a firing records the notes it delivered. Safe in the
+	// mirror-off sweep: {"slug":"nonexistent"} resolves no job, so the
+	// handler answers 200 {"context":""} and writes nothing.
+	"/api/recall",
 	// Peers surface: registered outside webAction, gated via mirrorGated —
 	// send/spawn/kill/open drive real tmux panes and ghostty windows.
 	"/api/peers/send", "/api/peers/spawn", "/api/peers/kill", "/api/peers/open",

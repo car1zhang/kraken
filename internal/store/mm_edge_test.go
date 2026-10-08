@@ -186,8 +186,7 @@ func TestEdgeMMAddMMItemRefusesNonPositiveCreatedAt(t *testing.T) {
 }
 
 // edgeMMRequireEmpty is the "a refusal writes nothing" half every validation
-// case above shares: validate-first means a refused item leaves ZERO rows, which
-// is also what makes MintMMEpisode's own validate-first rule reachable.
+// case above shares: validate-first means a refused item leaves ZERO rows.
 func edgeMMRequireEmpty(t *testing.T, s *Store) {
 	t.Helper()
 	items, err := s.ListMMItems(true)
@@ -1169,34 +1168,35 @@ func TestEdgeMMListWatchItemsIsLiveOnly(t *testing.T) {
 // both of which are empty by the time the migration finishes.
 func TestEdgeMMMigrationV29CarriesOnlyLiveWatchedEdges(t *testing.T) {
 	// EXACT rather than a floor: this fixture seeds a v28 shape and lets
-	// migrate() walk forward, so whoever appends v32 has to come here and
+	// migrate() walk forward, so whoever appends v33 has to come here and
 	// confirm downgradeFreshDB reverses their step before this passes again.
 	// (v30 added jobs.agent; downgradeFreshDB's v30 arm drops it. v31 dropped
 	// orch_inbox; downgradeFreshDB's v31 arm recreates it, and it is then
-	// present in the v28 shape exactly as a real v28 database held it.)
-	if schemaVersion != 31 {
-		t.Fatalf("schemaVersion = %d, want 31 — this fixture seeds a v28 shape and walks it forward", schemaVersion)
+	// present in the v28 shape exactly as a real v28 database held it. v32
+	// dropped the kg_* tables; its arm puts them back, so the graph rows below
+	// are seeded through raw SQL AFTER the downgrade — the accessors are gone.)
+	if schemaVersion != 32 {
+		t.Fatalf("schemaVersion = %d, want 32 — this fixture seeds a v28 shape and walks it forward", schemaVersion)
 	}
 	s := edgeMMOpen(t)
 
-	src, err := s.UpsertNode(GraphNode{Name: "hephaestus"})
-	if err != nil {
-		t.Fatalf("upsert src node: %v", err)
-	}
-	dst, err := s.UpsertNode(GraphNode{Name: "the frozen contract"})
-	if err != nil {
-		t.Fatalf("upsert dst node: %v", err)
-	}
-	liveEdge, added, err := s.InsertEdge(GraphEdge{SrcID: src, DstID: dst, Predicate: "ignores", Fact: "hephaestus ignores the frozen contract", Strength: 5})
-	if err != nil || !added {
-		t.Fatalf("insert live edge = (%d, %v, %v)", liveEdge, added, err)
-	}
-	deadEdge, added, err := s.InsertEdge(GraphEdge{SrcID: src, DstID: dst, Predicate: "ignored", Fact: "an observation carl already closed", Strength: 5})
-	if err != nil || !added {
-		t.Fatalf("insert dead edge = (%d, %v, %v)", deadEdge, added, err)
-	}
-
 	downgradeFreshDB(t, s, 28)
+
+	insert := func(q string, args ...any) int64 {
+		t.Helper()
+		res, err := s.db.Exec(q, args...)
+		if err != nil {
+			t.Fatalf("seed %q: %v", q, err)
+		}
+		id, _ := res.LastInsertId()
+		return id
+	}
+	const nodeSQL = `INSERT INTO kg_nodes (name) VALUES (?)`
+	const edgeSQL = `INSERT INTO kg_edges (src_id, dst_id, predicate, fact, strength) VALUES (?, ?, ?, ?, 5)`
+	src := insert(nodeSQL, "hephaestus")
+	dst := insert(nodeSQL, "the frozen contract")
+	liveEdge := insert(edgeSQL, src, dst, "ignores", "hephaestus ignores the frozen contract")
+	deadEdge := insert(edgeSQL, src, dst, "ignored", "an observation carl already closed")
 
 	for _, c := range []int64{liveEdge, deadEdge} {
 		if _, err := s.db.Exec(

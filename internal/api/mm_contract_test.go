@@ -78,8 +78,9 @@ func contractMMDecode(t *testing.T, rec *httptest.ResponseRecorder) map[string]a
 }
 
 // contractMMCreated drives one create arm and requires the stated 200 shape:
-// `{"id":N,"episode":E}` on EVERY successful create, since the episode id is
-// what a caller dereferences with `k graph get`.
+// `{"id":N}` on a successful create, with NO `episode` key — creates stopped
+// minting a graph episode when the knowledge graph was removed. The episode
+// return is kept for the call sites' shape and is always 0.
 func contractMMCreated(t *testing.T, mux http.Handler, path string, body any) (id int64, episode int64, already bool) {
 	t.Helper()
 	rec := contractMMPOST(t, mux, path, body)
@@ -96,21 +97,15 @@ func contractMMCreated(t *testing.T, mux http.Handler, path string, body any) (i
 		t.Fatalf("POST %s `id` = %#v, want a real row id", path, raw)
 	}
 	already, _ = obj["already"].(bool)
-	if ep, present := obj["episode"]; present {
-		f, ok := ep.(float64)
-		if !ok {
-			t.Fatalf("POST %s `episode` = %#v, want a number", path, ep)
-		}
-		episode = int64(f)
-	} else if !already {
-		t.Fatalf("POST %s body = %s, want `episode` on every successful create", path, rec.Body.String())
+	if _, present := obj["episode"]; present {
+		t.Fatalf("POST %s body = %s, want no `episode` key", path, rec.Body.String())
 	}
-	return int64(n), episode, already
+	return int64(n), 0, already
 }
 
 // contractMMRemove drives POST /api/mm/remove and requires a plain 200. Its
-// response shape is not frozen (remove is not a create, so the
-// `{"id":N,"episode":E}` clause does not reach it), so nothing here reads the
+// response shape is not frozen (remove is not a create, so the `{"id":N}`
+// clause does not reach it), so nothing here reads the
 // body.
 func contractMMRemove(t *testing.T, mux http.Handler, id int64) {
 	t.Helper()
@@ -252,8 +247,10 @@ func TestContractMMGETCarriesTheFrozenKeySetAndOmitsTheLiveOnes(t *testing.T) {
 	if contractMMStr(t, obj, "context") != "Q9" {
 		t.Errorf("context = %q, want Q9", contractMMStr(t, obj, "context"))
 	}
-	if n, ok := obj["episode_id"].(float64); !ok || int64(n) <= 0 {
-		t.Errorf("episode_id = %#v, want the minted episode's id", obj["episode_id"])
+	// episode_id stays on the wire (shipped iOS decodes it non-optional) but
+	// nothing writes it any more, so a new row carries 0.
+	if n, ok := obj["episode_id"].(float64); !ok || int64(n) != 0 {
+		t.Errorf("episode_id = %#v, want the key present at 0", obj["episode_id"])
 	}
 
 	// Kill it, and the three invalidation keys arrive together.
@@ -320,8 +317,8 @@ func TestContractMMNoteIsKindNoteSourceManual(t *testing.T) {
 	id, ep, _ := contractMMCreated(t, mux, "/api/mm/note", map[string]any{
 		"text": "agents never write the mental model", "context": "Q5",
 	})
-	if ep <= 0 {
-		t.Fatalf("episode = %d, want the minted episode's id", ep)
+	if ep != 0 {
+		t.Fatalf("episode = %d, want none (creates mint nothing)", ep)
 	}
 	obj := contractMMItemByID(t, contractMMItems(t, mux, ""), id)
 	if contractMMStr(t, obj, "kind") != "note" {
@@ -409,8 +406,8 @@ func TestContractMMDecisionFreezesTheWholeQuestion(t *testing.T) {
 	}
 
 	id, ep, _ := contractMMCreated(t, mux, "/api/mm/decision", map[string]any{"slug": "decided", "qid": "Q3"})
-	if ep <= 0 {
-		t.Fatalf("episode = %d", ep)
+	if ep != 0 {
+		t.Fatalf("episode = %d, want none", ep)
 	}
 	obj := contractMMItemByID(t, contractMMItems(t, mux, ""), id)
 	if contractMMStr(t, obj, "kind") != "decision" {
@@ -456,7 +453,7 @@ func TestContractMMDecisionFreezesTheWholeQuestion(t *testing.T) {
 
 // TestContractMMDecisionOmitsAnEmptyRecommendation: the "recommendation: " line
 // is conditional, and a question with none must not carry an empty one — the
-// content is hashed into the episode, so a stray blank line is a second
+// content is hashed for the `already` probe, so a stray blank line is a second
 // spelling of the same decision.
 func TestContractMMDecisionOmitsAnEmptyRecommendation(t *testing.T) {
 	st := useTestStore(t)
@@ -503,8 +500,8 @@ func TestContractMMArtifactFreezesBytesAndServesThemBack(t *testing.T) {
 	if already {
 		t.Fatal("the first artifact mark reported already=true")
 	}
-	if ep <= 0 {
-		t.Fatalf("episode = %d", ep)
+	if ep != 0 {
+		t.Fatalf("episode = %d, want none", ep)
 	}
 
 	obj := contractMMItemByID(t, contractMMItems(t, mux, ""), id)
@@ -626,8 +623,8 @@ func TestContractMMElementMarksExactlyTheSelectedText(t *testing.T) {
 	if already {
 		t.Fatal("the first element mark reported already=true")
 	}
-	if ep <= 0 {
-		t.Fatalf("episode = %d", ep)
+	if ep != 0 {
+		t.Fatalf("episode = %d, want none", ep)
 	}
 	obj := contractMMItemByID(t, contractMMItems(t, mux, ""), id)
 	if contractMMStr(t, obj, "kind") != "reading" || contractMMStr(t, obj, "source") != "artifact-element" {
@@ -715,8 +712,8 @@ func TestContractMMCodeMarkLandsAsADirtyAnchorOutsideACheckout(t *testing.T) {
 	if already {
 		t.Fatal("the first code mark reported already=true")
 	}
-	if ep <= 0 {
-		t.Fatalf("episode = %d", ep)
+	if ep != 0 {
+		t.Fatalf("episode = %d, want none", ep)
 	}
 
 	obj := contractMMItemByID(t, contractMMItems(t, mux, ""), id)

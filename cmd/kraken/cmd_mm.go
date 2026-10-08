@@ -35,7 +35,7 @@ import (
 // thousands of lines, and macOS' argv limit would turn a large selection into
 // a failed exec rather than a mark.
 //
-// Behavior contract, identical to cmd_load.go's and cmd_graph.go's:
+// Behavior contract, identical to cmd_load.go's:
 //   - success: a read prints the server's JSON to stdout verbatim, exit 0; a
 //     write prints one short confirmation line to STDERR, exit 0.
 //   - a 4xx prints the server's own error message to stderr, exit non-zero —
@@ -381,7 +381,7 @@ type mmNoteFields struct {
 // parseMMNote reads `"<text>" [--context S]`. The note is one positional
 // rather than the remaining words joined, so a note that happens to start
 // with a hyphen is unambiguous — and `--` ends flag parsing for exactly that
-// case, the escape cmd_graph.go's `search` carries for the same reason.
+// case.
 func parseMMNote(args []string) (mmNoteFields, error) {
 	var f mmNoteFields
 	if len(args) > 0 && args[0] == "--" {

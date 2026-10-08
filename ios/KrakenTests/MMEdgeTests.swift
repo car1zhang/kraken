@@ -495,7 +495,9 @@ final class EdgeMMItemDecodeTests: XCTestCase {
     /// is a row `mmMatch` would then compare against "".
     func testEdgeMMItemMissingRequiredKeyFailsToDecode() {
         let full = edgeMMItemJSON()
-        for key in ["id", "kind", "source", "slug", "source_ref", "content", "created_at", "episode_id"] {
+        // `episode_id` is not in the list: it is optional since the graph
+        // removal, and a body without it decodes.
+        for key in ["id", "kind", "source", "slug", "source_ref", "content", "created_at"] {
             let body = edgeMMDropKey(full, key)
             XCTAssertNotEqual(body, full, "fixture should contain \(key)")
             XCTAssertThrowsError(
@@ -510,10 +512,6 @@ final class EdgeMMItemDecodeTests: XCTestCase {
         ))
         XCTAssertThrowsError(try edgeMMDecode(
             #"{"id":1,"kind":"reading","source":"artifact","slug":"a","source_ref":"x.md","content":"x.md","createdAt":1,"episode_id":1}"#,
-            as: WebMMItem.self
-        ))
-        XCTAssertThrowsError(try edgeMMDecode(
-            #"{"id":1,"kind":"reading","source":"artifact","slug":"a","source_ref":"x.md","content":"x.md","created_at":1,"episodeId":1}"#,
             as: WebMMItem.self
         ))
     }

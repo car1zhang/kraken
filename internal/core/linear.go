@@ -17,8 +17,8 @@ import (
 
 // linear.go — kraken's read-only client for Linear's GraphQL API: the issues
 // assigned to carl, the comments on them, and the media attached to both.
-// It is the binary's third outbound API client after embed.go's embedder and
-// slack.go's Slack poller, and
+// It is one of the binary's outbound API clients beside slack.go's Slack
+// poller, and
 // it deliberately copies that file's shape wherever the two have the same
 // problem — credentials, error posture, "the key's value never leaves this
 // struct".
@@ -28,8 +28,8 @@ import (
 // need; a code generator would buy nothing and cost the repo its dependency
 // rule.
 //
-// Credentials follow embed.go's openai.env pattern exactly, for the same
-// launchd reason: `launchctl setenv` does not reach a job whose plist declares
+// Credentials follow the asc.env / slack.env file pattern exactly, for the
+// same launchd reason: `launchctl setenv` does not reach a job whose plist declares
 // its own EnvironmentVariables, so a file is the only way these reach
 // `kraken serve`. Process env wins over the file (an explicit export in a
 // terminal must be able to override for a test), the file is parsed never
@@ -37,7 +37,7 @@ import (
 // event or a job body — only its name, and only to say it is missing.
 //
 // That last rule is ENFORCED here rather than assumed, because this client has
-// a path the embedder does not: it quotes remote text into its errors, and the
+// a path that is easy to get wrong: it quotes remote text into its errors, and the
 // pass dlogs those durably. Every piece of remote-supplied text that enters an
 // error goes through safeText, which redacts the configured key before
 // truncating. The %w chains are the deliberate exception and they are safe by
@@ -45,8 +45,8 @@ import (
 // header, and the URL is either c.BaseURL or an attachment link — the key is
 // only ever written into a header, so it cannot appear in one.
 //
-// Failure posture differs from the embedder's in one way worth stating: there
-// is no ErrNoLinear sentinel. An empty APIKey is simply "the feature is off",
+// Failure posture differs from the Slack client's in one way worth stating:
+// there is no ErrNoLinear sentinel. An empty APIKey is simply "the feature is off",
 // which the pass reads as a silent return — no error value exists for it
 // because no caller would do anything with one.
 //
@@ -127,7 +127,7 @@ type LinearConfig struct {
 	States []string
 }
 
-// loadLinearEnv parses LinearEnvPath, same defensive shape as loadEmbedEnv: a
+// loadLinearEnv parses LinearEnvPath, same defensive shape as loadSlackEnv: a
 // missing or malformed file is an empty map, never an error.
 func loadLinearEnv() map[string]string {
 	out := map[string]string{}
@@ -167,8 +167,7 @@ func linearSetting(file map[string]string, key string) string {
 
 // LoadLinearConfig resolves the feature's configuration from the process
 // environment and LinearEnvPath, in that precedence. The file is read ONCE per
-// call for NewEmbedder's reason: three settings each re-opening a 0600 file
-// from disk is pure waste.
+// call: three settings each re-opening a 0600 file from disk is pure waste.
 //
 // Every degradation here is silent by design. An absent file, an unreadable
 // one and a line-noise one all produce the env-only view, and an absent key

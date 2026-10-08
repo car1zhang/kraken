@@ -633,24 +633,6 @@ actor APIClient {
         try await get(baseURL: baseURL, path: "/api/ship-ios/status")
     }
 
-    // MARK: - knowledge graph
-
-    /// The whole viewer payload — every node with its server-computed layout
-    /// position, every edge (live AND invalidated, so the screen can strike
-    /// retired facts through rather than hide history), and the stats block.
-    /// Additive endpoint, no contract bump.
-    func fetchGraph(baseURL: String) async throws -> GraphPayload {
-        try await get(baseURL: baseURL, path: "/api/graph")
-    }
-
-    /// One node's detail: its aliases (also on the viewer payload, via one
-    /// bulk join) plus every edge touching it. The drawer asks for this on each
-    /// selection; until it lands the caller falls back to the payload's own
-    /// edges, so a slow or failed read degrades to fewer facts, never to none.
-    func fetchGraphNode(baseURL: String, id: Int64) async throws -> GraphNodeDetail {
-        try await get(baseURL: baseURL, path: "/api/graph/node", query: [("id", String(id))])
-    }
-
     // MARK: - artifact library
 
     /// Every saved artifact, newest first — the server's own order, which the

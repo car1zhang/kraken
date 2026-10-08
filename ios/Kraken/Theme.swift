@@ -284,9 +284,8 @@ enum KTheme {
     // The card/field hairline — a translucent edge, not a drawn 1px rule.
     static let hairlineUI = UIColor { $0.userInterfaceStyle == .light ? UIColor(white: 0, alpha: 0.08) : UIColor(white: 1, alpha: 0.12) }
     static let hairline = Color(uiColor: hairlineUI)
-    // hairline2 stays an OPAQUE ink: besides borders it is the fill for the
-    // graph canvas's structural node types (file/job) and for real dividers,
-    // where a translucent value would render as nothing.
+    // hairline2 stays an OPAQUE ink: besides borders it is the fill for real
+    // dividers, where a translucent value would render as nothing.
     static let hairline2UI = dyn(light: 0xB9C6D6, dark: 0x2A3A50)
     static let hairline2 = Color(uiColor: hairline2UI)
 
@@ -310,10 +309,10 @@ enum KTheme {
     // `fixedViolet` carries the literals the accent had before the accent
     // became tint-derived — so under the default violet tint nothing moved,
     // and under every other tint this stays violet. It was the QUEUED state's
-    // hue until that state was retired; its one surviving reader is the graph
-    // canvas's `convention` node type (see graphTypeColorUI), which needs the
-    // pre-tint violet to match the web board pixel for pixel. It is a token of
-    // its own rather than an alias of `accent` because a tint-following violet
+    // hue until that state was retired, and its last reader (the knowledge
+    // graph canvas's `convention` node type) went with the graph, so nothing
+    // reads it today. It stays as the one pre-tint violet literal. It is a
+    // token of its own rather than an alias of `accent` because a tint-following violet
     // collapses into a neighbouring meaning: the pink tint lands 3° from
     // `counter`, green 3° from `solved`, amber 2° from `revealed` and cyan on
     // top of `polling`. A user picking a theme colour must not be able to make
@@ -389,16 +388,6 @@ enum KTheme {
     static let skillDream = Color(uiColor: skillDreamUI)
     static let skillDreamSoftUI = dyn(light: 0xF3E8FF, dark: 0x2A1440)
     static let skillDreamSoft = Color(uiColor: skillDreamSoftUI)
-    // /graph is the sixth skill hue, and it doubles as the GRAPH screen's own
-    // accent — the selection ring on the canvas. Both hexes are `--skill-graph`
-    // in web/_ui/src/styles/style.css (dark from `:root`, light from the
-    // `[data-theme="light"]` block), and web/graphpalette_contract_test.go
-    // PARSES the line below to hold the two files in step, exactly as
-    // TestJobPaletteMatchesSwift does for the eight job colors above. Keep it
-    // as one literal `dyn(light: 0x…, dark: 0x…)` line: a hex assembled from
-    // constants would read as a changed palette to that check.
-    static let skillGraphUI = dyn(light: 0x456F0B, dark: 0x87DF49)
-    static let skillGraph = Color(uiColor: skillGraphUI)
 
     // Per-job colors: the eight names Claude Code's own `/color` command
     // accepts, in `/color`'s order. The DARK values are Claude Code's exact
@@ -431,57 +420,6 @@ enum KTheme {
     static let jobPink = Color(uiColor: jobPinkUI)
     static let jobCyanUI = dyn(light: 0x06718B, dark: 0x0891B2)
     static let jobCyan = Color(uiColor: jobCyanUI)
-
-    /// A knowledge-graph node's fill, by entity type.
-    ///
-    /// The nine mappings are the port of web graphModel.ts's `TYPE_COLOR_VARS`
-    /// — the same palette TOKEN per type, which is the claim this makes: a
-    /// `component` takes `--polling` on both surfaces. Whether the two resolve
-    /// to the same pixel is a property of each token, and seven of the nine do
-    /// in both appearances; `--skill-do` (tool) and `--skill-info`
-    /// (external-system) are drifted in LIGHT only — style.css has #7B6505 /
-    /// #1866C4 where skillDoUI / skillInfoUI above have 0x8A7206 / 0x1A6FD4.
-    /// That drift predates this map, is not the graph's to fix, and no test
-    /// pins those two (TestJobPaletteMatchesSwift covers the eight job colors
-    /// only); it is written down here so the next reader does not take the
-    /// resemblance for a guarantee.
-    ///
-    /// `convention` takes `fixedVioletUI`, NOT `accentUI`, and that is the one
-    /// place this map deliberately reads differently from its source: web's
-    /// `TYPE_COLOR_VARS` names `--accent`, but web's `--accent` is a FIXED
-    /// violet while ours became tint-derived. Pointing it at `fixedVioletUI` —
-    /// which carries the pre-tint accent literals — is what keeps the two
-    /// boards the same pixel. Following the tint here would also collide the
-    /// type with its neighbours: a cyan tint would make `convention`
-    /// indistinguishable from `component` (`polling`), a pink one from
-    /// `person` (`counter`), a green one from `decision` (`solved`). A node
-    /// type is a MEANING, and meanings never re-tint.
-    ///
-    /// All NINE seed types of the `/graph` skill's vocabulary are named: a
-    /// seed type falling through to the invented-type grey made three
-    /// documented types indistinguishable from unrecognised ones, which is a
-    /// review finding the web side already carries.
-    ///
-    /// UIColor rather than Color because the canvas resolves it against a
-    /// trait collection before drawing; the SwiftUI wrapper is one
-    /// `Color(uiColor:)` at the call site.
-    static func graphTypeColorUI(_ type: String) -> UIColor {
-        switch type {
-        case "convention": return fixedVioletUI
-        case "component": return pollingUI
-        case "failure-mode": return revealedUI
-        case "decision": return solvedUI
-        case "person": return counterUI
-        case "tool": return skillDoUI
-        case "external-system": return skillInfoUI
-        // file and job are structural context rather than knowledge, so they
-        // deliberately share the hairline grey instead of taking hues of their
-        // own — they should recede behind the concepts they carry.
-        case "file", "job": return hairline2UI
-        // Anything the extraction agent invented that the map does not name.
-        default: return text2UI
-        }
-    }
 
     // Global chrome is NOT configured here any more. iOS 26 paints the
     // floating tab bar, the glass nav bar and the large title itself, and the

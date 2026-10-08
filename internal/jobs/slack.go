@@ -35,8 +35,8 @@ import (
 // message it did not durably record — that is the one failure this file has no
 // recovery for, since Slack is read-only to kraken and there is no second copy.
 //
-// The pass is also SILENT when Slack is unconfigured. core.ErrNoSlack is the
-// embedder's ErrNoEmbedder posture, not ship's refusal posture: a machine with
+// The pass is also SILENT when Slack is unconfigured. core.ErrNoSlack is a
+// "feature off" posture, not ship's refusal posture: a machine with
 // no ~/.kraken/slack.env is a machine that has not opted in, and it must cost
 // nothing and log nothing, forever.
 

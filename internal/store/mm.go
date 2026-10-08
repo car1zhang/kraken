@@ -15,8 +15,11 @@ import (
 // The subsystem is called `mm` everywhere — table, file, route, verb —
 // because "library" is already taken by saved_artifacts and the two are
 // different things: a library entry is a copy carl kept, an mm item is a claim
-// that carl KNOWS something. The knowledge graph downstream is a compilation
-// of these rows, not a peer of them; the item is the source of truth.
+// that carl KNOWS something. The item is the source of truth.
+//
+// episode_id is a vestigial column: nothing writes it any more (it used to
+// name the graph episode an item minted), but it is still scanned and served
+// because shipped iOS builds decode `episode_id` as a non-optional key.
 //
 // Three properties shape every verb below.
 //
@@ -115,8 +118,7 @@ var (
 )
 
 // SHA256Hex is the identity hash this subsystem compares payloads with: hex
-// sha256, the same spelling the knowledge graph's episode hash uses
-// (jobs.addEpisode). The token watermarks are NOT a precedent for it — a
+// sha256. The token watermarks are NOT a precedent for it — a
 // job_token_files row is a byte offset, not a digest.
 //
 // Exported because FindLiveMMItem takes a hash rather than a payload — the
@@ -151,9 +153,10 @@ func scanMMItem(row interface{ Scan(...any) error }) (MMItem, error) {
 
 // AddMMItem stores one item and returns its id.
 //
-// VALIDATE FIRST, and the reason is layer 2 rather than tidiness: the caller
-// mints a graph episode immediately after this returns, and no transaction
-// spans the two writes (jobs.MintMMEpisode's contract). A refusal here must
+// VALIDATE FIRST, and the reason is atomicity rather than tidiness: the caller
+// may write more rows for this item immediately after this returns (a frozen
+// snapshot, a code item's anchor), and no transaction spans those writes. A
+// refusal here must
 // therefore leave zero rows anywhere, which it does by refusing before the
 // INSERT rather than by cleaning up after one.
 //
@@ -319,7 +322,7 @@ func (s *Store) GetMMItem(id int64) (MMItem, error) {
 // It is what makes every capture surface idempotent: clicking ✓ read twice, or
 // re-running the Zed task on the same lines, returns the item that already
 // exists instead of minting a near-duplicate the memory pane would render
-// twice and the graph would compile twice.
+// twice.
 //
 // All four have to match, and the fourth is what makes the other three safe: a
 // whole-artifact mark whose bytes have moved on is NOT this item, it is a
@@ -358,9 +361,8 @@ func (s *Store) FindLiveMMItem(source string, jobID int64, sourceRef, contentSHA
 // This is the "carl read it again, and it says something different now" path:
 // FindLiveMMItem missed on the hash, so what is stored is a record of an
 // EARLIER revision. It is invalidated rather than updated because the old row
-// is still true — carl really did read that version — and because updating it
-// would silently rewrite the frozen content an already-compiled graph fact was
-// derived from.
+// is still true — carl really did read that version — and updating it would
+// silently rewrite the record of what he read.
 //
 // Zero matches is a success returning 0, not ErrNotFound: the first mark of an
 // artifact supersedes nothing, and that is the common case rather than an
@@ -435,28 +437,6 @@ func (s *Store) InvalidateMMItem(id, at int64, reason, detail string) error {
 	return nil
 }
 
-// SetMMItemEpisode stamps the graph episode this item minted back onto the
-// row, closing the link the invalidation walk later reads (an item's death
-// closes the edges its episode produced).
-//
-// It is a separate verb rather than a column on AddMMItem because the episode
-// cannot exist before the item does: the episode's ref is `mm:<item id>`.
-// ErrNotFound when the id names nothing.
-func (s *Store) SetMMItemEpisode(id, episodeID int64) error {
-	res, err := s.db.Exec(`UPDATE mm_items SET episode_id = ? WHERE id = ?`, episodeID, id)
-	if err != nil {
-		return fmt.Errorf("set mm item %d episode: %w", id, err)
-	}
-	n, err := res.RowsAffected()
-	if err != nil {
-		return fmt.Errorf("set mm item %d episode: %w", id, err)
-	}
-	if n == 0 {
-		return fmt.Errorf("set mm item %d episode: %w", id, ErrNotFound)
-	}
-	return nil
-}
-
 // ---------------------------------------------------------------------------
 // mm_code_anchors
 // ---------------------------------------------------------------------------
@@ -481,7 +461,7 @@ func scanMMCodeAnchor(row interface{ Scan(...any) error }) (MMCodeAnchor, error)
 // AddMMCodeAnchor stores the anchor for a source=code item.
 //
 // Six refusals in four groups, all validate-first for AddMMItem's reason (no
-// transaction spans the item, the anchor and the episode mint). Three groups
+// transaction spans the item and the anchor). Three groups
 // are ordinary field checks:
 //
 //   - AnchorKind must name one of the four rungs of the resolution ladder.

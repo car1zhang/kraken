@@ -146,7 +146,7 @@ the new build" would be false at exactly the moment it is shown.
 
 `last_error` is **VESTIGIAL since v6** — the same call `cell_cap` gets, for the
 same reason. It has no writer left: the tick returns no error now that the
-queue pass is gone, and the one start it still makes (a dream or graph job it
+queue pass is gone, and the one start it still makes (a dream job it
 created itself) reports its failure per job, to the event log and a
 notification, rather than through one global string no client renders per job.
 The key stays because omitting one is a breaking change and removing it buys
@@ -168,7 +168,7 @@ payload, so a client sees exactly what it has always seen.
 | `detail` | string | omitempty | zeus' last assistant text, full multi-line text capped at 4000 runes (not bytes) |
 | `question` | object (`webQuestion`) | omitempty (null-able) | |
 | `zeus_status` | string | omitempty | zeus' own refined status (running/polling/waiting/question); live started, non-done cells only, omitted when zeus isn't resolvable |
-| `stage` | string | omitempty | the pipeline skill zeus most recently used — one of the six phase-governing skill names (`info`/`aim`/`do`/`pr`/`dream`/`graph`), read off zeus' transcript (`jobs.FindStage`: last Skill invocation, `/name` command message, or Read of a `.claude/skills/<name>/SKILL.md` wins; the reference skill `load` never counts). Started non-done jobs with a resolvable transcript only (live or `cell_gone`). Absence covers three states the wire does not separate — no resolvable transcript, any failed or truncated scan, and no pipeline skill used yet — all rendered the same way (no badge). Rendered as one card chip on both clients. Additive, no contract bump |
+| `stage` | string | omitempty | the pipeline skill zeus most recently used — one of the five phase-governing skill names (`info`/`aim`/`do`/`pr`/`dream`; `graph` was retired with the knowledge graph, and a client renders an unknown stage with its generic fallback), read off zeus' transcript (`jobs.FindStage`: last Skill invocation, `/name` command message, or Read of a `.claude/skills/<name>/SKILL.md` wins; the reference skill `load` never counts). Started non-done jobs with a resolvable transcript only (live or `cell_gone`). Absence covers three states the wire does not separate — no resolvable transcript, any failed or truncated scan, and no pipeline skill used yet — all rendered the same way (no badge). Rendered as one card chip on both clients. Additive, no contract bump |
 | `wakeup` | object (`webWakeup`) | omitempty (null-able) | pending `ScheduleWakeup` from zeus' transcript — cell is on a poll timer, still counts as `working`; render a countdown chip. Additive, no contract bump |
 | `roster` | array (`webAgent`) | omitempty | live crew (nested subagents), live started non-done cells only |
 | `health` | string | omitempty | "" (absent) = healthy |
@@ -397,7 +397,7 @@ cell is up. A `200` means the cell is live and the job reads `working`; a `409`
 carries the exact reason and leaves the job a draft. It refuses, in order, a
 job that is unparseable, done, already started, has an empty spec, or whose
 `repo:` does not resolve — one refusal set (`jobs.SubmitJob`), shared with the
-TUI's `s` key and the daemon's own dream/graph starts.
+TUI's `s` key and the daemon's own dream starts.
 
 Clients that used to render an in-flight "queued" column should render the
 pending POST on the dragged card and return it to draft on a 409: the request
@@ -564,12 +564,10 @@ so there is no `slug` on this route or either of its writes.
 **A watch item is a row in its own `watch_items` table.** The observation is
 the row's own sentence; the same row carries the dream-loop workflow and carl's
 judgement. It spent one release as a knowledge-graph EDGE with a thin `kg_watch`
-overlay, and Q9 moved it back out: the graph is now compiled from carl's own
-mental-model marks rather than from anything an agent observed, so a nightly
-pass' observation no longer belongs in it. Two consequences for a client:
+overlay before moving back into its own table; the knowledge graph itself has
+since been removed. Two consequences for a client:
 
-- **`id` is a WATCH-ROW id** — no longer an edge id, and no longer something
-  `GET /api/graph` will print. It is still opaque to the app, and still the id
+- **`id` is a WATCH-ROW id**, not an edge id. It is opaque to the app, and the id
   both writes below take. Ids from before the move do not survive it; a client
   holding one refetches, exactly as it would after any restart.
 - **A CLOSED item leaves the list.** `remove` stamps `expired_at` rather than
@@ -690,8 +688,7 @@ Otherwise a new row is inserted, with `state` defaulting to `watching` and
 `sightings` 1.
 
 The PROMOTE branch is gone with the edge model — there is no longer a separate
-population of facts an observation could be adopted from — and an add no longer
-creates a graph episode or edge anywhere.
+population of facts an observation could be adopted from.
 
 **`update` writes the workflow columns only.** The observation and its
 endpoints are refused with a 400 rather than ignored: the fold matches on the
@@ -1184,8 +1181,8 @@ phone has full parity with the board, writes included (carl, gate R2: "I need
 ios parity even in v1 with full writes"). `GET /api/mm` decodes as
 `MMPage`/`WebMMItem`/`WebMMAnchor`; the six client-reachable writes are
 `APIClient.markArtifactRead`, `markElementRead`, `markDecision`, `markDetail`,
-`addMMNote` and `dropMM`, each answering the shared `MMCreated` (`{id,
-episode}` or `{id, already}`) except the last, which answers `{"ok": true}`.
+`addMMNote` and `dropMM`, each answering the shared `MMCreated` (`{id}` or
+`{id, already}`) except the last, which answers `{"ok": true}`.
 
 The other two are **deliberately absent from the app**. `POST /api/mm/code`
 takes an absolute WORKTREE path, a repo-relative file and a start row, which is
@@ -1203,7 +1200,7 @@ What the app renders, and where:
 
 | surface | file | what it does |
 |---|---|---|
-| MODEL pane — the Memory tab's third segment beside Graph and Library | `MentalModelView.swift` | every mark newest-first, kind chips with counts (all / decisions / read / notes / dead), a note quick-add, rows expanding to the frozen content — an `artifact-element` item through the app's NATIVE markdown pipeline (`MarkdownText`) so a marked table renders as a table, its headline being that block's first non-empty line truncated at 80 — the board's `elementHeadline` rule, held in step — and a ✕ per row. An invalidated row shows its reason and its ✕ is DISABLED rather than absent |
+| MODEL pane — the Memory tab's second segment beside Library (`MemoryRootView.swift` is the tab root) | `MentalModelView.swift` | every mark newest-first, kind chips with counts (all / decisions / read / notes / dead), a note quick-add, rows expanding to the frozen content — an `artifact-element` item through the app's NATIVE markdown pipeline (`MarkdownText`) so a marked table renders as a table, its headline being that block's first non-empty line truncated at 80 — the board's `elementHeadline` rule, held in step — and a ✕ per row. An invalidated row shows its reason and its ✕ is DISABLED rather than absent |
 | ✓ read / mark selection | `ArtifactView.swift` (the pager's toolbar, beside ☆ save) | with nothing selected it is the whole-artifact toggle, pressed from the live `artifact` item and dropping through `/api/mm/remove`; with a non-empty selection in the web view it becomes the mark-selection form and posts `/api/mm/element` with the RENDERED text, exactly as the board does — the server locates the source span — then clears the selection on a mark that landed. The selection form is offered only on a markdown or plain-text artifact, never on an `.html`/`.svg`/`.pdf`/image page, where a selection would be text out of the server's own markup. The board's equivalent gate is its `md`-class check, which is stricter still — it excludes plain-text bodies too, where the phone allows them |
 | ◆ decision | `JobDetailView.swift` (`DocQuestionCard`) | on ANSWERED question rows only, since an unanswered one is a 400. Idempotent, so it stays pressable once decided |
 | detail mark | `JobDetailView.swift` (the Detail section) | marks the cell's rendered detail line, whose text exists nowhere else |
@@ -1258,7 +1255,7 @@ does the worktree resolution itself. iOS does not send these params.
 | `content` | string | always | served WHOLE, never cut — it is what carl read, and the invalidated view exists to show it back in full. For an artifact mark it is the source ref: an artifact's content is its snapshot, which rides its own route |
 | `context` | string | always | the question's context, the note carl attached to a code mark, or `""` |
 | `created_at` | number | always | unix millis |
-| `episode_id` | number | always | the layer-2 episode minted with the item |
+| `episode_id` | number | always | legacy: the knowledge-graph episode once minted with the item. Still always emitted, and `0` for every row created since the graph was removed (older rows keep their old value). Shipped iOS builds decode it non-optional, which is why the key stays; current builds decode it as `Int64?` and read nothing from it |
 | `invalidated_at` | number | omitempty | unix millis. **The absence of these three keys is the wire's only spelling of "live"** |
 | `invalid_reason` | string | omitempty | `removed` (carl unmarked it), `content-changed`, `artifact-deleted`, `file-deleted` |
 | `invalid_detail` | string | omitempty | free text |
@@ -1311,10 +1308,11 @@ never echoing the offending key), and an empty required field refused by name.
 | `POST /api/mm/detail` | `{slug, text}` | kind `reading`, source `agent-output`. `text` ≤ 8K runes. The steer modal's rendered detail line, whose text exists nowhere else on disk — which is why the item's content IS the record |
 | `POST /api/mm/remove` | `{id}` | carl unmarking: an invalidation with reason `removed`, never a delete |
 
-Every successful create also mints the layer-2 episode and answers
-`{"id": number, "episode": number}`. An idempotent re-mark of something already
-live answers `{"id": number, "already": true}` instead — same id, no second
-row, no second episode — which is what lets a client fire a mark button without
+Every successful create answers `{"id": number}`. It no longer carries an
+`episode` key: nothing is minted since the knowledge graph was removed, and
+`MMCreated.episode` was always optional on the client. An idempotent re-mark of
+something already live answers `{"id": number, "already": true}` instead —
+same id, no second row — which is what lets a client fire a mark button without
 first checking whether it is already on. `POST /api/mm/remove` answers the
 standard `{"ok": true}`.
 
@@ -1322,460 +1320,32 @@ Errors: 400 (bad json, an unrecognized field, a missing or empty required
 field, an over-long text, a non-absolute worktree, a file path that escapes it,
 `start_row` < 1, an unanswered question, an `id` ≤ 0), 403 in mirror mode, 404
 (no such job, question, artifact or item), 405 for non-POST, 413 for a body
-over 1 MB, 500 (no store wired, or a mint that failed after the item was
-already persisted — the item survives, and the `already` paths make the retry
-safe). Re-removing an already-invalidated item is a **200**, and the earlier
+over 1 MB, 500 (no store wired, or a store write failed). Re-removing an already-invalidated item is a **200**, and the earlier
 reason is left in place: the caller asked for it to be gone and it is gone.
 
 ---
 
-## Knowledge graph
+## Recall
 
-Ten routes over the `kg_*` tables (internal/api/graph.go, plus
-internal/api/recall.go), in the order register.go wires them: `graph`,
-`graph/stats`, `graph/node`, `graph/fact`, `graph/episode`, `graph/pending`,
-`graph/search`, `graph/recall`, `graph/add`, `graph/episode-done`.
-**All additive — none of them bumps `apiContract`.** Every one is a NEW PATH, never a
-key added to, retyped in, or removed from an existing shape, so a client that
-predates them decodes nothing differently.
+### `POST /api/recall` — localhost-only (not called by the iOS app or web UI; not modeled in Models.swift/APIClient.swift)
 
-**`GET /api/graph` and `GET /api/graph/node` ARE modeled in Models.swift and
-APIClient.swift** (the first and third routes above). The iOS graph screen
-(`ios/Kraken/GraphView.swift`) is a native SwiftUI `Canvas` that consumes both
-directly, via `GraphPayload`/`GraphNodeDetail` (`APIClient.fetchGraph` and
-`fetchGraphNode`). It previously wrapped the web board's own `#/graph` page
-in a `WKWebView`, on the argument that one server-computed layout should mean
-one implementation; the layout half of that still holds — positions come from
-`core.ComputeLayout` and both clients draw the same shape, there is no
-client-side force simulation on either — but WebGL inside a sheet fights the
-sheet's gestures, sigma's labels are sized for a desktop, and the
-rail/canvas/rail layout does not fit a phone. The remaining five routes
-(`stats`, `pending`, `search`, `add`, `episode-done`) stay web- and
-`k graph`-only. The two dereference reads — `graph/fact` and `graph/episode` —
-are narrower still: they are `k graph get`-only, with no web UI caller either,
-since their reader is an agent following an injected
-`[F<edge id> E<episode id>]` handle rather than a person clicking a canvas.
-Neither is modeled in Models.swift or APIClient.swift.
+Mid-conversation context for a cell (api/recall.go, jobs/recall.go). It replaced `POST /api/graph/recall` when the knowledge graph was removed; the request body is the same. Its only caller is `kraken recall-hook`, wired by every cell worktree as a `UserPromptSubmit` hook, which POSTs its payload here and emits the response as `hookSpecificOutput.additionalContext`.
 
-The `stats` object's keys are snake_case (`live_edges`,
-`missing_embeddings`) like the rest of this API. (They were briefly camelCase
-during the parallel build; renamed before anything shipped, so no client ever
-saw the old spelling.)
-
-**Mirror mode**: the six GET reads plus `POST /api/graph/search` stay reachable
-under `--mirror` (search is a POST only because a query is arbitrary user
-text, not because it writes). `GET /api/graph/fact` and
-`GET /api/graph/episode` are ungated for the same reason as the other reads,
-and pointedly so: following a handle touches `kg_recall` not at all —
-dereferencing a fact the agent was already handed is not a delivery, so there
-is nothing for a mirror to refuse. `POST /api/graph/recall`,
-`POST /api/graph/add` and `POST /api/graph/episode-done` are gated with the
-usual 403 `disabled in mirror mode` — recall reads like a search but records
-what it delivered.
-
-### `GET /api/graph`
-
-The viewer payload in one response: every node with its cached position,
-every edge — **live and invalidated both**, so the viewer strikes retired
-facts through rather than hiding history — and the stats block.
-
-Response: `{"nodes": [webGraphNode], "edges": [webGraphEdge], "stats": webGraphStats}`.
-`nodes` and `edges` are always arrays, never `null`.
-
-`webGraphNode`:
-
-| key | type | optionality | notes |
-|---|---|---|---|
-| `id` | number | always | |
-| `name` | string | always | the canonical name |
-| `type` | string | always | the extractor's entity type |
-| `description` | string | always | the short gloss of what the concept IS, independent of any edge |
-| `x` | number | always | server-computed layout position; **`0` when layout has not run for this node yet**, which the client places itself |
-| `y` | number | always | as `x` |
-| `aliases` | array of string | omitempty | populated here via one bulk join (the nightly graph ingest reads this route as its canonicalization inventory, and an alias-blind inventory re-derived the same merges night after night), and by `GET /api/graph/node`. A node with no aliases omits the key rather than sending an empty array |
-
-`webGraphEdge`:
-
-| key | type | optionality | notes |
-|---|---|---|---|
-| `id` | number | always | |
-| `src` | number | always | source node id |
-| `dst` | number | always | destination node id |
-| `predicate` | string | always | |
-| `fact` | string | always | the natural-language sentence — the edge's short description IS its name |
-| `strength` | number | always | the extractor's 1-10 confidence |
-| `occurrences` | number | always | distinct episodes independently stating this fact |
-| `valid_until` | number | always | **world** time, unix millis; `0` = still true |
-| `expired_at` | number | always | **system** time, unix millis; `0` = live |
-| `episode` | number | always | the episode this fact was extracted from |
-
-`webGraphStats`:
-
-| key | type | optionality | notes |
-|---|---|---|---|
-| `nodes` | number | always | |
-| `edges` | number | always | every edge, live or not |
-| `live_edges` | number | always | `expired_at = 0` only |
-| `episodes` | number | always | |
-| `pending` | number | always | episodes still awaiting extraction |
-| `missing_embeddings` | number | always | nodes + live edges with no vector yet; sits non-zero forever if no embedder is configured, which is a normal state, not an error |
-
-Errors: 405 (non-GET), 500 (no store wired, or a read failed).
-
-### `GET /api/graph/stats`
-
-The same stats block on its own: `{"stats": webGraphStats}`, built by the
-same function `GET /api/graph` uses so the two cannot drift. Its own route
-because the one caller that wants stats alone is `k graph stats` inside a
-cell, and making it pull every node and edge to print six integers would be
-the most expensive read here for the cheapest answer.
-
-Errors: 405 (non-GET), 500.
-
-### `GET /api/graph/node?id=N`
-
-The inspector's read: one node, its aliases, and **every** edge touching it,
-live and invalidated both.
-
-Response: `{"node": webGraphNode, "edges": [webGraphEdge]}`. The node's
-`aliases` key is present here whenever the node has any. `edges` is always an
-array, never `null`.
-
-Errors: 400 (missing or non-positive-integer `id`), 404 (no node with that
-id — a named node that does not exist is an answer, not an empty result),
-405, 500.
-
-### `GET /api/graph/fact?id=N` — `k graph get`-only (not called by the iOS app or web UI; not modeled in Models.swift/APIClient.swift)
-
-The fact dereference: one edge in **full**, its two endpoint entities, the
-episode it came from, and what else those entities are known for. Reached from
-a cell as `k graph get F<edge id>` (or a bare edge id).
-
-Its reason to exist is the injected memory block. A fact rendered into an
-agent's context arrives clause-cut to 180 runes and carries a handle —
-`[F<edge id> E<episode id>, seen Nx]` — precisely so the summary can be short;
-this route is what turns that handle back into the whole thing.
-
-Response:
-`{"fact": webGraphFactFull, "src": webGraphNode, "dst": webGraphNode, "episode": webGraphEpisodeRef|null, "siblings": {"src": [webGraphSiblingFact], "dst": [webGraphSiblingFact]}}`.
-
-An **invalidated** edge still dereferences — a handle cited in a brief written
-last month may name a fact kraken has since unlearned, and a 404 would leave
-the reader unable to tell "kraken never said this" from "kraken stopped
-believing it". `expired_at` on the bundle says which.
-
-`webGraphFactFull`:
-
-| key | type | optionality | notes |
-|---|---|---|---|
-| `id` | number | always | the edge id — the `F<id>` half of the handle |
-| `src` | string | always | endpoint **name**, falling back to `"#<id>"` when the node row is missing. The fact IS the answer here; a missing gloss never drops or 500s it |
-| `dst` | string | always | as `src` |
-| `predicate` | string | always | |
-| `fact` | string | always | the stored sentence **byte-exact** — untruncated, never clause-cut. Getting past the injected block's 180-rune cut is the whole point of following a handle |
-| `strength` | number | always | the extractor's 1-10 confidence |
-| `occurrences` | number | always | distinct episodes independently stating this fact |
-| `valid_from` | number | always | **world** time, unix millis |
-| `valid_until` | number | always | **world** time; `0` = still true |
-| `created_at` | number | always | **system** time — when kraken learned it |
-| `expired_at` | number | always | **system** time; `0` = live |
-| `episode` | number | always | the episode id this fact was extracted from — the `E<id>` half of the handle |
-
-Both time axes ride in full here, unlike `webGraphFact` on `/api/graph/search`,
-which trims them: a ranked list is scanned, a dereferenced fact is studied.
-There is no `weak` key — that is a relevance verdict, and there is no query on
-this route to be relevant to; publishing `false` would assert one that was
-never computed.
-
-`src` and `dst` are `webGraphNode`, the same type `GET /api/graph` serves, with
-`aliases` populated via the node's alias rows and `x`/`y` always `0` — the same
-"a fact bundle is a list to read, not a canvas to draw" reasoning
-`/api/graph/search` states. A missing node row degrades to
-`{"id": <id>, "name": "#<id>"}` (every other key at its zero value) rather than
-a 404: the caller named a **fact**, and the fact exists.
-
-`episode` is a provenance **pointer** — `{"id", "kind", "ref"}` and nothing
-else. `content` is deliberately absent: an episode is a reduced transcript span
-measured in kilobytes, and inlining it into every fact dereference would drown
-the one sentence the caller asked for in the material it came from. Pull the
-text by asking for it, on `/api/graph/episode`. An edge whose episode row is
-absent serves an explicit `null` rather than an empty object.
-
-`siblings` are the **live** edges touching each endpoint (via the same
-`occurrences DESC, id` neighbour read the search expansion uses), **excluding
-the dereferenced edge itself** — it is already the response's `fact`, and
-repeating it would spend a slot saying nothing. Capped at **10 per endpoint**,
-so a hub endpoint cannot turn a targeted dereference into a dump. Both lists
-are always arrays, never `null`. A **self-loop** fact (`src == dst`) has one
-endpoint and therefore one sibling list, served under both keys.
-
-`webGraphSiblingFact` is `webGraphFact` minus `weak` (no query, so no verdict)
-— and, like `webGraphFact`, without the system-time stamps, since siblings come
-from `NeighborEdges` and are live-only: `id`, `src`, `dst`, `predicate`,
-`fact`, `strength`, `occurrences`, `valid_until`. Endpoints are names with the
-same `"#<id>"` fallback.
-
-No `kg_recall` interaction: dereferencing a fact the agent was already handed
-is not a delivery, so it must not spend that fact's once-per-session budget.
-
-Errors: 400 (missing or non-positive-integer `id`), 404 (no fact with that id),
-405, 500 (no store wired, or a read failed). Additive route — it never bumps
-`apiContract`.
-
-### `GET /api/graph/episode?id=N` — `k graph get`-only (not called by the iOS app or web UI; not modeled in Models.swift/APIClient.swift)
-
-The episode dereference: one provenance unit **with its text**, and every fact
-extracted from it. Reached from a cell as `k graph get E<episode id>` — the
-other half of the injected handle.
-
-Response: `{"episode": webGraphEpisode, "edges": [webGraphFactFull]}`.
-
-`content` **does** inline here, unlike in the fact bundle's episode pointer:
-pulling the provenance text is this route's entire purpose, and the caller
-asked for it by id rather than receiving it as a side effect. The `episode`
-object is the same `webGraphEpisode` `GET /api/graph/pending` serves (`id`,
-`kind`, `ref`, `content`, `ts`; `hash` and `state` deliberately absent).
-
-`edges` is every fact from that episode, **live and invalidated both**, in
-ascending id order — the order the extractor stated them in, which is the
-closest thing to the source text's own order. The question this route answers
-is what the episode *produced*, not what survives of it, so `expired_at` is not
-filtered; each element carries its own stamp. Endpoint names are resolved in
-one bulk node read with the same `"#<id>"` fallback. Always an array, never
-`null` — an episode that yielded no facts is a span that HAS been read and
-produced nothing, which is an ordinary answer.
-
-No `kg_recall` interaction, for the same reason as the fact route.
-
-Errors: 400 (missing or non-positive-integer `id`), 404 (no episode with that
-id), 405, 500. Additive route — it never bumps `apiContract`.
-
-### `POST /api/graph/search`
-
-Retrieval: embeds the query, fuses vector, BM25 and name-anchor candidates,
-expands one hop, and returns both the structured facts and the triple text an
-agent pastes into its context. The name-anchor leg is the query's own terms
-matched against node **names and aliases** rather than fact sentences: a query
-that names a low-degree entity ("who is lewis") retrieves that entity's facts
-even when no sentence shares a word with it.
-
-A missing or failing embedder degrades **silently** to BM25-only — a fresh
-install with no `OPENAI_API_KEY` gets keyword search, never a 500.
-
-Request: `{"query": string, "limit": number}`. `query` is required (blank →
-400). `limit` is optional; absent or `0` means the default 20, and anything
-over 200 is capped rather than refused. `DisallowUnknownFields`: any other
-key is a 400.
-
-Response: `{"nodes": [webGraphNode], "facts": [webGraphFact], "triples": string, "strong": number}`.
-`nodes` and `facts` are always arrays, never `null`; `triples` is the same
-facts serialized for an LLM context block — facts that clear the relevance
-gate first, then (only when at least one fact fails it) a literal
-`weakly related:` line and the rest. `strong` counts the facts that cleared
-the gate — including the ones exempted from it for touching a node the query
-named (see `weak` below); `0` with a non-empty `facts` means the graph had nothing on-topic
-and the entries are nearest-neighbour context, not answers. Additive keys on
-a route no iOS client decodes — they never bump `apiContract`.
-
-`nodes` is the set of entities the matched facts touch, sorted by id (so the
-response is deterministic for a fixed corpus). It is here because
-`.claude/skills/graph/SKILL.md`'s canonicalization step resolves an incoming
-name against what already exists via `k graph search "<name>"` — a judgement
-about *entities*, which facts answer only indirectly. Elements are
-`webGraphNode`, the same type `GET /api/graph` serves, except that `x`/`y`
-are always `0` here: a search result is a list to read, not a canvas to draw,
-so the layout table is not joined.
-
-`webGraphFact`:
-
-| key | type | optionality | notes |
-|---|---|---|---|
-| `id` | number | always | the edge id |
-| `src` | string | always | endpoint **name**, not id — a search's reader is a human or an agent, neither of which can resolve an integer. Falls back to `"#<id>"` if the node is missing from the result set, so a fact is never dropped over a missing gloss |
-| `dst` | string | always | as `src` |
-| `predicate` | string | always | |
-| `fact` | string | always | |
-| `strength` | number | always | |
-| `occurrences` | number | always | |
-| `valid_until` | number | always | world time; `0` = still true |
-| `weak` | bool | always | `true` when the fact failed the relevance gate. Three ways to pass: cosine ≥ 0.72 against the query; ≥2 shared content words when no usable vector exists (no query embedding, no stored embedding, or a dimension mismatch); or — **regardless of cosine or overlap** — either endpoint being a node the query NAMED, i.e. a low-degree node whose name or alias is fully covered by the query's content terms. A fact touching such a node is never `weak`, because the gate compares fact *sentences* and cannot see that the caller spelled the entity out. Marked, never dropped, so the caller decides what nearest-neighbour context is worth |
-
-There is deliberately **no `score` key**: array order already expresses the
-ranking, and publishing a fusion score would invite clients to threshold on a
-number whose scale is an implementation detail — the same argument
-`webJobLoad` makes for keeping the derived `roi` off the wire.
-
-Errors: 400 (bad JSON, unknown field, blank query), 405, 413 (body over 1MB),
-500.
-
-### `POST /api/graph/add`
-
-The extraction agent's write — one turn's whole output in one request, since
-an edge names endpoints the same body creates and an invalidation is only
-meaningful beside the edge that replaced it.
+The response is up to two blocks concatenated, each `""` when it has nothing to say: carl's **unread notes** for the job (every feedback row and answered question not yet delivered, once per job and note-as-written, addressed to the job's stamped lead session only), then carl's **goals** (re-delivered whenever the rendered state differs from what the session last saw). A non-lead session gets the goals block or `""`. Any event other than `UserPromptSubmit` gets `""`. Nothing leaves the machine: no embedder is called.
 
 Request:
 
-```json
-{
-  "episode_id": 12,
-  "nodes":      [{"name": "...", "type": "...", "description": "...", "aliases": ["..."]}],
-  "edges":      [{"src": "...", "dst": "...", "predicate": "...", "fact": "...", "strength": 7, "valid_from": 0, "valid_until": 0}],
-  "invalidate": [{"edge_id": 44, "valid_until": 1769040000000}]
-}
-```
-
-All three lists are optional individually; a body with none of them is a 400
-(`nothing to add`). Edge endpoints are named by **name**, never by id: a name
-that resolves to nothing creates a bare node, because a fact is worth keeping
-and an entity mentioned only as an endpoint is still an entity.
-
-Validation is total and runs **before any write** — there is no transaction
-spanning the three lists, so anything refusable is refused first. Refusals
-(all 400, each naming the offending index): blank node name, blank alias,
-blank `src`/`dst`/`predicate`/`fact`, `strength` outside 1..10 **including an
-absent one** (an omitted strength is not a default, it is an unstated
-confidence), `edge_id` ≤ 0, and `valid_until` ≤ 0 on an **invalidation** (`0`
-means "still true" on that column, which is the opposite of invalidating).
-`DisallowUnknownFields` applies.
-
-An **edge** may carry `valid_until` too, and it means something different from
-an invalidation's: an episode can state a fact already known to have ended
-("we used X until March"), which is one edge with both world-time bounds — not
-a live edge plus an invalidation of something that was never live. Such a row
-keeps `expired_at = 0`: kraken still believes the claim, the world simply
-moved on. Only `invalidate` stamps system time, because only it records
-kraken **unlearning** something it had asserted.
-
-Response: `{"nodes": [{"name", "id", "added"}], "edges": [{"src", "dst", "id", "added"}], "invalidated": [number]}`.
-`added` is `false` for a merge into an existing row — the only way a caller
-can tell its "new" entity was already known under an alias, or that its fact
-was a repeat sighting rather than a new edge.
-
-A store failure partway through returns **500 with the same three result
-lists filled in as far as they got**, plus `error`. That is deliberate: the
-writes that landed cannot be rolled back, so the caller is told what to skip
-on a retry. Every write on this path is idempotent under a retry anyway
-(`UpsertNode` merges, `AddAlias` is `ON CONFLICT DO NOTHING`, `InsertEdge`
-counts a repeat as a sighting).
-
-Errors: 400, 405, 413, 500. Gated under `--mirror`.
-
-### `GET /api/graph/pending?limit=`
-
-The extraction queue read, oldest first so the backlog drains in ingest
-order. `limit` is optional (default 20, capped at 200); a non-positive or
-unparseable value is a 400.
-
-Response: `{"episodes": [webGraphEpisode]}` — always an array, never `null`.
-
 | key | type | optionality | notes |
 |---|---|---|---|
-| `id` | number | always | |
-| `kind` | string | always | `mental-model` \| `transcript` \| `feedback` \| `watchlist` \| `artifact` \| `job`. `mental-model` is the only one anything still WRITES — the graph is compiled from carl's own marks now, and the legacy five survive so the episodes already in the table stay readable |
-| `ref` | string | always | source pointer: `path#start-end` for files, row id otherwise |
-| `content` | string | always | the reduced text handed to the extractor — inline, since it IS this route's payload; a URL per episode would be N round trips for nothing |
-| `ts` | number | always | unix millis — when the SOURCE material was written, not when it was ingested |
+| `session_id` | string | required in practice | blank yields `""` |
+| `event` | string | optional | `hook_event_name` verbatim |
+| `prompt` | string | optional | accepted and ignored (the hook forwards it verbatim) |
+| `transcript_path` | string | optional | accepted and ignored, as `prompt` |
+| `slug` | string | optional | the cell's job slug, baked into the installed hook command; what the notes and goals blocks resolve the job by |
 
-The row's `hash` and `state` are deliberately absent: hash is the store's
-internal dedupe key, and every row this route can serve is `pending`.
+Response: `{"context": string}`. **`""` is a normal 200**, never an error status: the caller is a hook running inside someone else's conversation.
 
-Errors: 400 (bad `limit`), 405, 500.
-
-### `POST /api/graph/episode-done`
-
-Flips one episode out of the pending queue. Request `{"id": number}`,
-response `{"ok": true}`. Reached from a cell as `k graph done <episode id>`.
-
-Its own route rather than a field of `/api/graph/add` because an episode can
-legitimately yield **nothing** — a span with no facts in it has still been
-read, and folding "done" into the write would leave it pending forever,
-re-extracted on every pass.
-
-An unknown id is a **404, not a silent 200**: the underlying `UPDATE` matches
-nothing and reports no error, so without the lookup a typo'd id would be
-acknowledged as done while the real episode sat pending forever.
-
-Errors: 400 (bad JSON, unknown field, missing/non-positive id), 404, 405,
-413, 500. Gated under `--mirror`.
-
-### `POST /api/graph/recall` — localhost-only (not called by the iOS app or web UI; not modeled in Models.swift/APIClient.swift)
-
-Mid-conversation memory (api/recall.go, jobs/recall.go). Its only caller is
-`kraken recall-hook`, wired by every cell worktree as one Claude Code hook:
-`UserPromptSubmit` (query = the user's new message; the `PostToolUse` arm was
-retired on measurement — `jobs.recallHookEvents`). The hook POSTs its payload
-here and emits the response as `hookSpecificOutput.additionalContext`.
-
-The response is up to THREE blocks concatenated, in this order, each `""`
-when it has nothing to say: carl's **unread notes** for the job
-(jobs/recallnotes.go — every feedback row and every answered question not yet
-delivered, each delivered ONCE per job and note-as-written: the key hashes the
-text, so an edited note or a re-answer arrives again; recorded in the kv row
-`notes_delivered:<job id>` before the block is returned, withdrawn if that
-write fails, never recorded for a caller that has gone; addressed to the job's
-stamped lead session only — a teammate's or side thread's firing gets no
-notes; capped at `notesContextBytes` with the overflow deferred to the next
-prompt in order, and each item cut at `notesItemRunes` with a marker), then
-carl's **goals** (re-delivered whenever the rendered state differs from what
-the session last saw), then the **graph facts** the rest of this section
-describes.
-
-`Stop` is deliberately not wired: Claude Code's hooks reference is explicit
-that `additionalContext` at Stop **continues the turn** rather than
-annotating it, so injecting there would resume every agent past its own
-stop-gates and chain paid calls until retrieval ran dry. `PostToolUse` has no
-such problem — its context lands in a turn already continuing. The server
-side is event-agnostic — nothing here reads `event` — so wiring changes live
-in `jobs.recallHookEvents` alone.
-
-Two server-side properties make the per-tool-call cadence affordable and
-correct: firings for one `session_id` SERIALIZE on an in-process per-session
-mutex (parallel tool calls fire parallel hooks; unserialized they could read
-one skip-set and double-inject), and a firing whose query is byte-identical
-to the session's last completed one — every post-tool-call firing after the
-first within one assistant message — short-circuits to `""` before any
-retrieval or embedding. The hook itself also skips any firing whose payload
-carries an `agent_id`: settings hooks run inside in-process subagents too,
-under the PARENT's `session_id`, and injecting there would mark facts
-delivered into a context that is discarded when the subagent finishes.
-
-Request:
-
-| key | type | optionality | notes |
-|---|---|---|---|
-| `session_id` | string | required in practice | the dedup key; blank/whitespace always yields an empty context, since without one the same facts would re-inject on every firing |
-| `event` | string | optional | `hook_event_name` verbatim — carried for debugging, never branched on |
-| `prompt` | string | optional | the user's new message — `UserPromptSubmit`'s query |
-| `transcript_path` | string | optional | fallback query source: the transcript's last assistant text, read when `prompt` is empty (the retired `PostToolUse` arm's query, since that payload carried no prompt) |
-| `slug` | string | optional | the cell's job slug, baked into the installed hook command; what the goals and notes blocks resolve the job by (current slug, then former slugs, then the session as the pre-slug fallback) — empty is legal and stays legal |
-
-Response: `{"context": string}` — the rendered block, or `""`.
-
-**`""` is a normal 200, never an error status.** The caller is a hook running
-inside somebody else's conversation, and "the graph has nothing to add" is the
-common case. It is what comes back for: no query text, nothing retrieved,
-nothing that clears `core.RelevantEdge`, everything relevant already delivered
-to this session, or any store failure on the way — a hook that breaks a turn
-is a bug by definition.
-
-A non-empty context is recorded in `kg_recall` (one row per `(session_id,
-edge_id)`) BEFORE it is returned, so **a given fact reaches a given session at
-most once**; a failure to record withdraws the block rather than sending an
-undeduplicatable one. What is recorded is exactly the facts the block CARRIES,
-not every fact that cleared relevance — one skipped by the byte cap stays
-eligible for a later firing. A request whose caller has already gone (the hook
-gives up at 4s) records nothing at all, for the same reason: a fact nobody read
-is not a fact delivered. The block is byte-identical in format to the one
-`graphContext` appends to a fresh cell's brief — same header, same
-`graphContextFacts`/`graphContextBytes` caps.
-
-The query text is redacted (`core.RedactSecrets`) before it is sent to the
-embedding API — this is the only path in the binary that ships a raw user
-prompt off the machine. The BM25 leg searches the unredacted query, which
-never leaves kraken.db.
-
-Additive: it never bumps `apiContract`. Gated under `--mirror` (it writes).
+Additive: it never bumps `apiContract`. Gated under `--mirror` (it records what it delivered).
 
 Errors: 400 (bad JSON, unknown field), 405, 413, 500 (no store wired).
 

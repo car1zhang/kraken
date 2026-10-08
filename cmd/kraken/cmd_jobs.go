@@ -170,11 +170,11 @@ func hookArgs(args []string) (string, bool) {
 // PostToolUse as well until Q11 retired that arm (`jobs.recallHookEvents`,
 // with `retiredRecallHookEvents` stripping the old entry on merge). It shares
 // the two flags the whole hook family carries but NOT hookArgs, whose contract
-// requires exactly one bare slug: here the slug is OPTIONAL. Graph recall is
-// keyed on the SESSION in the hook payload and needs no slug at all, which is
-// why every settings.json written before this argument existed must keep
-// working; the slug is what the GOALS and NOTES halves resolve the job by, and
-// a cell's teammates fire this hook from sessions no job row has ever seen. A
+// requires exactly one bare slug: here the slug is OPTIONAL. Every
+// settings.json written before this argument existed must keep working, and
+// recall then falls back to matching the payload's session against the job
+// row; the slug is what the GOALS and NOTES halves resolve the job by, and a
+// cell's teammates fire this hook from sessions no job row has ever seen. A
 // SECOND bare argument is still the malformed shape and still runs nothing —
 // a hook that dies on an unexpected argument fails the turn it fired on, the
 // one thing a hook must never do. This dispatch case was silently DROPPED once, by

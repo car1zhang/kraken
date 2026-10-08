@@ -102,7 +102,7 @@ func jobListHandler(w http.ResponseWriter, r *http.Request) {
 	// on a store-only machine (Q14) answers an empty pluto dir with an empty
 	// list — "there are no jobs" is then indistinguishable from "the store is
 	// not wired", and iris would draft a duplicate of every job that exists.
-	if _, ok := graphStore(w); !ok {
+	if _, ok := activeStore(w); !ok {
 		return
 	}
 	js := jobs.LoadJobs()
@@ -228,7 +228,7 @@ func jobDraftHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	st, ok := graphStore(w)
+	st, ok := activeStore(w)
 	if !ok {
 		return
 	}

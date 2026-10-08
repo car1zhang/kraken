@@ -5,7 +5,7 @@ import Observation
 // pure function both halves of the app's save affordance ask the same question
 // through.
 //
-// It lives beside the graph rather than on the board because a saved artifact
+// It lives in the Memory tab rather than on the board because a saved artifact
 // has outlived its job by design — the server stores frozen BYTES, so a row
 // stays readable after the job is torn down, archived or hard deleted. There is
 // no card to hang it off any more, which is the whole reason it is here: the
@@ -107,7 +107,7 @@ final class LibraryViewModel {
 /// artifact viewer on its own frozen snapshot.
 ///
 /// It owns its own sheet rather than reporting taps upward, which keeps
-/// GraphView's mode switch to the one thing it is — a switch.
+/// MemoryRootView's mode switch to the one thing it is — a switch.
 struct LibraryList: View {
     let baseURL: String
 
@@ -197,7 +197,7 @@ struct LibraryList: View {
     /// and the job may be gone entirely, which is exactly why the row carries
     /// its own copy rather than looking one up.
     private func subtitle(_ item: WebLibraryItem) -> String {
-        let day = graphShortDate(ms: item.savedAt)
+        let day = memoryShortDate(ms: item.savedAt)
         return day.isEmpty ? item.slug : "\(item.slug) · \(day)"
     }
 }

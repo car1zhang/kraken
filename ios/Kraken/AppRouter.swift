@@ -13,14 +13,12 @@ import Observation
 ///   kraken://overview              → Board tab, open the overview sheet
 ///   kraken://dream                 → Board tab, open the DREAM sheet
 ///                                     (the nightly loop's reports + watchlist)
-///   kraken://graph                 → the MEMORY tab (the knowledge graph
-///                                     viewer and the saved-artifact library,
-///                                     a tab of its own since the nav
-///                                     restructure — no longer a Board sheet).
-///                                     The host stays `graph` and the case
-///                                     stays `.graph`: only the tab's visible
-///                                     label renamed, so links in shipped
-///                                     builds keep working.
+///   kraken://graph                 → the MEMORY tab (the saved-artifact
+///                                     library and the mental model). The
+///                                     host stays `graph` and the case stays
+///                                     `.graph`, names kept from when the tab
+///                                     hosted the knowledge graph, so links in
+///                                     shipped builds keep working.
 ///   kraken://job/<slug>            → Board tab, open that job's detail
 ///                                     (waits for the board to load if needed)
 ///   kraken://job/<slug>/answer     → …and open the answer sheet

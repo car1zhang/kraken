@@ -25,12 +25,12 @@ import (
 // TestAPIContractUnchanged.
 //
 // Reads vs writes under --mirror: the two GETs stay open (a read is a read,
-// the same call /api/graph and /api/watchlist's GET make), and the one POST
+// the same call /api/watchlist's GET makes), and the one POST
 // is mirror-gated at registration (register.go) with the standard plain-text
 // 403 — the same "a mirror board is read-only, full stop" policy every other
-// agent-side write follows. Gating at registration rather than inline is what
-// /api/graph/add does and is available here for the same reason: ack is a
-// POST-ONLY path, so there is no GET on it for a route wrapper to take down.
+// agent-side write follows. Gating at registration rather than inline is
+// available here because ack is a POST-ONLY path, so there is no GET on it
+// for a route wrapper to take down.
 //
 // The DTOs below are this package's own, per the house rule that the api
 // layer owns its wire shapes and store types never serialize directly. That
@@ -124,7 +124,7 @@ func slackInboxHandler(w http.ResponseWriter, r *http.Request) {
 		webJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "GET only"})
 		return
 	}
-	st, ok := graphStore(w)
+	st, ok := activeStore(w)
 	if !ok {
 		return
 	}
@@ -156,15 +156,14 @@ func slackAckHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req slackAckReq
-	// decodeGraphBody is this package's shared strict decoder (MaxBytesReader
-	// + DisallowUnknownFields + the 413/400 split); it is named for its first
-	// caller rather than for the graph, and reusing it keeps one refusal
-	// wording across every route that rejects unknown fields. That strictness
-	// matters more here than elsewhere: this route's whole job is to RETIRE
+	// decodeStrictBody is this package's shared strict decoder (MaxBytesReader
+	// + DisallowUnknownFields + the 413/400 split), and reusing it keeps one
+	// refusal wording across every route that rejects unknown fields. That
+	// strictness matters more here than elsewhere: this route's whole job is to RETIRE
 	// rows, and a body whose ids landed under a misspelled key would decode
 	// to an empty list. The empty-ids check below catches that either way,
 	// but the refusal naming the key is the one that says what to fix.
-	if !decodeGraphBody(w, r, &req, "this route takes only ids and disposition") {
+	if !decodeStrictBody(w, r, &req, "this route takes only ids and disposition") {
 		return
 	}
 	if len(req.IDs) == 0 {
@@ -182,7 +181,7 @@ func slackAckHandler(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
-	st, ok := graphStore(w)
+	st, ok := activeStore(w)
 	if !ok {
 		return
 	}
@@ -220,7 +219,7 @@ func slackStatusHandler(w http.ResponseWriter, r *http.Request) {
 		webJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "GET only"})
 		return
 	}
-	st, ok := graphStore(w)
+	st, ok := activeStore(w)
 	if !ok {
 		return
 	}

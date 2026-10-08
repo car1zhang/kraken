@@ -31,11 +31,12 @@ web-assets:
 #
 # -tags sqlite_fts5 compiles FTS5 into mattn/go-sqlite3 (its
 # sqlite3_opt_fts5.go is behind `//go:build sqlite_fts5 || fts5`), which the
-# knowledge graph's kg_edges_fts virtual table needs at migration time. A
-# binary built without the tag fails LOUDLY on open ("no such module: fts5")
-# rather than serving a database with broken search — same deliberate-failure
-# stance as web-assets above. `go test ./...` needs the tag for the same
-# reason; the commands in CLAUDE.md carry it.
+# retired knowledge graph's v15 migration still needs: it creates an FTS5
+# virtual table on every fresh database, and migration history is never
+# edited. A binary built without the tag fails LOUDLY on open ("no such
+# module: fts5") — same deliberate-failure stance as web-assets above.
+# `go test ./...` needs the tag for the same reason; the commands in
+# CLAUDE.md carry it.
 build: web-assets
 	CGO_ENABLED=1 go build -tags sqlite_fts5 -ldflags "-X kraken/internal/util.BuildSHA=$(SHA)" -o kraken ./cmd/kraken
 

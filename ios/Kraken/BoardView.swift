@@ -1103,8 +1103,8 @@ struct BoardView: View {
             }
             .accessibilityLabel("Dream")
         }
-        // The graph button is gone — the graph is a tab now (RootTabView).
-        // The gauge that replaced it opens the Usage drawer, which used to be
+        // The old graph button is gone (the Memory tab took its place in
+        // RootTabView). The gauge that replaced it opens the Usage drawer, which used to be
         // a tab of its own.
         ToolbarItem(placement: .topBarTrailing) {
             Button {
@@ -2438,18 +2438,18 @@ private struct CardChipFlow: Layout {
 }
 
 /// The stage badge: which pipeline skill zeus most recently used
-/// (info/aim/do/pr/dream/graph), read off zeus' transcript server-side —
+/// (info/aim/do/pr/dream), read off zeus' transcript server-side —
 /// see `webJob.Stage` (internal/api/board.go) for what absence covers.
 /// Like the goal it is a fact ABOUT the job rather than something it
 /// contains, so the card slots it with the identity chips (after the
 /// threads, before the goal — the slot web's `.st-chip` takes).
 ///
 /// Each stage wears its skill's own icon and palette colour (`KTheme.skill*`
-/// — the same six tokens the steer modal's command chips and the DREAM/GRAPH
-/// surfaces wear, mirrored from web's `--skill-*`), so a column of badges
+/// — the same five tokens the steer modal's command chips and the DREAM
+/// surface wear, mirrored from web's `--skill-*`), so a column of badges
 /// sorts by eye; web's `.st-chip-<stage>` carries the text-glyph sibling of
-/// each symbol and the two lists move together. The graph symbol is the
-/// Graph tab's own. A stage newer than this build falls back to the accent
+/// each symbol and the two lists move together. A stage this build does not
+/// name (including the retired `graph`) falls back to the accent
 /// look with a neutral symbol rather than drawing nothing — a symbol rather
 /// than web's bare-name treatment because `KChip.icon` is non-optional, so
 /// this chip structurally always draws one: the name is the payload, the
@@ -2464,7 +2464,6 @@ private struct StageChip: View {
         case "do": return ("gearshape.fill", KTheme.skillDo)
         case "pr": return ("arrow.triangle.branch", KTheme.skillPr)
         case "dream": return ("moon.fill", KTheme.skillDream)
-        case "graph": return ("point.3.connected.trianglepath.dotted", KTheme.skillGraph)
         default: return ("arrow.triangle.turn.up.right.diamond", KTheme.accent)
         }
     }

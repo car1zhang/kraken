@@ -13,8 +13,18 @@ import (
 // `KTheme.stoppedUI` in ios/Kraken/Theme.swift (the same chips and pill on the
 // phone). Both declarations claim, in their own comments, to mirror the other
 // exactly; nothing but this test keeps that claim true, and the drift is
-// silent. The mould is graphpalette_contract_test.go's, deliberately — one
-// token, two sources, byte agreement.
+// silent. One token, two sources, byte agreement.
+
+// paletteLightBlock is where style.css's light overrides start. Every
+// declaration before it is the dark (`:root`) value, every one after it the
+// light one — the same source-order split jobpalette_test.go makes, stated by
+// anchor rather than by count because there is only one variable to count.
+const paletteLightBlock = `:root[data-theme="light"]`
+
+// palettePair is one colour's two halves, uppercased and `#`-stripped, so both
+// sides of the comparison carry their theme with them rather than relying on
+// argument order.
+type palettePair struct{ light, dark string }
 
 // stoppedCSSVarRe matches a `--stopped: #HEX` DECLARATION. Prose mentions of
 // the token in comments never carry a `: #hex` tail, and `var(--stopped)`
@@ -27,19 +37,19 @@ var stoppedCSSVarRe = regexp.MustCompile(`--stopped\s*:\s*(#[0-9A-Fa-f]{6})`)
 var stoppedSwiftRe = regexp.MustCompile(`stoppedUI\s*=\s*dyn\(light:\s*0x([0-9A-Fa-f]{6}),\s*dark:\s*0x([0-9A-Fa-f]{6})\)`)
 
 // stoppedCSSHexes returns the dark and light `--stopped` hexes, split at the
-// light-theme block the same way graphContractCSSHexes splits, with the same
-// exactly-one-per-block requirement and for the same reason: a duplicate
-// declaration means a later rule silently wins and the test pins the loser.
-func stoppedCSSHexes(t *testing.T) graphContractPair {
+// light-theme block, with exactly one declaration required per block: a
+// duplicate declaration means a later rule silently wins and the test pins the
+// loser.
+func stoppedCSSHexes(t *testing.T) palettePair {
 	t.Helper()
 	data, err := os.ReadFile("_ui/src/styles/style.css")
 	if err != nil {
 		t.Fatalf("read _ui/src/styles/style.css: %v", err)
 	}
 	src := string(data)
-	lightAt := strings.Index(src, graphContractLightBlock)
+	lightAt := strings.Index(src, paletteLightBlock)
 	if lightAt < 0 {
-		t.Fatalf("style.css has no %s block to read the light theme from", graphContractLightBlock)
+		t.Fatalf("style.css has no %s block to read the light theme from", paletteLightBlock)
 	}
 	var darks, lights []string
 	for _, m := range stoppedCSSVarRe.FindAllStringSubmatchIndex(src, -1) {
@@ -52,18 +62,17 @@ func stoppedCSSHexes(t *testing.T) graphContractPair {
 	}
 	if len(darks) != 1 {
 		t.Fatalf("style.css declares --stopped %d times before %s, want exactly 1 (got %v)",
-			len(darks), graphContractLightBlock, darks)
+			len(darks), paletteLightBlock, darks)
 	}
 	if len(lights) != 1 {
 		t.Fatalf("style.css declares --stopped %d times inside %s, want exactly 1 (got %v)",
-			len(lights), graphContractLightBlock, lights)
+			len(lights), paletteLightBlock, lights)
 	}
-	return graphContractPair{light: lights[0], dark: darks[0]}
+	return palettePair{light: lights[0], dark: darks[0]}
 }
 
 // TestStoppedPaletteMatchesSwift reads Theme.swift off disk relative to this
-// package, exactly as TestGraphPaletteMatchesSwift does: a checkout without
-// ios/ skips, a present-but-disagreeing file fails.
+// package: a checkout without ios/ skips, a present-but-disagreeing file fails.
 func TestStoppedPaletteMatchesSwift(t *testing.T) {
 	css := stoppedCSSHexes(t)
 
@@ -80,13 +89,13 @@ func TestStoppedPaletteMatchesSwift(t *testing.T) {
 			"the contract freezes that line verbatim (style.css has light %s / dark %s)",
 			css.light, css.dark)
 	}
-	swift := graphContractPair{light: strings.ToUpper(m[1]), dark: strings.ToUpper(m[2])}
+	swift := palettePair{light: strings.ToUpper(m[1]), dark: strings.ToUpper(m[2])}
 
 	if swift.dark != css.dark {
 		t.Errorf("stoppedUI dark = 0x%s, but --stopped in :root is #%s", swift.dark, css.dark)
 	}
 	if swift.light != css.light {
 		t.Errorf("stoppedUI light = 0x%s, but --stopped in %s is #%s",
-			swift.light, graphContractLightBlock, css.light)
+			swift.light, paletteLightBlock, css.light)
 	}
 }

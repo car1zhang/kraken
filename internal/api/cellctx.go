@@ -28,7 +28,7 @@ func cellContextHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req cellContextReq
-	if !decodeGraphBody(w, r, &req,
+	if !decodeStrictBody(w, r, &req,
 		"this route takes only slug, session_id, used_percentage and context_window_size") {
 		return
 	}
@@ -67,7 +67,7 @@ func cellContextHandler(w http.ResponseWriter, r *http.Request) {
 		webJSON(w, http.StatusOK, map[string]bool{"ok": true})
 		return
 	}
-	st, ok := graphStore(w)
+	st, ok := activeStore(w)
 	if !ok {
 		return
 	}

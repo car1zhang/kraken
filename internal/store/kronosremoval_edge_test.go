@@ -70,11 +70,13 @@ func edgeKronosRemovalExec(t *testing.T, s *Store, stmts ...string) {
 
 func edgeKronosRemovalAssertAfter(t *testing.T, s *Store) {
 	t.Helper()
-	if v := edgeKronosRemovalVersion(t, s); v != 31 {
-		t.Fatalf("user_version = %d, want 31", v)
+	// The current version rather than a literal 31: the knowledge graph's
+	// removal appended v32 after this step landed.
+	if v := edgeKronosRemovalVersion(t, s); v != schemaVersion {
+		t.Fatalf("user_version = %d, want the current %d", v, schemaVersion)
 	}
-	if schemaVersion != 31 {
-		t.Fatalf("schemaVersion = %d, want 31", schemaVersion)
+	if schemaVersion < 31 {
+		t.Fatalf("schemaVersion = %d, want ≥ 31", schemaVersion)
 	}
 	if edgeKronosRemovalHasTable(t, s, "orch_inbox") {
 		t.Errorf("orch_inbox still in sqlite_master after migration")
@@ -190,8 +192,8 @@ func TestKronosRemovalEdgeReopenAtV31IsNoOp(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	path := filepath.Join(t.TempDir(), "kraken.db")
 	s := edgeKronosRemovalOpen(t, path)
-	if v := edgeKronosRemovalVersion(t, s); v != 31 {
-		t.Fatalf("fresh open user_version = %d, want 31", v)
+	if v := edgeKronosRemovalVersion(t, s); v != schemaVersion {
+		t.Fatalf("fresh open user_version = %d, want the current %d", v, schemaVersion)
 	}
 	if edgeKronosRemovalHasTable(t, s, "orch_inbox") {
 		t.Fatalf("fresh store holds orch_inbox")
@@ -208,8 +210,8 @@ func TestKronosRemovalEdgeReopenAtV31IsNoOp(t *testing.T) {
 
 	s2 := edgeKronosRemovalOpen(t, path)
 	defer s2.Close()
-	if v := edgeKronosRemovalVersion(t, s2); v != 31 {
-		t.Fatalf("re-open user_version = %d, want 31", v)
+	if v := edgeKronosRemovalVersion(t, s2); v != schemaVersion {
+		t.Fatalf("re-open user_version = %d, want the current %d", v, schemaVersion)
 	}
 	if v, err := s2.GetKV("limit_hit:iris"); err != nil || v != "kept" {
 		t.Errorf("limit_hit:iris after re-open = %q (err %v), want kept", v, err)
