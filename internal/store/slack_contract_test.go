@@ -268,9 +268,10 @@ func TestContractSlackV17MigratesFromV16(t *testing.T) {
 		`DROP TABLE IF EXISTS board_bg`,
 		// v25 adds saved_artifacts, the artifact library.
 		`DROP TABLE IF EXISTS saved_artifacts`,
-		// v24 adds kronos' orch_inbox — a later migration's table in this
-		// walk's terms, and a leftover one fails that step's bare CREATE
-		// exactly as a leftover linear_issues would.
+		// v24 adds the retired orchestrator's orch_inbox — a later
+		// migration's table in this walk's terms, and a leftover one fails
+		// that step's bare CREATE exactly as a leftover linear_issues would.
+		// (v31 drops it again, so on a current database this is a no-op.)
 		`DROP TABLE IF EXISTS orch_inbox`,
 		// v23 adds BOTH: the goals table and jobs.goal_id. Only the table is
 		// dropped here — v27 above already took the column, so this list

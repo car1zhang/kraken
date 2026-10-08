@@ -9,24 +9,24 @@ import (
 	"kraken/internal/util"
 )
 
-// cmd_cell.go — `k cell steer|submit|answer <slug>`: kronos' whole control
+// cmd_cell.go — `k cell steer|submit|answer <slug>`: an agent-side control
 // surface on a job cell, proxying to the BOARD's own routes — POST /api/steer,
 // POST /api/queue (the submit), POST /api/question and POST /api/doc-question
 // (internal/api/actions.go).
 //
-// Reusing the board's routes rather than adding kronos-shaped ones is the
+// Reusing the board's routes rather than adding agent-shaped ones is the
 // load-bearing choice here. Those four are the same doors carl's own clicks
 // go through, so every guard they already carry — the submit ladder's fixed
 // refusal order and its per-job mutex, steer's live-cell check, the doc
-// answer's cap — applies to kronos unchanged, and there is no second, weaker
-// door onto a live cell that could drift out of step with the first. What
-// this file adds is only the CLI shape and the audit trail.
+// answer's cap — applies to an agent caller unchanged, and there is no
+// second, weaker door onto a live cell that could drift out of step with the
+// first. What this file adds is only the CLI shape and the audit trail.
 //
-// Every op logs to the unified event log on SUCCESS, with src `kronos`, so
-// "who steered this cell?" has an answer that does not depend on kronos
+// Every op logs to the unified event log on SUCCESS, with src `cell`, so
+// "who steered this cell?" has an answer that does not depend on the caller
 // saying so. The log post is best-effort: the action has already landed by
-// then, and failing the verb over an unrecorded audit line would tell kronos
-// the steer did not happen when it did.
+// then, and failing the verb over an unrecorded audit line would tell the
+// caller the steer did not happen when it did.
 //
 // Same behavior contract as the rest of the proxy family (cmd_slack.go's
 // header states it in full): writes print one short confirmation line to
@@ -238,7 +238,7 @@ func runCellSubmit(slug string) error {
 }
 
 // runCellAnswer posts to whichever of the two routes the flags selected. Both
-// log the same event name: the audit line answers "kronos answered something
+// log the same event name: the audit line answers "an agent answered something
 // on this job", and which KIND of question it was is already recoverable from
 // the job's own rows.
 func runCellAnswer(slug, digit, question, text string) error {
@@ -262,11 +262,11 @@ func runCellAnswer(slug, digit, question, text string) error {
 // Its error is deliberately DROPPED. It is called only after the action
 // itself returned 200, so a failure here means the audit line is missing,
 // not that the steer/submit/answer did not happen — and reporting it as a
-// failed verb would send kronos to retry an action that already landed, which
+// failed verb would send the caller to retry an action that already landed, which
 // on `submit` is a second start attempt and on `steer` a duplicate message
 // into a live pane.
 func logCellAction(event, slug string) {
 	_, _ = qfPost("/api/logevent", map[string]any{
-		"src": "kronos", "level": "info", "event": event, "msg": slug,
+		"src": "cell", "level": "info", "event": event, "msg": slug,
 	})
 }

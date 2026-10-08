@@ -16,8 +16,9 @@ import (
 // that resolve to nothing, more lead groups than the byte cap can hold — and
 // what the recall channel does when a LINK changes rather than a goal.
 //
-// Written blind from the frozen contract. internal/jobs/{goalctx,recall,
-// kronos}.go were never read in their working-tree state; the harness idioms
+// Written blind from the frozen contract. internal/jobs/{goalctx,recall}.go
+// (and the since-removed orchestrator's file) were never read in their
+// working-tree state; the harness idioms
 // (UseStore, JobBySlug/LoadJobs, the graphFacts seam, RecallRequest) are
 // pre-existing package state read at the base commit.
 //

@@ -17,35 +17,34 @@ import (
 	"kraken/internal/util"
 )
 
-// cmd_ctx.go — `k ctx-hook` and `k rearm-hook`, two Claude Code hooks kept out
-// of usage() alongside pr-hook and recall-hook for the same reason — they are
-// machinery running inside somebody else's conversation, not verbs a human
-// types.
+// cmd_ctx.go — `k ctx-hook`, a Claude Code hook kept out of usage()
+// alongside pr-hook and recall-hook for the same reason — it is machinery
+// running inside somebody else's conversation, not a verb a human types.
 //
-// ctx-hook is a statusline command with two installers. Without --slug it is
-// kronos' (jobs' installKronosSettings): it reports to /api/orch/context and
-// prints `kronos NN%`. With --slug it is a cell's (jobs' mergeCellStatusLine,
-// in every cell's settings.json): it reports to /api/cell/context keyed on the
-// slug, and prints the user's own ~/.claude/settings.json statusLine output
-// (run by runUserStatusLine, bounded by ctxHookTimeout) or `<slug> NN%` when
-// there is none or it fails. rearm-hook is kronos' PostCompact hook.
+// ctx-hook is a cell's statusline command (jobs' mergeCellStatusLine installs
+// it into every cell's settings.json as `ctx-hook --slug <slug>`): it reports
+// the context fill to /api/cell/context keyed on the slug, and prints the
+// user's own ~/.claude/settings.json statusLine output (run by
+// runUserStatusLine, bounded by ctxHookTimeout) or `<slug> NN%` when there is
+// none or it fails. Without --slug it reports nowhere and prints `ctx NN%`:
+// the slug-less form belonged to a since-retired standing agent's statusline,
+// and a settings file that still carries it (that agent's own dir on a machine
+// that ran it) must keep rendering a line rather than an error.
 //
-// Both share one posture, and it is the opposite of every other verb in this
-// binary: THEY NEVER FAIL. A statusline command that exits non-zero or writes
-// to stdout on error puts a broken line in the pane's chrome on every render
-// — kronos' pane or a cell's; a PostCompact hook that errors interrupts the
-// turn it fired on. Every failure anywhere — no daemon, no store, a malformed
-// payload, a timeout — degrades to "report nothing", never to a broken pane.
-// That is why neither of these routes through qfPost: its whole contract is to
-// turn a failure into a message and an exit code.
+// Its posture is the opposite of every other verb in this binary: IT NEVER
+// FAILS. A statusline command that exits non-zero or writes to stdout on
+// error puts a broken line in the pane's chrome on every render. Every
+// failure anywhere — no daemon, no store, a malformed payload, a timeout —
+// degrades to "report nothing", never to a broken pane. That is why it does
+// not route through qfPost: its whole contract is to turn a failure into a
+// message and an exit code.
 //
 // The client timeout is 2s rather than qfHTTPTimeout's 5s. The statusline
-// runs on every render and the compact hook runs at the moment a compaction
-// has just finished, so a slow or dead kraken serve must cost a blink rather
-// than a visible hang. The report is telemetry: losing one is free, waiting
-// for one is not.
+// runs on every render, so a slow or dead kraken serve must cost a blink
+// rather than a visible hang. The report is telemetry: losing one is free,
+// waiting for one is not.
 
-// ctxHookTimeout bounds both hooks' single round trip, and separately the
+// ctxHookTimeout bounds the hook's single round trip, and separately the
 // wrapped user statusline command in runUserStatusLine. See the file header.
 const ctxHookTimeout = 2 * time.Second
 
@@ -80,8 +79,8 @@ type statuslineInput struct {
 // dead. The pin in ctxhook_pin_test.go is that discovery's regression guard.
 //
 // It returns the value following --slug ("" when absent, or when --slug is the
-// last word): a cell's statusline command carries it, kronos' does not, and
-// that difference is what selects runCtxHook's cell mode.
+// last word): a cell's statusline command carries it, and its absence is what
+// selects runCtxHook's report-nowhere mode.
 func ctxHookFlags(args []string) string {
 	slug := ""
 	for i := 0; i < len(args); i++ {
@@ -198,11 +197,10 @@ func (b *cappedBuffer) Write(p []byte) (int, error) {
 // statusline that only renders when the daemon answers is a statusline that
 // vanishes exactly when something is wrong.
 //
-// slug == "" is kronos' statusline: report to /api/orch/context and print
-// `kronos NN%`. A non-empty slug is a cell's: report to /api/cell/context
-// keyed on the slug, and print the user's own statusline (userStatusLine, run
-// with the same stdin) when there is one and it produced output, else
-// `<slug> NN%`.
+// A non-empty slug is a cell's: report to /api/cell/context keyed on the slug,
+// and print the user's own statusline (userStatusLine, run with the same
+// stdin) when there is one and it produced output, else `<slug> NN%`.
+// slug == "" reports nowhere and prints `ctx NN%` (see the file header).
 func runCtxHook(stdin io.Reader, stdout io.Writer, slug string, userStatusLine string) {
 	var in statuslineInput
 	// A read or decode failure is not reported anywhere: there is nowhere to
@@ -215,25 +213,17 @@ func runCtxHook(stdin io.Reader, stdout io.Writer, slug string, userStatusLine s
 		_ = json.Unmarshal(raw, &in)
 	}
 	pct := in.ContextWindow.UsedPercentage
-	if in.SessionID != "" && pct != nil {
+	if in.SessionID != "" && pct != nil && slug != "" {
 		// Errors dropped by contract: see the file header. A skipped report
 		// costs one render's telemetry, and the next render sends another.
-		if slug == "" {
-			_ = hookPost("/api/orch/context", map[string]any{
-				"session_id":          in.SessionID,
-				"used_percentage":     *pct,
-				"context_window_size": in.ContextWindow.ContextWindowSize,
-			})
-		} else {
-			_ = hookPost("/api/cell/context", map[string]any{
-				"slug":                slug,
-				"session_id":          in.SessionID,
-				"used_percentage":     *pct,
-				"context_window_size": in.ContextWindow.ContextWindowSize,
-			})
-		}
+		_ = hookPost("/api/cell/context", map[string]any{
+			"slug":                slug,
+			"session_id":          in.SessionID,
+			"used_percentage":     *pct,
+			"context_window_size": in.ContextWindow.ContextWindowSize,
+		})
 	}
-	label := "kronos"
+	label := "ctx"
 	if slug != "" {
 		label = slug
 		if userStatusLine != "" {
@@ -253,54 +243,14 @@ func runCtxHook(stdin io.Reader, stdout io.Writer, slug string, userStatusLine s
 	fmt.Fprintln(stdout, line)
 }
 
-// hookPayload is the subset of a Claude Code hook payload these hooks read.
-// PostCompact carries the session it fired for, which is the only field the
-// re-arm needs — and the field the server checks against the session it has
-// recorded as kronos', so a hook firing from any other conversation is
-// refused rather than allowed to wipe that conversation's recall marks.
-type hookPayload struct {
-	SessionID string `json:"session_id"`
-}
-
-// cmdRearmHook is `kraken rearm-hook`: the PostCompact hook. A compaction
-// discards the context that kg_recall's per-session marks say kronos has
-// already been told, so the marks are dropped and the graph is free to
-// deliver those facts again.
-//
-// It prints NOTHING on any path — success included. A PostCompact hook's
-// stdout is not chrome the user reads, and a line there would land in the
-// transcript immediately after a compaction, which is the one place nothing
-// should be adding noise.
-func cmdRearmHook(args []string) {
-	ctxHookFlags(args)
-	runRearmHook(os.Stdin)
-}
-
-// runRearmHook is cmdRearmHook's body, split out for the same testability
-// reason as runCtxHook's. Every failure — unreadable stdin, malformed JSON, a
-// blank session, a refusing or absent server — returns silently: the worst
-// case is that kronos is not re-told some facts, which is exactly the state
-// it was in before the compaction.
-func runRearmHook(stdin io.Reader) {
-	raw, err := io.ReadAll(io.LimitReader(stdin, 1<<20))
-	if err != nil {
-		return
-	}
-	var in hookPayload
-	if err := json.Unmarshal(raw, &in); err != nil || in.SessionID == "" {
-		return
-	}
-	_ = hookPost("/api/graph/recall-rearm", map[string]any{"session_id": in.SessionID})
-}
-
-// hookPost is these two hooks' one round trip: POST JSON to kraken serve,
-// bounded at ctxHookTimeout, with the response body discarded.
+// hookPost is the hook's one round trip: POST JSON to kraken serve, bounded
+// at ctxHookTimeout, with the response body discarded.
 //
 // It deliberately does NOT reuse qfPost. That helper's whole value is turning
 // a failure into a sentence a human or an agent reads and an exit code — the
 // opposite of what a hook needs, and it carries the 5s timeout besides. The
-// error returned here exists only so a caller CAN branch on it; both callers
-// drop it, and that is the contract rather than an oversight.
+// error returned here exists only so a caller CAN branch on it; the caller
+// drops it, and that is the contract rather than an oversight.
 func hookPost(path string, body any) error {
 	buf, err := json.Marshal(body)
 	if err != nil {
@@ -313,7 +263,7 @@ func hookPost(path string, body any) error {
 	}
 	defer resp.Body.Close()
 	// Drained rather than left to Close because reading the body to EOF is
-	// what makes the discard explicit — every response on these two routes is
+	// what makes the discard explicit — every response on this route is
 	// a few dozen bytes, so it costs nothing and it says the body was
 	// deliberately thrown away rather than forgotten. Nothing about
 	// connection reuse is claimed: hookPost builds a fresh client per call

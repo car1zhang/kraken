@@ -22,9 +22,8 @@ _k() {
         'mm:carl'"'"'s verbs for the mental model — mark/drop code read, note, read it back, serve it to Zed'
         'slack:iris-side verb — read/ack the Slack intake inbox via kraken serve'
         'job:iris-side verb — list/read jobs and write a draft via kraken serve'
-        'orch:kronos-side verb — read/ack the orchestrator inbox via kraken serve'
-        'board:kronos-side verb — read the job board (whole, or one job) via kraken serve'
-        'cell:kronos-side verb — steer/submit/answer one job'"'"'s cell via kraken serve'
+        'board:agent-side verb — read the job board (whole, or one job) via kraken serve'
+        'cell:agent-side verb — steer/submit/answer one job'"'"'s cell via kraken serve'
         'mine:the dream pass'"'"' mechanical read of claude'"'"'s transcripts (local files, no serve)'
         'serve:the one long-lived kraken process — scheduler + web UI/API, sqlite-backed'
         'import:one-shot sqlite-migration cutover (human-run once per machine)'
@@ -313,26 +312,6 @@ _k() {
             # <slug> completion is intentionally not offered, for the reason
             # spelled out under questions) above: job identity lives only in
             # kraken.db, with no cheap store-backed completion source.
-            ;;
-        orch)
-            if (( CURRENT == 3 )); then
-                local -a ops
-                ops=(
-                    'inbox:print the unacked orchestrator items as JSON (oldest first, capped at 100 with the full count in `total`)'
-                    'ack:retire a batch of items with a disposition'
-                )
-                _describe -t ops 'op' ops
-            elif [[ $words[3] == ack ]]; then
-                # both flags are REQUIRED and this op takes no positional at
-                # all, so both are offered from word 4 on — the `slack ack`
-                # shape rather than `load set`'s.
-                local -a ackflags
-                ackflags=(
-                    '--ids:comma-separated inbox ids from `k orch inbox`'
-                    '--disposition:what happened — steered:<slug>, answered:<slug>, ignored:<reason>'
-                )
-                _describe -t flags 'flag' ackflags
-            fi
             ;;
         board)
             if (( CURRENT == 3 )); then

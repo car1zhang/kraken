@@ -18,7 +18,7 @@ import (
 // Dimension: LOGIC. The refusal matrix (405, 400s, 404, unknown fields) is
 // athena-edge's.
 //
-// Through the real mux (Register), as the kronos route tests do. Every
+// Through the real mux (Register), as the slack route tests do. Every
 // package-level identifier is prefixed `logic`.
 
 func logicCellCtxPost(t *testing.T, body string) *httptest.ResponseRecorder {

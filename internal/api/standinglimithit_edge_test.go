@@ -82,10 +82,10 @@ func TestEdgeAgtLimitHitXORRefusals(t *testing.T) {
 		name string
 		body string
 	}{
-		{"both slug and agent", `{"slug":"edge-agt-xor","agent":"kronos","error":"rate_limit"}`},
-		{"both, agent listed first", `{"agent":"kronos","slug":"edge-agt-xor","error":"rate_limit"}`},
+		{"both slug and agent", `{"slug":"edge-agt-xor","agent":"iris","error":"rate_limit"}`},
+		{"both, agent listed first", `{"agent":"iris","slug":"edge-agt-xor","error":"rate_limit"}`},
 		{"both, with an unknown agent", `{"slug":"edge-agt-xor","agent":"zeus","error":"rate_limit"}`},
-		{"both, with an unknown slug", `{"slug":"no-such-job-anywhere","agent":"kronos","error":"rate_limit"}`},
+		{"both, with an unknown slug", `{"slug":"no-such-job-anywhere","agent":"iris","error":"rate_limit"}`},
 		{"neither key present", `{"error":"rate_limit"}`},
 		{"both keys present but empty", `{"slug":"","agent":"","error":"rate_limit"}`},
 		{"slug empty, agent absent", `{"slug":"","error":"rate_limit"}`},
@@ -112,7 +112,7 @@ func TestEdgeAgtLimitHitXORRefusalNamesTheRule(t *testing.T) {
 	mustCreateStoreJob(t, st, store.Job{Slug: "edge-agt-rule", Repo: "monolith"})
 
 	for _, body := range []string{
-		`{"slug":"edge-agt-rule","agent":"kronos","error":"rate_limit"}`,
+		`{"slug":"edge-agt-rule","agent":"iris","error":"rate_limit"}`,
 		`{"error":"rate_limit"}`,
 	} {
 		rec := edgeAgtPost(t, body)
@@ -136,15 +136,14 @@ func TestEdgeAgtLimitHitUnknownAgentRefusedAndNamed(t *testing.T) {
 	for _, id := range []string{
 		"zeus",
 		"hephaestus",
-		"KRONOS",
-		"Kronos",
 		"IRIS",
-		"kronos-1",
-		"krono",
+		"Iris",
+		"iris-1",
+		"iri",
 		"irisx",
 		"0",
 		"42",
-		"limit_hit:kronos",
+		"limit_hit:iris",
 	} {
 		t.Run(id, func(t *testing.T) {
 			body, err := json.Marshal(map[string]string{"agent": id, "error": "rate_limit"})
@@ -169,16 +168,16 @@ func TestEdgeAgtLimitHitAgentStillNeedsAnErrorType(t *testing.T) {
 	st := useTestStore(t)
 
 	for _, body := range []string{
-		`{"agent":"kronos"}`,
-		`{"agent":"kronos","error":""}`,
-		`{"agent":"kronos","details":"resets 4pm"}`,
+		`{"agent":"iris"}`,
+		`{"agent":"iris","error":""}`,
+		`{"agent":"iris","details":"resets 4pm"}`,
 	} {
 		rec := edgeAgtPost(t, body)
 		if rec.Code != http.StatusBadRequest {
 			t.Fatalf("body %q: status = %d, want 400", body, rec.Code)
 		}
 	}
-	if got := edgeAgtRecord(t, st, "kronos"); got.At != 0 {
+	if got := edgeAgtRecord(t, st, "iris"); got.At != 0 {
 		t.Fatalf("a refused delivery recorded a hit: %+v", got)
 	}
 }
@@ -191,11 +190,11 @@ func TestEdgeAgtLimitHitRefusalsRecordNothing(t *testing.T) {
 	j := mustCreateStoreJob(t, st, store.Job{Slug: "edge-agt-clean", Repo: "monolith"})
 
 	for _, body := range []string{
-		`{"slug":"edge-agt-clean","agent":"kronos","error":"rate_limit"}`,
+		`{"slug":"edge-agt-clean","agent":"iris","error":"rate_limit"}`,
 		`{"error":"rate_limit"}`,
 		`{"agent":"zeus","error":"rate_limit"}`,
-		`{"agent":"KRONOS","error":"rate_limit"}`,
-		`{"agent":"kronos","error":""}`,
+		`{"agent":"IRIS","error":"rate_limit"}`,
+		`{"agent":"iris","error":""}`,
 		`{"slug":"","agent":"","error":"rate_limit"}`,
 	} {
 		if rec := edgeAgtPost(t, body); rec.Code == http.StatusOK {
@@ -203,7 +202,7 @@ func TestEdgeAgtLimitHitRefusalsRecordNothing(t *testing.T) {
 		}
 	}
 
-	for _, id := range []string{"kronos", "iris", "zeus", "KRONOS", ""} {
+	for _, id := range []string{"iris", "zeus", "IRIS", ""} {
 		if got := edgeAgtRecord(t, st, id); got.At != 0 {
 			t.Fatalf("a refused delivery recorded under %q: %+v", id, got)
 		}
@@ -219,14 +218,14 @@ func TestEdgeAgtLimitHitValidAgentRecordsUnderTheAgentKey(t *testing.T) {
 	st := useTestStore(t)
 	j := mustCreateStoreJob(t, st, store.Job{Slug: "edge-agt-bystander", Repo: "monolith"})
 
-	rec := edgeAgtPost(t, `{"agent":"kronos","error":"rate_limit","details":"resets 4:50am (America/New_York)","session_id":"sess-kronos"}`)
+	rec := edgeAgtPost(t, `{"agent":"iris","error":"rate_limit","details":"resets 4:50am (America/New_York)","session_id":"sess-iris"}`)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200 (body %q)", rec.Code, rec.Body.String())
 	}
 
-	got := edgeAgtRecord(t, st, "kronos")
+	got := edgeAgtRecord(t, st, "iris")
 	if got.At == 0 {
-		t.Fatal("no record written under limit_hit:kronos")
+		t.Fatal("no record written under limit_hit:iris")
 	}
 	if got.Error != "rate_limit" {
 		t.Errorf("Error = %q, want rate_limit", got.Error)
@@ -236,9 +235,6 @@ func TestEdgeAgtLimitHitValidAgentRecordsUnderTheAgentKey(t *testing.T) {
 	}
 	if got.Deliveries != 1 {
 		t.Errorf("Deliveries = %d, want 1", got.Deliveries)
-	}
-	if other := edgeAgtRecord(t, st, "iris"); other.At != 0 {
-		t.Fatalf("recording for kronos also wrote iris' row: %+v", other)
 	}
 	if jb := jobs.ReadLimitHit(j); jb.At != 0 {
 		t.Fatalf("recording for an agent wrote a job's row: %+v", jb)
@@ -253,14 +249,14 @@ func TestEdgeAgtLimitHitAgentAndJobRowsAreIndependent(t *testing.T) {
 	st := useTestStore(t)
 	j := mustCreateStoreJob(t, st, store.Job{Slug: "edge-agt-parallel", Repo: "monolith"})
 
-	if rec := edgeAgtPost(t, `{"agent":"kronos","error":"rate_limit"}`); rec.Code != http.StatusOK {
+	if rec := edgeAgtPost(t, `{"agent":"iris","error":"rate_limit"}`); rec.Code != http.StatusOK {
 		t.Fatalf("agent delivery: status = %d", rec.Code)
 	}
 	if rec := edgeAgtPost(t, `{"slug":"edge-agt-parallel","error":"overloaded"}`); rec.Code != http.StatusOK {
 		t.Fatalf("slug delivery: status = %d", rec.Code)
 	}
 
-	if got := edgeAgtRecord(t, st, "kronos"); got.Error != "rate_limit" || got.Deliveries != 1 {
+	if got := edgeAgtRecord(t, st, "iris"); got.Error != "rate_limit" || got.Deliveries != 1 {
 		t.Fatalf("the agent row = %+v, want its own rate_limit delivery", got)
 	}
 	if got := jobs.ReadLimitHit(j); got.Error != "overloaded" || got.Deliveries != 1 {
@@ -269,18 +265,18 @@ func TestEdgeAgtLimitHitAgentAndJobRowsAreIndependent(t *testing.T) {
 }
 
 // The agent path's fold semantics are the job path's, unchanged. The herd
-// is real here too — kronos' own claude and the transcript arm both report
-// one wall — and the counters have to survive it.
+// is real here too — a hook delivery, were one wired, and the transcript arm
+// would both report one wall — and the counters have to survive it.
 func TestEdgeAgtLimitHitAgentFoldSemantics(t *testing.T) {
 	t.Run("the herd folds and every delivery answers 200", func(t *testing.T) {
 		st := useTestStore(t)
 		for i := 0; i < 5; i++ {
-			rec := edgeAgtPost(t, `{"agent":"kronos","error":"rate_limit","session_id":"s"}`)
+			rec := edgeAgtPost(t, `{"agent":"iris","error":"rate_limit","session_id":"s"}`)
 			if rec.Code != http.StatusOK {
 				t.Fatalf("delivery %d: status = %d (body %q)", i, rec.Code, rec.Body.String())
 			}
 		}
-		got := edgeAgtRecord(t, st, "kronos")
+		got := edgeAgtRecord(t, st, "iris")
 		if got.Deliveries != 5 {
 			t.Fatalf("Deliveries = %d, want 5", got.Deliveries)
 		}
@@ -291,14 +287,14 @@ func TestEdgeAgtLimitHitAgentFoldSemantics(t *testing.T) {
 
 	t.Run("a resolved hit never folds", func(t *testing.T) {
 		st := useTestStore(t)
-		edgeAgtSeed(t, st, "kronos", jobs.LimitHit{
+		edgeAgtSeed(t, st, "iris", jobs.LimitHit{
 			Error: "rate_limit", At: 1_700_000_000, Deliveries: 3,
 			HandledAt: 1_700_000_100, Outcome: "rotated",
 		})
-		if rec := edgeAgtPost(t, `{"agent":"kronos","error":"rate_limit"}`); rec.Code != http.StatusOK {
+		if rec := edgeAgtPost(t, `{"agent":"iris","error":"rate_limit"}`); rec.Code != http.StatusOK {
 			t.Fatalf("status = %d, want 200", rec.Code)
 		}
-		got := edgeAgtRecord(t, st, "kronos")
+		got := edgeAgtRecord(t, st, "iris")
 		if got.At == 1_700_000_000 {
 			t.Fatalf("the delivery folded onto a RESOLVED hit: %+v", got)
 		}
@@ -323,18 +319,18 @@ func TestEdgeAgtLimitHitAgentFoldSemantics(t *testing.T) {
 
 	t.Run("a reset clause replaces clause-less details", func(t *testing.T) {
 		st := useTestStore(t)
-		if rec := edgeAgtPost(t, `{"agent":"kronos","error":"rate_limit","details":"429 Too Many Requests"}`); rec.Code != http.StatusOK {
+		if rec := edgeAgtPost(t, `{"agent":"iris","error":"rate_limit","details":"429 Too Many Requests"}`); rec.Code != http.StatusOK {
 			t.Fatalf("first: status = %d", rec.Code)
 		}
 		const withClause = "You've hit your session limit · resets 4:50am (America/New_York)"
-		body, err := json.Marshal(map[string]string{"agent": "kronos", "error": "rate_limit", "details": withClause})
+		body, err := json.Marshal(map[string]string{"agent": "iris", "error": "rate_limit", "details": withClause})
 		if err != nil {
 			t.Fatal(err)
 		}
 		if rec := edgeAgtPost(t, string(body)); rec.Code != http.StatusOK {
 			t.Fatalf("second: status = %d", rec.Code)
 		}
-		got := edgeAgtRecord(t, st, "kronos")
+		got := edgeAgtRecord(t, st, "iris")
 		if got.Details != withClause {
 			t.Fatalf("Details = %q, want the clause-carrying delivery's %q", got.Details, withClause)
 		}
@@ -345,14 +341,14 @@ func TestEdgeAgtLimitHitAgentFoldSemantics(t *testing.T) {
 
 	t.Run("an unresolved swap watermark survives supersession", func(t *testing.T) {
 		st := useTestStore(t)
-		edgeAgtSeed(t, st, "kronos", jobs.LimitHit{
+		edgeAgtSeed(t, st, "iris", jobs.LimitHit{
 			Error: "rate_limit", At: 1_700_000_000, Deliveries: 1,
 			SwappedAt: 1_700_000_050, SwappedTo: "pool-b@example.com",
 		})
-		if rec := edgeAgtPost(t, `{"agent":"kronos","error":"overloaded"}`); rec.Code != http.StatusOK {
+		if rec := edgeAgtPost(t, `{"agent":"iris","error":"overloaded"}`); rec.Code != http.StatusOK {
 			t.Fatalf("status = %d, want 200", rec.Code)
 		}
-		got := edgeAgtRecord(t, st, "kronos")
+		got := edgeAgtRecord(t, st, "iris")
 		if got.SwappedAt != 1_700_000_050 || got.SwappedTo != "pool-b@example.com" {
 			t.Fatalf("the landed swap was dropped by a superseding delivery: %+v", got)
 		}
@@ -362,12 +358,12 @@ func TestEdgeAgtLimitHitAgentFoldSemantics(t *testing.T) {
 // `details` is free text Claude Code wrote, so the agent form truncates it
 // exactly as the slug form does rather than refusing the delivery: the
 // error type is the payload, and losing a standing agent's limit over a
-// verbose sentence would leave kronos dead with nothing recorded.
+// verbose sentence would leave the agent dead with nothing recorded.
 func TestEdgeAgtLimitHitAgentDetailsTruncatedRatherThanRefused(t *testing.T) {
 	st := useTestStore(t)
 
 	long := "You've hit your session limit.\nresets 4:50am.\r\n" + strings.Repeat("wait or upgrade ", 60)
-	body, err := json.Marshal(map[string]string{"agent": "kronos", "error": "rate_limit", "details": long})
+	body, err := json.Marshal(map[string]string{"agent": "iris", "error": "rate_limit", "details": long})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -376,7 +372,7 @@ func TestEdgeAgtLimitHitAgentDetailsTruncatedRatherThanRefused(t *testing.T) {
 		t.Fatalf("status = %d, want 200 (body %q)", rec.Code, rec.Body.String())
 	}
 
-	got := edgeAgtRecord(t, st, "kronos")
+	got := edgeAgtRecord(t, st, "iris")
 	if want := core.TruncateOneLine(long, 200); got.Details != want {
 		t.Fatalf("Details = %q, want core.TruncateOneLine(details, 200) = %q", got.Details, want)
 	}
@@ -395,13 +391,13 @@ func TestEdgeAgtLimitHitAgentDetailsTruncatedRatherThanRefused(t *testing.T) {
 func TestEdgeAgtLimitHitAgentIgnoresUnknownFields(t *testing.T) {
 	st := useTestStore(t)
 
-	body := `{"agent":"kronos","error":"rate_limit","details":"d",` +
+	body := `{"agent":"iris","error":"rate_limit","details":"d",` +
 		`"hook_event_name":"StopFailure","api_error":{"type":"rate_limit_error"},` +
-		`"slug_hint":"kronos","effort":{"level":"high"},"future_field":[1,2,3]}`
+		`"slug_hint":"iris","effort":{"level":"high"},"future_field":[1,2,3]}`
 	if rec := edgeAgtPost(t, body); rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200 (body %q)", rec.Code, rec.Body.String())
 	}
-	if got := edgeAgtRecord(t, st, "kronos"); got.Error != "rate_limit" || got.Details != "d" {
+	if got := edgeAgtRecord(t, st, "iris"); got.Error != "rate_limit" || got.Details != "d" {
 		t.Fatalf("record = %+v", got)
 	}
 }
@@ -419,14 +415,14 @@ func TestEdgeAgtLimitHitAgentRouteIsNotMirrorGated(t *testing.T) {
 	mux := http.NewServeMux()
 	Register(mux)
 
-	rec := postJSON(t, mux, edgeAgtPath, []byte(`{"agent":"kronos","error":"rate_limit"}`))
+	rec := postJSON(t, mux, edgeAgtPath, []byte(`{"agent":"iris","error":"rate_limit"}`))
 	if rec.Code == http.StatusForbidden {
 		t.Fatalf("POST %s with an agent = 403 under mirror mode — a mirror must still RECORD hits", edgeAgtPath)
 	}
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200 (body %q)", rec.Code, rec.Body.String())
 	}
-	if got := edgeAgtRecord(t, st, "kronos"); got.At == 0 {
+	if got := edgeAgtRecord(t, st, "iris"); got.At == 0 {
 		t.Fatal("a mirror recorded nothing for a valid agent delivery")
 	}
 }

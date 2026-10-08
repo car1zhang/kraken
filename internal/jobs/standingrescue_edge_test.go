@@ -46,7 +46,7 @@ var edgeStandingNow = time.Unix(1_800_000_000, 0)
 // all derived from it, so its contents and its ORDER are contract, not
 // convenience.
 func TestEdgeStandingAgentIDsAreExactAndStable(t *testing.T) {
-	want := []string{"kronos", "iris"}
+	want := []string{"iris"}
 	for round := 0; round < 2; round++ {
 		got := standingAgentIDs()
 		if len(got) != len(want) {
@@ -62,11 +62,11 @@ func TestEdgeStandingAgentIDsAreExactAndStable(t *testing.T) {
 
 // IsStandingAgentID is case-SENSITIVE and exact. It is the API route's
 // whole validation, so anything it accepts becomes a kv key that the rescue
-// pass will later act on — an accepted near-miss ("Kronos", " kronos") would
+// pass will later act on — an accepted near-miss ("Iris", " iris") would
 // mint a record no pass ever reads, and an accepted numeric string would
 // land in the same namespace a job's key lives in.
 func TestEdgeIsStandingAgentIDRejectsEverythingElse(t *testing.T) {
-	for _, id := range []string{"kronos", "iris"} {
+	for _, id := range []string{"iris"} {
 		if !IsStandingAgentID(id) {
 			t.Errorf("IsStandingAgentID(%q) = false, want true", id)
 		}
@@ -74,18 +74,9 @@ func TestEdgeIsStandingAgentIDRejectsEverythingElse(t *testing.T) {
 	for _, id := range []string{
 		"",
 		" ",
-		"KRONOS",
-		"Kronos",
 		"IRIS",
 		"Iris",
-		" kronos",
-		"kronos ",
-		"kronos\n",
 		"\tiris",
-		"kronos-1",
-		"kronos.iris",
-		"krono",
-		"kronoss",
 		"iri",
 		"iriss",
 		"zeus",
@@ -96,10 +87,7 @@ func TestEdgeIsStandingAgentIDRejectsEverythingElse(t *testing.T) {
 		"42",
 		"123456",
 		"-1",
-		"limit_hit:kronos",
 		"limit_hit:iris",
-		"kronos,iris",
-		"kronos|iris",
 	} {
 		if IsStandingAgentID(id) {
 			t.Errorf("IsStandingAgentID(%q) = true, want false", id)
@@ -121,7 +109,7 @@ func TestEdgeStandingHitKeyShape(t *testing.T) {
 }
 
 // The contract's mandated collision fixture, by SHAPE rather than by luck:
-// a job whose decimal id renders to a string the same LENGTH as "kronos"
+// a job whose decimal id renders to a string the same LENGTH as "iris"
 // must still key differently, and so must the extremes of the int64 range.
 func TestEdgeStandingHitKeyNeverCollidesWithAJobKey(t *testing.T) {
 	agentKeys := map[string]string{}
@@ -131,9 +119,9 @@ func TestEdgeStandingHitKeyNeverCollidesWithAJobKey(t *testing.T) {
 
 	for _, jobID := range []int64{
 		0, 1, -1, 6, 42,
-		123456,  // exactly len("kronos") == 6 digits — the mandated same-length shape
-		1111,    // len("iris") == 4 digits
-		9999999, // longer than either
+		123456,
+		1111,    // exactly len("iris") == 4 digits — the mandated same-length shape
+		9999999, // longer
 		math.MaxInt64,
 		math.MinInt64,
 	} {
@@ -146,13 +134,13 @@ func TestEdgeStandingHitKeyNeverCollidesWithAJobKey(t *testing.T) {
 	// and the shape assertion itself: equal length, different string. A test
 	// that only compared unequal ids would pass on a key scheme that
 	// happened to differ in length today.
-	sameLen := limitHitKey(123456)
-	if len(sameLen) != len(standingHitKey("kronos")) {
+	sameLen := limitHitKey(1111)
+	if len(sameLen) != len(standingHitKey("iris")) {
 		t.Fatalf("fixture is not the intended shape: %q and %q differ in length",
-			sameLen, standingHitKey("kronos"))
+			sameLen, standingHitKey("iris"))
 	}
-	if sameLen == standingHitKey("kronos") {
-		t.Fatalf("limitHitKey(123456) == standingHitKey(\"kronos\") == %q", sameLen)
+	if sameLen == standingHitKey("iris") {
+		t.Fatalf("limitHitKey(1111) == standingHitKey(\"iris\") == %q", sameLen)
 	}
 }
 
@@ -162,19 +150,12 @@ func TestEdgeStandingHitKeyNeverCollidesWithAJobKey(t *testing.T) {
 // agent) must not let two agents' keys merge, and the separator must keep
 // the id and the reason distinguishable.
 func TestEdgeStandingHitTriggerKeyShapeAndCollision(t *testing.T) {
-	const reason = "kronos hit a usage limit: You've hit your session limit"
+	const reason = "iris hit a usage limit: You've hit your session limit"
 
 	for _, id := range standingAgentIDs() {
 		if got, want := standingHitTriggerKey(id, reason), "limithit:"+id+"|"+reason; got != want {
 			t.Errorf("standingHitTriggerKey(%q, reason) = %q, want %q", id, got, want)
 		}
-	}
-
-	// the collision fixture: one reason naming kronos, keyed under both
-	// agents, must produce two different keys — otherwise iris' dedup stamp
-	// would mute kronos' re-record (and vice versa) forever.
-	if a, b := standingHitTriggerKey("kronos", reason), standingHitTriggerKey("iris", reason); a == b {
-		t.Fatalf("both agents key one reason to %q", a)
 	}
 
 	// and it can never land on a JOB's trigger key: those render a decimal
@@ -199,7 +180,7 @@ func TestEdgeStandingHitTriggerKeyShapeAndCollision(t *testing.T) {
 func TestEdgeReadLimitHitByKeyDegradesToZero(t *testing.T) {
 	t.Run("no store wired", func(t *testing.T) {
 		t.Setenv("HOME", t.TempDir())
-		if got := readLimitHitByKey(standingHitKey("kronos")); got != (LimitHit{}) {
+		if got := readLimitHitByKey(standingHitKey("iris")); got != (LimitHit{}) {
 			t.Fatalf("readLimitHitByKey with no store = %+v, want the zero record", got)
 		}
 	})
@@ -213,7 +194,7 @@ func TestEdgeReadLimitHitByKeyDegradesToZero(t *testing.T) {
 
 	t.Run("garbage rows", func(t *testing.T) {
 		st := useTestStore(t)
-		key := standingHitKey("kronos")
+		key := standingHitKey("iris")
 		for _, bad := range []string{
 			"{not json",
 			"",
@@ -259,11 +240,11 @@ func TestEdgeReadLimitHitDelegatesToTheKeyedRead(t *testing.T) {
 // the key is a namespace, the label is the human word for who hit the wall.
 func TestEdgeRecordLimitHitByKeyWithoutStoreErrsAndNamesTheLabel(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
-	got, err := recordLimitHitByKey(standingHitKey("kronos"), "kronos", "", "rate_limit", "d", "s", "a", edgeStandingNow)
+	got, err := recordLimitHitByKey(standingHitKey("iris"), "iris", "", "rate_limit", "d", "s", "a", edgeStandingNow)
 	if err == nil {
 		t.Fatalf("recordLimitHitByKey with no store = (%+v, nil), want an error", got)
 	}
-	if !strings.Contains(err.Error(), "kronos") {
+	if !strings.Contains(err.Error(), "iris") {
 		t.Errorf("error %q does not name the label", err)
 	}
 	if got != (LimitHit{}) {
@@ -277,12 +258,12 @@ func TestEdgeRecordLimitHitByKeyWithoutStoreErrsAndNamesTheLabel(t *testing.T) {
 func TestEdgeRecordLimitHitByKeyFoldEdges(t *testing.T) {
 	t.Run("a resolved hit never folds", func(t *testing.T) {
 		st := useTestStore(t)
-		key := standingHitKey("kronos")
+		key := standingHitKey("iris")
 		edgeStandingSeedHit(t, st, key, LimitHit{
 			Error: "rate_limit", At: edgeStandingNow.Unix() - 600, Deliveries: 4,
 			HandledAt: edgeStandingNow.Unix() - 300, Outcome: "rotated",
 		})
-		got, err := recordLimitHitByKey(key, "kronos", "", "rate_limit", "again", "s", "", edgeStandingNow)
+		got, err := recordLimitHitByKey(key, "iris", "", "rate_limit", "again", "s", "", edgeStandingNow)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -299,11 +280,11 @@ func TestEdgeRecordLimitHitByKeyFoldEdges(t *testing.T) {
 
 	t.Run("a different error type never folds", func(t *testing.T) {
 		st := useTestStore(t)
-		key := standingHitKey("kronos")
+		key := standingHitKey("iris")
 		edgeStandingSeedHit(t, st, key, LimitHit{
 			Error: "rate_limit", At: edgeStandingNow.Unix() - 60, Deliveries: 2,
 		})
-		got, err := recordLimitHitByKey(key, "kronos", "", "overloaded", "", "", "", edgeStandingNow)
+		got, err := recordLimitHitByKey(key, "iris", "", "overloaded", "", "", "", edgeStandingNow)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -314,7 +295,7 @@ func TestEdgeRecordLimitHitByKeyFoldEdges(t *testing.T) {
 
 	t.Run("an unresolved swap watermark survives supersession", func(t *testing.T) {
 		st := useTestStore(t)
-		key := standingHitKey("kronos")
+		key := standingHitKey("iris")
 		edgeStandingSeedHit(t, st, key, LimitHit{
 			Error: "rate_limit", At: edgeStandingNow.Unix() - 60, Deliveries: 1,
 			SwappedAt: edgeStandingNow.Unix() - 30, SwappedTo: "pool-b@example.com",
@@ -322,7 +303,7 @@ func TestEdgeRecordLimitHitByKeyFoldEdges(t *testing.T) {
 		// a DIFFERENT error type supersedes the record; the landed swap must
 		// ride across, or the next tick reads a hit that was never swapped
 		// and swaps the machine a second time.
-		got, err := recordLimitHitByKey(key, "kronos", "", "overloaded", "", "", "", edgeStandingNow)
+		got, err := recordLimitHitByKey(key, "iris", "", "overloaded", "", "", "", edgeStandingNow)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -350,13 +331,13 @@ func TestEdgeRecordLimitHitByKeyFoldEdges(t *testing.T) {
 
 	t.Run("a folded delivery with a reset clause replaces clause-less details", func(t *testing.T) {
 		st := useTestStore(t)
-		key := standingHitKey("kronos")
+		key := standingHitKey("iris")
 		edgeStandingSeedHit(t, st, key, LimitHit{
 			Error: "rate_limit", At: edgeStandingNow.Unix() - 60, Deliveries: 1,
 			Details: "429 Too Many Requests",
 		})
 		const withClause = "You've hit your session limit · resets 4:50am (America/New_York)"
-		got, err := recordLimitHitByKey(key, "kronos", "", "rate_limit", withClause, "", "", edgeStandingNow)
+		got, err := recordLimitHitByKey(key, "iris", "", "rate_limit", withClause, "", "", edgeStandingNow)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -370,13 +351,13 @@ func TestEdgeRecordLimitHitByKeyFoldEdges(t *testing.T) {
 
 	t.Run("a clause-less delivery never replaces clause-carrying details", func(t *testing.T) {
 		st := useTestStore(t)
-		key := standingHitKey("kronos")
+		key := standingHitKey("iris")
 		const withClause = "You've hit your session limit · resets 4:50am (America/New_York)"
 		edgeStandingSeedHit(t, st, key, LimitHit{
 			Error: "rate_limit", At: edgeStandingNow.Unix() - 60, Deliveries: 1,
 			Details: withClause,
 		})
-		got, err := recordLimitHitByKey(key, "kronos", "", "rate_limit", "429 Too Many Requests", "", "", edgeStandingNow)
+		got, err := recordLimitHitByKey(key, "iris", "", "rate_limit", "429 Too Many Requests", "", "", edgeStandingNow)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -387,14 +368,14 @@ func TestEdgeRecordLimitHitByKeyFoldEdges(t *testing.T) {
 
 	t.Run("the fold keeps the FIRST delivery's identity", func(t *testing.T) {
 		useTestStore(t)
-		key := standingHitKey("kronos")
-		first, err := recordLimitHitByKey(key, "kronos", "", "rate_limit", "one", "sess-a", "", edgeStandingNow)
+		key := standingHitKey("iris")
+		first, err := recordLimitHitByKey(key, "iris", "", "rate_limit", "one", "sess-a", "", edgeStandingNow)
 		if err != nil {
 			t.Fatal(err)
 		}
 		// hours later, from the transcript arm: still folds (there is no
 		// time window on the fold), and At/SessionID stay the first one's.
-		got, err := recordLimitHitByKey(key, "kronos", "", "rate_limit", "two", "sess-b", "agent-2", edgeStandingNow.Add(9*time.Hour))
+		got, err := recordLimitHitByKey(key, "iris", "", "rate_limit", "two", "sess-b", "agent-2", edgeStandingNow.Add(9*time.Hour))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -499,7 +480,7 @@ func edgeStandingAdoptable() LimitHit {
 		Error:       "rate_limit",
 		Details:     "You've hit your session limit",
 		At:          edgeStandingNow.Unix() - 120,
-		SessionID:   "sess-kronos",
+		SessionID:   "sess-iris",
 		Deliveries:  3,
 		Attempts:    2,
 		LastAttempt: edgeStandingNow.Unix() - 60,
@@ -587,325 +568,6 @@ func TestEdgeAdoptLandedSwapTouchesOnlyTheSwapFields(t *testing.T) {
 	want.SwappedTo = "pool-b@example.com"
 	if got != want {
 		t.Fatalf("adoption changed more than the swap fields:\n got %+v\nwant %+v", got, want)
-	}
-}
-
-// --- kronos' limit-hook command and its settings entry ---
-
-// The command's shape is exact, and the ORDER within it is load-bearing:
-// hookCommandFlags renders the flags a hook process cannot inherit, and
-// they have to sit between the verb and its argument the way every other
-// kraken hook command in this package builds them.
-func TestEdgeKronosLimitHookCommandShape(t *testing.T) {
-	const bin = "/opt/kraken-bin/kraken"
-
-	t.Run("default machine", func(t *testing.T) {
-		t.Setenv("HOME", t.TempDir())
-		t.Setenv("KRAKEN_DB_PATH", "")
-		got := kronosLimitHookCommand(bin)
-		if want := bin + " limit-hook" + hookCommandFlags() + " --agent kronos"; got != want {
-			t.Fatalf("kronosLimitHookCommand = %q, want %q", got, want)
-		}
-		if !strings.HasSuffix(got, " --agent kronos") {
-			t.Fatalf("kronosLimitHookCommand = %q, want it to end in the agent flag", got)
-		}
-		// never the cell form: a slug where an agent id goes would record a
-		// standing agent's limit against a job that does not exist.
-		if strings.Contains(got, "--agent kronos ") {
-			t.Fatalf("kronosLimitHookCommand = %q, want nothing after the agent id", got)
-		}
-	})
-
-	t.Run("a non-default db path is baked in ahead of the flag", func(t *testing.T) {
-		t.Setenv("HOME", t.TempDir())
-		t.Setenv("KRAKEN_DB_PATH", "/custom/kraken.db")
-		got := kronosLimitHookCommand(bin)
-		if want := bin + " limit-hook" + hookCommandFlags() + " --agent kronos"; got != want {
-			t.Fatalf("kronosLimitHookCommand = %q, want %q", got, want)
-		}
-		if !strings.Contains(got, "/custom/kraken.db") {
-			t.Fatalf("kronosLimitHookCommand = %q, want the db path baked in", got)
-		}
-		if strings.Index(got, "/custom/kraken.db") > strings.Index(got, "--agent") {
-			t.Fatalf("the flag run sits AFTER the agent id in %q", got)
-		}
-	})
-
-	// The replace-merge recognizes kraken's own entry by the "limit-hook"
-	// verb, and that predicate has to survive the trailing `--agent <id>`
-	// shape — if it does not, every install appends another entry and
-	// kronos grows one dead hook per install, forever.
-	t.Run("the replace-merge predicate recognizes it", func(t *testing.T) {
-		t.Setenv("HOME", t.TempDir())
-		t.Setenv("KRAKEN_DB_PATH", "")
-		group := map[string]any{
-			"matcher": "rate_limit",
-			"hooks": []any{
-				map[string]any{"type": "command", "command": kronosLimitHookCommand(bin)},
-			},
-		}
-		if !groupRunsVerb(group, "limit-hook") {
-			t.Fatalf("groupRunsVerb could not find the limit-hook verb in %q", kronosLimitHookCommand(bin))
-		}
-	})
-}
-
-// edgeStandingHookGroups returns every hook GROUP registered under one
-// event of a merged settings blob, as raw maps — the matcher is part of
-// what is being measured, so a reader that only returned command strings
-// could not see it.
-func edgeStandingHookGroups(t *testing.T, settings []byte, event string) []map[string]any {
-	t.Helper()
-	var parsed map[string]any
-	if err := json.Unmarshal(settings, &parsed); err != nil {
-		t.Fatalf("merged settings are not valid JSON: %v\n%s", err, settings)
-	}
-	hooks, _ := parsed["hooks"].(map[string]any)
-	groups, _ := hooks[event].([]any)
-	var out []map[string]any
-	for _, g := range groups {
-		if gm, ok := g.(map[string]any); ok {
-			out = append(out, gm)
-		}
-	}
-	return out
-}
-
-// edgeStandingLimitGroups filters those groups down to the ones running
-// kraken's limit-hook verb.
-func edgeStandingLimitGroups(t *testing.T, settings []byte) []map[string]any {
-	t.Helper()
-	var out []map[string]any
-	for _, g := range edgeStandingHookGroups(t, settings, "StopFailure") {
-		if groupRunsVerb(g, "limit-hook") {
-			out = append(out, g)
-		}
-	}
-	return out
-}
-
-// Installing twice yields ONE entry, and a changed binary path REPLACES
-// rather than appending. The documented parallel-server drill runs a
-// scratch build from /tmp, so append-if-absent would leave kronos with a
-// second StopFailure hook naming a binary that is then deleted — a failing
-// hook on every rate-limit death, on the one agent nobody is watching.
-func TestEdgeMergeKronosSettingsStopFailureIsIdempotentAndReplaced(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
-	t.Setenv("KRAKEN_DB_PATH", "")
-	const binA = "/tmp/kraken-test-a"
-	const binB = "/usr/local/bin/kraken"
-
-	once, err := mergeKronosSettings(nil, binA)
-	if err != nil {
-		t.Fatalf("merge(nil): %v", err)
-	}
-	groups := edgeStandingLimitGroups(t, once)
-	if len(groups) != 1 {
-		t.Fatalf("a fresh install wrote %d StopFailure limit-hook groups, want exactly 1:\n%s", len(groups), once)
-	}
-	if m, _ := groups[0]["matcher"].(string); m != "rate_limit" {
-		t.Fatalf("matcher = %q, want %q", m, "rate_limit")
-	}
-
-	twice, err := mergeKronosSettings(once, binA)
-	if err != nil {
-		t.Fatalf("merge(once): %v", err)
-	}
-	if got := len(edgeStandingLimitGroups(t, twice)); got != 1 {
-		t.Fatalf("a second install with the same binary left %d limit-hook groups, want 1:\n%s", got, twice)
-	}
-
-	thrice, err := mergeKronosSettings(twice, binB)
-	if err != nil {
-		t.Fatalf("merge(twice, binB): %v", err)
-	}
-	final := edgeStandingLimitGroups(t, thrice)
-	if len(final) != 1 {
-		t.Fatalf("installing from a new binary path left %d limit-hook groups, want 1:\n%s", len(final), thrice)
-	}
-	cmds := edgeHookCommands(t, thrice, "StopFailure")
-	for _, c := range cmds {
-		if strings.Contains(c, binA) {
-			t.Fatalf("the stale binary path survived in %q", c)
-		}
-	}
-	if n := edgeCountString(cmds, kronosLimitHookCommand(binB)); n != 1 {
-		t.Fatalf("StopFailure carries %d copies of the current command, want 1: %v", n, cmds)
-	}
-}
-
-// A hand-edited StopFailure key that is not an array of groups is a shape
-// Claude Code cannot run anyway. Replacing it outright is what keeps the
-// hook really installed; returning early and reporting success would leave
-// kronos permanently without its fast trigger on a settings file that looks
-// fine.
-func TestEdgeMergeKronosSettingsReplacesANonArrayStopFailure(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
-	t.Setenv("KRAKEN_DB_PATH", "")
-	const bin = "/usr/local/bin/kraken"
-
-	for _, weird := range []string{
-		`{"hooks":{"StopFailure":{"note":"hand edited into an object"}}}`,
-		`{"hooks":{"StopFailure":"a bare string"}}`,
-		`{"hooks":{"StopFailure":null}}`,
-		`{"hooks":{"StopFailure":42}}`,
-		`{"hooks":{"StopFailure":[]}}`,
-	} {
-		t.Run(weird, func(t *testing.T) {
-			merged, err := mergeKronosSettings([]byte(weird), bin)
-			if err != nil {
-				t.Fatalf("merge: %v", err)
-			}
-			groups := edgeStandingLimitGroups(t, merged)
-			if len(groups) != 1 {
-				t.Fatalf("StopFailure carries %d limit-hook groups, want 1:\n%s", len(groups), merged)
-			}
-			if m, _ := groups[0]["matcher"].(string); m != "rate_limit" {
-				t.Fatalf("matcher = %q, want %q", m, "rate_limit")
-			}
-		})
-	}
-}
-
-// The whole file is merged, never clobbered: somebody else's StopFailure
-// group, somebody else's statusLine, and any unrelated top-level key are
-// all left exactly as they were, and kraken's three existing hook groups
-// keep their single entry each.
-func TestEdgeMergeKronosSettingsLeavesEverythingElseAlone(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
-	t.Setenv("KRAKEN_DB_PATH", "")
-	const bin = "/usr/local/bin/kraken"
-
-	existing := `{
-	  "hooks": {
-	    "StopFailure": [
-	      {"matcher": "rate_limit", "hooks": [{"type": "command", "command": "/opt/somebody/else --report"}]}
-	    ]
-	  },
-	  "statusLine": {"type": "command", "command": "/opt/somebody/else/statusline"},
-	  "someUserKey": {"kept": true}
-	}`
-
-	merged, err := mergeKronosSettings([]byte(existing), bin)
-	if err != nil {
-		t.Fatalf("merge: %v", err)
-	}
-
-	cmds := edgeHookCommands(t, merged, "StopFailure")
-	if edgeCountString(cmds, "/opt/somebody/else --report") != 1 {
-		t.Fatalf("a foreign StopFailure entry was disturbed: %v", cmds)
-	}
-	if n := edgeCountString(cmds, kronosLimitHookCommand(bin)); n != 1 {
-		t.Fatalf("StopFailure carries %d copies of kraken's own entry, want 1: %v", n, cmds)
-	}
-
-	var parsed map[string]any
-	if err := json.Unmarshal(merged, &parsed); err != nil {
-		t.Fatalf("merged settings are not valid JSON: %v", err)
-	}
-	status, _ := parsed["statusLine"].(map[string]any)
-	if cmd, _ := status["command"].(string); cmd != "/opt/somebody/else/statusline" {
-		t.Fatalf("a foreign statusLine was rewritten: %q", cmd)
-	}
-	user, _ := parsed["someUserKey"].(map[string]any)
-	if kept, _ := user["kept"].(bool); !kept {
-		t.Fatalf("an unrelated top-level key was dropped: %v", parsed["someUserKey"])
-	}
-
-	// kraken's pre-existing groups still carry at least one entry each.
-	// PostToolUse is not among them since recall's per-tool-call arm retired
-	// (TestRecallHookEventsPinsTheWiring) — kronos writes nothing there now.
-	for _, ev := range []string{"PreToolUse", "PostCompact", "UserPromptSubmit"} {
-		if len(edgeHookCommands(t, merged, ev)) == 0 {
-			t.Errorf("event %q lost its kraken entry", ev)
-		}
-	}
-}
-
-// TestEdgeMergeKronosSettingsStripsTheRetiredRecallArm is a REGRESSION PIN,
-// not a spec test: the merge learned to strip retiredRecallHookEvents only
-// after the strand it fixes was diagnosed in review.
-//
-// Dropping PostToolUse from recallHookEvents stops kraken WRITING that entry
-// and does nothing at all to the one already in kronos' file — and kronos'
-// file is long-lived (its dir is `~/.kraken/kronos`, created once and merged
-// into on every spawn). Left there, a hook nothing in the binary intends fires
-// on every one of kronos' tool calls forever, POSTing to a route that answers
-// it, with no code left that a grep for the behaviour would land on.
-//
-// The fixture is the shape that actually exists on this machine: kraken's own
-// pre-retirement PostToolUse recall group, alone under that key (kronos gets
-// no pr-hook), beside a foreign StopFailure entry and a foreign key. What must
-// survive is everything that is not that group.
-func TestEdgeMergeKronosSettingsStripsTheRetiredRecallArm(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
-	t.Setenv("KRAKEN_DB_PATH", "")
-	const bin = "/usr/local/bin/kraken"
-
-	existing := `{
-	  "hooks": {
-	    "PostToolUse": [
-	      {"hooks": [{"type": "command", "command": "/usr/local/bin/kraken recall-hook --serve-addr 127.0.0.1:7777"}]}
-	    ],
-	    "StopFailure": [
-	      {"matcher": "rate_limit", "hooks": [{"type": "command", "command": "/opt/somebody/else --report"}]}
-	    ]
-	  },
-	  "someUserKey": {"kept": true}
-	}`
-
-	merged, err := mergeKronosSettings([]byte(existing), bin)
-	if err != nil {
-		t.Fatalf("mergeKronosSettings: %v", err)
-	}
-	for _, cmd := range edgeHookCommands(t, merged, "PostToolUse") {
-		if strings.Contains(cmd, "recall-hook") {
-			t.Errorf("the retired PostToolUse recall arm survived the merge: %q\n%s", cmd, merged)
-		}
-	}
-	// The key itself goes when nothing else is under it: an empty array is a
-	// shape kraken wrote, and this file promises to leave alone what it did
-	// not write.
-	var parsed map[string]any
-	if err := json.Unmarshal(merged, &parsed); err != nil {
-		t.Fatalf("merged settings are not valid JSON: %v\n%s", err, merged)
-	}
-	hooks, _ := parsed["hooks"].(map[string]any)
-	if _, present := hooks["PostToolUse"]; present {
-		t.Errorf("PostToolUse survived as an empty key: %s", merged)
-	}
-	// Everything else is untouched: the foreign StopFailure entry, kraken's own
-	// limit-hook beside it, the wired recall arm, and an unrelated top-level key.
-	stop := edgeHookCommands(t, merged, "StopFailure")
-	if edgeCountString(stop, "/opt/somebody/else --report") != 1 {
-		t.Errorf("a foreign StopFailure entry was disturbed: %v", stop)
-	}
-	if n := edgeCountString(stop, kronosLimitHookCommand(bin)); n != 1 {
-		t.Errorf("StopFailure carries %d copies of kraken's own entry, want 1: %v", n, stop)
-	}
-	for _, event := range recallHookEvents {
-		cmds := edgeHookCommands(t, merged, event)
-		n := 0
-		for _, cmd := range cmds {
-			if strings.Contains(cmd, "recall-hook") {
-				n++
-			}
-		}
-		if n != 1 {
-			t.Errorf("%s holds %d recall commands, want exactly 1: %v", event, n, cmds)
-		}
-	}
-	if user, _ := parsed["someUserKey"].(map[string]any); user == nil || user["kept"] != true {
-		t.Errorf("an unrelated top-level key was dropped: %v", parsed["someUserKey"])
-	}
-}
-
-// A settings file kraken cannot parse is a file kraken must not overwrite —
-// the StopFailure addition does not change that.
-func TestEdgeMergeKronosSettingsRefusesInvalidJSON(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
-	if _, err := mergeKronosSettings([]byte("{not json"), "/usr/local/bin/kraken"); err == nil {
-		t.Fatal("mergeKronosSettings over unparseable JSON returned nil error")
 	}
 }
 
@@ -1058,7 +720,7 @@ func edgeStandingPeer(session, name, sessionID string) *core.Peer {
 // nothing here reads a real conversation.
 func edgeStandingTranscript(t *testing.T, sessionID string, lines ...string) string {
 	t.Helper()
-	dir := filepath.Join(util.Home(), ".claude", "projects", "-Users-x-kraken-kronos")
+	dir := filepath.Join(util.Home(), ".claude", "projects", "-Users-x-kraken-iris")
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatalf("mkdir %s: %v", dir, err)
 	}
@@ -1084,27 +746,27 @@ const edgeStandingLimitBanner = `{"type":"assistant","message":{"model":"<synthe
 func TestEdgeStandingHealthQuietArms(t *testing.T) {
 	t.Run("no peer at all", func(t *testing.T) {
 		useTestStore(t)
-		a := edgeStandingAgentOf("kronos", edgeStandingStub{enabled: true})
-		edgeStandingTranscript(t, "sess-kronos", edgeStandingLimitBanner)
-		reason, isLimit, retryable := standingHealth(a, nil, "sess-kronos")
+		a := edgeStandingAgentOf("iris", edgeStandingStub{enabled: true})
+		edgeStandingTranscript(t, "sess-iris", edgeStandingLimitBanner)
+		reason, isLimit, retryable := standingHealth(a, nil, "sess-iris")
 		edgeStandingWantQuiet(t, "nil peer", reason, isLimit, retryable)
 	})
 
 	t.Run("a nameless peer is still starting", func(t *testing.T) {
 		useTestStore(t)
-		edgeStandingTranscript(t, "sess-kronos", edgeStandingLimitBanner)
-		a := edgeStandingAgentOf("kronos", edgeStandingStub{
-			enabled: true, peer: edgeStandingPeer("kronos", "", ""),
+		edgeStandingTranscript(t, "sess-iris", edgeStandingLimitBanner)
+		a := edgeStandingAgentOf("iris", edgeStandingStub{
+			enabled: true, peer: edgeStandingPeer("iris", "", ""),
 		})
-		reason, isLimit, retryable := standingHealth(a, []*core.Peer{a.Find(nil)}, "sess-kronos")
+		reason, isLimit, retryable := standingHealth(a, []*core.Peer{a.Find(nil)}, "sess-iris")
 		edgeStandingWantQuiet(t, "nameless peer", reason, isLimit, retryable)
 	})
 
 	t.Run("no recorded session id", func(t *testing.T) {
 		useTestStore(t)
-		edgeStandingTranscript(t, "sess-kronos", edgeStandingLimitBanner)
-		a := edgeStandingAgentOf("kronos", edgeStandingStub{
-			enabled: true, peer: edgeStandingPeer("kronos", "kronos", "sess-kronos"),
+		edgeStandingTranscript(t, "sess-iris", edgeStandingLimitBanner)
+		a := edgeStandingAgentOf("iris", edgeStandingStub{
+			enabled: true, peer: edgeStandingPeer("iris", "iris", "sess-iris"),
 		})
 		reason, isLimit, retryable := standingHealth(a, []*core.Peer{a.Find(nil)}, "")
 		edgeStandingWantQuiet(t, "empty recorded id", reason, isLimit, retryable)
@@ -1112,8 +774,8 @@ func TestEdgeStandingHealthQuietArms(t *testing.T) {
 
 	t.Run("an unresolvable transcript path", func(t *testing.T) {
 		useTestStore(t)
-		a := edgeStandingAgentOf("kronos", edgeStandingStub{
-			enabled: true, peer: edgeStandingPeer("kronos", "kronos", "sess-kronos"),
+		a := edgeStandingAgentOf("iris", edgeStandingStub{
+			enabled: true, peer: edgeStandingPeer("iris", "iris", "sess-iris"),
 		})
 		// no transcript was ever written for this id
 		reason, isLimit, retryable := standingHealth(a, []*core.Peer{a.Find(nil)}, "sess-never-written")
@@ -1123,8 +785,8 @@ func TestEdgeStandingHealthQuietArms(t *testing.T) {
 	t.Run("an empty transcript file", func(t *testing.T) {
 		useTestStore(t)
 		edgeStandingTranscript(t, "sess-empty")
-		a := edgeStandingAgentOf("kronos", edgeStandingStub{
-			enabled: true, peer: edgeStandingPeer("kronos", "kronos", "sess-empty"),
+		a := edgeStandingAgentOf("iris", edgeStandingStub{
+			enabled: true, peer: edgeStandingPeer("iris", "iris", "sess-empty"),
 		})
 		reason, isLimit, retryable := standingHealth(a, []*core.Peer{a.Find(nil)}, "sess-empty")
 		edgeStandingWantQuiet(t, "empty transcript", reason, isLimit, retryable)
@@ -1151,9 +813,9 @@ func TestEdgeStandingHealthClassifiesOnlyTheRecordedSession(t *testing.T) {
 	edgeStandingTranscript(t, "sess-recorded",
 		`{"type":"assistant","message":{"model":"claude-fable-5","content":[{"type":"text","text":"all good"}]}}`)
 
-	peer := edgeStandingPeer("kronos", "kronos", "sess-guessed")
+	peer := edgeStandingPeer("iris", "iris", "sess-guessed")
 	peer.SessionIDGuessed = true
-	a := edgeStandingAgentOf("kronos", edgeStandingStub{enabled: true, peer: peer})
+	a := edgeStandingAgentOf("iris", edgeStandingStub{enabled: true, peer: peer})
 
 	reason, isLimit, retryable := standingHealth(a, []*core.Peer{peer}, "sess-recorded")
 	if reason != "" || isLimit || retryable {
@@ -1168,58 +830,58 @@ func TestEdgeStandingHealthClassifiesOnlyTheRecordedSession(t *testing.T) {
 // to demand positive identity evidence: a refusal costs one deferred round,
 // a false positive destroys a stranger's pane.
 func TestEdgeStandingKillTargetRefusals(t *testing.T) {
-	a := edgeStandingAgentOf("kronos", edgeStandingStub{enabled: true})
+	a := edgeStandingAgentOf("iris", edgeStandingStub{enabled: true})
 
 	cases := []struct {
 		name     string
 		peers    []*core.Peer
 		recorded string
 	}{
-		{"no peers at all", nil, "sess-kronos"},
-		{"an empty snapshot", []*core.Peer{}, "sess-kronos"},
+		{"no peers at all", nil, "sess-iris"},
+		{"an empty snapshot", []*core.Peer{}, "sess-iris"},
 		{
 			"a nameless claude with no session id and nothing recorded",
-			[]*core.Peer{edgeStandingPeer("kronos", "", "")},
+			[]*core.Peer{edgeStandingPeer("iris", "", "")},
 			"",
 		},
 		{
 			"a nameless claude with no session id",
-			[]*core.Peer{edgeStandingPeer("kronos", "", "")},
-			"sess-kronos",
+			[]*core.Peer{edgeStandingPeer("iris", "", "")},
+			"sess-iris",
 		},
 		{
 			"a foreign name in the agent's session",
-			[]*core.Peer{edgeStandingPeer("kronos", "somebody-else", "sess-other")},
-			"sess-kronos",
+			[]*core.Peer{edgeStandingPeer("iris", "somebody-else", "sess-other")},
+			"sess-iris",
 		},
 		{
 			"the agent's own name in ANOTHER session",
-			[]*core.Peer{edgeStandingPeer("cell-something-3", "kronos", "sess-kronos")},
-			"sess-kronos",
+			[]*core.Peer{edgeStandingPeer("cell-something-3", "iris", "sess-iris")},
+			"sess-iris",
 		},
 		{
 			"the recorded session id in ANOTHER session",
-			[]*core.Peer{edgeStandingPeer("cell-something-3", "", "sess-kronos")},
-			"sess-kronos",
+			[]*core.Peer{edgeStandingPeer("cell-something-3", "", "sess-iris")},
+			"sess-iris",
 		},
 		{
 			"a nested (depth > 0) agent",
-			[]*core.Peer{func() *core.Peer { p := edgeStandingPeer("kronos", "kronos", "sess-kronos"); p.Depth = 1; return p }()},
-			"sess-kronos",
+			[]*core.Peer{func() *core.Peer { p := edgeStandingPeer("iris", "iris", "sess-iris"); p.Depth = 1; return p }()},
+			"sess-iris",
 		},
 		{
 			"a shell pane holding no agent",
-			[]*core.Peer{{TmuxSession: "kronos", Pane: "%1", Role: "shell"}},
-			"sess-kronos",
+			[]*core.Peer{{TmuxSession: "iris", Pane: "%1", Role: "shell"}},
+			"sess-iris",
 		},
 		{
 			"a codex pane",
 			[]*core.Peer{func() *core.Peer {
-				p := edgeStandingPeer("kronos", "kronos", "sess-kronos")
+				p := edgeStandingPeer("iris", "iris", "sess-iris")
 				p.Agent = "codex"
 				return p
 			}()},
-			"sess-kronos",
+			"sess-iris",
 		},
 	}
 
@@ -1238,11 +900,11 @@ func TestEdgeStandingKillTargetRefusals(t *testing.T) {
 
 // The recorded-session-id clause is the second half of the identity test,
 // and it exists precisely for the peer the NAME clause cannot vouch for:
-// Peer.Name only appears once claude writes its session file, so a kronos
-// that is up and working but not yet named is exactly the case a name-only
+// Peer.Name only appears once claude writes its session file, so a standing
+// agent that is up and working but not yet named is exactly the case a name-only
 // guard would defer forever. A refusal is a deferral, and deferring on an
 // agent whose own recorded session id is sitting in the pane would leave a
-// limit-stalled kronos dead until carl typed into it.
+// limit-stalled agent dead until carl typed into it.
 //
 // (JOIN NOTE — the contract states both "matches BY IDENTITY: … or
 // (recorded != "" and SessionID == recorded)" and "a nameless peer …
@@ -1253,10 +915,10 @@ func TestEdgeStandingKillTargetRefusals(t *testing.T) {
 // refusal list is taken to mean "a peer with no identity evidence", and
 // this is the case that separates the two readings.)
 func TestEdgeStandingKillTargetAcceptsTheRecordedSessionIDOfANamelessPeer(t *testing.T) {
-	a := edgeStandingAgentOf("kronos", edgeStandingStub{enabled: true})
-	peer := edgeStandingPeer("kronos", "", "sess-kronos")
+	a := edgeStandingAgentOf("iris", edgeStandingStub{enabled: true})
+	peer := edgeStandingPeer("iris", "", "sess-iris")
 
-	got, why := standingKillTarget(a, []*core.Peer{peer}, "sess-kronos")
+	got, why := standingKillTarget(a, []*core.Peer{peer}, "sess-iris")
 	if got != peer {
 		t.Fatalf("standingKillTarget = (%+v, %q), want the peer whose SessionID is the recorded one", got, why)
 	}
@@ -1371,17 +1033,17 @@ func TestEdgeStandingLimitRescueSkipsEmptyAndResolvedHits(t *testing.T) {
 		st := useTestStore(t)
 		calls := edgeStandingStubRespawn(t, nil)
 		d := newDaemon()
-		a := edgeStandingAgentOf("kronos", edgeStandingStub{
-			enabled: true, recorded: "sess-kronos", hasRecorded: true,
-			peer: edgeStandingPeer("kronos", "kronos", "sess-kronos"),
+		a := edgeStandingAgentOf("iris", edgeStandingStub{
+			enabled: true, recorded: "sess-iris", hasRecorded: true,
+			peer: edgeStandingPeer("iris", "iris", "sess-iris"),
 		})
 
-		d.standingLimitRescue(a, st, []*core.Peer{a.Find(nil)}, map[string]bool{"kronos": true}, edgeStandingNow)
+		d.standingLimitRescue(a, st, []*core.Peer{a.Find(nil)}, map[string]bool{"iris": true}, edgeStandingNow)
 
 		if len(*calls) != 0 {
 			t.Fatalf("standingRespawn was called %d times with no hit recorded", len(*calls))
 		}
-		if got := readLimitHitByKey(standingHitKey("kronos")); got != (LimitHit{}) {
+		if got := readLimitHitByKey(standingHitKey("iris")); got != (LimitHit{}) {
 			t.Fatalf("a no-hit tick wrote a record: %+v", got)
 		}
 	})
@@ -1389,7 +1051,7 @@ func TestEdgeStandingLimitRescueSkipsEmptyAndResolvedHits(t *testing.T) {
 	t.Run("an already-resolved hit", func(t *testing.T) {
 		st := useTestStore(t)
 		calls := edgeStandingStubRespawn(t, nil)
-		key := standingHitKey("kronos")
+		key := standingHitKey("iris")
 		resolved := LimitHit{
 			Error: "rate_limit", At: edgeStandingNow.Unix() - 3600, Deliveries: 2,
 			SwappedAt: edgeStandingNow.Unix() - 3500, SwappedTo: "pool-b@example.com",
@@ -1398,11 +1060,11 @@ func TestEdgeStandingLimitRescueSkipsEmptyAndResolvedHits(t *testing.T) {
 		edgeStandingSeedHit(t, st, key, resolved)
 
 		d := newDaemon()
-		a := edgeStandingAgentOf("kronos", edgeStandingStub{
-			enabled: true, recorded: "sess-kronos", hasRecorded: true,
-			peer: edgeStandingPeer("kronos", "kronos", "sess-kronos"),
+		a := edgeStandingAgentOf("iris", edgeStandingStub{
+			enabled: true, recorded: "sess-iris", hasRecorded: true,
+			peer: edgeStandingPeer("iris", "iris", "sess-iris"),
 		})
-		d.standingLimitRescue(a, st, []*core.Peer{a.Find(nil)}, map[string]bool{"kronos": true}, edgeStandingNow)
+		d.standingLimitRescue(a, st, []*core.Peer{a.Find(nil)}, map[string]bool{"iris": true}, edgeStandingNow)
 
 		if len(*calls) != 0 {
 			t.Fatalf("standingRespawn was called %d times on a resolved hit", len(*calls))
@@ -1420,20 +1082,20 @@ func TestEdgeStandingLimitRescueSkipsEmptyAndResolvedHits(t *testing.T) {
 func TestEdgeStandingLimitRescueRefusedKillTargetCountsOutWithoutRespawning(t *testing.T) {
 	st := useTestStore(t)
 	calls := edgeStandingStubRespawn(t, nil)
-	key := standingHitKey("kronos")
+	key := standingHitKey("iris")
 	edgeStandingSeedHit(t, st, key, LimitHit{
 		Error: "rate_limit", At: edgeStandingNow.Unix() - 300, Deliveries: 1,
 		SwappedAt: edgeStandingNow.Unix() - 120, SwappedTo: "pool-b@example.com",
 	})
 
 	d := newDaemon()
-	a := edgeStandingAgentOf("kronos", edgeStandingStub{
-		enabled: true, recorded: "sess-kronos", hasRecorded: true,
+	a := edgeStandingAgentOf("iris", edgeStandingStub{
+		enabled: true, recorded: "sess-iris", hasRecorded: true,
 	})
 	// the session is live, but its only pane holds a stranger — no identity
 	// evidence, so the round is refused
-	strangers := []*core.Peer{edgeStandingPeer("kronos", "somebody-else", "sess-nothing")}
-	d.standingLimitRescue(a, st, strangers, map[string]bool{"kronos": true}, edgeStandingNow)
+	strangers := []*core.Peer{edgeStandingPeer("iris", "somebody-else", "sess-nothing")}
+	d.standingLimitRescue(a, st, strangers, map[string]bool{"iris": true}, edgeStandingNow)
 
 	if len(*calls) != 0 {
 		t.Fatalf("standingRespawn ran %d times despite a refused kill target", len(*calls))
@@ -1457,18 +1119,18 @@ func TestEdgeStandingLimitRescueRefusedKillTargetCountsOutWithoutRespawning(t *t
 func TestEdgeStandingLimitRescueRespawnFailureLeavesTheHitOpen(t *testing.T) {
 	st := useTestStore(t)
 	calls := edgeStandingStubRespawn(t, os.ErrPermission)
-	key := standingHitKey("kronos")
+	key := standingHitKey("iris")
 	edgeStandingSeedHit(t, st, key, LimitHit{
 		Error: "rate_limit", At: edgeStandingNow.Unix() - 300, Deliveries: 1,
 		SwappedAt: edgeStandingNow.Unix() - 120, SwappedTo: "pool-b@example.com",
 	})
 
 	d := newDaemon()
-	a := edgeStandingAgentOf("kronos", edgeStandingStub{
-		enabled: true, recorded: "sess-kronos", hasRecorded: true,
+	a := edgeStandingAgentOf("iris", edgeStandingStub{
+		enabled: true, recorded: "sess-iris", hasRecorded: true,
 	})
-	peer := edgeStandingPeer("kronos", "kronos", "sess-kronos")
-	d.standingLimitRescue(a, st, []*core.Peer{peer}, map[string]bool{"kronos": true}, edgeStandingNow)
+	peer := edgeStandingPeer("iris", "iris", "sess-iris")
+	d.standingLimitRescue(a, st, []*core.Peer{peer}, map[string]bool{"iris": true}, edgeStandingNow)
 
 	if len(*calls) != 1 {
 		t.Fatalf("standingRespawn ran %d times, want exactly 1", len(*calls))
@@ -1493,7 +1155,7 @@ func TestEdgeStandingLimitRescueRespawnFailureLeavesTheHitOpen(t *testing.T) {
 func TestEdgeStandingLimitRescueIgnoresAWatermarkOlderThanTheHit(t *testing.T) {
 	st := useTestStore(t)
 	edgeStandingStubRespawn(t, nil)
-	key := standingHitKey("kronos")
+	key := standingHitKey("iris")
 	hit := LimitHit{
 		Error: "rate_limit", At: edgeStandingNow.Unix() - 300, Deliveries: 1,
 		Details: "You've hit your session limit",
@@ -1505,8 +1167,8 @@ func TestEdgeStandingLimitRescueIgnoresAWatermarkOlderThanTheHit(t *testing.T) {
 	}
 
 	d := newDaemon()
-	a := edgeStandingAgentOf("kronos", edgeStandingStub{
-		enabled: true, recorded: "sess-kronos", hasRecorded: true,
+	a := edgeStandingAgentOf("iris", edgeStandingStub{
+		enabled: true, recorded: "sess-iris", hasRecorded: true,
 	})
 	// the agent's session is NOT live, so the decide chain stops at its
 	// liveness gate and the only thing this tick could have written is an
@@ -1556,26 +1218,26 @@ func TestEdgeStandingLimitRescueIgnoresAWatermarkWithNoAccount(t *testing.T) {
 func TestEdgeStandingHealthPassSkipsWhenDisabledOrNotLive(t *testing.T) {
 	t.Run("feature disabled", func(t *testing.T) {
 		st := useTestStore(t)
-		edgeStandingTranscript(t, "sess-kronos", edgeStandingLimitBanner)
+		edgeStandingTranscript(t, "sess-iris", edgeStandingLimitBanner)
 		d := newDaemon()
-		a := edgeStandingAgentOf("kronos", edgeStandingStub{
-			enabled: false, recorded: "sess-kronos", hasRecorded: true,
-			peer: edgeStandingPeer("kronos", "kronos", "sess-kronos"),
+		a := edgeStandingAgentOf("iris", edgeStandingStub{
+			enabled: false, recorded: "sess-iris", hasRecorded: true,
+			peer: edgeStandingPeer("iris", "iris", "sess-iris"),
 		})
-		d.standingHealthPass(a, st, []*core.Peer{a.Find(nil)}, map[string]bool{"kronos": true}, edgeStandingNow)
-		edgeStandingWantNoHit(t, "kronos", "a disabled agent")
+		d.standingHealthPass(a, st, []*core.Peer{a.Find(nil)}, map[string]bool{"iris": true}, edgeStandingNow)
+		edgeStandingWantNoHit(t, "iris", "a disabled agent")
 	})
 
 	t.Run("session not live", func(t *testing.T) {
 		st := useTestStore(t)
-		edgeStandingTranscript(t, "sess-kronos", edgeStandingLimitBanner)
+		edgeStandingTranscript(t, "sess-iris", edgeStandingLimitBanner)
 		d := newDaemon()
-		a := edgeStandingAgentOf("kronos", edgeStandingStub{
-			enabled: true, recorded: "sess-kronos", hasRecorded: true,
-			peer: edgeStandingPeer("kronos", "kronos", "sess-kronos"),
+		a := edgeStandingAgentOf("iris", edgeStandingStub{
+			enabled: true, recorded: "sess-iris", hasRecorded: true,
+			peer: edgeStandingPeer("iris", "iris", "sess-iris"),
 		})
 		d.standingHealthPass(a, st, []*core.Peer{a.Find(nil)}, map[string]bool{}, edgeStandingNow)
-		edgeStandingWantNoHit(t, "kronos", "an agent whose session is not live")
+		edgeStandingWantNoHit(t, "iris", "an agent whose session is not live")
 	})
 }
 
@@ -1585,37 +1247,37 @@ func TestEdgeStandingHealthPassSkipsWhenDisabledOrNotLive(t *testing.T) {
 func TestEdgeStandingHealthPassRecordsNothingWithoutIdentity(t *testing.T) {
 	t.Run("no recorded session", func(t *testing.T) {
 		st := useTestStore(t)
-		edgeStandingTranscript(t, "sess-kronos", edgeStandingLimitBanner)
+		edgeStandingTranscript(t, "sess-iris", edgeStandingLimitBanner)
 		d := newDaemon()
-		a := edgeStandingAgentOf("kronos", edgeStandingStub{
+		a := edgeStandingAgentOf("iris", edgeStandingStub{
 			enabled: true, recorded: "", hasRecorded: false,
-			peer: edgeStandingPeer("kronos", "kronos", "sess-kronos"),
+			peer: edgeStandingPeer("iris", "iris", "sess-iris"),
 		})
-		d.standingHealthPass(a, st, []*core.Peer{a.Find(nil)}, map[string]bool{"kronos": true}, edgeStandingNow)
-		edgeStandingWantNoHit(t, "kronos", "an agent with no recorded session id")
+		d.standingHealthPass(a, st, []*core.Peer{a.Find(nil)}, map[string]bool{"iris": true}, edgeStandingNow)
+		edgeStandingWantNoHit(t, "iris", "an agent with no recorded session id")
 	})
 
 	t.Run("a nameless peer", func(t *testing.T) {
 		st := useTestStore(t)
-		edgeStandingTranscript(t, "sess-kronos", edgeStandingLimitBanner)
+		edgeStandingTranscript(t, "sess-iris", edgeStandingLimitBanner)
 		d := newDaemon()
-		a := edgeStandingAgentOf("kronos", edgeStandingStub{
-			enabled: true, recorded: "sess-kronos", hasRecorded: true,
-			peer: edgeStandingPeer("kronos", "", ""),
+		a := edgeStandingAgentOf("iris", edgeStandingStub{
+			enabled: true, recorded: "sess-iris", hasRecorded: true,
+			peer: edgeStandingPeer("iris", "", ""),
 		})
-		d.standingHealthPass(a, st, []*core.Peer{a.Find(nil)}, map[string]bool{"kronos": true}, edgeStandingNow)
-		edgeStandingWantNoHit(t, "kronos", "an agent still starting")
+		d.standingHealthPass(a, st, []*core.Peer{a.Find(nil)}, map[string]bool{"iris": true}, edgeStandingNow)
+		edgeStandingWantNoHit(t, "iris", "an agent still starting")
 	})
 
 	t.Run("no peer at all", func(t *testing.T) {
 		st := useTestStore(t)
-		edgeStandingTranscript(t, "sess-kronos", edgeStandingLimitBanner)
+		edgeStandingTranscript(t, "sess-iris", edgeStandingLimitBanner)
 		d := newDaemon()
-		a := edgeStandingAgentOf("kronos", edgeStandingStub{
-			enabled: true, recorded: "sess-kronos", hasRecorded: true,
+		a := edgeStandingAgentOf("iris", edgeStandingStub{
+			enabled: true, recorded: "sess-iris", hasRecorded: true,
 		})
-		d.standingHealthPass(a, st, nil, map[string]bool{"kronos": true}, edgeStandingNow)
-		edgeStandingWantNoHit(t, "kronos", "an agent with no pane in the snapshot")
+		d.standingHealthPass(a, st, nil, map[string]bool{"iris": true}, edgeStandingNow)
+		edgeStandingWantNoHit(t, "iris", "an agent with no pane in the snapshot")
 	})
 }
 

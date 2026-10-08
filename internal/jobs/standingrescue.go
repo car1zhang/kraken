@@ -12,12 +12,11 @@ import (
 	"kraken/internal/store"
 )
 
-// standingrescue.go — the health pass and the usage-limit rescue for the two
-// STANDING agents: kronos and iris. They are the claudes kraken keeps alive
-// that belong to no job, and until now every durability pass in this binary
-// was written against a *Job — so a kronos that died on an exhausted account
-// stayed dead until carl noticed the pane, which is precisely the thing an
-// orchestrator exists to stop happening to everything else.
+// standingrescue.go — the health pass and the usage-limit rescue for the
+// STANDING agent, iris: the claude kraken keeps alive that belongs to no job.
+// Every other durability pass in this binary is written against a *Job, so
+// without this file a standing agent that died on an exhausted account would
+// stay dead until carl noticed the pane.
 //
 // Everything here is the CELL machinery with the job removed, and that is a
 // deliberate reuse rather than a resemblance: limitRescueDecide,
@@ -34,9 +33,9 @@ import (
 // The RESUME is a session kill plus Ensure*, not a pane respawn. A cell's
 // zeus is resumed by `claude -r <session>` into its own pane because the pane
 // and its worktree are the thing being preserved; a standing agent's session
-// is kraken's own one-pane tmux session, and EnsureKronos/EnsureIris already
-// know how to build the exact command that brings that conversation back —
-// same session id, same brief, same model, and their own resume prompt ("You
+// is kraken's own one-pane tmux session, and EnsureIris already
+// knows how to build the exact command that brings that conversation back —
+// same session id, same brief, same model, and its own resume prompt ("You
 // were restarted…"), which says the same three things limitRescueResumePrompt
 // says to zeus. Writing a second resume prompt here would be a second place
 // for that text to drift.
@@ -46,22 +45,17 @@ import (
 // has exactly one conversation for its whole life, kraken knows its id before
 // the pane exists, and reading someone else's transcript is how a rescue
 // swaps the machine's login on another process' evidence.
-//
-// And there is NO orch inbox row anywhere in this file. A cell's health pass
-// writes one so kronos hears about the cell; a standing stall is kronos being
-// told about itself, which either arrives in a pane that cannot read it or
-// arrives at iris, who has no business with it.
 
 // standingAgent is one row of the standing arm: the identity the passes below
-// key on, plus the four behaviours that differ between kronos and iris. It is
-// a descriptor rather than an interface because every field but Enabled is
-// already a package function — the table is the whole abstraction, and a
-// second implementation of it would be a third standing agent, not a fake.
+// key on, plus the behaviours a standing agent supplies. It is a descriptor
+// rather than an interface because every field but Enabled is already a
+// package function — the table is the whole abstraction, and a second
+// implementation of it would be another standing agent, not a fake.
 type standingAgent struct {
 	ID        string // the agent id: the kv key's suffix, and what carl reads
 	Session   string // the tmux session it lives in
 	AgentName string // the claude --name it runs under
-	// Enabled is the feature gate: kronos' env file, iris' Slack credential.
+	// Enabled is the feature gate: for iris, its Slack credential.
 	// Consulted on every tick by both passes, so it must stay cheap.
 	Enabled func() bool
 	// RecordedSession returns the session id kraken minted for this agent, and
@@ -88,19 +82,6 @@ type standingAgent struct {
 // apart would mean a hit recorded under a key no pass ever reads.
 func standingAgents() []standingAgent {
 	return []standingAgent{
-		{
-			ID:        KronosSessionName,
-			Session:   KronosSessionName,
-			AgentName: KronosAgentName,
-			Enabled:   KronosEnabled,
-			RecordedSession: func(st *store.Store) (string, bool) {
-				a, ok := ReadKronosAgent(st)
-				return a.SessionID, ok
-			},
-			Find:    findKronos,
-			Respawn: respawnKronos,
-			Model:   core.KronosModel,
-		},
 		{
 			ID:        IrisSessionName,
 			Session:   IrisSessionName,
@@ -135,12 +116,11 @@ func irisEnabled() bool {
 	return err == nil
 }
 
-// respawnKronos and respawnIris are the two Respawn implementations, and both
-// exist to do one thing the Ensure* functions will not do on their own:
-// spawn NOW.
+// respawnIris is the Respawn implementation, and it exists to do one thing
+// EnsureIris will not do on its own: spawn NOW.
 //
-// Ensure* declines silently for five minutes after any spawn ATTEMPT
-// (kronosSpawnBackoff / irisSpawnBackoff), which is correct for the tick loop
+// EnsureIris declines silently for five minutes after any spawn ATTEMPT
+// (irisSpawnBackoff), which is correct for the tick loop
 // — it is what stops a claude that dies on startup being respawned four times
 // a minute forever — and wrong here. A rescue respawn is not a crash loop: the
 // pane is being killed deliberately, by a pass that has already recorded a
@@ -157,48 +137,6 @@ func irisEnabled() bool {
 // load-bearing there for the backoff, and it is what lets a caller here tell a
 // spawn that was attempted from one that was declined. A stamp that is still
 // zero after the call means no attempt was made, and that is an error.
-func respawnKronos(st *store.Store, live map[string]bool) error {
-	if st == nil {
-		return errors.New("kronos: no store wired — nothing to respawn from")
-	}
-	prev := int64(0)
-	if a, ok := ReadKronosAgent(st); ok && a.SpawnedAt != 0 {
-		prev = a.SpawnedAt
-		a.SpawnedAt = 0
-		if err := writeKronosAgent(st, a); err != nil {
-			return fmt.Errorf("kronos: clearing the spawn backoff failed: %w", err)
-		}
-	}
-	if err := EnsureKronos(st, live); err != nil {
-		restoreKronosStamp(st, prev)
-		return err
-	}
-	if a, ok := ReadKronosAgent(st); !ok || a.SpawnedAt == 0 {
-		// No attempt was made, so the zeroed stamp must not stay on disk: left
-		// at zero it disarms the crash-loop backoff for the ordinary Ensure
-		// pass on the very next tick, which is the one guard that pass has.
-		restoreKronosStamp(st, prev)
-		return errors.New("kronos: no spawn was attempted — the feature gate or the session gate declined it")
-	}
-	return nil
-}
-
-// restoreKronosStamp puts the pre-rescue SpawnedAt back after a respawn that
-// never attempted a spawn. Best-effort: the write that could fail here is the
-// same write that just succeeded at zeroing, and a stamp lost this way costs
-// one unguarded attempt, not a loop.
-func restoreKronosStamp(st *store.Store, prev int64) {
-	if prev == 0 {
-		return
-	}
-	if a, ok := ReadKronosAgent(st); ok && a.SpawnedAt == 0 {
-		a.SpawnedAt = prev
-		if err := writeKronosAgent(st, a); err != nil {
-			dlogErr("kronos: restoring the spawn backoff stamp failed: %v", err)
-		}
-	}
-}
-
 func respawnIris(st *store.Store, live map[string]bool) error {
 	if st == nil {
 		return errors.New("iris: no store wired — nothing to respawn from")
@@ -216,14 +154,19 @@ func respawnIris(st *store.Store, live map[string]bool) error {
 		return err
 	}
 	if a, ok := readIrisAgent(st); !ok || a.SpawnedAt == 0 {
-		// Same restore respawnKronos makes, for the same reason.
+		// No attempt was made, so the zeroed stamp must not stay on disk: left
+		// at zero it disarms the crash-loop backoff for the ordinary Ensure
+		// pass on the very next tick, which is the one guard that pass has.
 		restoreIrisStamp(st, prev)
 		return errors.New("iris: no spawn was attempted — the feature gate or the session gate declined it")
 	}
 	return nil
 }
 
-// restoreIrisStamp is restoreKronosStamp for iris' record.
+// restoreIrisStamp puts the pre-rescue SpawnedAt back after a respawn that
+// never attempted a spawn. Best-effort: the write that could fail here is the
+// same write that just succeeded at zeroing, and a stamp lost this way costs
+// one unguarded attempt, not a loop.
 func restoreIrisStamp(st *store.Store, prev int64) {
 	if prev == 0 {
 		return
@@ -313,7 +256,7 @@ func standingKillAndRespawn(a standingAgent, st *store.Store, live map[string]bo
 // board and viewer render them — while these are read by carl in a
 // notification and stored as a hit's Details. What they must NOT do is say
 // "zeus": these reasons name the agent that stalled, and a notification about
-// kronos that says zeus sends carl looking through job cells for a pane that
+// iris that says zeus sends carl looking through job cells for a pane that
 // is not in one.
 //
 // retryable is st.Transient and only on the api-error arm, exactly as
@@ -372,7 +315,7 @@ func standingHealth(a standingAgent, all []*core.Peer, recorded string) (reason 
 // standingHitTriggerKey is limitHitTriggerKey for a standing agent — same
 // shape, same pairing with limitHitTriggerDue, keyed on the agent id where the
 // cell keys on the job's immutable id. The id here is already immutable (there
-// is exactly one kronos and one iris on a machine), so the reason the cell's
+// is exactly one iris on a machine), so the reason the cell's
 // key avoids slugs does not arise; what carries over is the EXPIRY, which is
 // the half that matters. A stalled standing agent keeps the same banner at the
 // tail of its transcript indefinitely, so an un-expiring key would record the
@@ -442,7 +385,7 @@ func standingKillTarget(a standingAgent, all []*core.Peer, recorded string) (*co
 //
 // It shares the landed-swap ADOPTION the cell pass also gained. A cell and a standing agent
 // share one machine-wide login, so a rotate performed for a job's cell fixes
-// the account kronos was stalled on too — without the watermark, kronos would
+// the account iris was stalled on too — without the watermark, iris would
 // hold an unresolved hit, walk the pool for a second swap it does not need,
 // and burn a healthy account. adoptLandedSwap stamps the swap that already
 // happened onto this record, and the decide chain's landed-swap gate then does
@@ -518,11 +461,11 @@ func (d *daemonState) standingLimitRescue(a standingAgent, st *store.Store, all 
 
 	// Keyed on the hit, not on the agent and the action: nothing clears
 	// d.Notified and the daemon runs for weeks, so an agent+action key would
-	// announce kronos' first rescue and then silently swap the machine's login
+	// announce iris' first rescue and then silently swap the machine's login
 	// for every later one.
 	notifyOnce := func(title, msg string) {
 		// "limit:standing:" rather than the cell pass' "limit:" namespace: a
-		// job legitimately slugged "kronos" would otherwise share dedup keys
+		// job legitimately slugged "iris" would otherwise share dedup keys
 		// with the agent for an identical action and hit second.
 		nkey := "limit:standing:" + a.ID + "|" + string(action) + "|" + strconv.FormatInt(hit.At, 10)
 		if d.Notified[nkey] != 0 {
@@ -660,16 +603,14 @@ func (d *daemonState) standingLimitRescue(a standingAgent, st *store.Store, all 
 // transcript-derived trigger that covers what the StopFailure hook cannot.
 //
 // Both triggers exist for the same reason they do for cells, and the split
-// matters more here: the hook is installed into kronos' settings at spawn
-// (iris gets none at all — Q4), so a kronos already running when this ships
-// has no hook, and iris has no hook ever. The stall classification is the
+// matters more here: iris is spawned with no StopFailure hook (it has no
+// settings file of its own), so for iris this pass is the ONLY trigger. The stall classification is the
 // hook-independent way to learn the same fact, and it is recorded in the same
-// vocabulary ("rate_limit") so the two fold onto one record rather than
-// opening two.
+// vocabulary ("rate_limit") so a hook delivery, were one ever wired, would
+// fold onto the same record rather than opening a second.
 //
-// No orch inbox row is written for any of this, deliberately — kronos must not
-// be bumped about its own stall. The desktop notification is the whole
-// escalation, and it fires once per streak: a stalled agent keeps the same
+// The desktop notification is the whole escalation, and it fires once per
+// streak: a stalled agent keeps the same
 // banner at the tail of its transcript indefinitely, so the key is the reason
 // rather than the tick.
 func (d *daemonState) standingHealthPass(a standingAgent, st *store.Store, all []*core.Peer, live map[string]bool, now time.Time) {

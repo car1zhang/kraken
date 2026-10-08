@@ -118,7 +118,7 @@ func TestEdgeMergeBumpWantedTable(t *testing.T) {
 		{"working key false", "working", func(j *Job) map[string]bool { return map[string]bool{CellSession(j): false} }, false},
 		{"blocked key false", "blocked", func(j *Job) map[string]bool { return map[string]bool{CellSession(j): false} }, false},
 		{"working only other sessions live", "working", func(*Job) map[string]bool {
-			return map[string]bool{"cell-other-1": true, "kronos": true, "iris": true}
+			return map[string]bool{"cell-other-1": true, "iris": true}
 		}, false},
 		{"working bare-slug session live", "working", func(j *Job) map[string]bool {
 			// The pre-cutover bare-slug name is NOT this job's session.

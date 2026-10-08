@@ -5,14 +5,15 @@ import (
 	"testing"
 )
 
-// Lead-authored SIGHTED regression pin, from the kronos live demo
-// (2026-08-15): installKronosSettings writes `--serve-addr <addr>` into the
-// ctx-hook and rearm-hook command strings (hookCommandFlags, the E7 delivery
-// every hook verb uses), but both verbs shipped ignoring their argv — so on a
-// parallel server every statusline report silently went to the DEFAULT port
-// and the context meter read as never-reported, while on the real deployment
-// nothing was visibly wrong. The pin holds the property the demo caught
-// missing: the flag family reaches the env jobs.ServeBaseURL reads.
+// Lead-authored SIGHTED regression pin, from a live demo (2026-08-15) of the
+// since-retired kronos orchestrator, whose settings installer wrote
+// `--serve-addr <addr>` into the ctx-hook command string (hookCommandFlags,
+// the E7 delivery every hook verb uses) while the verb shipped ignoring its
+// argv — so on a parallel server every statusline report silently went to
+// the DEFAULT port and the context meter read as never-reported, while on the
+// real deployment nothing was visibly wrong. The pin holds the property the
+// demo caught missing: the flag family reaches the env jobs.ServeBaseURL
+// reads. A cell's `ctx-hook --slug` command carries the same flags today.
 func TestCtxHookFlagsReachTheEnv(t *testing.T) {
 	t.Setenv("KRAKEN_SERVE_ADDR", "")
 	t.Setenv("KRAKEN_DB_PATH", "")

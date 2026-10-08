@@ -423,8 +423,8 @@ func TestEdgeIrisBriefNeverAuthorizesQueueing(t *testing.T) {
 	}
 }
 
-// TestEdgeIrisBriefStaysLean mirrors TestEdgeKronosBriefStaysLean, at the same
-// deliberately generous number and for the same reason: a system prompt
+// TestEdgeIrisBriefStaysLean holds iris' brief to a deliberately generous
+// byte cap, for a simple reason: a system prompt
 // re-sent on every turn of an eternal conversation must stay lean, and this
 // catches a brief that swallowed a skill, not one that gained a paragraph.
 // iris had no size guard at all before 2026-08-21 — the only standing brief

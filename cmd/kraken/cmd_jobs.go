@@ -52,7 +52,7 @@ func cmdPrHook(args []string) {
 // It has two forms, because a limit can land on two kinds of claude. A CELL's
 // hook names its job — `kraken limit-hook <slug>`, byte-identical to what
 // every installed settings.json already carries. A STANDING agent's names
-// itself — `kraken limit-hook --agent kronos` — because kronos and iris have
+// itself — `kraken limit-hook --agent iris` — because a standing agent has
 // no job and so no slug, and the id is what the record is keyed on.
 //
 // It takes --serve-addr/--db-path identically to pr-hook, since every hook
@@ -79,7 +79,7 @@ func cmdLimitHook(args []string) {
 // It does not extend hookArgs, which pr-hook shares and whose contract is
 // exactly one bare slug. A flag only this verb accepts belongs in only this
 // verb's parser; widening the shared one would silently make `pr-hook --agent
-// kronos` a legal invocation of a verb that has no idea what to do with it.
+// iris` a legal invocation of a verb that has no idea what to do with it.
 func limitHookArgs(args []string) (slug, agent string, ok bool) {
 	for i := 0; i < len(args); i++ {
 		switch args[i] {

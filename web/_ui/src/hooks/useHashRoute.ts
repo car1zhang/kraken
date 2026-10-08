@@ -2,14 +2,14 @@ import { useCallback, useEffect, useState } from "react";
 
 import { readLS, writeLS } from "./useLocalStorage.ts";
 
-export const VIEWS = ["board", "kronos", "memory", "dream", "log"] as const;
+export const VIEWS = ["board", "memory", "dream", "log"] as const;
 export type View = (typeof VIEWS)[number];
 
 const LEGACY_KEY = "kraken-view";
 
 /**
- * Navigate from OUTSIDE the chrome's tab row (the kronos dock's ⤢ is the one
- * caller today). A bare `location.hash =` write would route fine — the
+ * Navigate to a view, and the one implementation `navigate` below delegates
+ * to. A bare `location.hash =` write would route fine — the
  * hashchange listener below picks it up — but it would skip the LEGACY_KEY
  * stamp `navigate` performs, and that key's whole claim is to be a faithful
  * record of the last view for a downgrade. One helper keeps the two writes
@@ -75,10 +75,9 @@ function parseHash(): View | null {
 }
 
 /**
- * The five views as real URLs (#/board, #/kronos, #/memory, #/dream, #/log) —
- * Q6, plus the kronos panel added beside them. VIEWS' order IS the tab order
- * the chrome renders (carl's pick: kronos beside the board, log last), and
- * `memory` is the graph view under its renamed tab (RENAMED, above).
+ * The four views as real URLs (#/board, #/memory, #/dream, #/log) — Q6.
+ * VIEWS' order IS the tab order the chrome renders (log last), and `memory`
+ * is the graph view under its renamed tab (RENAMED, above).
  *
  * The vanilla board had no router at all: the active view was a localStorage
  * string toggling `hidden` attributes, so there was no back button and no
@@ -94,8 +93,8 @@ function parseHash(): View | null {
  * truth and the key is just kept in step for a downgrade.
  *
  * Both seeds are VALIDATED against VIEWS rather than merely tested for
- * truthiness, and that is the whole defense against the removed DAG view: a
- * browser still holding `kraken-view: "dag"` (or sitting on `#/dag`) has a
+ * truthiness, and that is the whole defense against a removed view like the
+ * DAG: a browser still holding `kraken-view: "dag"` (or sitting on `#/dag`) has a
  * stale-but-truthy value, which an `|| "board"` guard passes through happily
  * and which then matches no <main> at all — every view hidden, a blank page,
  * no error. It falls back to the board instead, and the first navigate()

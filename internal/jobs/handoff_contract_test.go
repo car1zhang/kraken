@@ -487,7 +487,7 @@ func (n *logicNotes) list() []string {
 }
 
 // logicSwapNotify records every notification through the notifyFn seam the
-// existing kronos tests use.
+// existing rotation tests use.
 func logicSwapNotify(t *testing.T) *logicNotes {
 	t.Helper()
 	n := &logicNotes{}

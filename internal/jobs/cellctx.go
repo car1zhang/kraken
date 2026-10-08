@@ -14,8 +14,10 @@ import (
 // cellctx.go — a cell's context meter and the one thing kraken does with it:
 // type /handoff into zeus' pane once its context window is 75% full.
 //
-// The measurement arrives the same way kronos' does (kronosctx.go): the cell's
-// statusline command is `kraken ctx-hook --slug <slug>`, which POSTs the live
+// The measurement cannot be taken from outside the pane — only Claude Code
+// knows how full a session's window is, and its statusline command is the one
+// place it says so. So the cell's statusline command is
+// `kraken ctx-hook --slug <slug>`, which POSTs the live
 // session's numbers to /api/cell/context, and RecordCellContext persists them.
 // The pass below only reacts to what was recorded.
 //
@@ -38,8 +40,8 @@ func cellCtxKVKey(jobID int64, sessionID string) string {
 	return fmt.Sprintf("cell_ctx:%d:%s", jobID, sessionID)
 }
 
-// RecordCellContext persists one report. The refusals mirror
-// RecordKronosContext's: a blank session id makes the report unattributable,
+// RecordCellContext persists one report. Two refusals, both about a number
+// that would poison the meter: a blank session id makes the report unattributable,
 // and a percentage that is NaN or outside [0,100] is not a fill (NaN is tested
 // separately because every range comparison against it is false).
 func RecordCellContext(st *store.Store, jobID int64, sessionID string, pct float64, window int64) error {

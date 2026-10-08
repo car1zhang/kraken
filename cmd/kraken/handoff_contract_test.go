@@ -190,7 +190,7 @@ func TestLogicCtxHookFlagsReturnsSlugAndSetsEnv(t *testing.T) {
 	}
 }
 
-// No --slug → "" (kronos' own statusline).
+// No --slug → "" (the report-nowhere form).
 func TestLogicCtxHookFlagsNoSlugIsEmpty(t *testing.T) {
 	t.Setenv("KRAKEN_SERVE_ADDR", "")
 	if got := ctxHookFlags([]string{"--serve-addr", "127.0.0.1:9912"}); got != "" {
@@ -276,8 +276,8 @@ func logicAssertCellPost(t *testing.T, rec *logicRecorder) {
 }
 
 // Cell mode, no user statusline: POST to /api/cell/context and print the
-// default line `<slug> NN%`. The percentage format is read as the same one
-// the kronos line uses (the contract writes both as `NN%`).
+// default line `<slug> NN%`. The percentage format is the same one the
+// slug-less `ctx NN%` line uses (the contract writes both as `NN%`).
 func TestLogicRunCtxHookCellModeDefaultLine(t *testing.T) {
 	rec := logicServe(t)
 	var out bytes.Buffer
@@ -318,20 +318,21 @@ func TestLogicRunCtxHookCellModeWrapsUserStatusLine(t *testing.T) {
 	}
 }
 
-// Slug empty: exactly today's kronos behaviour — /api/orch/context, `kronos NN%`.
-func TestLogicRunCtxHookKronosModeUnchanged(t *testing.T) {
+// Slug empty: the slug-less form (the retired kronos orchestrator's
+// statusline) reports NOWHERE and still prints a line, `ctx NN%`, so a
+// settings file that still carries it renders rather than errors. Rewritten
+// by the lead at the kronos-removal merge from a test that pinned the old
+// /api/orch/context report; a sighted test, recorded as such in that job's
+// build report.
+func TestLogicRunCtxHookNoSlugReportsNowhere(t *testing.T) {
 	rec := logicServe(t)
 	var out bytes.Buffer
 	runCtxHook(strings.NewReader(logicStatusPayload), &out, "", "")
 
-	posts := rec.all()
-	if len(posts) != 1 || posts[0].path != "/api/orch/context" {
-		t.Fatalf("posts = %+v, want one POST to /api/orch/context", posts)
+	if posts := rec.all(); len(posts) != 0 {
+		t.Fatalf("posts = %+v, want none without a slug", posts)
 	}
-	if _, has := posts[0].body["slug"]; has {
-		t.Errorf("kronos body = %v carries a slug", posts[0].body)
-	}
-	if got, want := out.String(), "kronos 42.5%\n"; got != want {
+	if got, want := out.String(), "ctx 42.5%\n"; got != want {
 		t.Errorf("stdout = %q, want %q", got, want)
 	}
 }

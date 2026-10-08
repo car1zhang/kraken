@@ -317,7 +317,7 @@ describe("the memory rename", () => {
   const CONTRACT_LEGACY_KEY = "kraken-view";
 
   // The rename, not the roster: this pin originally asserted the contract's
-  // exact four-view list, and the kronos view merging beside it turned that
+  // exact four-view list, and another view merging beside it turned that
   // into a false failure — the same over-pin the store tests document for
   // schemaVersion equalities. What the rename obliges is that `memory` is a
   // view and `graph` is not; which OTHER views exist is the tab roster's

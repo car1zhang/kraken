@@ -335,8 +335,8 @@ func TestEdgeCtxHookSlugBlankSessionDoesNotPost(t *testing.T) {
 	}
 }
 
-// With a slug the report goes to /api/cell/context, never kronos' route.
-func TestEdgeCtxHookSlugNeverPostsKronosRoute(t *testing.T) {
+// With a slug the report goes to /api/cell/context and nowhere else.
+func TestEdgeCtxHookSlugPostsOnlyCellRoute(t *testing.T) {
 	srv := edgeStartCtxServer(t)
 	stdin := `{"session_id":"s-1","context_window":{"used_percentage":40,"context_window_size":200000}}`
 	_ = edgeRunCtx(stdin, "edge-job", "printf carl-line")

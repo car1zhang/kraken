@@ -119,7 +119,7 @@ func TestFableFallbackKeyMirrorsHitKey(t *testing.T) {
 	if got := fableFallbackKey(limitHitKey(508)); got != "fable_fallback:508" {
 		t.Errorf("cell key = %q", got)
 	}
-	if got := fableFallbackKey(standingHitKey("kronos")); got != "fable_fallback:kronos" {
+	if got := fableFallbackKey(standingHitKey("iris")); got != "fable_fallback:iris" {
 		t.Errorf("standing key = %q", got)
 	}
 }

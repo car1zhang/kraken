@@ -20,7 +20,7 @@ import (
 //
 // Written blind: no byte of the slice-B edits to internal/api (orch.go,
 // cellctx.go, register.go) was read while authoring this; orch.go and
-// graph.go were read for the existing kronos route and decodeGraphBody.
+// graph.go were read for the since-removed kronos route and decodeGraphBody.
 //
 // The handler is called DIRECTLY (the contract freezes the symbol), which
 // also keeps the mirror gate out of these assertions.

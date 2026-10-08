@@ -16,8 +16,8 @@ import (
 // limithook.go — `kraken limit-hook <slug>` and its standing-agent sibling
 // `kraken limit-hook --agent <id>`, wired as a Claude Code StopFailure hook
 // in each cell's worktree (cell.go's mergeHookSettings writes the entry,
-// matcher "rate_limit") and in kronos' own settings (kronos.go's
-// mergeKronosSettings). It is the detection half of the mid-run usage-limit
+// matcher "rate_limit"); the --agent form is installed nowhere today and
+// stays as the standing agent's reporting verb. It is the detection half of the mid-run usage-limit
 // rescue: when a claude dies on a usage limit, Claude Code fires this hook,
 // and this verb reports the failure to kraken serve so the daemon can swap
 // the main login to a healthier pool account without anyone watching the
@@ -119,14 +119,13 @@ func limitHitKey(id int64) string { return "limit_hit:" + strconv.FormatInt(id, 
 
 // --- standing agents ---
 //
-// kronos and iris are the two long-lived claudes kraken owns that are not
-// cells: one tmux session each, one conversation each, no job behind either.
-// They hit the same wall a cell does — one exhausted account stops every
-// process on this Mac — and until this shipped nothing rescued them, because
-// every key, every record and every pass in this feature was keyed on a job
-// id there is no such thing as for them.
+// iris is the long-lived claude kraken owns that is not a cell: one tmux
+// session, one conversation, no job behind it. It hits the same wall a cell
+// does — one exhausted account stops every process on this Mac — and every
+// key, every record and every pass in the cell feature is keyed on a job id
+// there is no such thing as for it.
 //
-// The two ids are a fixed list rather than anything derived. They name real
+// The ids are a fixed list rather than anything derived. They name real
 // singletons that exist because kraken spawns them, and a caller that could
 // hand this feature an arbitrary id would be a caller that can make the API
 // route write an unbounded number of kv rows nothing ever reads.
@@ -134,14 +133,19 @@ func limitHitKey(id int64) string { return "limit_hit:" + strconv.FormatInt(id, 
 // standingAgentIDs is that list, in a stable order — the standing arm walks
 // it, and its descriptor table (standingAgents) is pinned against it, so the
 // order being fixed is what makes those two comparable at all.
-func standingAgentIDs() []string { return []string{"kronos", "iris"} }
+func standingAgentIDs() []string { return []string{"iris"} }
+
+// StandingAgentIDs is standingAgentIDs' exported face, for the API route's
+// refusal message: a 400 for an id off the list names the accepted ids, read
+// from this same list so the message cannot drift from the check.
+func StandingAgentIDs() []string { return standingAgentIDs() }
 
 // IsStandingAgentID reports whether id names one of them. Exported because
 // the API route is the one place an id arrives from OUTSIDE this binary (a
 // hook command string kraken itself installed, or a hand-typed POST), and
 // that is exactly where the list has to be closed rather than trusted.
 // Case-sensitive on purpose: the ids are also tmux session names and claude
-// --name values, and "Kronos" is not one of those.
+// --name values, and "Iris" is not one of those.
 func IsStandingAgentID(id string) bool {
 	for _, a := range standingAgentIDs() {
 		if a == id {
@@ -155,7 +159,7 @@ func IsStandingAgentID(id string) bool {
 // job's limitHitKey names. The two namespaces cannot collide: a job's key
 // carries the decimal rendering of its int64 id and every standing id is
 // non-numeric, so no job — however its id is renumbered — can ever address
-// "limit_hit:kronos". Which matters for the reason limitHitKey is keyed on an
+// "limit_hit:iris". Which matters for the reason limitHitKey is keyed on an
 // immutable id at all: nothing deletes these rows, and a record read by the
 // wrong owner is a machine-wide credential swap performed on somebody else's
 // evidence.
@@ -244,7 +248,7 @@ func parseLimitPayload(raw []byte) (errorType, details, sessionID, agentID strin
 func LimitHook(slug string) { postLimitHit("slug", slug) }
 
 // LimitHookAgent is `kraken limit-hook --agent <id>`'s body: the same verb for
-// a STANDING agent (kronos, iris), which has no job and so no slug to name
+// a STANDING agent (iris), which has no job and so no slug to name
 // itself with. Everything else is LimitHook's contract unchanged — one
 // payload off stdin, one POST, never an exit, never a kraken.db open, and the
 // details already truncated on this side — because the two run in exactly the

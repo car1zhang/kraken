@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	"kraken/internal/core"
@@ -14,9 +15,10 @@ import (
 // limithit.go — POST /api/limit-hit: the localhost mutation endpoint a
 // StopFailure hook (`kraken limit-hook`, jobs/limithook.go) posts to when a
 // claude dies on a usage limit — a cell's, naming its job by `slug`, or a
-// STANDING agent's, naming itself by `agent` (kronos posts today; iris is on
-// the accepted list too, rescued by the transcript arm with no hook of its
-// own). It sits beside /api/pr-attach for the same reason that one exists:
+// STANDING agent's, naming itself by `agent` (iris is the one id on the
+// accepted list; it has no hook of its own today and is rescued by the
+// transcript arm, so this arm is reached only by a hand-run
+// `kraken limit-hook --agent`). It sits beside /api/pr-attach for the same reason that one exists:
 // the hook runs as its own short-lived process and kraken serve is the sole
 // DB writer, so the hook reports and the server records.
 //
@@ -33,7 +35,7 @@ import (
 //
 // Slug and Agent are that field, and exactly one of them is set: a cell's
 // hook names its job's slug, a standing agent's hook names its fixed agent
-// id (any id on the closed list — kronos and iris — is accepted). They are
+// id (any id on the closed list — today just iris — is accepted). They are
 // separate keys rather than one tagged identifier because
 // the two resolve through entirely different machinery — a slug is looked up
 // as a job and keyed on that job's immutable id, an agent id is checked
@@ -70,7 +72,7 @@ func limitHitHandler(w http.ResponseWriter, r *http.Request) {
 	// "slug is required" case widened; BOTH set is refused rather than given a
 	// precedence rule, because the two record under different keys and a body
 	// carrying both is a client that does not know which owner it is reporting
-	// for — picking one for it would file a cell's limit against kronos, or the
+	// for — picking one for it would file a cell's limit against iris, or the
 	// reverse, and nothing would ever say so.
 	if (req.Slug == "") == (req.Agent == "") {
 		webJSON(w, http.StatusBadRequest, map[string]string{"error": "exactly one of slug or agent is required"})
@@ -81,13 +83,15 @@ func limitHitHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if req.Agent != "" {
-		// A standing agent (kronos, iris) has no job, so there is nothing to
+		// A standing agent (iris) has no job, so there is nothing to
 		// resolve: the id itself is the owner, checked against the closed list
-		// jobs owns. An id outside it is a 400 naming the id — this route is
-		// reachable from any localhost POST, and an unchecked id would let one
-		// write an unbounded number of limit_hit rows nothing ever reads.
+		// jobs owns. An id outside it is a 400 naming the id and the accepted
+		// ids (read from jobs.StandingAgentIDs, the list the check uses) — this
+		// route is reachable from any localhost POST, and an unchecked id would
+		// let one write an unbounded number of limit_hit rows nothing ever reads.
 		if !jobs.IsStandingAgentID(req.Agent) {
-			webJSON(w, http.StatusBadRequest, map[string]string{"error": "unknown standing agent " + req.Agent})
+			webJSON(w, http.StatusBadRequest, map[string]string{"error": fmt.Sprintf(
+				"unknown standing agent %s (accepted: %s)", req.Agent, strings.Join(jobs.StandingAgentIDs(), ", "))})
 			return
 		}
 		hit, err := jobs.RecordStandingLimitHit(req.Agent, req.Error,

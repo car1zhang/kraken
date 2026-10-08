@@ -17,10 +17,8 @@ import type {
   DreamReports,
   GoalsPage,
   JobForm,
-  KronosStatus,
   LibraryPage,
   LogPage,
-  OrchInbox,
   PeersRead,
   RenameResult,
   ThreadOp,
@@ -181,16 +179,10 @@ export const fetchGoals = (signal?: AbortSignal) =>
 export const fetchLibrary = (signal?: AbortSignal) =>
   getJSON<LibraryPage>("/api/library", signal);
 
-// ------------------------------------------------------------ kronos
+// ------------------------------------------------------------- peers
 //
-// Three reads and one write, all pre-existing routes except /api/kronos and
-// /api/orch/inbox. The conversation and the composer deliberately go through
-// the generic PEERS routes rather than a kronos-specific pair: kronos is one
-// claude in one tmux pane, and `k r`/`k s` already address exactly that.
-
-/** kronos' liveness, pane, and last context report. */
-export const fetchKronos = (signal?: AbortSignal) =>
-  getJSON<KronosStatus>("/api/kronos", signal);
+// One read and one write over the generic PEERS routes — `k r` and `k s`
+// for any one claude in one tmux pane.
 
 /**
  * The tail of one pane's transcript. `n` counts NON-tool blocks and the server
@@ -212,10 +204,6 @@ export const fetchPaneRead = (pane: string, n = 30, signal?: AbortSignal) =>
  */
 export const sendToPane = (pane: string, message: string) =>
   postJSON("/api/peers/send", { pane, message });
-
-/** Unacked escalations, oldest first. */
-export const fetchOrchInbox = (signal?: AbortSignal) =>
-  getJSON<OrchInbox>("/api/orch/inbox", signal);
 
 export const fetchUpdateStatus = (signal?: AbortSignal) =>
   getJSON<import("./types.ts").WebUpdate>("/api/update/status", signal);
@@ -404,11 +392,8 @@ export const openTmux = (target: { pane?: string; slug?: string }) =>
 /**
  * Raise a pane and reduce the response to the one line a note slot shows:
  * a raise that worked but could not focus the terminal still surfaces its
- * note, and a clean raise surfaces nothing. Shared by both kronos surfaces
- * (the full view's OPEN TMUX and the dock's ⧉) so the contract cannot drift
- * between two hand-copied versions of the same eight lines. Throws are the
- * caller's — the server's own sentence belongs beside whichever button was
- * pressed.
+ * note, and a clean raise surfaces nothing. Throws are the caller's — the
+ * server's own sentence belongs beside whichever button was pressed.
  */
 export const raisePane = async (pane: string): Promise<string> => {
   const r = await openTmux({ pane });

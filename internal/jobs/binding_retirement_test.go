@@ -31,7 +31,7 @@ func TestRetirementNoAutomatedMainSwap(t *testing.T) {
 		filepath.Join("internal", "api", "account.go"):   true,
 		// rotation.go declares the swapMain seam (`= core.SwapMainTo`) whose
 		// one consumer is rescueSwap, the STANDING-agent rescue's swap half —
-		// kronos/iris are main's own tenants, so theirs is the one automated
+		// iris is main's own tenant, so its rescue is the one automated
 		// main swap that outlived Q2. Cell paths reach neither the seam nor
 		// the symbol; a cell-side reference lands in an unlisted file and
 		// still trips this guard.

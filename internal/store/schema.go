@@ -71,8 +71,9 @@ import (
 // Version 23 adds the goals table plus jobs.goal_id: carl's weekly and daily
 // goals, and the one goal a job optionally serves (see schemaV23 and
 // store/goals.go).
-// Version 24 adds kronos' orch_inbox, the orchestrator's inbox carrying
-// slack_inbox's three-timestamp lifecycle (see schemaV24 and store/orch.go).
+// Version 24 added orch_inbox, the since-retired orchestrator agent's inbox
+// carrying slack_inbox's three-timestamp lifecycle (see schemaV24; v31 drops
+// it again).
 // Version 25 adds saved_artifacts, the artifact LIBRARY: one frozen snapshot
 // per artifact carl saves, keyed (job_id, name) and outliving the job it came
 // from (see schemaV25 and store/saved.go).
@@ -94,7 +95,11 @@ import (
 // re-grown as a compilation of mm items alone, and rebuilds kg_episodes so its
 // closed `kind` CHECK admits 'mental-model' (see schemaV29 and
 // migrateV29MentalModel).
-const schemaVersion = 30
+// Version 30 adds jobs.agent, the coding agent a cell's zeus runs (see
+// schemaV30).
+// Version 31 retires the orchestrator agent: it drops orch_inbox and deletes
+// the five kv rows that agent wrote (see schemaV31).
+const schemaVersion = 31
 
 // schemaV1 creates all nine tables plus kv. Exact DDL (types, indexes) was
 // left to this package by the spec; shapes below mirror the spec's Data
@@ -1344,54 +1349,31 @@ CREATE INDEX goals_scope_period ON goals(scope, period, position);
 ALTER TABLE jobs ADD COLUMN goal_id INTEGER REFERENCES goals(id) ON DELETE SET NULL;
 `
 
-// schemaV24 adds kronos' one table. It is brand new and there is no hook:
-// nothing anywhere holds an orchestrator inbox row today, so there is nothing
-// to migrate forward — schemaV17/V18/V19's situation exactly, and an EMPTY
-// inbox is precisely the state a database that predates kronos is in.
+// schemaV24 added the orchestrator agent's one table, orch_inbox. That agent
+// has since been retired and schemaV31 drops the table again; its statements
+// stay exactly as they shipped (migrations are never edited, only appended —
+// see the migrations comment), so a database older than v24 still walks
+// forward through it and then loses the table at v31. Only comments — these,
+// and the SQL comments inside the string — were reworded when the agent was
+// removed.
 //
-// Purely additive: no existing table, column or row is touched, so a database
-// on a Mac that never creates ~/.kraken/kronos.env carries one empty table and
-// is otherwise identical to a v23 one.
+// It was a brand-new table with no hook — an EMPTY inbox was precisely the
+// state a database that predated the agent was in — and purely additive, so a
+// Mac that never enabled the agent carried one empty table and was otherwise
+// identical to a v23 one.
 //
-// orch_inbox is slack_inbox's shape with Slack's identity columns removed, and
-// that is deliberate rather than incidental: kronos' inbox has the same
-// lifecycle as iris' — a row is SEEN (the daemon enqueued it at a transition
-// it was already notifying about), DELIVERED (kronos' pane was bumped with a
-// count), then ACKED with a one-line disposition — so it carries the same three
-// timestamps rather than a state column, for schemaV17's reason: each
-// transition has a different writer, and each "not yet" is a real query
-// (`delivered_at = 0 AND acked_at = 0` is the delivery pass' worklist,
-// `acked_at = 0` is what the inbox route serves).
-//
-// kind carries NO CHECK constraint, which is where this table parts company
-// with slack_inbox.source. The two look alike — a short closed-ish set naming
-// where a row came from — but source names one of three POLLING LOOPS the
-// poller owns end to end, while kind names a daemon TRANSITION POINT, and the
-// set of transitions worth waking kronos for is expected to grow as the daemon
-// learns to notice more (the frozen contract's list — job-blocked, cell-gone,
-// cell-unhealthy, pr-merged, start-failed — is the set on the day it
-// ships, not a closed universe). A CHECK would make adding one a migration, and
-// the store's obligation is only that an EMPTY kind is refused, which
-// AddOrchItem does in Go where the error can say so.
-//
-// slug is NOT a foreign key and defaults to empty, both for reasons this
-// schema has already settled elsewhere: the no-FK rule is job_tokens' and
-// slack_inbox's — an inbox row records that something happened, which stays
-// true after the job is archived or hard deleted — and an EMPTY slug is a real
-// answer rather than a missing one: a row may describe something belonging to
-// no job at all.
-//
-// No secondary index, deliberately, and this is the paragraph to revisit if a
-// read ever gets slow rather than a defect to fix now — the argument schemaV17
-// makes for slack_inbox. Both orch_inbox listings scan the table at most once
-// per daemon tick. If a read ever does get slow, the index to add is
-// orch_inbox(acked_at, id), covering both filters and their shared ORDER BY
-// id. (An imsg_sent sibling table — the removed iMessage bridge's echo guard —
-// briefly shared this step and went with the bridge before the step ever
-// shipped.)
+// orch_inbox was slack_inbox's shape with Slack's identity columns removed:
+// a row was SEEN (the daemon enqueued it at a transition it was already
+// notifying about), DELIVERED (the agent's pane was bumped with a count),
+// then ACKED with a one-line disposition — the same three timestamps rather
+// than a state column, for schemaV17's reason. kind carried no CHECK, since
+// it named a daemon transition point whose set was expected to grow; slug was
+// not a foreign key, for job_tokens' and slack_inbox's no-FK reason. (An
+// imsg_sent sibling table — the removed iMessage bridge's echo guard — briefly
+// shared this step and went with the bridge before the step ever shipped.)
 //
 // Appended rather than folded into an earlier step for the reason schemaV2's
-// doc comment spells out: real kraken.db files already exist at v23.
+// doc comment spells out: real kraken.db files already existed at v23.
 const schemaV24 = `
 CREATE TABLE orch_inbox (
 	id           INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1399,9 +1381,9 @@ CREATE TABLE orch_inbox (
 	slug         TEXT NOT NULL DEFAULT '',   -- the job it is about; '' = belongs to no job
 	summary      TEXT NOT NULL DEFAULT '',   -- one line, capped by the caller
 	seen_at      INTEGER NOT NULL DEFAULT 0, -- unix millis: the daemon enqueued it
-	delivered_at INTEGER NOT NULL DEFAULT 0, -- unix millis: kronos' pane was bumped; 0 = pending
-	acked_at     INTEGER NOT NULL DEFAULT 0, -- unix millis: kronos acted on it; 0 = unacked
-	disposition  TEXT NOT NULL DEFAULT ''    -- kronos' one-line account of what it did
+	delivered_at INTEGER NOT NULL DEFAULT 0, -- unix millis: the agent's pane was bumped; 0 = pending
+	acked_at     INTEGER NOT NULL DEFAULT 0, -- unix millis: the agent acted on it; 0 = unacked
+	disposition  TEXT NOT NULL DEFAULT ''    -- the agent's one-line account of what it did
 );
 `
 
@@ -1438,8 +1420,8 @@ CREATE TABLE orch_inbox (
 //
 // Appended rather than folded into an earlier step for the reason schemaV2's
 // doc comment spells out: real kraken.db files already exist at v24. (It was
-// authored as v24 in a cell branch and renumbered here: kronos' orch_inbox
-// merged to main first and took that version.)
+// authored as v24 in a cell branch and renumbered here: the orchestrator's
+// orch_inbox merged to main first and took that version.)
 const schemaV25 = `
 CREATE TABLE saved_artifacts (
 	id       INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1734,6 +1716,32 @@ const schemaV30 = `
 ALTER TABLE jobs ADD COLUMN agent TEXT NOT NULL DEFAULT '';
 `
 
+// schemaV31 retires the orchestrator agent. Two halves, both plain SQL:
+//
+//   - orch_inbox (schemaV24) is DROPPED, rows and all — nothing reads it any
+//     more, and an inbox whose only consumer is gone has no forward home.
+//     IF EXISTS because the step only drops: it must not care what shape the
+//     table has, or whether a hand-repaired database still carries it.
+//   - the five kv rows the agent wrote — its spawn record, its context
+//     report and warning stamp, its limit-hit record and its Fable-fallback
+//     record — are DELETED by exact key, so the store holds nothing the
+//     binary can no longer read. Every other kv row, including iris'
+//     limit_hit:iris, is untouched.
+//
+// Appended rather than folded in, same reason as v28: real kraken.db files
+// already exist at v30.
+const schemaV31 = `
+DROP TABLE IF EXISTS orch_inbox;
+-- the retired orchestrator (kronos) agent's rows
+DELETE FROM kv WHERE key IN (
+	'kronos_agent',
+	'kronos_ctx',
+	'kronos_ctx_warned',
+	'limit_hit:kronos',
+	'fable_fallback:kronos'
+);
+`
+
 // migrationStep is one migration: SQL applied first, then an optional Go
 // hook run afterward inside the SAME transaction. Every migration before
 // v5 was a pure SQL string — DDL can't parse questions.yaml's hand-rolled
@@ -1809,9 +1817,9 @@ type migrationStep struct {
 // table has nothing to migrate forward, and a NULL goal_id correctly means
 // "this job serves no particular goal", which is true of every job that
 // predates the feature; see schemaV23);
-// migrations[24] adds kronos' orch_inbox (no hook — a brand-new table with no
-// prior home for its data, and an empty inbox is exactly the state a database
-// that predates kronos is in; see schemaV24);
+// migrations[24] added the since-retired orchestrator's orch_inbox (no hook —
+// a brand-new table with no prior home for its data; see schemaV24, and
+// migrations[31], which drops it);
 // migrations[25] adds saved_artifacts (no hook — a brand-new table has nothing
 // to migrate forward, and an EMPTY library correctly means "carl has never
 // saved an artifact", which is true of every database that predates the
@@ -1835,8 +1843,13 @@ type migrationStep struct {
 // wiped, which is why the destructive half is a hook rather than more SQL),
 // drops kg_watch, empties every kg_* table, and rebuilds kg_episodes with
 // 'mental-model' added to its closed kind CHECK (see schemaV29).
+// migrations[30] adds jobs.agent (no hook — the empty-string DEFAULT is the
+// claude agent every pre-existing job ran; see schemaV30).
+// migrations[31] retires the orchestrator agent: drops orch_inbox and deletes
+// the five kv rows it wrote (no hook — both halves are plain SQL; see
+// schemaV31).
 // Future schema changes append
-// migrations[30], migrations[31], ... rather than editing an existing
+// migrations[32], migrations[33], ... rather than editing an existing
 // schemaV<N> string (or hook) in place, so a database created under an older
 // binary still migrates forward correctly.
 var migrations = map[int]migrationStep{
@@ -1870,6 +1883,7 @@ var migrations = map[int]migrationStep{
 	28: {sql: schemaV28},
 	29: {sql: schemaV29, hook: migrateV29MentalModel},
 	30: {sql: schemaV30},
+	31: {sql: schemaV31},
 }
 
 // migrateV5Questions is migrations[5]'s Go hook: schemaV5's SQL has already

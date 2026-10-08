@@ -1195,7 +1195,7 @@ func cellCtxHookCommand(slug, krakenBin string) string {
 	return krakenBin + " ctx-hook --slug " + slug + hookCommandFlags()
 }
 
-// mergeCellStatusLine applies mergeKronosStatusLine's three-way rule to a
+// mergeCellStatusLine applies a three-way rule to the one statusLine slot in a
 // cell's settings: absent → install kraken's ctx-hook; an object already
 // running ctx-hook → rewritten to the current command; anything else (another
 // command, or a non-object value) → left alone with one log line.

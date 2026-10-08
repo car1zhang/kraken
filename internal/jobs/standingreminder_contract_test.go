@@ -1,9 +1,8 @@
 package jobs
 
 // Contract slice 3 (standing-agent reminder line): pins the closing
-// `## Your pane text` section appended to both kronosBrief() and irisBrief()
-// — its four literals, its placement after each brief's previously-last
-// section, and kronos' unchanged size cap.
+// `## Your pane text` section appended to irisBrief() — its four literals and
+// its placement after the brief's previously-last section.
 
 import (
 	"strings"
@@ -38,18 +37,6 @@ func contractAssertPaneTextAfter(t *testing.T, name, brief, prevHeading string) 
 	// Appended at the END: no further `## ` heading follows it.
 	if tail := brief[pane+len("## Your pane text"):]; strings.Contains(tail, "\n## ") {
 		t.Errorf("%s: another `## ` heading follows `## Your pane text`; it must be the closing section", name)
-	}
-}
-
-func TestContractStandingReminderKronos(t *testing.T) {
-	useTestStore(t)
-	contractAssertPaneTextAfter(t, "kronosBrief()", kronosBrief(), "## When in doubt, escalate")
-}
-
-func TestContractStandingReminderKronosSizeCap(t *testing.T) {
-	useTestStore(t)
-	if n := len(kronosBrief()); n > 16000 {
-		t.Errorf("kronosBrief() is %d bytes, cap is 16000", n)
 	}
 }
 
