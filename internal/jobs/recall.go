@@ -165,21 +165,44 @@ func Recall(ctx context.Context, st *store.Store, req RecallRequest) string {
 	// rendered something that matched it and was suppressed FOREVER — the one
 	// state change the feature exists to deliver. Empty is a state like any
 	// other; it just has nothing to inject.
-	goalsState, decided := recallGoalsState(st, req)
+	// The job is resolved ONCE for the two blocks that need it (goals and
+	// notes), and only on the event they ride: one ListJobs read per firing
+	// serves both.
+	var job *store.Job
+	if recallEmitsGoals(req) {
+		job = recallResolveJob(st, req)
+	}
+	goalsState, decided := recallGoalsState(st, req, job)
 	goals := goalsState
 	fingerprint := goalsFingerprint(goalsState)
 	if fingerprint == state.lastGoals {
 		goals = "" // this session has already seen exactly this state
 	}
-	// commit prefixes the goals block onto whatever the graph half produced and
-	// records the state this session has now seen.
+	// --- the notes half: carl's unread feedback and answers (recallnotes.go) ---
+	//
+	// Decided here beside goals, ahead of the same-query short-circuit, for
+	// the same reason: a note carl leaves changes neither the prompt nor the
+	// transcript, and the prompt it precedes is usually the one about it.
+	// Addressed to the job's LEAD session only (recallNotesTarget); every
+	// other session in the cell gets "" here. Its delivery record is per job,
+	// so only the lead's firings ever write it, and this session lock is what
+	// serializes those.
+	var notes string
+	var noteKeys []string
+	if recallEmitsGoals(req) && recallNotesTarget(job, sessionID) {
+		notes, noteKeys = recallNotesState(st, job)
+	}
+	// commit prefixes the notes and goals blocks onto whatever the graph half
+	// produced and records what this session has now seen.
 	//
 	// Guarded on ctx for the reason MarkRecalled is: the caller is a hook that
 	// gives up at recallHookTimeout while the embedder below has a budget an
 	// order of magnitude longer, so a return value from a late path may reach
 	// nobody. Recording a state that was never injected would suppress it until
 	// carl's NEXT edit — the delivery lost silently, exactly the failure the
-	// skip-set guard prevents on the graph side.
+	// skip-set guard prevents on the graph side. The notes record follows the
+	// same rule one step further: a delivery that cannot be RECORDED is
+	// withdrawn, since it would otherwise repeat on every prompt.
 	//
 	// `decided` is false when the goals decision did not run at all — a firing
 	// on an event goals do not ride, or a job that did not resolve — and then
@@ -187,10 +210,18 @@ func Recall(ctx context.Context, st *store.Store, req RecallRequest) string {
 	// not "no goals", and conflating them would re-deliver the block on the
 	// next prompt that did resolve.
 	commit := func(graphBlock string) string {
-		if decided && ctx.Err() == nil {
+		if ctx.Err() != nil {
+			return goals + graphBlock
+		}
+		if decided {
 			state.lastGoals = fingerprint
 		}
-		return goals + graphBlock
+		if notes != "" {
+			if err := markNotesDelivered(st, job, noteKeys, time.Now().UnixMilli()); err != nil {
+				notes = ""
+			}
+		}
+		return notes + goals + graphBlock
 	}
 	if query == "" {
 		return commit("")
@@ -326,13 +357,9 @@ func recallEmitsGoals(req RecallRequest) bool {
 // from the block alone, and recording the second as the first is what would
 // re-deliver an unchanged block on the next firing that did resolve.
 //
-// The job is resolved by SLUG first — current name, then former names, since a
-// rename moves neither the cell's installed hook command nor the worktree it
-// fires from — and only then by session, which is the pre-slug fallback for a
-// settings.json written before recallHookCommand carried one. Slug first
-// rather than session first because it is the answer that works for a cell's
-// TEAMMATES and side threads: their sessions appear on no job row, and they are
-// working on the same job with the same goals.
+// job is the caller's resolution (recallResolveJob, run once per firing for
+// this block and the notes block together); nil is "did not resolve", and
+// the decision is then not run.
 //
 // The job's whole LINK SET rides into the render, which is what makes a link
 // add, remove or clear re-arm the block through the fingerprint below with no
@@ -343,20 +370,25 @@ func recallEmitsGoals(req RecallRequest) bool {
 // A store failure inside the render is ("", true): no read is worth a broken
 // turn, and a transient failure that records "no goals" self-heals on the next
 // firing, which re-renders and re-arms.
-func recallGoalsState(st *store.Store, req RecallRequest) (string, bool) {
-	if !recallEmitsGoals(req) {
-		return "", false
-	}
-	job := recallResolveJob(st, req)
-	if job == nil {
+func recallGoalsState(st *store.Store, req RecallRequest, job *store.Job) (string, bool) {
+	if !recallEmitsGoals(req) || job == nil {
 		return "", false
 	}
 	return renderGoalsBlock(st, job.GoalIDs), true
 }
 
-// recallResolveJob finds the job this firing belongs to, or nil. One ListJobs
-// read serves all three lookups (current slug, former slugs, session), which is
-// also why it is one query rather than three round trips.
+// recallResolveJob finds the job this firing belongs to, or nil.
+//
+// The job is resolved by SLUG first — current name, then former names, since a
+// rename moves neither the cell's installed hook command nor the worktree it
+// fires from — and only then by session, which is the pre-slug fallback for a
+// settings.json written before recallHookCommand carried one. Slug first
+// rather than session first because it is the answer that works for a cell's
+// TEAMMATES and side threads: their sessions appear on no job row, and they are
+// working on the same job with the same goals.
+//
+// One ListJobs read serves all three lookups (current slug, former slugs,
+// session), which is also why it is one query rather than three round trips.
 func recallResolveJob(st *store.Store, req RecallRequest) *store.Job {
 	all, err := st.ListJobs()
 	if err != nil {

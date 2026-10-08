@@ -1155,7 +1155,10 @@ func limitHookEntry(slug, krakenBin string) map[string]any {
 // UserPromptSubmit, which queries on carl's new message and lands in front of
 // the agent before it starts thinking. Carl's prompt is real evidence of what
 // he is currently thinking about, which is the whole basis on which unsolicited
-// text may enter someone else's conversation.
+// text may enter someone else's conversation. The same firing carries carl's
+// goals and, for the lead session, his unread feedback rows and question
+// answers (recall.go, recallnotes.go) — all three blocks ride this one event,
+// which is why no cell needs a second hook installed for them.
 //
 // POSTTOOLUSE IS RETIRED, and it is retired on measurement rather than on
 // taste. It queried the graph with the ASSISTANT'S OWN LAST TEXT after every
