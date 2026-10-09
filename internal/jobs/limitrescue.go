@@ -3,6 +3,7 @@ package jobs
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -85,6 +86,13 @@ const (
 	rescueResume       limitRescueAction = "resume"
 	rescueParkManual   limitRescueAction = "park-manual"
 	rescueParkNoTarget limitRescueAction = "park-no-target"
+	// rescueLeaveRevived is the reset arm's answer when the pane has ALREADY
+	// taken a real turn since the window reopened — carl typed into it, or a
+	// bump landed — so the latch the resume exists to clear is gone and the
+	// kill would only cost the conversation, every in-flight teammate, and a
+	// resume that may not even fit (a context near the cap comes back
+	// "Prompt is too long"). The hit resolves without touching the pane.
+	rescueLeaveRevived limitRescueAction = "leave-revived"
 )
 
 const (
@@ -1463,6 +1471,12 @@ func limitRescueApply(hit LimitHit, action limitRescueAction, outcome, toEmail s
 		} else {
 			hit.Outcome = "resumed-after-reset"
 		}
+	case rescueLeaveRevived:
+		// No counter touched either: nothing was attempted, the pane did the
+		// resuming itself. The outcome word says so, so a later reader does
+		// not mistake it for a resume kraken performed.
+		hit.HandledAt = now.Unix()
+		hit.Outcome = "resumed-by-hand"
 	case rescueParkManual:
 		// No counter touched: carl pinned the account deliberately, so there
 		// is nothing here to retry and nothing to count.
@@ -1487,6 +1501,113 @@ func limitRescueApply(hit LimitHit, action limitRescueAction, outcome, toEmail s
 		}
 	}
 	return hit
+}
+
+// resetArmLeavesRevived is the reset arm's guard, kept pure so the wiring is
+// testable without a tmux snapshot: the hit must be on the RESET arm (no
+// rebind landed — the rebind arm is untouched, its pane is on the wrong
+// account whatever it has run) with a reset moment to cut at, and the pane
+// must have run since the reset. The status half (the pane running now)
+// holds for every agent; the FILE half is claude-only, because a codex
+// rollout carries no `type:"assistant"` records for it to read — so a codex
+// zeus revived by hand and idle at the tick is still resumed as before, a
+// recorded gap rather than a silent one.
+// Two known gaps, both self-healing: a zeus revived BEFORE ResetAt by some
+// other lever (a hand `/model` off an exhausted tier, a re-login) and idle at
+// the reset tick is still killed, since the cut is the banner's reset rather
+// than the hit; and a zeus that ran one real turn after the reset and then
+// latched on another window inside the settle resolves here over a latched
+// pane — the transcript arm re-records that banner as a fresh hit within its
+// trigger bound, so neither case strands a cell.
+func resetArmLeavesRevived(hit LimitHit, agent string, zeus *core.Peer) bool {
+	if hit.SwappedAt != 0 || hit.ResetAt == 0 || zeus == nil {
+		return false
+	}
+	if zeus.Status == "running" {
+		return true
+	}
+	return agent != "codex" && zeusRanSince(zeus, hit.ResetAt)
+}
+
+// zeusRanSince reports whether the pane took a REAL turn after `since` (unix
+// seconds): it is running now, or its transcript holds an assistant record
+// stamped after that moment whose model is not Claude Code's "<synthetic>" —
+// the model a latched pane stamps on the banner it writes instead of calling
+// the API, which is why a bare "transcript written since" cannot be the test
+// here (a carl keystroke into a still-latched pane appends exactly such a
+// record). "question" is deliberately not accepted on its own: the status
+// alone is not evidence of a turn, and a pane that reached a dialog by
+// running one has the record the transcript half finds.
+func zeusRanSince(p *core.Peer, since int64) bool {
+	if p == nil || since == 0 {
+		return false
+	}
+	if p.Status == "running" {
+		return true
+	}
+	path, err := core.ReadTranscriptPath(p)
+	if err != nil {
+		return false
+	}
+	return transcriptTurnSince(path, since)
+}
+
+// transcriptTurnTail bounds how much of a transcript transcriptTurnSince
+// reads: the records that can answer "did a turn run after the reset" are at
+// the end, and a long session's file is tens of MB.
+const transcriptTurnTail = 2 << 20
+
+// transcriptTurnSince is zeusRanSince's file half: a non-synthetic assistant
+// record with a timestamp after `since`, found in the file's last
+// transcriptTurnTail bytes. A record that cannot be decoded, carries no
+// timestamp, or is the partial line a tail read starts inside is skipped.
+func transcriptTurnSince(path string, since int64) bool {
+	f, err := os.Open(path)
+	if err != nil {
+		return false
+	}
+	defer f.Close()
+	fi, err := f.Stat()
+	if err != nil {
+		return false
+	}
+	start := int64(0)
+	if fi.Size() > transcriptTurnTail {
+		start = fi.Size() - transcriptTurnTail
+	}
+	buf := make([]byte, fi.Size()-start)
+	if _, err := f.ReadAt(buf, start); err != nil && err != io.EOF {
+		return false
+	}
+	lines := strings.Split(string(buf), "\n")
+	if start > 0 && len(lines) > 0 {
+		lines = lines[1:] // the tail began inside a record
+	}
+	cutoff := time.Unix(since, 0)
+	for _, line := range lines {
+		if !strings.Contains(line, "\"assistant\"") {
+			continue
+		}
+		var rec struct {
+			Type      string `json:"type"`
+			Timestamp string `json:"timestamp"`
+			Message   struct {
+				Model string `json:"model"`
+			} `json:"message"`
+		}
+		if err := json.Unmarshal([]byte(line), &rec); err != nil || rec.Type != "assistant" {
+			continue
+		}
+		ts, err := time.Parse(time.RFC3339Nano, rec.Timestamp)
+		if err != nil || !ts.After(cutoff) {
+			continue
+		}
+		if rec.Message.Model == "" || rec.Message.Model == "<synthetic>" {
+			continue
+		}
+		return true
+	}
+	return false
 }
 
 // mergeLimitRescueState folds the rescue's six owned fields onto whatever is
@@ -1781,6 +1902,22 @@ func (d *daemonState) limitRescue(j *Job, all []*core.Peer, live map[string]bool
 		// account never moved.
 		resumePrompt := limitRescueResumePrompt
 		if hit.SwappedAt == 0 {
+			// The reset arm's kill is only owed to a pane still latched on the
+			// limit. One that has already run a real turn since the window
+			// reopened (carl's "continue", the board's retry) needs nothing,
+			// and killing it is pure loss. Measured 2026-10-08 on two cells:
+			// one zeus carl had revived 7.5 minutes earlier was killed with
+			// its seven live teammates and three just-dispatched fix briefs,
+			// and its respawn's first turn failed "Prompt is too long" until
+			// carl compacted by hand; the other lost an in-flight query.
+			if resetArmLeavesRevived(hit, j.Agent, CellZeus(j, all)) {
+				hit = limitRescueApply(hit, rescueLeaveRevived, "", "", now)
+				if err := saveLimitRescueState(j, hit); err != nil {
+					dlogErr("%s: persist limit-hit record failed: %v", j.Slug, err)
+				}
+				dlogEvent("info", "limit-rescue-skipped", "%s: usage window reset and zeus already took a turn since — left alone, not killed", j.Slug)
+				return
+			}
 			resumePrompt = limitResetResumePrompt
 		}
 		// A codex zeus has no crew, so it gets the same message with the
