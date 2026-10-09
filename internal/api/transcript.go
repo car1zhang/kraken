@@ -13,12 +13,16 @@ import (
 // block carries its record uuid, which is what the mind button captures as a
 // transcript source's anchor.
 
-// jobTranscriptDefaultN is the steer modal's panel size.
+// jobTranscriptDefaultN is the `n` arm's default when a request names no
+// `turns` — the pre-turns panel size, kept for any caller still sending it.
 const jobTranscriptDefaultN = 50
 
-// jobTranscriptHandler serves the last n blocks of zeus' transcript. The
-// clamp to 1..200 is jobs.ZeusTranscriptBlocks'; a job with no session or no
-// transcript yet is an empty list, never an error. A read, so ungated.
+// jobTranscriptHandler serves the tail of zeus' transcript: the last `turns`
+// TURNS when that query is a positive integer (the steer modal's ask — a turn
+// is one of carl's prompts and everything zeus did after it, clamped to 1..50
+// by jobs.ZeusTranscriptTurns), else the last `n` blocks (default 50,
+// clamped to 1..200 by jobs.ZeusTranscriptBlocks). A job with no session or
+// no transcript yet is an empty list, never an error. A read, so ungated.
 func jobTranscriptHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		webJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "GET only"})
@@ -35,12 +39,24 @@ func jobTranscriptHandler(w http.ResponseWriter, r *http.Request) {
 			n = iv
 		}
 	}
+	turns := 0
+	if v := strings.TrimSpace(r.URL.Query().Get("turns")); v != "" {
+		if iv, err := strconv.Atoi(v); err == nil && iv > 0 {
+			turns = iv
+		}
+	}
 	j, _, err := webJobFor(slug)
 	if err != nil {
 		webJSON(w, http.StatusNotFound, map[string]string{"error": err.Error()})
 		return
 	}
-	blocks, session, err := jobs.ZeusTranscriptBlocks(j, n)
+	var blocks []jobs.TranscriptBlock
+	var session string
+	if turns > 0 {
+		blocks, session, err = jobs.ZeusTranscriptTurns(j, turns)
+	} else {
+		blocks, session, err = jobs.ZeusTranscriptBlocks(j, n)
+	}
 	if err != nil {
 		mmErr(w, "job-transcript", http.StatusInternalServerError, err.Error())
 		return

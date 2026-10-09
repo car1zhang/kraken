@@ -183,6 +183,144 @@ func TestLastBlocksCountsUserMessages(t *testing.T) {
 	}
 }
 
+// LastTurns cuts at the n-th most recent PROMPT: a turn is carl's prompt plus
+// everything after it, harness-written user records (a task notification, a
+// slash-command echo) start no turn, and the cap drops whole oldest turns.
+func TestLastTurns(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "s.jsonl")
+	content := `{"type":"user","uuid":"u1","message":{"content":"first ask"}}
+{"type":"assistant","uuid":"a1","message":{"content":[{"type":"text","text":"reply one"}]}}
+{"type":"assistant","uuid":"a2","message":{"content":[{"type":"tool_use","name":"Bash","input":{"command":"ls"}}]}}
+{"type":"user","uuid":"u2","message":{"content":"second ask"}}
+{"type":"user","uuid":"u3","message":{"content":"<task-notification>done</task-notification>"}}
+{"type":"assistant","uuid":"a3","message":{"content":[{"type":"text","text":"reply two"}]}}
+{"type":"user","uuid":"u4","message":{"content":"third ask"}}
+{"type":"assistant","uuid":"a4","message":{"content":[{"type":"text","text":"reply three"}]}}
+`
+	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+		t.Fatal(err)
+	}
+	blocks, counted, err := LastTurns(path, 1, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if counted != 1 || len(blocks) != 2 || blocks[0].UUID != "u4" {
+		t.Errorf("n=1: counted=%d blocks=%v", counted, blocks)
+	}
+	// The notification sits inside turn two, so n=2 starts at "second ask".
+	blocks, counted, err = LastTurns(path, 2, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if counted != 2 || len(blocks) != 5 || blocks[0].UUID != "u2" {
+		t.Errorf("n=2: counted=%d blocks=%v", counted, blocks)
+	}
+	// More turns than exist: the whole file.
+	blocks, counted, err = LastTurns(path, 10, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if counted != 3 || len(blocks) != 8 || blocks[0].UUID != "u1" {
+		t.Errorf("n=10: counted=%d blocks=%v", counted, blocks)
+	}
+	// A cap of 6 blocks fits turns two and three (5 blocks) but not all three.
+	blocks, counted, err = LastTurns(path, 10, 6)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if counted != 2 || len(blocks) != 5 || blocks[0].UUID != "u2" {
+		t.Errorf("cap=6: counted=%d blocks=%v", counted, blocks)
+	}
+	// A cap smaller than the newest turn still returns that turn whole.
+	blocks, counted, err = LastTurns(path, 10, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if counted != 1 || len(blocks) != 2 || blocks[0].UUID != "u4" {
+		t.Errorf("cap=1: counted=%d blocks=%v", counted, blocks)
+	}
+	if _, _, err := LastTurns(filepath.Join(dir, "nope.jsonl"), 1, 0); err == nil {
+		t.Errorf("want error for a missing transcript file")
+	}
+	// Blocks AHEAD of the first prompt: the cap drops them first, on their
+	// own, before any whole turn goes.
+	leading := filepath.Join(dir, "leading.jsonl")
+	content = `{"type":"assistant","uuid":"p0","message":{"content":[{"type":"text","text":"pre"}]}}
+{"type":"user","uuid":"u1","message":{"content":"first ask"}}
+{"type":"assistant","uuid":"a1","message":{"content":[{"type":"text","text":"reply one"}]}}
+{"type":"user","uuid":"u2","message":{"content":"second ask"}}
+{"type":"assistant","uuid":"a2","message":{"content":[{"type":"text","text":"reply two"}]}}
+`
+	if err := os.WriteFile(leading, []byte(content), 0644); err != nil {
+		t.Fatal(err)
+	}
+	blocks, counted, err = LastTurns(leading, 5, 4)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if counted != 2 || len(blocks) != 4 || blocks[0].UUID != "u1" {
+		t.Errorf("leading cap=4: counted=%d blocks=%v", counted, blocks)
+	}
+	blocks, counted, err = LastTurns(leading, 5, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if counted != 1 || len(blocks) != 2 || blocks[0].UUID != "u2" {
+		t.Errorf("leading cap=2: counted=%d blocks=%v", counted, blocks)
+	}
+	// n below 1 reads as 1 rather than indexing prompts[-1].
+	blocks, counted, err = LastTurns(path, 0, 0)
+	if err != nil || counted != 1 || len(blocks) != 2 || blocks[0].UUID != "u4" {
+		t.Errorf("n=0: counted=%d blocks=%v err=%v", counted, blocks, err)
+	}
+	// No prompt anywhere: the cap is a plain tail cut.
+	headless := filepath.Join(dir, "headless.jsonl")
+	var sb strings.Builder
+	for i := 0; i < 8; i++ {
+		sb.WriteString(`{"type":"assistant","uuid":"h` + string(rune('0'+i)) + `","message":{"content":[{"type":"text","text":"t"}]}}` + "\n")
+	}
+	if err := os.WriteFile(headless, []byte(sb.String()), 0644); err != nil {
+		t.Fatal(err)
+	}
+	blocks, counted, err = LastTurns(headless, 5, 3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if counted != 0 || len(blocks) != 3 || blocks[0].UUID != "h5" {
+		t.Errorf("headless cap=3: counted=%d blocks=%v", counted, blocks)
+	}
+}
+
+// A window that reaches the scan limit without reaching n prompts is cut at
+// the oldest prompt it holds, so the first turn shown is a whole one.
+func TestLastTurnsScanLimitCutsAtWholeTurn(t *testing.T) {
+	oldStart, oldLimit := tailStartWindow, lastBlocksScanLimit
+	t.Cleanup(func() { tailStartWindow, lastBlocksScanLimit = oldStart, oldLimit })
+	dir := t.TempDir()
+	path := filepath.Join(dir, "s.jsonl")
+	pad := strings.Repeat("x", 300)
+	content := `{"type":"user","uuid":"u1","message":{"content":"first ask"}}
+{"type":"assistant","uuid":"a1","message":{"content":[{"type":"text","text":"` + pad + `"}]}}
+{"type":"user","uuid":"u2","message":{"content":"second ask"}}
+{"type":"assistant","uuid":"a2","message":{"content":[{"type":"text","text":"` + pad + `"}]}}
+`
+	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+		t.Fatal(err)
+	}
+	// A window holding the whole of turn two plus the TAIL of turn one, and
+	// a limit that stops growth there.
+	tailStartWindow = 500
+	lastBlocksScanLimit = 500
+	blocks, counted, err := LastTurns(path, 5, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if counted != 1 || len(blocks) != 2 || blocks[0].UUID != "u2" {
+		t.Errorf("scan-limited: counted=%d blocks=%v", counted, blocks)
+	}
+}
+
 func TestLastBlocksMissingFile(t *testing.T) {
 	if _, _, err := LastBlocks(filepath.Join(t.TempDir(), "nope.jsonl"), 1); err == nil {
 		t.Errorf("want error for a missing transcript file")

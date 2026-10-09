@@ -365,10 +365,14 @@ export const fetchMMSource = (id: number, signal?: AbortSignal) =>
 export const captureToMind = (slug: string, text: string, source: CaptureSource) =>
   postJSON<CaptureToMindResult>("/api/mm/capture", { slug, text, source });
 
-/** zeus' last `n` transcript blocks — the steer modal's read-only panel. */
-export const fetchJobTranscript = (slug: string, n = 50, signal?: AbortSignal) =>
+/**
+ * zeus' last `turns` transcript TURNS — each of carl's prompts and everything
+ * zeus did after it — the steer modal's read-only panel. The server drops the
+ * oldest whole turns past its block cap, never a turn's head.
+ */
+export const fetchJobTranscriptTurns = (slug: string, turns = 5, signal?: AbortSignal) =>
   getJSON<JobTranscript>(
-    `/api/job/transcript?slug=${encodeURIComponent(slug)}&n=${n}`,
+    `/api/job/transcript?slug=${encodeURIComponent(slug)}&turns=${turns}`,
     signal,
   );
 

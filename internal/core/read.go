@@ -208,6 +208,110 @@ func LastBlocks(path string, n int) ([]block, int, error) {
 	}
 }
 
+// LastTurns returns the transcript's trailing TURNS: every block from the
+// n-th most recent prompt onward. A turn is one of carl's prompts plus
+// everything that follows it until the next — a "user" block that
+// harnessUserRecord does not claim (the same prompt test LastTurnUUID makes;
+// a tool_result-only user record, a teammate message and a daemon-typed
+// `/color` echo start no turn). counted is how many prompts the answer
+// spans. It shares LastBlocks' backward growing-window read and its two
+// stops: at the file's head every block is inside the last n turns, and at
+// lastBlocksScanLimit the answer is cut at the EARLIEST prompt the window
+// reached, so the oldest turn shown is a whole one rather than the tail of a
+// turn whose prompt is out of the window — unless the window holds no prompt
+// at all (one enormous turn), where the window's blocks are the answer and
+// counted is 0.
+//
+// maxBlocks (≤ 0 for no cap) bounds the answer by dropping the OLDEST whole
+// turns until it fits, never cutting inside one, and the newest turn is
+// always kept even when it alone exceeds the cap: a turn is only legible
+// from its prompt, and the panel that asks for turns is the panel carl reads
+// to see what zeus is doing now.
+func LastTurns(path string, n, maxBlocks int) ([]block, int, error) {
+	n = max(n, 1) // n=0 would index prompts[-1] on a prompt-less window
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, 0, fmt.Errorf("open transcript: %v", err)
+	}
+	defer f.Close()
+	info, err := f.Stat()
+	if err != nil {
+		return nil, 0, fmt.Errorf("stat transcript: %v", err)
+	}
+	size := info.Size()
+	codex := IsCodexRollout(path)
+	for window := tailStartWindow; ; window *= 2 {
+		lines, err := tailWindow(f, size, window)
+		if err != nil {
+			return nil, 0, err
+		}
+		var blocks []block
+		if codex {
+			blocks = parseCodexBlocks(lines)
+		} else {
+			blocks = parseBlocks(lines)
+		}
+		if len(blocks) == 0 && (window >= size || window >= lastBlocksScanLimit) {
+			return nil, 0, nil
+		}
+		// prompt indices, newest first
+		var prompts []int
+		for i := len(blocks) - 1; i >= 0; i-- {
+			if isPromptBlock(blocks[i]) {
+				prompts = append(prompts, i)
+				if len(prompts) == n {
+					break
+				}
+			}
+		}
+		whole := window >= size
+		if len(prompts) < n && !whole && window < lastBlocksScanLimit {
+			continue
+		}
+		cut := 0
+		switch {
+		case len(prompts) == n:
+			cut = prompts[n-1]
+		case whole:
+			cut = 0 // fewer than n turns exist: all of them
+		case len(prompts) > 0:
+			cut = prompts[len(prompts)-1] // scan limit: oldest whole turn seen
+		}
+		// Drop the oldest whole turns past the cap, keeping the newest. k is
+		// the prompts index of the turn cut currently starts at; len(prompts)
+		// means cut sits BEFORE the oldest prompt (a whole-file answer with
+		// blocks ahead of its first prompt), so the first drop is of those
+		// leading blocks alone. With no prompt in the window there is no turn
+		// head to protect, so the cap is a plain tail cut.
+		k := len(prompts)
+		if len(prompts) > 0 && cut == prompts[len(prompts)-1] {
+			k = len(prompts) - 1
+		}
+		for maxBlocks > 0 && len(blocks)-cut > maxBlocks && k > 0 {
+			k--
+			cut = prompts[k]
+		}
+		if maxBlocks > 0 && len(prompts) == 0 && len(blocks) > maxBlocks {
+			cut = len(blocks) - maxBlocks
+		}
+		counted := 0
+		for _, p := range prompts {
+			if p >= cut {
+				counted++
+			}
+		}
+		return blocks[cut:], counted, nil
+	}
+}
+
+// isPromptBlock reports whether a block is one of carl's prompts — the
+// record that starts a turn. LastTurnUUID additionally requires a uuid, since
+// its answer IS the uuid; a codex rollout's user_message has none and still
+// starts a turn here.
+func isPromptBlock(b block) bool {
+	return b.Kind == "user" && !harnessUserRecord(b.Text)
+}
+
 // BlocksAround returns the blocks within radius of the record carrying uuid,
 // wherever in the transcript it sits: up to radius blocks before the first
 // block stamped with uuid, every block through the last one stamped with it,
@@ -462,7 +566,7 @@ func LastTurnUUID(path string) string {
 		line, rerr := rd.ReadString('\n')
 		if line != "" {
 			for _, b := range parseBlocks([]string{line}) {
-				if b.Kind == "user" && b.UUID != "" && !harnessUserRecord(b.Text) {
+				if isPromptBlock(b) && b.UUID != "" {
 					last = b.UUID
 				}
 			}

@@ -26,6 +26,15 @@ type TranscriptBlock struct {
 // backward scan grows with the request.
 const transcriptMaxBlocks = 200
 
+// transcriptMaxTurns bounds a turns request the same way, and
+// transcriptMaxTurnBlocks caps the blocks a turns answer carries — a `/do`
+// turn can run to hundreds of tool one-liners, and the panel polls every 3s.
+// Whole oldest turns are dropped to fit, never a turn's head (core.LastTurns).
+const (
+	transcriptMaxTurns      = 50
+	transcriptMaxTurnBlocks = 400
+)
+
 // ZeusTranscriptBlocks returns the last n blocks (clamped to 1..200) of the
 // job's stamped zeus session and that session id. A job with no stamped
 // session, or whose transcript cannot be found, is an empty answer with nil
@@ -39,14 +48,7 @@ func ZeusTranscriptBlocks(j *Job, n int) ([]TranscriptBlock, string, error) {
 	if n > transcriptMaxBlocks {
 		n = transcriptMaxBlocks
 	}
-	if j == nil {
-		return []TranscriptBlock{}, "", nil
-	}
-	sid := strings.TrimSpace(j.Session)
-	if sid == "" {
-		return []TranscriptBlock{}, "", nil
-	}
-	path := core.TranscriptPathForSession(sid)
+	sid, path := stampedZeusTranscript(j)
 	if path == "" {
 		return []TranscriptBlock{}, "", nil
 	}
@@ -65,4 +67,44 @@ func ZeusTranscriptBlocks(j *Job, n int) ([]TranscriptBlock, string, error) {
 		out = append(out, TranscriptBlock{Kind: b.Kind, Text: b.Text, From: b.From, UUID: b.UUID})
 	}
 	return out, sid, nil
+}
+
+// ZeusTranscriptTurns is ZeusTranscriptBlocks counted in TURNS rather than
+// blocks: the last n (clamped to 1..50) of carl's prompts and everything zeus
+// did after each, at most transcriptMaxTurnBlocks blocks with the oldest
+// whole turns dropped to fit. Same empty-answer and error rules.
+func ZeusTranscriptTurns(j *Job, n int) ([]TranscriptBlock, string, error) {
+	if n < 1 {
+		n = 1
+	}
+	if n > transcriptMaxTurns {
+		n = transcriptMaxTurns
+	}
+	sid, path := stampedZeusTranscript(j)
+	if path == "" {
+		return []TranscriptBlock{}, "", nil
+	}
+	blocks, _, err := core.LastTurns(path, n, transcriptMaxTurnBlocks)
+	if err != nil {
+		return nil, "", err
+	}
+	out := make([]TranscriptBlock, 0, len(blocks))
+	for _, b := range blocks {
+		out = append(out, TranscriptBlock{Kind: b.Kind, Text: b.Text, From: b.From, UUID: b.UUID})
+	}
+	return out, sid, nil
+}
+
+// stampedZeusTranscript resolves the job's stamped zeus session to its
+// transcript; "" for either half means nothing to read (no job, no stamped
+// session, no transcript on disk yet).
+func stampedZeusTranscript(j *Job) (sid, path string) {
+	if j == nil {
+		return "", ""
+	}
+	sid = strings.TrimSpace(j.Session)
+	if sid == "" {
+		return "", ""
+	}
+	return sid, core.TranscriptPathForSession(sid)
 }
