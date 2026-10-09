@@ -3033,6 +3033,13 @@ func TestMMMindLayerWireShapes(t *testing.T) {
 		t.Fatalf("transcript status %d, body %s", rec.Code, rec.Body.String())
 	}
 	assertShape(t, "/api/job/transcript", rec.Body.Bytes(), jobTranscriptSpec)
+	// The turns arm answers the same envelope.
+	rec = httptest.NewRecorder()
+	jobTranscriptHandler(rec, httptest.NewRequest(http.MethodGet, "/api/job/transcript?slug=contract-transcript&turns=5", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("transcript turns status %d, body %s", rec.Code, rec.Body.String())
+	}
+	assertShape(t, "/api/job/transcript?turns=", rec.Body.Bytes(), jobTranscriptSpec)
 }
 
 // webMMAnchorSpec covers the `anchor` object — its own spec because

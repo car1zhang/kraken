@@ -12,7 +12,7 @@ import {
   editFeedback,
   fetchDraft,
   fetchJobForm,
-  fetchJobTranscript,
+  fetchJobTranscriptTurns,
   killJob,
   openInEditor,
   reactivateJob,
@@ -1085,15 +1085,23 @@ function SteerBody({
  * "estimated  ago" when the stamp is absent, which a present `load` never is
  * (WebJobLoad) — the same defensive-only category as loadROI's zero arms.
  */
-/** How many of zeus' transcript blocks the panel shows. */
-const TRANSCRIPT_BLOCKS = 50;
+/**
+ * How many of zeus' TURNS the panel shows — a turn being one of carl's
+ * prompts and everything zeus did after it, so what the panel holds is the
+ * last few exchanges whole rather than a block count that cuts mid-turn.
+ */
+const TRANSCRIPT_TURNS = 5;
 /** The modal's cadence — the board poll that re-renders it is 3s too. */
 const TRANSCRIPT_POLL_MS = 3000;
 
 /**
- * zeus' last 50 transcript blocks, rendered by the thread overlay's block
+ * zeus' last 5 transcript turns, rendered by the thread overlay's block
  * renderer, each block stamped as a `transcript` mind source (zeus' session +
  * the record uuid). Read-only: steering is the composer below.
+ *
+ * COLLAPSED by default: the modal opens to steer, and the transcript is the
+ * thing carl unfolds when he wants to see what zeus is doing — folded, it
+ * neither pushes the composer down nor polls (the poll is gated on `open`).
  *
  * Painted imperatively and only when the markup CHANGES, for the thread
  * overlay's reason plus one of the mind button's: re-setting identical
@@ -1101,9 +1109,9 @@ const TRANSCRIPT_POLL_MS = 3000;
  * is in the middle of making.
  */
 function ZeusTranscriptPanel({ slug }: { slug: string }) {
-  const [open, setOpen] = useState(true);
+  const [open, setOpen] = useState(false);
   const read = usePoll<JobTranscript>(
-    (signal) => fetchJobTranscript(slug, TRANSCRIPT_BLOCKS, signal),
+    (signal) => fetchJobTranscriptTurns(slug, TRANSCRIPT_TURNS, signal),
     TRANSCRIPT_POLL_MS,
     { enabled: open },
   );
@@ -1126,27 +1134,37 @@ function ZeusTranscriptPanel({ slug }: { slug: string }) {
     el.innerHTML = html;
     el.scrollTop = atBottom ? el.scrollHeight : prevTop;
   }, [blocks, session]);
-  // Nothing to show is nothing rendered: a job with no stamped session (never
-  // started) answers an empty list, and an empty titled box would read as a
-  // transcript that is somehow blank.
+  // Unfolding lands on the NEWEST turn: `display: none` forgets the body's
+  // scroll position, and the paint above only moves it when the markup
+  // changes, so a reopen on unchanged markup would otherwise sit at the top —
+  // the oldest turn — until zeus wrote something.
+  useEffect(() => {
+    const el = box.current;
+    if (open && el) el.scrollTop = el.scrollHeight;
+  }, [open]);
+  // An empty answer — a job with no stamped session yet, or a codex job,
+  // whose rollout no claude transcript lookup finds — keeps the header and
+  // says so, rather than hiding the panel: the header is what carl just
+  // clicked, and a button that vanishes on click reads as broken. The body
+  // stays empty rather than rendering a blank titled box.
   const empty = read.data !== undefined && blocks.length === 0;
   return (
-    <div
-      className="steer-transcript"
-      id="steer-transcript"
-      hidden={empty && !read.error}
-      data-mind-slug={slug}
-    >
+    <div className="steer-transcript" id="steer-transcript" data-mind-slug={slug}>
       <button
         className="steer-transcript-head"
         aria-expanded={open}
         title={open ? "hide zeus' transcript" : "show zeus' recent transcript"}
         onClick={() => setOpen((v) => !v)}
       >
-        {open ? "▾" : "▸"} zeus · last {TRANSCRIPT_BLOCKS} blocks
+        {open ? "▾" : "▸"} zeus · last {TRANSCRIPT_TURNS} turns
         {read.error ? ` · couldn't read: ${read.error.message}` : ""}
+        {!read.error && empty ? " · no transcript yet" : ""}
       </button>
-      <div className="convo steer-transcript-body" ref={box} hidden={!open} />
+      <div
+        className="convo steer-transcript-body"
+        ref={box}
+        hidden={!open || empty || read.data === undefined}
+      />
     </div>
   );
 }

@@ -1106,6 +1106,9 @@ func TestMindLayerEdgeZeusTranscriptBlocksNoSession(t *testing.T) {
 		"no transcript": {Slug: "edge-ml-tx2", ID: 4, Repo: "kraken", Session: "1b6e0a7c-0000-4000-8000-00000000abcd"},
 	} {
 		for _, n := range []int{-5, 0, 1, 50, 200, 201, 100000} {
+			if tb, ts, terr := ZeusTranscriptTurns(j, n); terr != nil || ts != "" || len(tb) != 0 {
+				t.Errorf("%s turns=%d: = %v, %q, %v; want empty, \"\", nil", name, n, tb, ts, terr)
+			}
 			blocks, sess, err := ZeusTranscriptBlocks(j, n)
 			if err != nil {
 				t.Errorf("%s n=%d: err = %v, want nil", name, n, err)

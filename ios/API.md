@@ -1478,14 +1478,19 @@ a missing source is always a 200.
 `ext` is the artifact's extension (`md`, `html`, …) or `""`. 400 bad id; 404
 unknown item.
 
-#### `GET /api/job/transcript?slug=&n=` → `{"session": string, "blocks": [TranscriptBlock]}` (api/transcript.go)
+#### `GET /api/job/transcript?slug=&n=&turns=` → `{"session": string, "blocks": [TranscriptBlock]}` (api/transcript.go)
 
-The tail of zeus' own conversation for the steer modal's transcript panel. `n`
-defaults to 50 and is clamped to 1…200. Each block is `{kind, text, from?,
-uuid}` — `/api/thread/read`'s block shape with `uuid` always present and no
-`inherited`. A job with no stamped session or no transcript yet answers
-`{"session": "", "blocks": []}`. 400 missing slug; 404 unknown slug. A read,
-so reachable under `--mirror`.
+The tail of zeus' own conversation for the steer modal's transcript panel.
+`turns`, when a positive integer, selects the last that many TURNS — each of
+carl's prompts and everything zeus did after it, clamped to 1…50, at most 400
+blocks with the oldest whole turns dropped to fit (never a turn's head) — and
+is what the board's panel sends (`turns=5`). Otherwise `n` selects the last
+that many blocks, defaulting to 50 and clamped to 1…200. Each block is `{kind,
+text, from?, uuid}` — `/api/thread/read`'s block shape with `uuid` always
+present and no `inherited`. A job with no stamped session or no transcript yet
+answers `{"session": "", "blocks": []}`. 400 missing slug; 404 unknown slug. A
+read, so reachable under `--mirror`. Additive (`turns` is a new query
+parameter), so `apiContract` stays 6.
 
 ---
 
