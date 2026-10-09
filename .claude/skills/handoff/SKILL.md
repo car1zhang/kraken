@@ -9,9 +9,11 @@ argument-hint: "[resume | how to continue: agents, slices, instructions]"
 
 > **Kraken-level copy** — loaded from `.claude/skills/handoff/` in this worktree. If the harness header says `Base directory ... ~/.claude/skills/handoff`, a personal copy shadowed this one (personal beats project on a name collision).
 
-A compaction keeps a summary; a handoff keeps a document. `/handoff` writes the document first, so whoever continues — you after compaction, or fresh teammates — starts from a record you chose rather than one a summarizer chose. It is not a phase: it changes no stage badge and no gate, and after it you are in exactly the phase you left. Three modes, by `$ARGUMENTS`:
+A compaction keeps a summary; a handoff keeps a document. `/handoff` writes the document first, so whoever continues — you after compaction, or fresh teammates — starts from a record you chose rather than one a summarizer chose. It is not a phase: it changes no stage badge and no gate, and after it you are in exactly the phase you left. Three modes, by the argument text you were invoked with. Claude Code substitutes that text wherever the placeholder appears, so it appears exactly once, on the next line, and the rest of this file names it as "the arguments" (a second placeholder anywhere else would be replaced by the argument text too):
 
-| `$ARGUMENTS` | Mode | Who continues |
+Arguments: $ARGUMENTS
+
+| Arguments | Mode | Who continues |
 |---|---|---|
 | empty | self | you, compacted |
 | `resume` | resume | you, just compacted — read the doc and go on |
@@ -45,7 +47,7 @@ Then say the closing line (section 4) and END YOUR TURN with no further tool cal
 
 ## 2b. Spawn mode: hand to teammates and keep going
 
-Read carl's `$ARGUMENTS` as the plan: how many agents, their names if given, how the remaining work splits, any instructions. Write the doc with one `## Agent:` section each. Spawn every continuation agent as a TEAMMATE — an Agent call with a `name` and `model: opus` — whose brief is: the doc's absolute path, its own section's name, the file-output contract (its report path, outside the repo), the zsh dialect line, and `kraken mm get --file` for every file it will cite. Names: the one carl gave; else the crew role the work matches (`hephaestus-<slice>` for code, `hermes-<id>` for a figure); else `relay-<n>`. Record each name and report path in the doc's **In flight** section. You do NOT compact yourself in this mode (carl's decision, Q2 of job 548): say the closing line, then wait on the report paths per the wait protocol in `.claude/skills/do/SKILL.md` step 4 — one background until-loop over every report path, then end the turn.
+Read carl's arguments (the Arguments line at the top) as the plan: how many agents, their names if given, how the remaining work splits, any instructions. Write the doc with one `## Agent:` section each. Spawn every continuation agent as a TEAMMATE — an Agent call with a `name` and `model: opus` — whose brief is: the doc's absolute path, its own section's name, the file-output contract (its report path, outside the repo), the zsh dialect line, and `kraken mm get --file` for every file it will cite. Names: the one carl gave; else the crew role the work matches (`hephaestus-<slice>` for code, `hermes-<id>` for a figure); else `relay-<n>`. Record each name and report path in the doc's **In flight** section. You do NOT compact yourself in this mode (carl's decision, Q2 of job 548): say the closing line, then wait on the report paths per the wait protocol in `.claude/skills/do/SKILL.md` step 4 — one background until-loop over every report path, then end the turn.
 
 ## 3. Resume mode
 
