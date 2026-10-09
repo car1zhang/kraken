@@ -381,6 +381,18 @@ func readLimitHitByKey(key string) LimitHit {
 // first-arrival details would suppress the reset re-arm for every
 // hook-first hit, silently.
 //
+// The same holds for the banner that NAMES the window, reset clause or not:
+// a folded delivery whose details name a limit window (namesLimitWindow)
+// replaces stored Details that name none — unless that would trade away a
+// reset clause the stored ones carry — and brings its session id along, since
+// only the lead's own transcript produces such a banner while the first
+// delivery may be a teammate's hook. The Fable banner ("You've reached your
+// Fable limit. Run /usage-credits …") carries no reset clause, so the
+// reset rule alone kept the hook's raw 429 body, and the Fable fallback —
+// whose only other evidence is a usage-snapshot row that is itself errored
+// with a 429 while the account is limited — never saw the banner and left
+// four Fable-exhausted cells to rotation on 2026-10-08.
+//
 // Anything else — no record, a resolved one, or a different error — starts
 // a fresh unresolved record, with ONE thing carried across: an unresolved
 // swap watermark. A cell whose rescue has swapped but not yet resumed its
@@ -404,9 +416,19 @@ func limitHitFolds(cur LimitHit, errorType string) bool {
 func mergeLimitHitDelivery(cur LimitHit, errorType, details, sessionID, agentID string, now time.Time) LimitHit {
 	if limitHitFolds(cur, errorType) {
 		cur.Deliveries++
-		if parseLimitReset(cur.Details, time.Unix(cur.At, 0)) == 0 &&
-			parseLimitReset(details, time.Unix(cur.At, 0)) != 0 {
+		curReset := parseLimitReset(cur.Details, time.Unix(cur.At, 0)) != 0
+		newReset := parseLimitReset(details, time.Unix(cur.At, 0)) != 0
+		gainsReset := !curReset && newReset
+		gainsWindow := !namesLimitWindow(cur.Details) && namesLimitWindow(details) && (newReset || !curReset)
+		if gainsReset || gainsWindow {
 			cur.Details = details
+		}
+		// A window-naming banner comes from the lead's own transcript, so its
+		// session is the one the banner describes; the first delivery's may be
+		// a teammate's hook, which would fail the fallback's session gate.
+		if gainsWindow && sessionID != "" {
+			cur.SessionID = sessionID
+			cur.AgentID = agentID
 		}
 		return cur
 	}
