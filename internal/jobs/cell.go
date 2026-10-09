@@ -491,6 +491,30 @@ func addBranchRuns(fam map[string]bool, base string, maxRun int) {
 	}
 }
 
+// pruneStaleWorktrees drops git's registrations of worktrees whose directory
+// no longer exists, so a `git worktree add` of the branch such a registration
+// still claims can succeed (a reused PATH git tolerates on its own, measured;
+// a held BRANCH it refuses). A registration goes stale whenever a worktree
+// directory is removed without `git worktree remove`. Measured 2026-10-08: a zeus made its own
+// worktree of a SECOND repo inside its cell dir; teardown's os.RemoveAll then
+// deleted it along with everything else, so that repo kept registering the
+// cell's branch as checked out at a path that no longer existed. The job was
+// then re-pointed at that repo, and its reactivation's `worktree add` refused
+// with "is already used by worktree at <gone path>" ten seconds after the
+// Done; the job had to be re-created by hand. The prune runs in the repo the
+// add targets — a stale registration left in a repo kraken is not adding
+// into blocks nothing here and is not swept. `git worktree prune` only drops
+// registrations whose directory is absent at that instant (a worktree on an
+// unmounted volume counts; `git worktree lock` is git's own guard for one),
+// never a live one and never one holding git's "initializing" lock, so
+// running it before every add is safe. A failure is logged and otherwise
+// ignored, since the add that follows reports the real problem itself.
+func pruneStaleWorktrees(repo string) {
+	if out, err := exec.Command("git", "-C", repo, "worktree", "prune").CombinedOutput(); err != nil {
+		fmt.Fprintf(os.Stderr, "kraken: git worktree prune in %s failed: %v %s\n", repo, err, strings.TrimSpace(string(out)))
+	}
+}
+
 // ensureUsableBranch makes CellBranch(j) safe to (re)create the worktree on
 // and returns the git worktree-add branch flag to use: "-b" when the branch
 // doesn't exist, "-B" (reset) when it exists but is fully merged into base —
@@ -981,6 +1005,7 @@ func StartCell(j *Job, repo string) error {
 			return fmt.Errorf("mkdir %s: %v", d, err)
 		}
 	}
+	pruneStaleWorktrees(repo)
 	out, err := exec.Command("git", "-C", repo, "worktree", "add", wt, branchFlag, CellBranch(j), base).CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("git worktree add: %s", strings.TrimSpace(string(out)))
@@ -2731,6 +2756,7 @@ func ReactivateJob(j *Job, session, message string) error {
 		// syncCellArtifacts takes its dir-missing skip branch and the mirror
 		// goes quiet with nothing reporting it. One dir per cell, chosen once.
 		wt = cellWorktreeIn(reDir, repo)
+		pruneStaleWorktrees(repo)
 		out, err := exec.Command("git", "-C", repo, "worktree", "add", wt, branchFlag, branch, startPoint).CombinedOutput()
 		if err != nil {
 			return fmt.Errorf("git worktree add: %s", strings.TrimSpace(string(out)))
