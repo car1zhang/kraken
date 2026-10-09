@@ -3,9 +3,10 @@ import PhotosUI
 
 // MARK: - command chips
 
-/// Row of five tappable command chips — /info /aim /do /pr /dream — for one-tap
-/// insertion into a composer's bound text, mirroring the web SPA's command
-/// chips (app.js's attachCmdChips). This still appends rather than inserting
+/// Row of six tappable command chips — /info /aim /do /pr /dream /handoff —
+/// for one-tap insertion into a composer's bound text, mirroring the web
+/// SPA's command chips (app.js's attachCmdChips). This still appends rather
+/// than inserting
 /// at the caret even though HighlightingTextEditor is UIKit-backed (and so
 /// does expose a cursor position) — caret-aware insertion is an explicit
 /// non-goal for this pass. A leading space is added only when the text is
@@ -22,32 +23,50 @@ import PhotosUI
 struct CmdChipsRow: View {
     @Binding var text: String
 
-    static let commands = ["/info", "/aim", "/do", "/pr", "/dream"]
+    // /handoff sits last: it is the one chip that names no phase (it hands
+    // the cell over behind a written record and returns it to the phase it
+    // was in), and the one carl reaches for on a cell already mid-phase.
+    static let commands = ["/info", "/aim", "/do", "/pr", "/dream", "/handoff"]
 
     var body: some View {
-        HStack(spacing: 6) {
-            ForEach(Self.commands, id: \.self) { cmd in
-                let active = Self.isPresent(cmd, in: text)
-                let style = Self.style(for: cmd)
-                Button {
-                    append(cmd)
-                } label: {
-                    // Capsule rather than the old sharp 1px rect — the glass
-                    // idiom's chip shape. The skill hues themselves are
-                    // untouched (they are NOT tint-derived; see KTheme).
-                    Text(cmd)
-                        .font(.data(11, weight: .semibold))
-                        .foregroundStyle(style.color)
-                        .padding(.horizontal, 10)
-                        .padding(.vertical, 5)
-                        .background(active ? style.soft : .clear, in: Capsule())
-                        .overlay(Capsule().stroke(active ? style.color : style.soft, lineWidth: 1))
-                        .shadow(color: active ? style.color.opacity(0.5) : .clear, radius: 4)
-                        .contentShape(Capsule())
+        // A horizontal ScrollView rather than a bare HStack: six chips come
+        // to roughly 360pt of capsules at this font, against the ~315-330pt
+        // a Form row offers on a 393pt phone, and a bare HStack answers that
+        // by squeezing the Text inside its capsules (web's row wraps instead,
+        // via flex-wrap). `.fixedSize()` on each label keeps every chip at
+        // its natural width so the row scrolls rather than truncates. The
+        // scroll view would otherwise clip the active chip's glow and the
+        // outer half of its stroke (a bare HStack never clipped), and would
+        // rubber-band on a Pro Max where all six already fit.
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 6) {
+                ForEach(Self.commands, id: \.self) { cmd in
+                    let active = Self.isPresent(cmd, in: text)
+                    let style = Self.style(for: cmd)
+                    Button {
+                        append(cmd)
+                    } label: {
+                        // Capsule rather than the old sharp 1px rect — the glass
+                        // idiom's chip shape. The skill hues themselves are
+                        // untouched (they are NOT tint-derived; see KTheme).
+                        Text(cmd)
+                            .font(.data(11, weight: .semibold))
+                            .lineLimit(1)
+                            .fixedSize()
+                            .foregroundStyle(style.color)
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 5)
+                            .background(active ? style.soft : .clear, in: Capsule())
+                            .overlay(Capsule().stroke(active ? style.color : style.soft, lineWidth: 1))
+                            .shadow(color: active ? style.color.opacity(0.5) : .clear, radius: 4)
+                            .contentShape(Capsule())
+                    }
+                    .buttonStyle(.plain)
                 }
-                .buttonStyle(.plain)
             }
         }
+        .scrollClipDisabled()
+        .scrollBounceBehavior(.basedOnSize, axes: .horizontal)
     }
 
     // command → (UIColor, UIColor soft) — the ONE switch statement both this
@@ -62,6 +81,7 @@ struct CmdChipsRow: View {
         case "/do": return (KTheme.skillDoUI, KTheme.skillDoSoftUI)
         case "/pr": return (KTheme.skillPrUI, KTheme.skillPrSoftUI)
         case "/dream": return (KTheme.skillDreamUI, KTheme.skillDreamSoftUI)
+        case "/handoff": return (KTheme.skillHandoffUI, KTheme.skillHandoffSoftUI)
         default: return nil
         }
     }

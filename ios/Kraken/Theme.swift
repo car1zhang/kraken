@@ -378,7 +378,7 @@ enum KTheme {
     static let skillPrSoftUI = dyn(light: 0xDCF3E4, dark: 0x0F2E1D)
     static let skillPrSoft = Color(uiColor: skillPrSoftUI)
     // /dream is the fifth skill hue, and violet is the pick because the four
-    // above are blue/red/yellow/green — the five chips sit side by side in
+    // above are blue/red/yellow/green — the chips sit side by side in
     // CmdChipsRow, so separation from all four at once is what matters. Its
     // nearest neighbour is the generic `accent` purple, which never appears
     // IN the chip row, so that collision is cosmetic rather than confusing.
@@ -388,6 +388,22 @@ enum KTheme {
     static let skillDream = Color(uiColor: skillDreamUI)
     static let skillDreamSoftUI = dyn(light: 0xF3E8FF, dark: 0x2A1440)
     static let skillDreamSoft = Color(uiColor: skillDreamSoftUI)
+    // /handoff is the sixth skill hue and the one chip that names no phase:
+    // it writes the handoff doc and compacts (or spawns continuation
+    // teammates), then returns the cell to the phase it was in, so it gets a
+    // chip and a colour but never a stage badge. Orange is the wheel's
+    // remaining gap between do-yellow and aim-red; its nearest neighbour is
+    // `jobOrange` below, which DOES share the job detail screen with the
+    // chip row — as a round colour swatch, not a text chip — so the two are
+    // told apart by shape and position rather than hue. Chosen to match
+    // --skill-handoff in web/_ui/src/styles/style.css (no test pins the
+    // skill palette across the two files, unlike the job palette): the light
+    // value is darkened to #B4400E to clear WCAG AA (4.67 against the raised
+    // card, 4.81 against its own soft fill).
+    static let skillHandoffUI = dyn(light: 0xB4400E, dark: 0xFB923C)
+    static let skillHandoff = Color(uiColor: skillHandoffUI)
+    static let skillHandoffSoftUI = dyn(light: 0xFDE8D8, dark: 0x3B1F0A)
+    static let skillHandoffSoft = Color(uiColor: skillHandoffSoftUI)
 
     // Per-job colors: the eight names Claude Code's own `/color` command
     // accepts, in `/color`'s order. The DARK values are Claude Code's exact

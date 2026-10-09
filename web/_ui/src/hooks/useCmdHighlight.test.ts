@@ -41,13 +41,20 @@ describe("cmdHighlightHTML", () => {
   it("does not highlight a longer word that merely starts with a command", () => {
     expect(cmdHighlightHTML("/document this")).not.toContain("cmd-hl-do");
     expect(cmdHighlightHTML("/prs")).not.toContain("cmd-hl-pr");
+    expect(cmdHighlightHTML("/handoffs")).not.toContain("cmd-hl-handoff");
+  });
+
+  it("highlights /handoff as a chip of its own, argument left plain", () => {
+    // the one chip that names no phase — it still gets its own hue
+    const html = cmdHighlightHTML("/handoff resume");
+    expect(html).toContain('<span class="cmd-hl cmd-hl-handoff">/handoff</span> resume');
   });
 
   it("escapes before matching, so HTML in the composer stays text", () => {
     const html = cmdHighlightHTML("<b>/do</b>");
     expect(html).not.toContain("<b>");
     expect(html).toContain("&lt;b&gt;");
-    // Escape-then-match is safe because none of the four commands contain an
+    // Escape-then-match is safe because none of the five commands contain an
     // HTML-special character. It does mean the ESCAPED text is what the anchor
     // sees: `/do` here follows the ";" of "&gt;", not whitespace, so it does
     // not light up. Carried over verbatim — a command glued to a tag is not a
@@ -78,6 +85,12 @@ describe("CMD_ACTIVE_RE", () => {
 
   it("has an entry for every chip and nothing else", () => {
     expect(Object.keys(CMD_ACTIVE_RE).sort()).toEqual([...CMD_CHIPS].sort());
+  });
+
+  it("lists /handoff as a chip — the phase-less skill is still a one-tap command", () => {
+    expect(CMD_CHIPS).toContain("/handoff");
+    expect(CMD_ACTIVE_RE["/handoff"]?.test("/handoff two agents: a and b")).toBe(true);
+    expect(CMD_ACTIVE_RE["/handoff"]?.test("the handoff doc")).toBe(false);
   });
 });
 

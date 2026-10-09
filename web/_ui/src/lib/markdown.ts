@@ -31,7 +31,7 @@
 //  1. SAFETY BY CONSTRUCTION. Everything this renders is agent-authored — a
 //     zeus detail line, a thread block, a spec, an artifact file — and it is
 //     inert because escaping happens FIRST and every transform afterwards
-//     operates on already-escaped text. None of the four commands, the pipe
+//     operates on already-escaped text. None of the five commands, the pipe
 //     table syntax, or the emphasis markers involve HTML-special characters,
 //     so matching post-escape is safe. Swapping in a real markdown library
 //     would replace that one-line argument with a dependency's threat model.
