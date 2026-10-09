@@ -20,17 +20,33 @@ final class HighlightingTextEditorTests: XCTestCase {
         Token(range: NSRange(location: location, length: length), command: command)
     }
 
-    // MARK: - all five commands
+    // MARK: - all six commands
 
-    func testAllFiveCommandsMatch() {
-        let text = "/info /aim /do /pr /dream"
+    func testAllSixCommandsMatch() {
+        let text = "/info /aim /do /pr /dream /handoff"
         XCTAssertEqual(matches(text), [
             token(0, 5, "/info"),
             token(6, 4, "/aim"),
             token(11, 3, "/do"),
             token(15, 3, "/pr"),
             token(19, 6, "/dream"),
+            token(26, 8, "/handoff"),
         ])
+    }
+
+    func testEveryChipCommandIsRecognized() {
+        // The chip row and the highlighter share CmdChipsRow.commands, so a
+        // chip that the finder does not recognize would insert text it then
+        // fails to colour — the drift this pins against.
+        for cmd in CmdChipsRow.commands {
+            XCTAssertEqual(matches(cmd), [token(0, cmd.utf16.count, cmd)], cmd)
+        }
+    }
+
+    func testHandoffResumeIsStillTheHandoffToken() {
+        // `/handoff resume` is the form the skill types into its own pane;
+        // only the command token is coloured, the argument stays plain.
+        XCTAssertEqual(matches("/handoff resume"), [token(0, 8, "/handoff")])
     }
 
     // MARK: - boundary traps
