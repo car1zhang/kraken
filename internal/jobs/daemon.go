@@ -653,10 +653,17 @@ func (d *daemonState) tick(mirror bool) (int, error) {
 				if mirror {
 					continue
 				}
+				// Read the marker BEFORE the resume: ResumeTeardown's final
+				// state write clears j.Teardown on this same struct, so the
+				// log line below printed an empty "()" on every one of its
+				// firings and could not say WHICH marker it finished — the
+				// one word that tells a genuine interrupted teardown from a
+				// resume racing the board's own Done.
+				marker := j.Teardown
 				if err := ResumeTeardown(j); err != nil {
 					dlogErr("%s: finish interrupted teardown failed: %v", j.Slug, err)
 				} else {
-					dlog("%s: finished interrupted teardown (%s)", j.Slug, j.Teardown)
+					dlog("%s: finished interrupted teardown (%s)", j.Slug, marker)
 				}
 				continue
 			}
