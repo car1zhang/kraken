@@ -403,6 +403,48 @@ func deriveState(j *Job, live bool, active bool) string {
 	return "blocked"
 }
 
+// holdBlocked confirms a WORKING job's blocked reading over two consecutive
+// ticks before the daemon acts on it. It returns the state the tick should
+// act on and the value to store back as the job's BlockedSince tick.
+//
+// The roll call (cellActive) reads a cell's claudes from a tmux snapshot and
+// a pane capture taken at one instant, and a zeus in the middle of a turn
+// measurably reads as idle for exactly one tick now and then — between two
+// tool calls, inside a long silent thinking span — then as running again on
+// the next. Each such misread was a full working→blocked→working round
+// trip: a state write, an artifact sync, and a "blocked — see the board"
+// notification to carl for a cell that never stopped. Holding the first
+// reading for one tick costs a genuine block one DaemonInterval of latency
+// on its notification and nothing else; a cell that really stopped is
+// still stopped a tick later.
+//
+// The hold applies ONLY to the working→blocked edge of a LIVE cell: a job
+// already blocked, a draft and a done job pass through unchanged, since
+// there is no transition to confirm (and a blocked job must never be
+// flipped to working by a hold), and so does a job whose tmux session is
+// gone — a missing session is not a roll-call misread, and holding it
+// would only delay the dead-cell state by a tick for nothing. firstTick is
+// the tick on which this hold began, zero when none is in progress. The
+// confirmation demands ADJACENCY — the hold must have begun on the
+// immediately preceding tick — rather than any earlier hold: the map entry
+// survives every path that skips this call (a repo that stopped resolving,
+// a job killed to draft mid-hold and resubmitted, a freed slug reused by a
+// new job), and without the adjacency check a stale entry would confirm
+// the next job's very first misread with no hold at all. A non-adjacent
+// blocked reading therefore starts a NEW hold, restamped to this tick.
+func holdBlocked(persisted, derived string, live bool, firstTick, tickN int) (string, int) {
+	if derived != "blocked" || !live {
+		return derived, 0
+	}
+	if persisted != "working" {
+		return derived, 0
+	}
+	if firstTick == 0 || tickN-firstTick != 1 {
+		return "working", tickN
+	}
+	return "blocked", firstTick
+}
+
 // --- job file writes ---
 
 // ListArtifacts lists a cell's artifact files, sorted by name. Missing dir

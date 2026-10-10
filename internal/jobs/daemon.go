@@ -308,6 +308,18 @@ type daemonState struct {
 	// it on restart just means the next real transition (not a spurious one
 	// — there's no false trigger from a blank map) does the mirror instead.
 	ArtifactSyncState map[string]string
+	// BlockedSince is the tick on which a WORKING job's roll call first
+	// read blocked (slug → tickN), the one-tick memory holdBlocked needs:
+	// the working→blocked write, its notification and its artifact sync
+	// wait for a second consecutive blocked reading, because the roll call
+	// reads a zeus mid-turn as idle for exactly one tick a dozen-plus times
+	// a night (measured across three nights) and each unconfirmed flip cost
+	// a "blocked — see the board" notification before the next tick read
+	// working again. Reset to zero on any non-blocked reading, confirmed
+	// only by the immediately following tick, and pruned with
+	// ArtifactSyncState. In-process only, like the maps above: losing it on
+	// a restart costs one more tick of hold, never a missed transition.
+	BlockedSince map[string]int
 	// TokenScan throttles tokensPass over jobs with no live cell (slug →
 	// unix millis of the last sum). In-process only, like the dedup maps
 	// above: losing it on a restart costs one extra sum per job, which is a
@@ -336,6 +348,7 @@ func newDaemon() *daemonState {
 		PRHeads:           map[string]string{},
 		RepairTries:       map[string]int{},
 		ArtifactSyncState: map[string]string{},
+		BlockedSince:      map[string]int{},
 		TokenScan:         map[string]int64{},
 		PRScan:            map[string]int64{},
 	}
@@ -359,6 +372,14 @@ func (d *daemonState) pruneArtifactSyncState(jobs []*Job) {
 	for slug := range d.ArtifactSyncState {
 		if !stillTracked[slug] {
 			delete(d.ArtifactSyncState, slug)
+		}
+	}
+	// BlockedSince is slug-keyed for the same reason and pruned on the same
+	// rule: holdBlocked's adjacency check already makes a stale entry
+	// harmless, so this is housekeeping rather than correctness.
+	for slug := range d.BlockedSince {
+		if !stillTracked[slug] {
+			delete(d.BlockedSince, slug)
 		}
 	}
 }
@@ -849,6 +870,11 @@ func (d *daemonState) tick(mirror bool) (int, error) {
 			}
 		}
 		st := deriveState(j, isLive, active)
+		// A working job's first blocked reading is held for one tick (see
+		// holdBlocked): everything below — the artifact sync, the state
+		// write, the notification — keys off the CONFIRMED state, so a
+		// one-tick misread of a mid-turn zeus moves nothing.
+		st, d.BlockedSince[j.Slug] = holdBlocked(j.State, st, isLive, d.BlockedSince[j.Slug], d.tickN)
 		// E11: on the very first tick after this process starts (fresh
 		// daemonState, so ArtifactSyncState is blank), seed the map from
 		// THIS tick's own derived state AND run one unconditional sync for
