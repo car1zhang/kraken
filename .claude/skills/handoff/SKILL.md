@@ -23,7 +23,7 @@ Who typed it does not change the procedure: kraken's daemon types a bare `/hando
 
 Path: `<set root>/80-handoff.md` when you are zeus; `<set root>/80-handoff-<your agent name>.md` when you are a teammate. The set root is the SET ROOT your brief names (in a cell: `<cellDir>/artifacts/`). Overwrite any existing one. Sections in this order, each paragraph ONE source line (never hard-wrapped), absolute paths, question ids as `Q<n>`, never a secret's value:
 
-1. `# Handoff — <job slug> — <ISO timestamp>` then one sentence: the FIRST thing the continuer must do.
+1. `# Handoff — <job slug> — <ISO timestamp>` then one sentence: the FIRST thing the continuer must do. The timestamp is the output of `date -u +%FT%TZ`, pasted — never typed from memory: a typed one comes out rounded to a minute that is not the Write's, and the continuer reads it as the moment the doc was true.
 2. **Goal** — the job in two sentences.
 3. **Where we are** — phase, gate, the last line you put on the board.
 4. **Done** — what shipped, with paths, PRs, commit SHAs.
