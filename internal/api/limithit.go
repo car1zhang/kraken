@@ -126,7 +126,15 @@ func limitHitHandler(w http.ResponseWriter, r *http.Request) {
 	// the resolved *Job, not req.Slug: the record is keyed on the job's
 	// immutable id, since archiving frees a slug and this row outlives the
 	// job that wrote it (jobs/limithook.go's limitHitKey)
-	hit, err := jobs.RecordLimitHit(j, req.Error,
+	// A mirror records the hit exactly as the live serve does and never
+	// notifies: the thread arm is the one record path that can reach a
+	// desktop notification, and "a mirror records, never acts" is drawn
+	// here because this route is deliberately not mirror-gated.
+	record := jobs.RecordLimitHit
+	if mirrorModeOn() {
+		record = jobs.RecordLimitHitMirror
+	}
+	hit, err := record(j, req.Error,
 		// core.TruncateOneLine both one-lines (control characters, newlines
 		// included, become spaces) and caps at 200 RUNES, so a multi-byte
 		// message can't blow a byte-counted cap.
@@ -142,7 +150,16 @@ func limitHitHandler(w http.ResponseWriter, r *http.Request) {
 	// silently stops firing. `details` is deliberately absent from the line —
 	// it is text kraken did not author, and an error message is exactly where
 	// a credential ends up quoted.
-	util.LogEvent("web", "info", "limit-hit",
-		fmt.Sprintf("limit hit %s: %s (delivery %d)", j.Slug, req.Error, hit.Deliveries))
+	// A side thread's hit says so in the line: it was recorded under the
+	// thread's key, resolved, and the cell's rescue will never act on it, so
+	// a reader correlating this log with a rescue event has to be told the
+	// rescue is not coming.
+	if hit.Thread != "" {
+		util.LogEvent("web", "info", "limit-hit",
+			fmt.Sprintf("limit hit %s: %s (side thread %s — the cell is untouched)", j.Slug, req.Error, hit.Thread))
+	} else {
+		util.LogEvent("web", "info", "limit-hit",
+			fmt.Sprintf("limit hit %s: %s (delivery %d)", j.Slug, req.Error, hit.Deliveries))
+	}
 	webJSON(w, http.StatusOK, map[string]any{"ok": true, "deliveries": hit.Deliveries})
 }

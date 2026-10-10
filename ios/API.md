@@ -2098,6 +2098,19 @@ hooks within seconds; a same-error delivery folds into the still-UNRESOLVED
 hit with no time window (resolution, not time, is the event boundary — the
 old 2-minute window is gone), and a resolved hit starts a fresh record.
 
+A delivery whose `session_id` is one of the job's SIDE THREADS (a thread row
+of that job, live or closed) is recorded under the thread's own key
+(`limit_hit:<job id>:<tid>`), resolved on record with outcome `thread-hit`,
+and never under the job's row the daemon's rescue reads — a thread shares its
+cell's account and hooks, so its first turn on an exhausted window fires the
+cell's hook with the cell's slug, and recorded as the cell's hit it drove a
+rebind and a kill-and-resume of an idle zeus for a pane the rescue cannot
+reach. The response is the same shape (`deliveries` is 1, since a resolved
+record never folds), the `limit-hit` event line says `side thread <tid> — the
+cell is untouched`, and one macOS notification names the thread — once per
+quiet gap of ten minutes measured from the previous delivery, and never from
+a `--mirror` serve, which records the hit identically and does not notify.
+
 Errors: 400 (bad JSON; neither or both of `slug`/`agent`; an `agent` outside
 the closed list — the body names the refused id and the accepted ids; missing `error`; **no such
 job** on the slug form), 405 (non-POST), 500 (store write failure).
