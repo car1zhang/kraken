@@ -103,6 +103,114 @@ type LimitHit struct {
 	// rebind that landed but whose saveLimitRescueState write was lost, where
 	// the row already says B while the window that actually failed was A.
 	SourceAccount string `json:"source_account,omitempty"`
+	// Thread is the side thread's tid when the delivery came from a thread's
+	// pane rather than zeus' or a teammate's (threadLimitHitTID below), and
+	// such a record lives under threadLimitHitKey, never under the job's own
+	// key. Empty on every record the cell's rescue chain reads, which is the
+	// property the field exists to make visible: the rescue's two tools —
+	// rebind the cell, kill and resume zeus — cannot reach a thread's pane,
+	// so a thread's hit recorded as the cell's buys a rebind and a cold
+	// re-prime of an idle zeus for a conversation that stays exactly as
+	// limited as it was.
+	Thread string `json:"thread,omitempty"`
+}
+
+// threadLimitHitKey is the kv key a SIDE THREAD's LimitHit lives under:
+// the job's own key with the thread's tid appended. It cannot collide with
+// limitHitKey (a job's key ends in its decimal id) or standingHitKey (no
+// standing id contains a colon), and it is keyed on the job id for the
+// reason limitHitKey is. Nothing reads it back today except the fold and the
+// notification dedup in recordThreadLimitHit; it exists so the observation
+// is still RECORDED — a thread dying on a limit is a fact about the account —
+// without entering the row the cell's rescue chain acts on.
+func threadLimitHitKey(jobID int64, tid string) string { return limitHitKey(jobID) + ":" + tid }
+
+// threadLimitHitNotifyGap is how long after a thread's recorded hit a repeat
+// delivery from the same thread stays silent. A thread has no crew, so its
+// herd is carl retrying the same dead turn by hand; one notification per
+// incident is the useful number, and the record is written on every delivery
+// regardless.
+const threadLimitHitNotifyGap = 10 * time.Minute
+
+// threadLimitHitTID resolves a delivery's session_id against the job's side
+// threads: the tid when the session is one of this job's thread rows (live or
+// closed — a thread that carl killed between the hit and the record is still
+// the thread that hit), "" otherwise. Errorless on purpose and "" on every
+// failure (no store, a lookup error, a session of another job's thread):
+// "" routes the delivery to the cell's own record, which is where every
+// non-thread delivery went before this existed, so a lookup that cannot
+// answer changes nothing.
+//
+// The session is the thread's rather than zeus' because a thread is a
+// `--fork-session` under a kraken-minted id (thread.go): its claude fires
+// the cell's own StopFailure hook — same worktree, same settings.json, the
+// cell's slug baked into the command — and the payload's session_id is the
+// only field that says whose turn died.
+func threadLimitHitTID(j *Job, sessionID string) string {
+	if j == nil || sessionID == "" {
+		return ""
+	}
+	st := ActiveStore()
+	if st == nil {
+		return ""
+	}
+	t, err := st.GetThreadBySession(sessionID)
+	if err != nil || t == nil || t.JobID != j.ID {
+		return ""
+	}
+	return t.TID
+}
+
+// recordThreadLimitHit is RecordLimitHit's thread arm: the delivery is
+// written under the thread's own key, RESOLVED on record (HandledAt stamped,
+// Outcome "thread-hit"), and never under the job's key — so the cell's
+// rescue chain, which reads only the job's key and short-circuits on a
+// resolved record, sees nothing. Resolution on record also means a later
+// delivery never folds onto it (limitHitFolds needs HandledAt == 0): every
+// delivery overwrites the key with a fresh record whose Deliveries is 1
+// and whose At is that delivery's own time. The notification gap below is
+// therefore a SLIDING window measured from the previous delivery, not from
+// an incident's start — a thread carl keeps retrying every few minutes
+// stays silent until it has been quiet for the gap, which is the useful
+// boundary, since each retry is the same dead turn.
+//
+// SourceAccount is the cell's binding at record time. A thread's own env
+// prefix was fixed at its spawn (thread.go's threadSpawnCommand), so a
+// thread branched before a rescue rebind still runs on the old slot and
+// this stamp names the cell's NEW one; nothing reads it off a thread record
+// today, so it is informational rather than exact.
+//
+// What carl is told, once per quiet gap: the thread is dead on a limit and
+// the cell is untouched. Zeus' own hit, when its next turn runs into the
+// same wall, carries zeus' session and takes the ordinary chain. notifyOK
+// is the caller's mirror gate: a mirror serve records exactly as the live
+// one does and never notifies, the same "a mirror records, never acts"
+// rule the rescue's `if !mirror` block draws — and the record path is
+// where this one has to be drawn, because /api/limit-hit is deliberately
+// not mirror-gated.
+func recordThreadLimitHit(j *Job, tid, errorType, details, sessionID, agentID string, now time.Time, notifyOK bool) (LimitHit, error) {
+	st := ActiveStore()
+	if st == nil {
+		return LimitHit{}, fmt.Errorf("record limit hit for %s thread %s: no store wired", j.Slug, tid)
+	}
+	key := threadLimitHitKey(j.ID, tid)
+	prev := readLimitHitByKey(key)
+	hit := mergeLimitHitDelivery(prev, errorType, details, sessionID, agentID, now)
+	hit.SourceAccount = j.AccountEmail
+	hit.Thread = tid
+	hit.HandledAt = now.Unix()
+	hit.Outcome = "thread-hit"
+	data, err := json.Marshal(hit)
+	if err != nil {
+		return LimitHit{}, fmt.Errorf("record limit hit for %s thread %s: %w", j.Slug, tid, err)
+	}
+	if err := st.SetKV(key, string(data)); err != nil {
+		return LimitHit{}, fmt.Errorf("record limit hit for %s thread %s: %w", j.Slug, tid, err)
+	}
+	if notifyOK && (prev.At == 0 || now.Sub(time.Unix(prev.At, 0)) > threadLimitHitNotifyGap) {
+		notifyFn("kraken ⚠ "+j.Slug, fmt.Sprintf("side thread %s hit a usage limit — the cell is untouched; switch the thread's model or revive it", tid))
+	}
+	return hit, nil
 }
 
 // limitHitKey is the kv key one job's LimitHit lives under, keyed on the
@@ -462,9 +570,36 @@ func mergeLimitHitDelivery(cur LimitHit, errorType, details, sessionID, agentID 
 // store wired are both errors, for the same reason: there is nowhere to put
 // the record, and silently dropping a hit would leave the caller reporting
 // success for a delivery nothing will ever act on.
+//
+// A delivery whose session_id is one of the job's SIDE THREADS never reaches
+// the job's record: it goes to recordThreadLimitHit, under the thread's own
+// key, resolved on record. A thread shares its cell's account and its
+// worktree's hooks, so its first turn on an exhausted window fires this same
+// hook with the cell's slug — and recorded as the cell's hit it drove the
+// cell's rescue (a rebind, then a kill-and-resume of a zeus that had been
+// idle for hours) for a pane the rescue cannot reach. The fallback already
+// declined a foreign session (modelfallback.go's session gate); this is the
+// same gate for the rest of the chain, drawn where the record is written so
+// no later reader has to re-draw it.
 func RecordLimitHit(j *Job, errorType, details, sessionID, agentID string, now time.Time) (LimitHit, error) {
+	return recordLimitHit(j, errorType, details, sessionID, agentID, now, true)
+}
+
+// RecordLimitHitMirror is RecordLimitHit for a `kraken serve --mirror`
+// process: the same record, byte for byte, and no notification on the
+// thread arm. The API handler picks this form from its mirror flag, since
+// the flag lives in the api package and the record must still be written
+// (the route is not mirror-gated on purpose).
+func RecordLimitHitMirror(j *Job, errorType, details, sessionID, agentID string, now time.Time) (LimitHit, error) {
+	return recordLimitHit(j, errorType, details, sessionID, agentID, now, false)
+}
+
+func recordLimitHit(j *Job, errorType, details, sessionID, agentID string, now time.Time, notifyOK bool) (LimitHit, error) {
 	if j == nil {
 		return LimitHit{}, fmt.Errorf("record limit hit: no job")
+	}
+	if tid := threadLimitHitTID(j, sessionID); tid != "" {
+		return recordThreadLimitHit(j, tid, errorType, details, sessionID, agentID, now, notifyOK)
 	}
 	return recordLimitHitByKey(limitHitKey(j.ID), j.Slug, j.AccountEmail, errorType, details, sessionID, agentID, now)
 }
