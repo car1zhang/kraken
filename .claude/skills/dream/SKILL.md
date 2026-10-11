@@ -481,6 +481,32 @@ specific, and it is the only place the cell's real paths appear:
 - **The report goes in the brief's SET ROOT** (`<cellDir>/artifacts/`) as `00-dream-report.md`. That
   directory is the only board-visible one, and the report is the deliverable; it is also what the
   board's `DREAM` view renders, so a pass that ships changes but writes no report is invisible.
+**Split by hunk, and a hunk belongs to exactly one PR.** The night's edits are usually reviewed as one
+diff and split into PRs afterwards, and a split that routes hunks by a marker string puts a hunk in
+EVERY PR whose marker it contains. That happens whenever two concerns touch one physical line —
+CLAUDE.md's paragraphs are single lines of 40 KB and more, so two daemon fixes that each add a clause
+to the same paragraph share one hunk — and the result is two PRs each carrying the other's prose:
+one night's two Go fixes both shipped the whole paragraph, so each PR's CLAUDE.md text described a
+function only the other PR added, the report described them as adjacent edits, and its claim check
+counted that hunk once while two PRs carried it. So when two concerns land on one physical line,
+either they ship as ONE PR — the one sanctioned exception to One concern per PR — or they STACK:
+the first PR's line carries only its own clause, and the second is cut off origin/main AFTER the
+first merges (the cell branch recycles anyway) and adds its clause then; a copy of the shared line
+in both is never an option. The claim check itself is a LEDGER, not a sum: generate the reviewed
+diff and every PR diff with `--unified=0`, so a hunk is one run of changed lines that context can
+neither merge nor split, key a table by the reviewed diff's hunks — file plus the hunk's removed
+and added CONTENT, with the `@@` header's old-side range only as a tiebreak, since line numbers
+shift once an earlier PR in the same file merges — and map each to the PR carrying it. Every row
+maps to exactly one PR, a hunk with two is a double claim, a hunk with none is a dropped edit, and
+the one row allowed two PRs is a shared line split by STACK: that row names the first PR and the
+second PR's concern as PENDING (to be cut after the first merges), carries the second clause's
+exact text in the report so it can be cut verbatim, is marked stacked, and is verified when the
+second PR exists — applying both and comparing the line to the reviewed diff runs then, not
+tonight. Never compare per-PR hunk counts against the diff's
+total: a double claim and a dropped edit cancel to the right sum, and git's re-hunking of a
+regenerated PR diff moves the sum with nothing wrong. Merge-order advice follows from the same
+ledger, never from file names or line proximity.
+
 - **Read and write watched observations with `kraken watchlist get|add|update|remove`** — the same four
   verbs, backed by the standalone `watch_items` table: `add` folds server-side on a repeat
   wording, and `remove` closes the row without deleting it. Sweep feedback with
