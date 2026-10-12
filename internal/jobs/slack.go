@@ -1,9 +1,12 @@
 package jobs
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
+	"net/url"
 	"sort"
 	"strconv"
 	"strings"
@@ -172,6 +175,80 @@ func slackLogClear(key string) {
 	slackMem.Lock()
 	defer slackMem.Unlock()
 	delete(slackMem.logged, key)
+}
+
+// slackTransportKey is the ONE slackLogOnce key a pass's conversation reads
+// share when the pass failed below Slack — a DNS miss, a refused dial, a
+// timeout. The per-conversation `history:<id>` key at the call site dedupes
+// a conversation that keeps failing on its own (archived, access revoked),
+// which is what it was written for; it dedupes nothing during a network
+// outage, because slackSweepOrder rotates a FRESH dozen conversations through
+// each pass, so every pass of an outage logged a dozen first-time keys —
+// measured over three outages: one error line per conversation per outage,
+// 474 in all, beside the PR tracker's dozen for the same outages. An outage
+// says nothing about the conversations it happened to land on, so it is
+// keyed on the failure instead and re-armed by the first pass that reads
+// cleanly. The inventory, mentions and name-resolution calls keep their own
+// single keys, so a full outage still costs one line per call site, never
+// per conversation; the thread reads (`replies:<id>`) are untouched, since in
+// an outage the history read fails first and no thread is read.
+const slackTransportKey = "transport"
+
+// slackHistoryFailFmt is the one per-conversation line a failed history read
+// writes, whether logged at the call site or deferred by slackLogTransport.
+const slackHistoryFailFmt = "slack: reading conversation %s failed — skipped, its watermarks left alone: %v"
+
+// slackReadFail is one conversation read that failed at the transport,
+// held until the pass is over (see slackLogTransport).
+type slackReadFail struct {
+	id  string
+	err error
+}
+
+// slackTransportFailure reports whether err is the network failing rather
+// than Slack answering: the client wraps every Do error with %w, so the
+// *url.Error (and the net.Error inside it) survive to here — as does the
+// *url.Error http.NewRequest returns for an unparseable base URL, which is
+// no more one conversation's fault. A Slack API error, a non-200 status and a
+// rate limit are plain fmt errors or their own types and read as
+// per-conversation.
+func slackTransportFailure(err error) bool {
+	var ue *url.Error
+	if errors.As(err, &ue) {
+		return true
+	}
+	var ne net.Error
+	if errors.As(err, &ne) {
+		return true
+	}
+	return errors.Is(err, context.DeadlineExceeded)
+}
+
+// slackLogTransport files a pass's transport failures once the pass is over,
+// because only then is it known whether they were the network or one
+// conversation. Two or more transport failures in one pass — or a lone one
+// in a pass that read nothing — are an outage: one line under the shared
+// transport key, which stays armed until a pass reads with no transport
+// failure at all, or with a single one beside successful reads, so the pass
+// an outage begins or ends in (successes beside failures) files under the
+// shared key too rather than per conversation. A lone transport failure
+// beside successful reads — one history too large for the client timeout, a
+// flap that caught one request — is that conversation's own and keeps the
+// per-conversation key the call site always used, so the line names the
+// conversation and recovers with it. The line lands at the end of the pass,
+// so when the outage is timeouts rather than refused dials, that first line
+// trails the outage's start by up to one pass of timeouts.
+func slackLogTransport(fails []slackReadFail, anySuccess bool) {
+	if len(fails) >= 2 || (len(fails) == 1 && !anySuccess) {
+		slackLogOnce(slackTransportKey, "slack: network failure reading conversations — %d read(s) failed this pass at the network; later passes are silent until one reads cleanly: %v", len(fails), fails[0].err)
+		return
+	}
+	if anySuccess {
+		slackLogClear(slackTransportKey)
+	}
+	for _, f := range fails {
+		slackLogOnce("history:"+f.id, slackHistoryFailFmt, f.id, f.err)
+	}
 }
 
 // slackHoldOff records a not-before deadline; slackReady is the gate that
@@ -673,6 +750,12 @@ func slackSweepConversations(client *core.SlackClient, marks map[string]string, 
 		return nil
 	}
 	slackLogClear("inventory")
+	// Transport failures are held until the pass is over: whether they were
+	// the network or one conversation depends on whether any read succeeded
+	// (slackLogTransport). The defer covers the 429 halt below too.
+	var transportFails []slackReadFail
+	anySuccess := false
+	defer func() { slackLogTransport(transportFails, anySuccess) }()
 	budget := slackHistoryBudget
 	for _, c := range slackSweepOrder(convs, slackSweptSnapshot(), slackHistoryBudget) {
 		if c.ID == "" {
@@ -694,9 +777,14 @@ func slackSweepConversations(client *core.SlackClient, marks map[string]string, 
 			if slackHoldOffFor(err, now) {
 				return errSlackHalt
 			}
-			slackLogOnce("history:"+c.ID, "slack: reading conversation %s failed — skipped, its watermarks left alone: %v", c.ID, err)
+			if slackTransportFailure(err) {
+				transportFails = append(transportFails, slackReadFail{id: c.ID, err: err})
+				continue
+			}
+			slackLogOnce("history:"+c.ID, slackHistoryFailFmt, c.ID, err)
 			continue
 		}
+		anySuccess = true
 		slackLogClear("history:" + c.ID)
 		source := slackSourceOf(c)
 		for _, m := range filterSlackNew(msgs, rowFloor, selfID) {
