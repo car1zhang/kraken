@@ -222,13 +222,20 @@ literally" among them, then cut off before its report rules; the scout burned fo
 duplicated full reduce in the garbled dir, and the failure is silent to the lead. The paths that
 cannot avoid identifiers — the assigned transcript paths above all — go in a staged assignment
 file (copied bytes, not typed ones) that the brief names by its short path, exactly as zeus' own
-brief rides in a file rather than on the tmux command line. Tell each scout to stage
-running notes there AS IT READS: the one-shot report rule concentrates the run's entire value into
+brief rides in a file rather than on the tmux command line. Tell each scout to APPEND a notes line
+to one notes file in its own scratch subdirectory as each view is finished, and, inside a view too
+long to finish in a few pages or when working from the raw file, one line per finding as it meets
+it (`>>`, and the brief says that form: "stage notes as you read" has produced, on consecutive
+nights, a single `cat >` dump written in the last minutes before the report, a few percent of the
+report's bytes and dated after the reading was over, which leaves nothing for the death mid-read
+the notes exist for): the one-shot report rule concentrates the run's entire value into
 the final call, and a scout that died on a connection error at the literal write boundary — its last words were an
 announcement that it had everything and was writing the report — cost ~30K output tokens of
 finished analysis with zero salvage, where its staged views survived and were the only thing the
 respawn could reuse (that pass did not yet know the transport-resume rule below). Notes are working
-files, not the report; the one-shot rule binds the report alone. And the shell-dialect rule from
+files, not the report; the one-shot rule binds the report alone. A notes line says the finding in
+the scout's own words, never a quoted command, and an append a hook refuses is skipped — it is not
+the both-paths-closed stop, which is the report's alone. And the shell-dialect rule from
 `.claude/skills/do/SKILL.md` step 4 binds YOU from your own first command, then goes into every
 scout brief — framed only as brief material, it was broken by the pass's own lead (a bare `===`
 echo aborting its second analysis command) minutes before the lead wrote it into five briefs, and
