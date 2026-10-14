@@ -5,6 +5,8 @@ description: "User skill for drafting and iterating product/engineering document
 
 # Aim — Initial Alignment Artifact Set
 
+> Read this file WHOLE — with the Read tool, or a plain `cat` with no `head`. Its cell contract, `## Inside A Kraken Cell`, sits in the file's back half, and a `head -N` read drops exactly that: a lead that read the first 200 lines of a 291-line skill broke every rule in the section it never saw.
+
 Create a concrete first artifact set the user can react to: no single flattened doc — a brief overview, standalone diagram cards, and section docs, each openable on its own. Use spec mode for proposed or future systems; use explain mode for existing systems or current behavior. Do enough research to avoid ignorant questions, then write down the current best shape with explicit assumptions, a large set of open questions, and a practical testing or verification plan. The artifact set is an iteration surface, not final architecture.
 
 **Follow-up skill: [[do]] (`/do`)** — once the set is locked, `/do` reads it, resolves any `P0` open questions with the user, and implements it. `/aim` produces the contract; `/do` executes it. When the user is ready to build, point them at `/do` rather than implementing inline.
