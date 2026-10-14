@@ -15,8 +15,10 @@ A compaction keeps a summary; a handoff keeps a document. `/handoff` writes the 
 |---|---|---|
 | empty | self | you, compacted |
 | `resume` | resume | you, just compacted — read the doc and go on |
-| anything else | spawn | the agents carl described; you keep your context and wait on them |
-| names a NEW kraken cell or job (`to a new cell`, `new kraken cell`, `as its own job`) | cell | a cell you FILE yourself with `kraken job draft` + `kraken cell submit`; you keep your context and go on |
+| names a NEW kraken cell, job or agent (`to a new cell`, `new kraken cell`, `another kraken agent`, `as its own job`) | cell | a cell you FILE yourself with `kraken job draft` + `kraken cell submit`; you keep your context and go on |
+| anything else | spawn | the agents carl described, spawned INSIDE this cell; you keep your context and wait on them |
+
+The rows are tried top down, so the cell row outranks the catch-all, and "another kraken agent" means a new cell, not a teammate: read as spawn mode, that phrasing got a code PR shipped from an /info job's own cell (2026-10-13). Spawn mode is for arguments that describe agents to run inside THIS cell.
 
 Who typed it does not change the procedure: kraken's daemon types a bare `/handoff` into zeus' pane when the cell's statusline reports the context at or above 75%, and that runs self mode exactly as carl's would.
 
@@ -51,7 +53,7 @@ Read carl's `$ARGUMENTS` as the plan: how many agents, their names if given, how
 
 ## 2c. Cell mode: file the new cell yourself and keep going
 
-Carl's `$ARGUMENTS` say the remaining work goes to a NEW kraken cell or job ("hand the X fix to a new kraken cell", "spin this off as its own job"). Do not wait for carl to file it — a cell that stops at "carl files the new cell" has measured as a stall (job 570, 2026-10-13: the lead wrote the slice, set a load estimate and went idle; carl's next message was "do the handoff and amend the skill so that you remember to do so next time"). The procedure:
+Carl's `$ARGUMENTS` say the remaining work goes to a NEW kraken cell, job or agent ("hand the X fix to a new kraken cell", "handoff X to another kraken agent", "spin this off as its own job"). Do not wait for carl to file it — a cell that stops at "carl files the new cell" has measured as a stall (job 570, 2026-10-13: the lead wrote the slice, set a load estimate and went idle; carl's next message was "do the handoff and amend the skill so that you remember to do so next time"). The procedure:
 
 1. Write the doc with its `## Agent: new cell <slug>` section (section 1, item 11). Pick the slug yourself: `<system>-<slice>`, lowercase kebab, unique among `kraken job list`'s active slugs.
 2. Write the job text to a scratch file — frontmatter then spec — and file it with `kraken job draft <slug> < <file>` (the full `kraken` binary, its own command). The frontmatter is exactly `job: <slug>`, `repo: <repo>`, `solo: false` between `---` lines (the route refuses `state:` and the retired keys). The spec is the `## Agent: new cell` section rewritten as a job spec: the slice in one paragraph, a "read first" paragraph naming the handoff artifacts by ABSOLUTE path — the cell's `artifacts/` path AND the flat copies that survive teardown (`~/Documents/pluto/<slug>-<id>.<file>`, archived under `archive/`), since the new cell may start after this one is gone — the measured facts the fix must change, constraints, and the acceptance test. Never a secret's value; a credential is named by where it lives.
