@@ -1820,7 +1820,7 @@ Refusal matrix (every row writes nothing):
 | **edit**: any non-empty `state:` | 400 |
 | **edit**: empty body | 400 |
 | **edit**: `mtime` present, non-zero, and not the row's rev | 409 conflict |
-| **edit**, all guards passed | writes ONLY `{repo, base, solo, model, body}`; `state` and every kraken-owned field (`session`, `run`, `prs`, `color`, `outcome`, `teardown`) keep their stored values, and the slug never changes |
+| **edit**, all guards passed | writes ONLY `{repo, base, solo, model, agent, body}`; `state` and every kraken-owned field (`session`, `run`, `prs`, `color`, `outcome`, `teardown`) keep their stored values, and the slug never changes |
 
 There is no longer any way for this route to start a job, and that is now
 STRUCTURAL rather than enforced: starting a job means submitting it on the
