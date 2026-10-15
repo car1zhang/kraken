@@ -138,6 +138,9 @@ func TestSkillsOwnTheCellContract(t *testing.T) {
 		want  []string
 	}{
 		{"aim", []string{
+			// the secret-question rule: per-phase copies, each the only one
+			// its own path ever sees (the `never Explore` precedent)
+			"never the value",
 			// the artifact set's shape and its mode-scoped required floor
 			"00-overview.md", "50-components.md", "51-code-map.md", "52-testing-plan.md",
 			"10-<id>.html", "Spec mode", "Explain mode",
@@ -177,6 +180,8 @@ func TestSkillsOwnTheCellContract(t *testing.T) {
 		{"info", []string{
 			"Inside A Kraken Cell", "<cellDir>/artifacts/",
 			"explanation ready:", "go deeper", "Use `0` where a count is zero",
+			// the secret-question rule: per-phase copies (see aim's entry)
+			"never the value",
 			// /info's defining constraint: lighter than /aim, and never any questions
 			"No open questions. Ever.", "never gets a `/do`", "never opens a PR",
 			"Never run `kraken questions` write verbs",
@@ -205,6 +210,8 @@ func TestSkillsOwnTheCellContract(t *testing.T) {
 		{"do", []string{
 			"90-build-report.md", "Discrepancies vs. the plan", "Complications",
 			"Deferred", "Verification",
+			// the secret-question rule: per-phase copies (see aim's entry)
+			"never the value",
 			// the cell section: the crew, the gate, the handoff to /pr
 			"Inside A Kraken Cell", "hephaestus", "athena-logic", "athena-edge", "athena-style",
 			// the crew are TEAMMATES. The ownership line moved on 2026-08-21:

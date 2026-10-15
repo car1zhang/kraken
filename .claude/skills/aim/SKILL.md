@@ -177,6 +177,7 @@ After writing the first draft in either mode:
 - Share the `00-overview.md` path and the set root again.
 - Summarize the most important assumptions and the highest-risk open questions, citing each by its stable id (e.g. "Q1: …", "Q4: …").
 - When asking the user to resolve questions (in chat or via AskUserQuestion), always lead with the id so their answers map back to the record.
+- **A question whose expected answer is a secret asks for the LOCATION (which env var or file holds it), never the value** — a pasted secret lands in a Claude-owned transcript that nothing can redact, and later readers copy it forward; the same rule inverted, never recite a credential from your own context — name where it lives instead. (do's step 2 carries the full rule.)
 - Wait for user edits or direction before moving into architecture/design.
 - On each iteration, update the relevant artifact directly (overview, a section doc, or a card via its fragment + rewrap), and update the open-questions record to remove resolved entries and add new ones — in a cell, via `kraken questions set/add/update/remove` (never write `answer`/`answered-at` yourself); standalone, edit `questions.yaml` directly.
 

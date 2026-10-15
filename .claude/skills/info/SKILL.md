@@ -284,7 +284,11 @@ the cell's brief wins wherever it is more specific:
   on the board; carl reads the artifacts and messages back directly, and each reply is the next
   round. A decision that genuinely cannot be defaulted may use `AskUserQuestion` — kraken surfaces
   the options as buttons — but that is for blockers, not for the routine uncertainty that belongs
-  inline. Never declare the job done; accepting is carl's move.
+  inline. Never declare the job done; accepting is carl's move. And a question whose expected
+  answer is a secret asks for the LOCATION (which env var or file holds it), never the value — a
+  pasted secret lands in a Claude-owned transcript that nothing can redact, and later readers copy
+  it forward; the same rule inverted, never recite a credential from your own context — name where
+  it lives instead. (do's step 2 carries the full rule.)
 - An /info job never gets a `/do`, has no phase 2, and never opens a PR — carl accepts the
   artifacts straight from the board instead.
 - `solo: true` on the job means no teammates and no subagents at all: prose only — no diagram cards
