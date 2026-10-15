@@ -101,8 +101,8 @@ generated spec.
 ## Diagrams, when a round calls for one
 
 Diagrams follow /aim's mechanics exactly — read `.claude/skills/aim/SKILL.md` (paths relative to
-the worktree root, your cwd in a cell, not this skill's base directory) for the full rules. The
-short form, with /info's overrides:
+the worktree root — where a cell starts you, and where you return before any spawn — not this
+skill's base directory) for the full rules. The short form, with /info's overrides:
 
 - Each diagram is designed AND rendered by a TEAMMATE on **`model: opus`** (Claude Opus 5 — sonnet
   misplaces elements), writing one complete `<svg>` fragment to the set's fragments dir
@@ -111,6 +111,12 @@ short form, with /info's overrides:
   diagram ids are; keep ids lowercase `[a-z0-9-]` and ≤ 40 chars, since the id rides inside a
   schema-validated agent name) — which buys it its own pane and keeps it addressable for a later
   round; an unnamed in-process subagent is for read-only exploration, never for rendering.
+- **Return the shell to the worktree root in the SAME message as the spawn** (`cd <worktree
+  root>; pwd` immediately before the Agent call). A teammate starts in YOUR Bash tool's current
+  cwd and `.claude/settings.json` binds by cwd, so a renderer spawned while the shell still sits
+  in a package directory — a `cd <package> && grep …` from the research step is enough, and the
+  cwd persists across calls — runs with none of the cell's hooks and files its transcript under a
+  sibling project dir. /aim's Core Rules state the rule in full; it binds here identically.
 - Every brief carries the **path** `.claude/skills/aim/assets/hermes-contract.md` with an
   instruction to Read it in full before writing any markup and to compose only from it — never its
   contents pasted inline, which is /aim's rule and not an /info override: a re-typed contract
