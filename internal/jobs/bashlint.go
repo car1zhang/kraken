@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"io"
+	"os"
 	"regexp"
 	"strings"
 )
@@ -38,6 +39,14 @@ import (
 //     `status` is a read-only special in zsh (an alias of `$?`), so the
 //     natural idiom `out=$(cmd); status=$?` aborts the whole compound with
 //     `read-only variable: status` before anything after it runs.
+//   - a Bash-route write into the worktree (`> f`/`>> f`, `sed -i`,
+//     `perl -pi`, `tee f`) whose target resolves inside the git root the
+//     hook runs under: the edit route the /do skill bans because it fails
+//     silently and bypasses the Edit tool's read-first guard, measured
+//     recurring in lead and implementer sessions alike — and the one shape
+//     the harness itself steers agents toward (a bypass-mode reminder says
+//     to prefer sed and heredocs over Edit), which is why prose alone never
+//     held it. Path-aware so scratch writes pass; bashlint_write.go owns it.
 //   - a mutating `git stash` (bare, or push/pop/apply/drop/…): the one
 //     entry that is not a zsh quirk but a destructive shape — in a cell the
 //     worktree is shared with live teammates, a stash sweeps THEIR
@@ -340,6 +349,15 @@ func blank(b []byte, from, to int) {
 // stripComments' `#` test exact: by then every `#` still standing is
 // outside a quoted span and outside a heredoc body by construction.
 func lintBashCommand(cmd string) string {
+	return lintBashCommandAt(cmd, "", "")
+}
+
+// lintBashCommandAt is lintBashCommand plus the worktree-write check
+// (bashlint_write.go), which needs to know WHERE the command runs: cwd is
+// the hook payload's working directory and root the git worktree above it.
+// Either empty disables that one check and leaves the shape checks as they
+// are — the no-location form is what every caller outside the hook wants.
+func lintBashCommandAt(cmd, cwd, root string) string {
 	text := stripComments(stripQuotedAndCond(stripHeredocBodies(stripArith(cmd))))
 	var msgs []string
 	for _, c := range bashLintChecks {
@@ -347,6 +365,7 @@ func lintBashCommand(cmd string) string {
 			msgs = append(msgs, "kraken bash-lint: "+c.msg)
 		}
 	}
+	msgs = append(msgs, lintBashWrites(text, cwd, root)...)
 	return strings.Join(msgs, "\n")
 }
 
@@ -381,6 +400,7 @@ func stripComments(text string) string {
 // the schema is Claude Code's, not kraken's.
 type bashLintPayload struct {
 	ToolName  string `json:"tool_name"`
+	Cwd       string `json:"cwd"`
 	ToolInput struct {
 		Command string `json:"command"`
 	} `json:"tool_input"`
@@ -401,7 +421,19 @@ func BashLintStdin(r io.Reader) (string, bool) {
 	if p.ToolName != "Bash" || strings.TrimSpace(p.ToolInput.Command) == "" {
 		return "", false
 	}
-	if msg := lintBashCommand(p.ToolInput.Command); msg != "" {
+	// The worktree-write check resolves relative targets against the
+	// payload's cwd (Claude Code's own session directory; the process cwd
+	// is the fallback when the field is absent) inside the git root above
+	// it. No root above means no worktree to protect, and the check is off.
+	cwd := p.Cwd
+	if cwd == "" {
+		cwd, _ = os.Getwd()
+	}
+	root := ""
+	if cwd != "" {
+		root = gitRootAbove(cwd)
+	}
+	if msg := lintBashCommandAt(p.ToolInput.Command, cwd, root); msg != "" {
 		return msg, true
 	}
 	return "", false
