@@ -213,14 +213,20 @@ short form, with /info's overrides:
    getting dropped (the zsh rules used to live only in the phase-2 skill, and one measured night had
    every Bash error across eleven sessions be the same hook block on `--include=*.py` from
    researcher briefs that never mentioned the shell). First, the dialect line, verbatim: *Shell is
-   zsh on macOS: write `--include='*.py'` (quote every glob), `echo "==="` (quote any word starting
-   with `=`), `timeout N cmd` does not exist (use a background watch), never name a loop/read
-   variable `path` or `fpath` (`while read sid path` wipes PATH for the rest of the run), use
-   absolute paths (an earlier call's `cd` may still be in effect, or the cwd may have reset — a
-   relative path is a bet either way), and never end a `;`-compound with a grep/sed that may match
-   nothing (close with `; true`).* Second, the file-output contract does not survive
-   re-delegation on its own: a brief that permits its researcher to spawn further agents
-   says the contract passes down VERBATIM —
+   zsh on macOS: quote every argument containing `*` `?` `[` `(` — write `--include='*.py'`
+   (that flag is grep's — ripgrep's is `-g '*.py'`, rg handed `--include` exits 2, and
+   `2>/dev/null` paired with a trailing `; true` on a search turns that flag error into believed
+   zero matches: never pair those two), `echo "==="` (quote any word starting with `=`),
+   `timeout N cmd` does not exist (use a background watch), never name a loop/read variable
+   `path`, `fpath` or `status` (`while read sid path` wipes PATH for the rest of the run;
+   `status` is read-only in zsh — use `rc=$?`), use absolute paths (an earlier call's `cd` may
+   still be in effect, or the cwd may have reset — a relative path is a bet either way), an
+   intentional glob that may match nothing takes the `(N)` qualifier
+   (`for f in reports/*.md(N)` — quoting would make it literal, and a `for` word-list nomatch
+   aborts the whole eval, trailing `; true` included), and never end a `;`-compound with a
+   grep/sed that may match nothing (close with `; true` — never over a suppressed stderr).*
+   Second, the file-output contract does not survive re-delegation on its own: a brief that
+   permits its researcher to spawn further agents says the contract passes down VERBATIM —
    every spawned agent gets its own named output file under the same scratch namespace and the same
    repo bar — or forbids re-delegation outright. A researcher told "read-only" has re-briefed its
    own children with "do not write any files", stranding a fan-out's entire findings in chat
