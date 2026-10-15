@@ -12,6 +12,11 @@ import (
 )
 
 func TestPrAttachHandlerHappyPath(t *testing.T) {
+	// HOME is sandboxed so the job's `repo: monolith` resolves to no checkout
+	// and the route's repo check fails OPEN: this test is about the attach
+	// and its dedup, not about the repo gate (prattach_*_test.go cover that),
+	// and against the real ~/Developer/monolith a carl/kraken URL is a 409.
+	t.Setenv("HOME", t.TempDir())
 	t.Setenv("KRAKEN_PLUTO_DIR", t.TempDir())
 	writeTestJob(t, "pr-attach-happy", "")
 

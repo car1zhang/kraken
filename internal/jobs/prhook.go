@@ -150,6 +150,72 @@ func repoOriginPrefix(dir string) (string, bool) {
 	return originToPrefix(string(out)), true
 }
 
+// githubRepoPrefix is the only prefix shape JobRepoOriginPrefix vouches for.
+// An origin originToPrefix cannot reduce to it — an `ssh://` URL, an ssh host
+// alias, a trailing slash, a non-GitHub host — is an UNKNOWN repo rather than
+// a known one that matches nothing: vouching for a prefix no PR URL can ever
+// equal would make the attach route refuse every real PR of that checkout,
+// the exact loss failing open exists to prevent.
+var githubRepoPrefix = regexp.MustCompile(`^github\.com/[\w.-]+/[\w.-]+$`)
+
+// JobRepoOriginPrefix is a job's own GitHub repo in originToPrefix's shape
+// (`github.com/<owner>/<repo>`): j.Repo resolved to its checkout under
+// ~/Developer, that checkout's origin read, a userinfo on an https origin
+// (`https://<user>@github.com/…`, how a second GitHub account is often
+// cloned) stripped so that form stays guarded. ok=false — and "unknown" is
+// the whole answer, never an error — when j is nil, j.Repo is blank or
+// resolves to no checkout, the checkout has no readable origin, or the
+// origin does not reduce to githubRepoPrefix's shape. Callers fail OPEN on
+// !ok: the one caller today is /api/pr-attach's repo check, where an unknown
+// repo must keep attaching rather than start dropping real PRs. Known
+// limit: a checkout whose origin is a fork, or names a repo since renamed on
+// GitHub, vouches for the origin's owner/repo, so a PR opened against the
+// upstream or the new name is refused there.
+func JobRepoOriginPrefix(j *Job) (prefix string, ok bool) {
+	if j == nil || strings.TrimSpace(j.Repo) == "" {
+		return "", false
+	}
+	dir, err := ResolveRepo(j.Repo)
+	if err != nil {
+		return "", false
+	}
+	p, ok := repoOriginPrefix(dir)
+	if !ok {
+		return "", false
+	}
+	if at := strings.Index(p, "@"); at >= 0 && !strings.Contains(p[:at], "/") {
+		p = p[at+1:] // https userinfo: `user@github.com/o/r` → `github.com/o/r`
+	}
+	if !githubRepoPrefix.MatchString(p) {
+		return "", false
+	}
+	return p, true
+}
+
+// PRURLInRepo reports whether url is a pull request of the repo prefix
+// names (`github.com/<owner>/<repo>`, originToPrefix's shape): exactly
+// `https://<prefix>/pull/<digits>`, compared case-insensitively because
+// GitHub treats `Owner/Repo` and `owner/repo` as one repo. An empty prefix
+// matches nothing — an unknown repo is the caller's decision, not a
+// wildcard — and the prefix is not normalized here: `carl/kraken` does not
+// cover `carl/kraken-ios`, and a prefix carrying a scheme, a trailing slash
+// or `.git` simply fails to match.
+func PRURLInRepo(url, prefix string) bool {
+	if prefix == "" {
+		return false
+	}
+	rest, ok := strings.CutPrefix(strings.ToLower(url), "https://"+strings.ToLower(prefix)+"/pull/")
+	if !ok || rest == "" {
+		return false
+	}
+	for _, r := range rest {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
+}
+
 // defaultServeAddr is kraken serve's default bind address (matches
 // cmd_serve.go's own "7777" default) — the fallback when
 // KRAKEN_SERVE_ADDR isn't set.
@@ -219,17 +285,39 @@ const prAttachHTTPTimeout = 3 * time.Second
 // on a 200 response; any error (server down, timeout, non-200) is false, so
 // the caller can fall back to the direct write.
 func postPRAttach(slug, url string) bool {
-	body, err := json.Marshal(map[string]string{"slug": slug, "url": url})
+	status, _ := postPRAttachStatus(slug, url)
+	return status == http.StatusOK
+}
+
+// postPRAttachStatus is postPRAttach with the answer kept: the HTTP status
+// (0 on a transport failure) and the response body, so PrHook can tell a
+// serve that REFUSED the PR (409, the repo check in api/prattach.go) from a
+// serve it never reached, and print the refusal's reason in the pane.
+func postPRAttachStatus(slug, url string) (status int, body string) {
+	payload, err := json.Marshal(map[string]string{"slug": slug, "url": url})
 	if err != nil {
-		return false
+		return 0, ""
 	}
 	client := http.Client{Timeout: prAttachHTTPTimeout}
-	resp, err := client.Post(ServeBaseURL()+"/api/pr-attach", "application/json", bytes.NewReader(body))
+	resp, err := client.Post(ServeBaseURL()+"/api/pr-attach", "application/json", bytes.NewReader(payload))
 	if err != nil {
-		return false
+		return 0, ""
 	}
 	defer resp.Body.Close()
-	return resp.StatusCode == http.StatusOK
+	b, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<16))
+	return resp.StatusCode, string(b)
+}
+
+// serveErrorText is the `error` field of a serve JSON error body, or the
+// trimmed raw body when it does not parse as one.
+func serveErrorText(body string) string {
+	var m struct {
+		Error string `json:"error"`
+	}
+	if err := json.Unmarshal([]byte(body), &m); err == nil && m.Error != "" {
+		return m.Error
+	}
+	return strings.TrimSpace(body)
 }
 
 // AttachJobPR is the PR-attach entry point exposed to the api package's
@@ -250,11 +338,17 @@ func AttachJobPR(j *Job, url string) (attached bool, err error) {
 // local LoadJobBySlug call below exists solely to narrow extractPRURLs to
 // the job's own repo via the origin prefix; a board-created job that lives
 // only as a store row (no job file on disk) makes j nil here, and the POST
-// attempt still fires, matching any repo (prefix == ""). When the POST
-// fails there is no local fallback — the PR shipped, but kraken doesn't
-// know about it until serve comes back and the daemon's branch-list poll
+// attempt still fires, matching any repo (prefix == "") — which is every
+// store-only job, i.e. every job created since file mode was retired, so
+// the repo check that matters is the SERVER's: /api/pr-attach has the
+// store, resolves the job's repo itself, and answers 409 for a PR of
+// another repo (a cell that ran `gh pr create` in another repo's checkout
+// attached that repo's PR to its own job, 2026-10-13). When the POST fails
+// there is no local fallback — the PR shipped, but kraken doesn't know
+// about it until serve comes back and the daemon's branch-list poll
 // notices. Always returns (never os.Exit(1)); every outcome is a single
-// stderr line.
+// stderr line: attached, NOT attached (the 409), or NOT RECORDED (any other
+// answer, serve unreachable included).
 func PrHook(slug string) {
 	raw, err := io.ReadAll(os.Stdin)
 	if err != nil {
@@ -276,10 +370,16 @@ func PrHook(slug string) {
 		}
 	}
 	for _, url := range extractPRURLs(raw, prefix) {
-		if postPRAttach(slug, url) {
+		status, body := postPRAttachStatus(slug, url)
+		switch status {
+		case http.StatusOK:
 			fmt.Fprintf(os.Stderr, "pr-hook %s: attached %s (via kraken serve)\n", slug, url)
-			continue
+		case http.StatusConflict:
+			// serve's repo check: the PR is real, but it lives in another
+			// repo than the job's, so it is not this job's record.
+			fmt.Fprintf(os.Stderr, "pr-hook %s: NOT attached (outside the job's repo): %s — %s\n", slug, url, serveErrorText(body))
+		default:
+			fmt.Fprintf(os.Stderr, "pr-hook %s: PR NOT RECORDED (serve unreachable): %s\n", slug, url)
 		}
-		fmt.Fprintf(os.Stderr, "pr-hook %s: PR NOT RECORDED (serve unreachable): %s\n", slug, url)
 	}
 }

@@ -6,6 +6,7 @@ import (
 	"regexp"
 
 	"kraken/internal/jobs"
+	"kraken/internal/util"
 )
 
 // prattach.go — POST /api/pr-attach: the new localhost mutation endpoint
@@ -59,6 +60,23 @@ func prAttachHandler(w http.ResponseWriter, r *http.Request) {
 	j, _, ferr := webJobFor(req.Slug)
 	if ferr != nil {
 		webJSON(w, http.StatusNotFound, map[string]string{"error": "no such job"})
+		return
+	}
+	// The repo check lives HERE and not in the hook: pr-hook runs outside
+	// serve with no store, and a board-created job has no job file for it to
+	// read, so its own origin-prefix narrowing is empty for every store-only
+	// job — every job created since file mode was retired — and it posts
+	// whatever `gh pr create` printed. A cell of another repo that amended a
+	// kraken skill from the kraken checkout attached kraken's PR to its own
+	// job that way (2026-10-13): the daemon told that zeus the PR merged, the
+	// card carried a foreign chip, and only the restart repair dropped it
+	// hours later. An unknown repo — unresolvable, origin unreadable, or an
+	// origin JobRepoOriginPrefix cannot reduce to github.com/<owner>/<repo> —
+	// fails OPEN: refusing on missing evidence would drop real PRs, the exact
+	// loss the hook exists to prevent.
+	if prefix, ok := jobs.JobRepoOriginPrefix(j); ok && !jobs.PRURLInRepo(req.URL, prefix) {
+		util.LogEvent("web", "info", "pr-attach-refused", j.Slug+": "+req.URL+" refused — outside the job's repo "+prefix)
+		webJSON(w, http.StatusConflict, map[string]string{"error": req.URL + " is not in " + j.Slug + "'s repo (" + prefix + ")"})
 		return
 	}
 	attached, err := jobs.AttachJobPR(j, req.URL)
