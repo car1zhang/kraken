@@ -51,6 +51,10 @@ night and teaches him the loop does not listen.
 
 1. **Carl's verdicts and comments** on watched observations, and **open dream PRs**. Both are suppression:
    a rule already in flight must not be re-proposed, and an observation he has ruled on is already decided.
+   List the PRs with an explicit `--limit` far above the stack, and treat a result exactly equal
+   to the limit as truncated: `gh pr list` returns 30 rows by default, and a pass has taken that
+   page for the total — an undercount in the night's own numbers, and a truncated list hides
+   older in-flight fixes, which is exactly how a duplicate proposal happens.
 2. **The rest of the watch overlay** — what previous nights are still watching. A row whose state
    reads `shipped` is a CLAIM, not a settled fact: before letting it suppress a fresh sighting,
    verify the fix actually landed — a `pr_url` that points at a MERGED change covering the
