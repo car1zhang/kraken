@@ -322,9 +322,10 @@ Commands:
                       reads the full job text from stdin and creates or amends
                       a DRAFT. The route is guarded server-side: it refuses
                       any state:, the retired ready:/prereqs: keys, an
-                      unparseable body, and any started job — iris drafts, and
-                      submitting (which starts the cell) stays carl's move on
-                      the board.
+                      unparseable body, and any started job. A draft starts
+                      only when submitted: carl on the board, or
+                      'k cell submit' run by kronos on carl's instruction —
+                      iris drafts and never submits.
   k mine digest|reduce [--since <unix-millis>] ...
                       the nightly dream pass' mechanical read of claude's own
                       transcripts under ~/.claude/projects — a pure local file
