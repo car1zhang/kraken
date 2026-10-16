@@ -214,8 +214,9 @@ final class NotificationManager: NSObject {
     }
 
     private func performBackgroundFetch() async {
-        let baseURL = UserDefaults.standard.string(forKey: "serverURL") ?? KrakenDefaults.serverURL
-        guard let board = try? await APIClient.shared.fetchBoard(baseURL: baseURL) else { return }
+        let baseURL = KrakenDefaults.storedServerURL
+        guard KrakenDefaults.isConfigured(baseURL),
+              let board = try? await APIClient.shared.fetchBoard(baseURL: baseURL) else { return }
         processBoard(board)
     }
 }

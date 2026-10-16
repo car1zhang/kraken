@@ -148,12 +148,11 @@ func refuseCodexThread(j *Job, verb string) error {
 	return nil
 }
 
-// threadStore resolves the store every thread verb needs. Threads live ONLY in
-// kraken.db — there is no file fallback the way jobs still have one — so a
-// caller running without a wired store (the bubbletea viewer, a file-mode
-// daemon) gets a clear refusal rather than a silent no-op. j.ID == 0 means a
-// file-backed job with no row to hang threads off, which is the same refusal
-// for the same reason.
+// threadStore resolves the store every thread verb needs. Threads live in
+// kraken.db, so a caller running without a wired store (the bubbletea viewer,
+// a bare CLI process) gets a clear refusal rather than a silent no-op.
+// j.ID == 0 means a Job built by ParseJob alone, with no row to hang threads
+// off, which is the same refusal for the same reason.
 func threadStore(j *Job) (*store.Store, error) {
 	st := ActiveStore()
 	if st == nil {

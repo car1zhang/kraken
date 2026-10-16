@@ -1,6 +1,56 @@
 .PHONY: build web-assets install install-completion install-serve ios-testflight mac install-mac clean
 
-PLIST := $(HOME)/Library/LaunchAgents/dev.carl.kraken.plist
+# launchd label of the `kraken serve` job: names the plist file, its Label key
+# and every launchctl target below. Resolved in this order:
+#   1. the make line or the environment (`make install KRAKEN_LABEL=x`);
+#   2. else the first KRAKEN_LABEL= line of ~/.kraken/env (a missing or
+#      unreadable file reads as no line);
+#   3. else dev.carl.kraken, the label existing installs already have loaded,
+#      so leaving it unset everywhere changes nothing on those machines.
+# Step 2 is what makes a hand-typed `make install` and the daemon's (`k update`
+# runs make from serve's environment, which ApplyEnvFile has already filled
+# from the same file) resolve the SAME label: put a custom label in the env
+# file and both paths agree. A machine that switches labels has to bootout the
+# old one by hand once.
+KRAKEN_ENV_FILE := $(HOME)/.kraken/env
+# The lookup reads the file the way util.ApplyEnvFile does: a UTF-8 BOM at the
+# start of the file and a trailing CR (a CRLF file) are ignored, the key and
+# value are trimmed, and the FIRST KRAKEN_LABEL= line wins (quotes are kept,
+# exactly as the loader keeps them; the one quote rule is below).
+KRAKEN_ENV_LABEL := $(strip $(shell LC_ALL=C awk 'NR==1{sub(/^\357\273\277/,"")} {sub(/\r$$/,"")} /^[ \t]*KRAKEN_LABEL[ \t]*=/{v=$$0; sub(/^[^=]*=[ \t]*/,"",v); sub(/[ \t]+$$/,"",v); print v; exit}' '$(KRAKEN_ENV_FILE)' 2>/dev/null))
+ifneq ($(KRAKEN_ENV_LABEL),)
+KRAKEN_LABEL ?= $(KRAKEN_ENV_LABEL)
+endif
+KRAKEN_LABEL ?= dev.carl.kraken
+# The quote rule, applied to the RESOLVED label whatever its origin (make line,
+# environment, or the file): a value wrapped in matching ' or " quotes is
+# refused with a note and falls through to the default. The env loader keeps
+# quotes verbatim, so a quoted line in ~/.kraken/env reaches the daemon's
+# environment quoted and from there the board UPDATE's `make install`; used
+# as-is it would name a plist and a launchd job with quote characters in them.
+# `override`, because a make-line value cannot be reassigned without it.
+KRAKEN_LABEL_QUOTED := $(and $(filter '%,$(firstword $(KRAKEN_LABEL))),$(filter %',$(lastword $(KRAKEN_LABEL))))$(and $(filter "%,$(firstword $(KRAKEN_LABEL))),$(filter %",$(lastword $(KRAKEN_LABEL))))
+ifneq ($(KRAKEN_LABEL_QUOTED),)
+$(info note: ignoring the quoted KRAKEN_LABEL (origin: $(origin KRAKEN_LABEL); "file" means ~/.kraken/env) — write it unquoted; using dev.carl.kraken)
+override KRAKEN_LABEL := dev.carl.kraken
+endif
+# a set-but-empty KRAKEN_LABEL (environment or make line) would name a plist
+# called ".plist" and target gui/<uid>/ — treat it as unset
+ifeq ($(strip $(KRAKEN_LABEL)),)
+override KRAKEN_LABEL := dev.carl.kraken
+endif
+PLIST := $(HOME)/Library/LaunchAgents/$(KRAKEN_LABEL).plist
+
+# Whether kraken.db existed BEFORE this make ran. Evaluated once at parse time
+# on purpose: install-serve (a prerequisite of install) bootstraps a fresh
+# serve, which creates the database within moments, so a check made inside
+# the install recipe would read every first install as an upgrade.
+KRAKEN_DB_PREEXISTED := $(shell test -f '$(or $(KRAKEN_DB_PATH),$(HOME)/.kraken/kraken.db)' && echo yes)
+
+# the name kraken's agents use for the person running it. `install` writes it
+# into ~/.kraken/env as KRAKEN_OPERATOR only when that file has no such line
+# yet; an existing line is never rewritten. Defaults to the account's full name.
+OPERATOR ?= $(shell id -F 2>/dev/null)
 
 # short commit of the tree being built, stamped into the binary so a running
 # kraken can report what it is (util.Build(), the board's build chip) and the
@@ -40,12 +90,45 @@ web-assets:
 build: web-assets
 	CGO_ENABLED=1 go build -tags sqlite_fts5 -ldflags "-X kraken/internal/util.BuildSHA=$(SHA)" -o kraken ./cmd/kraken
 
-# kraken runs on exactly one personal machine, so install always deploys
-# `kraken serve` — the only runtime. `kraken import` (a separate, human-run
-# one-shot) moves any legacy file-store data into kraken.db before or after
-# this; install itself no longer branches on whether that's happened yet.
+# install always deploys `kraken serve` — the only runtime.
 install: build install-completion install-serve
 	mkdir -p $(HOME)/.local/bin
+	# Record the operator's name in ~/.kraken/env (parsed by every kraken
+	# process at startup, util.ApplyEnvFile) — but only when the file has no
+	# KRAKEN_OPERATOR= line: a name the operator wrote or edited by hand is
+	# never rewritten. The file is created if absent, a missing trailing newline
+	# is repaired before appending, and an empty OPERATOR writes nothing (the
+	# runtime then falls back to $USER). This runs before the restart below, so
+	# the daemon comes up already knowing the name.
+	#
+	# Same rule for KRAKEN_BRANCH_PREFIX, on an UPGRADE only: when kraken.db
+	# existed before this make (KRAKEN_DB_PREEXISTED, read at parse time) and
+	# the file has no KRAKEN_BRANCH_PREFIX= line, pin `carl/` — the prefix every
+	# branch had before it became a knob — so live cells, their PR tracking and
+	# reactivation keep the branches they already have instead of moving to the
+	# new `kraken/` default. A fresh install writes no prefix line.
+	#
+	# Any failed write to the file (mkdir, touch, unreadable file, append)
+	# FAILS the recipe: reporting "wrote" over a write that did not happen
+	# would leave agents nameless with nothing saying why.
+	@op='$(subst ','\'',$(OPERATOR))'; env="$(HOME)/.kraken/env"; \
+	fail() { echo "error: could not write $$env — $$1" >&2; exit 1; }; \
+	mkdir -p "$(HOME)/.kraken" || fail "mkdir failed"; \
+	touch "$$env" || fail "touch failed"; \
+	[ -r "$$env" ] || fail "file is not readable"; \
+	nl() { if [ -s "$$env" ] && [ -n "$$(tail -c 1 "$$env")" ]; then echo >> "$$env" || fail "append failed"; fi; }; \
+	if grep -q '^[[:space:]]*KRAKEN_OPERATOR[[:space:]]*=' "$$env"; then \
+	  echo "~/.kraken/env already names the operator — left as is"; \
+	elif [ -z "$$op" ]; then \
+	  echo "note: no operator name (set OPERATOR=...) — agents will use \$$USER"; \
+	else \
+	  nl; printf 'KRAKEN_OPERATOR=%s\n' "$$op" >> "$$env" || fail "append failed"; \
+	  echo "wrote KRAKEN_OPERATOR=$$op → ~/.kraken/env"; \
+	fi; \
+	if [ "$(KRAKEN_DB_PREEXISTED)" = yes ] && ! grep -q '^[[:space:]]*KRAKEN_BRANCH_PREFIX[[:space:]]*=' "$$env"; then \
+	  nl; printf '%s\n' '# pinned by make install: this install predates the branch-prefix knob, so it keeps the carl/ branches it has' 'KRAKEN_BRANCH_PREFIX=carl/' >> "$$env" || fail "append failed"; \
+	  echo "wrote KRAKEN_BRANCH_PREFIX=carl/ → ~/.kraken/env (existing install keeps its branch names)"; \
+	fi
 	# Sign the fresh binary HERE — in the build dir, before it is copied into
 	# ~/.local/bin. codesign rewrites the file it signs, so signing the
 	# installed path in place would modify a live binary and SIGKILL every
@@ -54,11 +137,15 @@ install: build install-completion install-serve
 	#
 	# Why sign at all: a Go binary is ad-hoc signed by default, so its
 	# designated requirement is `cdhash H"..."` — a hash of its own bytes,
-	# invalidated by every rebuild. macOS TCC keys the Documents-folder grant
-	# (kraken reads ~/Documents/pluto) on that requirement, so each `make
-	# install` looked like a brand new app and re-prompted. Signing with a real
+	# invalidated by every rebuild. macOS TCC keys any privacy grant it makes
+	# to the binary on that requirement, so with an ad-hoc signature each `make
+	# install` looks like a brand new app and a granted prompt comes back. Signing with a real
 	# identity plus a stable --identifier makes the requirement name WHO signed
-	# it instead of WHAT the bytes are, so the grant survives rebuilds.
+	# it instead of WHAT the bytes are, so a grant survives rebuilds.
+	#
+	# The --identifier is deliberately NOT $(KRAKEN_LABEL): it is the code
+	# identity existing grants are keyed on, not the launchd job name, and
+	# moving it would re-prompt every grant once.
 	#
 	# Identity: $(KRAKEN_SIGN_ID) if set, else the first codesigning identity in
 	# the keychain (swapping to a self-signed cert later is config, not code).
@@ -105,20 +192,15 @@ install: build install-completion install-serve
 	# never a non-zero exit: by this point the binary is installed and `kraken
 	# update` reads this recipe's exit code as "did the update work".
 	@uid=$$(id -u); \
-	if launchctl print gui/$$uid/dev.carl.kraken >/dev/null 2>&1; then \
-	  launchctl kickstart -k gui/$$uid/dev.carl.kraken \
-	    || echo "warning: kraken is installed but the launchd restart failed — 'launchctl kickstart -k gui/$$uid/dev.carl.kraken' by hand"; \
+	if launchctl print gui/$$uid/$(KRAKEN_LABEL) >/dev/null 2>&1; then \
+	  launchctl kickstart -k gui/$$uid/$(KRAKEN_LABEL) \
+	    || echo "warning: kraken is installed but the launchd restart failed — 'launchctl kickstart -k gui/$$uid/$(KRAKEN_LABEL)' by hand"; \
 	elif launchctl bootstrap gui/$$uid $(PLIST) 2>/dev/null || launchctl load $(PLIST); then \
 	  echo "launchd job was not loaded — bootstrapped it"; \
 	else \
 	  echo "warning: kraken is installed but the launchd job could not be loaded — 'launchctl bootstrap gui/$$uid $(PLIST)' by hand"; \
 	fi
 	@echo "launchd job loaded — status: k v header, ~/.kraken/daemon.json, or ~/.kraken/kraken.log"
-	# one-time cutover nudge: legacy file-mode state (order.json, JSONL logs,
-	# job files) only reaches kraken.db via a manual `kraken import` run
-	@if [ -f $(HOME)/.kraken/order.json ] && [ -f $(HOME)/.kraken/kraken.db ]; then \
-	  echo "note: legacy ~/.kraken/order.json detected — run 'kraken import' once to migrate file-mode state"; \
-	fi
 
 # the plist is generated, not checked in: it embeds $(HOME) paths. PATH must
 # carry homebrew + ~/.local/bin: kraken serve shells out to tmux/git/gh/claude.
@@ -153,7 +235,7 @@ install-serve:
 	  '<?xml version="1.0" encoding="UTF-8"?>' \
 	  '<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">' \
 	  '<plist version="1.0"><dict>' \
-	  '  <key>Label</key><string>dev.carl.kraken</string>' \
+	  '  <key>Label</key><string>$(KRAKEN_LABEL)</string>' \
 	  '  <key>ProgramArguments</key><array>' \
 	  '    <string>$(HOME)/.local/bin/kraken</string>' \
 	  '    <string>serve</string>' \
@@ -174,18 +256,35 @@ install-serve:
 	else \
 	  mv -f $(PLIST).new $(PLIST); \
 	  echo "launchd plist changed — reloading the job so the new definition takes effect"; \
-	  launchctl bootout gui/$$uid/dev.carl.kraken 2>/dev/null || true; \
+	  launchctl bootout gui/$$uid/$(KRAKEN_LABEL) 2>/dev/null || true; \
 	  launchctl bootstrap gui/$$uid $(PLIST) \
 	    || echo "warning: launchctl bootstrap failed — the plist is updated but not loaded; retry 'make install' or log out"; \
 	fi
 
+# The completion goes into the first of these dirs that ALREADY EXISTS; only
+# ~/.zsh/completions is ever created, as the fallback. Creating the oh-my-zsh
+# path on a machine without oh-my-zsh would leave a stub ~/.oh-my-zsh that
+# nothing loads (and that confuses a later oh-my-zsh install). ~/.zsh/completions
+# is only read if it is on your fpath — the reload hint below says so.
+# Completion is optional, so a machine where neither dir is usable (a FILE
+# where a dir is expected, an unwritable dir) gets a note and the target still
+# succeeds: failing here would fail the whole `make install`, and with it a
+# board UPDATE, over a tab-completion file.
 install-completion:
 	@dest=""; \
 	for d in "$(HOME)/.oh-my-zsh/custom/completions" "$(HOME)/.zsh/completions"; do \
-		if [ -d "$$d" ] || mkdir -p "$$d" 2>/dev/null; then dest="$$d"; break; fi; \
+		if [ -d "$$d" ]; then dest="$$d"; break; fi; \
 	done; \
-	if [ -z "$$dest" ]; then echo "no writable completion dir"; exit 1; fi; \
-	cp cmd/kraken/_k "$$dest/_k"; \
+	if [ -z "$$dest" ]; then \
+		dest="$(HOME)/.zsh/completions"; \
+		if ! mkdir -p "$$dest" 2>/dev/null; then \
+			echo "note: no usable zsh completion dir ($$dest could not be created) — skipping completion"; exit 0; \
+		fi; \
+		echo "created $$dest — add 'fpath=(~/.zsh/completions \$$fpath)' before compinit in ~/.zshrc if it is not there"; \
+	fi; \
+	if ! cp cmd/kraken/_k "$$dest/_k" 2>/dev/null; then \
+		echo "note: could not write $$dest/_k — skipping completion"; exit 0; \
+	fi; \
 	echo "installed zsh completion → $$dest/_k"; \
 	echo "reload with: rm -f ~/.zcompdump* && exec zsh"
 

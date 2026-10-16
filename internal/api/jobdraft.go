@@ -98,10 +98,9 @@ func jobListHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// Guarded like its four siblings even though LoadJobs takes no store
-	// handle: with none wired it falls through to the FILE-mode reader, which
-	// on a store-only machine (Q14) answers an empty pluto dir with an empty
-	// list — "there are no jobs" is then indistinguishable from "the store is
-	// not wired", and iris would draft a duplicate of every job that exists.
+	// handle: with none wired LoadJobs answers an empty list, and "there are
+	// no jobs" would then be indistinguishable from "the store is not wired"
+	// — iris would draft a duplicate of every job that exists.
 	if _, ok := activeStore(w); !ok {
 		return
 	}
@@ -223,7 +222,7 @@ func jobDraftHandler(w http.ResponseWriter, r *http.Request) {
 	// ready-change guard was loud.
 	if key := retiredFrontmatterKey(req.Content); key != "" {
 		webJSON(w, http.StatusBadRequest, map[string]string{
-			"error": key + ": is a retired key and is refused on this route — the queued status is gone; a job starts when carl submits it on the board. Resend the text without that line",
+			"error": key + ": is a retired key and is refused on this route — the queued status is gone; a job starts when the operator submits it on the board. Resend the text without that line",
 		})
 		return
 	}

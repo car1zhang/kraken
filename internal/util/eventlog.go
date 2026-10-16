@@ -75,7 +75,7 @@ type LogEntry struct {
 type LogFileInfo struct {
 	Name  string `json:"name"`
 	Size  int64  `json:"size"`
-	MTime int64  `json:"mtime"` // unix millis, matches jobMTime's encoding
+	MTime int64  `json:"mtime"` // unix millis
 }
 
 func LogsDir() string {

@@ -47,8 +47,9 @@ exactly. Uploads for an app that does not exist are rejected.
 
 ### 3. App Store signing assets — created on your first run
 
-The keychain has only `Apple Development: Carl Zhang (J43AYT4Q4V)`, which is
-enough to build and archive but *not* to export for the App Store.
+A keychain that holds only an `Apple Development: <your name> (<id>)`
+certificate has enough to build and archive but *not* to export for the App
+Store.
 
 Fixing that means letting `xcodebuild` talk to the Apple Developer website and
 **write to your real developer account** — provisioning profiles, App IDs, and

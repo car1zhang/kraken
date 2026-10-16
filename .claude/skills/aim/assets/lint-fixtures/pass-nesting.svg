@@ -23,7 +23,7 @@
     <rect x="300" y="112" width="256" height="150" rx="2"/>
     <path d="M 300,112 L 312,100 H 568 L 556,112 Z"/>
     <path d="M 556,112 L 568,100 V 250 L 556,262"/>
-    <text x="360" y="130">carl's Mac</text>
+    <text x="360" y="130">your Mac</text>
     <g class="proc">
       <rect x="320" y="146" width="150" height="50" rx="2"/>
       <rect x="324" y="150" width="142" height="42" rx="1"/>

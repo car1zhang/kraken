@@ -1,13 +1,11 @@
 package jobs
 
 import (
-	"os"
-	"path/filepath"
-	"reflect"
 	"strings"
 	"testing"
 
 	"kraken/internal/core"
+	"kraken/internal/store"
 )
 
 const sampleJob = `---
@@ -273,15 +271,6 @@ func TestParseJobTeardownMarker(t *testing.T) {
 	if j.Teardown != "done:accepted" {
 		t.Fatalf("teardown = %q, want %q", j.Teardown, "done:accepted")
 	}
-	// clearing the marker removes the line entirely (patchField's empty-val
-	// removal), so finished teardowns leave no residue in hand-read files
-	out, err := patchField(src, "teardown", "")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if strings.Contains(out, "teardown") {
-		t.Fatalf("cleared marker still present:\n%s", out)
-	}
 }
 
 // TestParseJobTypeLegacyDiscard covers Q14: the job-level type concept is
@@ -384,70 +373,6 @@ func TestParseJobCRLF(t *testing.T) {
 	j := ParseJob("yelp-dedupe.job.md", []byte(src))
 	if j.Err != "" || j.Slug != "yelp-dedupe" || j.Repo != "monolith" {
 		t.Fatalf("CRLF parse degraded: err=%q slug=%q repo=%q", j.Err, j.Slug, j.Repo)
-	}
-}
-
-func TestPatchStateHealsIndented(t *testing.T) {
-	src := "---\njob: x\n state: working\n---\nbody"
-	out, err := patchState(src, "done")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if strings.Count(out, "state:") != 1 {
-		t.Fatalf("indented state line not healed:\n%s", out)
-	}
-	if j := ParseJob("x.job.md", []byte(out)); j.State != "done" {
-		t.Fatalf("state after heal: %q", j.State)
-	}
-}
-
-func TestPatchState(t *testing.T) {
-	// insert when absent — body untouched byte-for-byte
-	out, err := patchState(sampleJob, "working")
-	if err != nil {
-		t.Fatal(err)
-	}
-	j := ParseJob("yelp-dedupe.job.md", []byte(out))
-	if j.State != "working" {
-		t.Fatalf("state after insert: %q", j.State)
-	}
-	orig := ParseJob("yelp-dedupe.job.md", []byte(sampleJob))
-	if j.Body != orig.Body {
-		t.Fatal("patchState changed the body")
-	}
-	// replace when present
-	out2, err := patchState(out, "done")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if strings.Count(out2, "\nstate:") != 1 {
-		t.Fatalf("state line duplicated:\n%s", out2)
-	}
-	if j2 := ParseJob("x.job.md", []byte(out2)); j2.State != "done" {
-		t.Fatalf("state after replace: %q", j2.State)
-	}
-	// malformed input errors
-	if _, err := patchState("no frontmatter", "x"); err == nil {
-		t.Fatal("expected error for missing frontmatter")
-	}
-}
-
-func TestPatchFieldOutcome(t *testing.T) {
-	src := "---\njob: x\nstate: working\n---\nbody"
-	out, err := patchField(src, "outcome", "approach A works")
-	if err != nil {
-		t.Fatal(err)
-	}
-	j := ParseJob("x.job.md", []byte(out))
-	if j.Err != "" || j.Outcome != "approach A works" || j.State != "working" {
-		t.Fatalf("outcome insert: err=%q outcome=%q state=%q", j.Err, j.Outcome, j.State)
-	}
-	out2, err := patchField(out, "outcome", "revised")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if strings.Count(out2, "outcome:") != 1 {
-		t.Fatalf("outcome duplicated:\n%s", out2)
 	}
 }
 
@@ -660,7 +585,8 @@ func TestCellNaming(t *testing.T) {
 	if got := CellSession(j); got != "cell-weird-slug-12" {
 		t.Fatalf("CellSession: %q", got)
 	}
-	if got := CellBranch(j); got != "carl/weird-slug-12" {
+	t.Setenv("KRAKEN_BRANCH_PREFIX", "")
+	if got := CellBranch(j); got != "kraken/weird-slug-12" {
 		t.Fatalf("CellBranch: %q", got)
 	}
 	if got := CellWorktree(j, "/Users/car1zhang/Developer/monolith"); !strings.HasSuffix(got, "/weird-slug-12/wt-monolith") {
@@ -765,253 +691,51 @@ body`
 	}
 }
 
-func TestPatchPRs(t *testing.T) {
-	src := "---\njob: x\ntype: build\nrepo: kraken\nready: true\nstate: working\n---\nbody\n"
-	prs := []JobPR{{URL: "https://x/pull/1", State: "open"}}
-
-	// insert before the closing fence when absent
-	got, err := patchPRs(src, prs)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(got, "prs:\n  - url: https://x/pull/1\n    state: open\n---") {
-		t.Fatalf("insert: %q", got)
-	}
-	if !strings.Contains(got, "state: working") || !strings.Contains(got, "body") {
-		t.Fatalf("insert clobbered neighbors: %q", got)
-	}
-
-	// replace in place on a later write, and round-trip through the parser
-	prs[0].State = "merged"
-	prs = append(prs, JobPR{URL: "https://x/pull/2", State: "open"})
-	got2, err := patchPRs(got, prs)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if strings.Count(got2, "prs:") != 1 {
-		t.Fatalf("replace duplicated the block: %q", got2)
-	}
-	// what patchPRs wrote must round-trip through the strict parser
-	j := ParseJob("x.job.md", []byte(got2))
-	if j.Err != "" || len(j.PRs) != 2 || j.PRs[0].State != "merged" || j.PRs[1].URL != "https://x/pull/2" {
-		t.Fatalf("round-trip: err=%q prs=%+v\n%s", j.Err, j.PRs, got2)
-	}
-
-	// no frontmatter refuses
-	if _, err := patchPRs("no fences here", prs); err == nil {
-		t.Error("expected error on missing frontmatter")
-	}
-}
-
-// TestPatchPRsWatermarkRoundTrip covers watchPRs' two extra frontmatter
-// fields through patchPRs: a watermarked entry emits last-comment-at/
-// bumped-sha lines and round-trips through the strict parser, while an
-// entry with no watermarks set (the pre-watchPRs shape) writes byte-
-// identical to before — no blank watermark lines — so files nothing has
-// ever watched stay untouched by this feature.
-func TestPatchPRsWatermarkRoundTrip(t *testing.T) {
-	src := "---\njob: x\ntype: build\nrepo: kraken\nready: true\nstate: working\n---\nbody\n"
-	prs := []JobPR{
-		{URL: "https://x/pull/1", State: "open", LastCommentAt: "2024-01-02T03:04:05Z", BumpedSHA: "abc123"},
-		{URL: "https://x/pull/2", State: "open"}, // no watermarks yet
-	}
-	got, err := patchPRs(src, prs)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(got, "  - url: https://x/pull/1\n    state: open\n    last-comment-at: 2024-01-02T03:04:05Z\n    bumped-sha: abc123\n") {
-		t.Fatalf("watermark lines missing: %q", got)
-	}
-	if !strings.Contains(got, "  - url: https://x/pull/2\n    state: open\n---") {
-		t.Fatalf("unwatermarked entry grew blank watermark lines: %q", got)
-	}
-	j := ParseJob("x.job.md", []byte(got))
-	if j.Err != "" || len(j.PRs) != 2 || j.PRs[0] != prs[0] || j.PRs[1] != prs[1] {
-		t.Fatalf("round-trip: err=%q prs=%+v\n%s", j.Err, j.PRs, got)
-	}
-}
-
-// A legacy success: | block scalar whose CONTENT line starts with "prs:"
-// must never be mistaken for the prs: key — the tracker rewrites the block
-// every tick, and a trimmed-prefix match would silently eat that content
-// line (athena finding on the first cut of patchPRs).
-func TestPatchPRsSkipsBlockScalarContent(t *testing.T) {
-	src := "---\njob: x\ntype: build\nrepo: kraken\nready: true\nsuccess: |\n  prs: shown on the board\nstate: working\n---\nbody\n"
-	got, err := patchPRs(src, []JobPR{{URL: "https://x/pull/1", State: "open"}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(got, "  prs: shown on the board") {
-		t.Fatalf("success block scalar content eaten: %q", got)
-	}
-	j := ParseJob("x.job.md", []byte(got))
-	if j.Err != "" || len(j.PRs) != 1 {
-		t.Fatalf("round-trip: err=%q prs=%+v", j.Err, j.PRs)
-	}
-}
-
-// writeJobPRs must never drop a URL already on disk: the daemon's reconciled
-// list is built from j.PRs loaded at the start of a tick, but appendJobPR
-// (the pr-hook verb's real-time path) may append a fresh record straight to
-// the FILE in between. File has A, X recorded; the caller passes an updated
-// A alone (as if X had never been loaded) — the write must still land with
-// both A(merged) and X(unchanged), X appended after the caller's slice.
-func TestWriteJobPRsUnionsFileOnlyRecords(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "x.job.md")
-	src := "---\njob: x\ntype: build\nrepo: kraken\nready: true\nstate: working\nprs:\n" +
-		"  - url: https://x/pull/1\n    state: open\n" +
-		"  - url: https://x/pull/2\n    state: open\n---\nbody\n"
-	if err := os.WriteFile(path, []byte(src), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	j := ParseJob("x.job.md", []byte(src))
-	j.File = path
-
-	// caller only knows about pull/1 (as if pull/2 was appended to the file
-	// by the hook after this tick's j.PRs snapshot was taken), and reports
-	// it merged
-	callerPRs := []JobPR{{URL: "https://x/pull/1", State: "merged"}}
-	if err := writeJobPRs(j, callerPRs); err != nil {
-		t.Fatal(err)
-	}
-
-	data, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	reparsed := ParseJob("x.job.md", data)
-	if reparsed.Err != "" {
-		t.Fatalf("reparsed job errored: %s", reparsed.Err)
-	}
-	want := []JobPR{
-		{URL: "https://x/pull/1", State: "merged"},
-		{URL: "https://x/pull/2", State: "open"},
-	}
-	if len(reparsed.PRs) != 2 || reparsed.PRs[0] != want[0] || reparsed.PRs[1] != want[1] {
-		t.Fatalf("prs after write: %+v, want %+v", reparsed.PRs, want)
-	}
-	if len(j.PRs) != 2 || j.PRs[0] != want[0] || j.PRs[1] != want[1] {
-		t.Fatalf("j.PRs not updated to union: %+v", j.PRs)
-	}
-}
-
-// removeJobPRs is the repair pass's write path: unlike writeJobPRs (which
-// unions in any file-only URL, protecting a concurrent attach but wrongly
-// resurrecting exactly what a repair means to delete), it re-reads the file
-// fresh and filters ITS current list by URL — so a PR the drop set never
-// named survives untouched. This test only exercises that drop-set
-// filtering semantics (a URL outside drop passes through unchanged); it
-// doesn't simulate a true concurrent appendJobPR race across processes.
-func TestRemoveJobPRs(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "x.job.md")
-	src := "---\njob: x\ntype: build\nrepo: kraken\nready: true\nstate: working\nprs:\n" +
-		"  - url: https://x/pull/1\n    state: open\n" +
-		"  - url: https://x/pull/2\n    state: open\n" +
-		"  - url: https://x/pull/3\n    state: open\n" +
-		"  - url: https://x/pull/4\n    state: open\n" +
-		"  - url: https://x/pull/5\n    state: open\n---\nbody\n"
-	if err := os.WriteFile(path, []byte(src), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	j := ParseJob("x.job.md", []byte(src))
-	j.File = path
-
-	drop := map[string]bool{
-		"https://x/pull/1": true,
-		"https://x/pull/2": true,
-		"https://x/pull/3": true,
-		"https://x/pull/4": true,
-	}
-	removed, err := removeJobPRs(j, drop)
-	if err != nil {
-		t.Fatal(err)
-	}
-	wantRemoved := []string{"https://x/pull/1", "https://x/pull/2", "https://x/pull/3", "https://x/pull/4"}
-	if !reflect.DeepEqual(removed, wantRemoved) {
-		t.Fatalf("removed: got %v, want %v", removed, wantRemoved)
-	}
-
-	data, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	reparsed := ParseJob("x.job.md", data)
-	if reparsed.Err != "" {
-		t.Fatalf("reparsed job errored: %s", reparsed.Err)
-	}
-	// pull/5 was never in the drop set — it survives untouched, which is
-	// the filtering behavior that also protects a PR attached concurrently
-	// between this call's read and write (not exercised here directly).
-	want := []JobPR{{URL: "https://x/pull/5", State: "open"}}
-	if !reflect.DeepEqual(reparsed.PRs, want) {
-		t.Fatalf("prs after remove: got %+v, want %+v", reparsed.PRs, want)
-	}
-	if !reflect.DeepEqual(j.PRs, want) {
-		t.Fatalf("j.PRs not updated: got %+v, want %+v", j.PRs, want)
-	}
-
-	// no-op: nothing in drop matches what's now on disk, so nothing is
-	// removed and the file is left untouched.
-	removed2, err := removeJobPRs(j, map[string]bool{"https://x/pull/999": true})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if removed2 != nil {
-		t.Fatalf("no-op drop: got removed %v, want nil", removed2)
-	}
-}
-
 // updatePRWatermark is watchPRs' write path: it must land the new watermark
 // on the right URL, leave every other recorded field (including a sibling
 // PR's own watermark) untouched, and no-op cleanly when the URL is no longer
-// on disk (dropped by a concurrent repair pass or hand edit between load and
-// write) rather than resurrecting it.
+// recorded (dropped by a concurrent repair pass between load and write)
+// rather than resurrecting it.
 func TestUpdatePRWatermark(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "x.job.md")
-	src := "---\njob: x\ntype: build\nrepo: kraken\nready: true\nstate: working\nprs:\n" +
-		"  - url: https://x/pull/1\n    state: open\n" +
-		"  - url: https://x/pull/2\n    state: open\n    last-comment-at: 2024-01-01T00:00:00Z\n    bumped-sha: sha0\n---\nbody\n"
-	if err := os.WriteFile(path, []byte(src), 0o644); err != nil {
+	st := useTestStore(t)
+	row := mustCreateJob(t, st, store.Job{Slug: "x", Repo: "kraken", State: "working"})
+	for _, u := range []string{"https://x/pull/1", "https://x/pull/2"} {
+		if err := st.UpsertPR(row.ID, u, "open"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := st.SetPRWatermark(row.ID, "https://x/pull/2", "2024-01-01T00:00:00Z", "sha0", ""); err != nil {
 		t.Fatal(err)
 	}
-	j := ParseJob("x.job.md", []byte(src))
-	j.File = path
+	j := LoadJobBySlug("x")
 
 	if err := updatePRWatermark(j, "https://x/pull/1", "2024-02-01T00:00:00Z", "sha1", "conflicting"); err != nil {
 		t.Fatal(err)
 	}
-	data, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatal(err)
+	want := map[string]JobPR{
+		"https://x/pull/1": {URL: "https://x/pull/1", State: "open", LastCommentAt: "2024-02-01T00:00:00Z", BumpedSHA: "sha1", ConflictState: "conflicting"},
+		"https://x/pull/2": {URL: "https://x/pull/2", State: "open", LastCommentAt: "2024-01-01T00:00:00Z", BumpedSHA: "sha0"},
 	}
-	reparsed := ParseJob("x.job.md", data)
-	if reparsed.Err != "" {
-		t.Fatalf("reparsed job errored: %s", reparsed.Err)
+	check := func(what string, prs []JobPR) {
+		t.Helper()
+		if len(prs) != 2 {
+			t.Fatalf("%s: got %+v, want 2 records", what, prs)
+		}
+		for _, p := range prs {
+			if p != want[p.URL] {
+				t.Fatalf("%s: got %+v, want %+v", what, p, want[p.URL])
+			}
+		}
 	}
-	want := []JobPR{
-		{URL: "https://x/pull/1", State: "open", LastCommentAt: "2024-02-01T00:00:00Z", BumpedSHA: "sha1", ConflictState: "conflicting"},
-		{URL: "https://x/pull/2", State: "open", LastCommentAt: "2024-01-01T00:00:00Z", BumpedSHA: "sha0"},
-	}
-	if len(reparsed.PRs) != 2 || reparsed.PRs[0] != want[0] || reparsed.PRs[1] != want[1] {
-		t.Fatalf("prs after watermark update: got %+v, want %+v", reparsed.PRs, want)
-	}
-	if len(j.PRs) != 2 || j.PRs[0] != want[0] || j.PRs[1] != want[1] {
-		t.Fatalf("j.PRs not updated: got %+v, want %+v", j.PRs, want)
-	}
+	check("stored prs after watermark update", LoadJobBySlug("x").PRs)
+	check("j.PRs after watermark update", j.PRs)
 
-	// URL no longer on disk (simulating a concurrent drop): no-op, no error,
-	// and the file is left byte-for-byte as read.
-	before, _ := os.ReadFile(path)
+	// URL no longer recorded (simulating a concurrent drop): no-op, no error,
+	// and nothing is resurrected.
 	if err := updatePRWatermark(j, "https://x/pull/999", "2024-03-01T00:00:00Z", "sha2", "clean"); err != nil {
 		t.Fatal(err)
 	}
-	after, _ := os.ReadFile(path)
-	if string(before) != string(after) {
-		t.Fatalf("unknown-URL update touched the file:\nbefore: %s\nafter:  %s", before, after)
-	}
+	check("stored prs after unknown-URL update", LoadJobBySlug("x").PRs)
 }
 
 func TestParseJobColor(t *testing.T) {

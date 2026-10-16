@@ -5,8 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"os"
-	"path/filepath"
 	"strings"
 
 	"kraken/internal/core"
@@ -45,29 +43,20 @@ func editableJob(j *jobs.Job) bool {
 	return !j.Started() || j.State == "done"
 }
 
-// --- store-mode support: jobedit.go's endpoints operate on real files in
-// file mode (unchanged below) and on the store row's frontmatter-equivalent
-// + body in store mode. The optimistic-lock token stays the wire field
-// "mtime" (a number, per the iOS wire-compat note) either way — in store
-// mode it carries the row's rev instead of a file mtime, so a client never
-// needs to know which mode it's talking to. ---
+// --- the editor's endpoints operate on the job's store row, presented as
+// its frontmatter-equivalent + body. The optimistic-lock token keeps the
+// wire field name "mtime" (a number, per the iOS wire-compat note) and
+// carries the row's rev. ---
 
 // jobEditMTime is the optimistic-lock token an editor endpoint hands back:
-// the store row's rev in store mode, the file's mtime-millis (jobMTime) in
-// file mode. j.File is empty for a store-backed Job (jobFromStoreRow never
-// sets it), so this must branch rather than stat an empty path.
+// the store row's rev.
 func jobEditMTime(j *jobs.Job) int64 {
-	if jobs.ActiveStore() != nil {
-		return j.Rev
-	}
-	fi, _ := os.Stat(j.File)
-	return jobMTime(fi)
+	return j.Rev
 }
 
-// composeRawJobContent renders a store-backed job's fields back into the
-// exact canonical frontmatter+body text a file-mode job file would hold —
-// reusing serializeJobFile (the form-save renderer) so raw view/edit gets
-// the identical text shape regardless of storage mode.
+// composeRawJobContent renders a job's fields back into canonical
+// frontmatter+body text — reusing serializeJobFile (the form-save renderer)
+// so raw view/edit and the form save produce the identical text shape.
 func composeRawJobContent(j *jobs.Job) string {
 	spec, logSection := splitBodyLog(j.Body)
 	fields := jobFormFields{
@@ -80,14 +69,13 @@ func composeRawJobContent(j *jobs.Job) string {
 
 // jobFieldsFromParsed converts a jobs.ParseJob result into the fields map
 // store.UpdateJobFields expects (jobFieldColumns' allowlist) — the raw
-// save's store-mode path, mirroring the raw file save's "whatever the user
-// submitted overwrites the whole record" semantics field-for-field.
+// save's field map, with "whatever the user submitted overwrites the whole
+// record" semantics field-for-field.
 //
 // "slug" is deliberately NOT in this map. A slug is the job's identity — the
-// cell dir, the tmux session, the branch family, the pluto artifact prefix and
-// every peer job's prereq reference are all derived from it — so moving it is
-// POST /api/job/rename's whole job (jobrename.go), gates and follow-through
-// included. Writing it here instead moved the column and nothing else, which
+// cell dir, the tmux session and the branch family are all derived from it —
+// so moving it is POST /api/job/rename's whole job (jobrename.go), gates and
+// follow-through included. Writing it here instead moved the column and nothing else, which
 // is why the raw save now refuses a changed job: line outright rather than
 // silently dropping it: a save that keeps the old name while the editor shows
 // the new one is the same lie in the other direction.
@@ -108,14 +96,14 @@ func jobFieldsFromParsed(p *jobs.Job) map[string]any {
 // L10's store.SaveJobEdit — one atomic transaction covering both, replacing
 // the old separate-calls sequence of UpdateJobFields and a syncStorePRs loop
 // of UpsertPR/RemovePR calls, each of which used to commit on its own) to a
-// store-backed job with optimistic locking mirroring the file-mode mtime
-// contract: mtime==0 or force==true skips the conflict check, retrying
+// store-backed job with optimistic locking on the row's rev: mtime==0 or
+// force==true skips the conflict check, retrying
 // once against the row's freshly-fetched rev if the first attempt (using
 // j's already-loaded rev) hits a genuine race — the same one-retry shape
 // store-backed WriteJobFields uses for named-field patches (jobs/store.go).
 // Otherwise a mismatch against j's loaded rev refuses immediately, before
 // ever touching the DB, with conflict=true so the caller can return the
-// same refusal body the file-mode mtime mismatch produces.
+// editor's 409 refusal body.
 func saveJobEditWithLock(
 	st *store.Store, j *jobs.Job, mtimeTok int64, force bool,
 	fields map[string]any,
@@ -155,35 +143,22 @@ func saveJobEditWithLock(
 
 // --- job authoring (draft + spec directly in the browser) ---
 
-// webJobRaw returns a job file's full content + mtime (the editor's load and
-// its optimistic-lock token).
+// webJobRaw returns a job's full text + optimistic-lock token (the editor's
+// load). With no store wired LoadJobs is empty, so the lookup 404s.
 func webJobRaw(w http.ResponseWriter, r *http.Request) {
 	j := jobs.JobBySlug(jobs.LoadJobs(), r.URL.Query().Get("slug"))
 	if j == nil {
 		webJSON(w, http.StatusNotFound, map[string]string{"error": "no such job"})
 		return
 	}
-	if jobs.ActiveStore() != nil {
-		webJSON(w, http.StatusOK, map[string]any{
-			"slug": j.Slug, "content": composeRawJobContent(j), "mtime": jobEditMTime(j),
-			"editable": editableJob(j),
-		})
-		return
-	}
-	data, err := os.ReadFile(j.File)
-	if err != nil {
-		webJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
-		return
-	}
-	fi, _ := os.Stat(j.File)
 	webJSON(w, http.StatusOK, map[string]any{
-		"slug": j.Slug, "content": string(data), "mtime": jobMTime(fi),
+		"slug": j.Slug, "content": composeRawJobContent(j), "mtime": jobEditMTime(j),
 		"editable": editableJob(j),
 	})
 }
 
-// webJobCreate makes a fresh <slug>.job.md from the template — the browser
-// twin of typing {{slug}} in a pluto note. Returns the content for editing.
+// webJobCreate makes a fresh job row from the template. Returns the content
+// for editing. Jobs live only in the store, so with none wired it refuses.
 func webJobCreate(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		webJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "POST only"})
@@ -199,81 +174,66 @@ func webJobCreate(w http.ResponseWriter, r *http.Request) {
 		webJSON(w, http.StatusBadRequest, map[string]string{"error": "slug must contain letters or digits"})
 		return
 	}
-	if st := jobs.ActiveStore(); st != nil {
-		if jobs.JobBySlug(jobs.LoadJobs(), slug) != nil {
-			webJSON(w, http.StatusConflict, map[string]string{"error": slug + " already exists"})
-			return
-		}
-		// L-nit: the row is created from jobs.JobTemplate(slug) PARSED, not a
-		// separately hand-typed store.Job literal — the file-mode create path
-		// below writes JobTemplate's full text straight to disk, so a job
-		// abandoned right after creation (never actually saved) leaves that
-		// exact template behind, comments included, on next raw-view/edit.
-		// Deriving the row from the same template text is how the store path
-		// matches that: a second hardcoded "repo monolith, solo false"
-		// literal here was a duplicate source of truth that could silently
-		// drift from JobTemplate's own defaults.
-		template := jobs.JobTemplate(slug)
-		parsed := jobs.ParseJob(slug+jobs.JobSuffix, []byte(template))
-		if _, err := st.CreateJob(&store.Job{
-			Slug: slug, Repo: parsed.Repo, Base: parsed.Base,
-			Solo: parsed.Solo, Model: parsed.Model,
-			Color: parsed.Color, Agent: parsed.Agent, Body: parsed.Body,
-		}); err != nil {
-			// ErrSlugTaken is a name clash the caller can fix by typing a
-			// different one, so it is a 409 like the pre-check above and never
-			// the generic 500. The pre-check does not cover it: it tests only
-			// ACTIVE slugs, while CreateJob also refuses an active job's FORMER
-			// slug (the rename reservation, store/jobs.go) — a name no board
-			// client can see, which is exactly why the refusal has to say so
-			// rather than read as a server fault.
-			if errors.Is(err, store.ErrSlugTaken) {
-				webJSON(w, http.StatusConflict, map[string]string{
-					"error": slug + " is taken — an active job already uses that name or reserved it as a former name by being renamed away from it",
-				})
-				return
-			}
-			webJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
-			return
-		}
-		j := jobs.JobBySlug(jobs.LoadJobs(), slug)
-		if j == nil {
-			webJSON(w, http.StatusInternalServerError, map[string]string{"error": "job created but could not be reloaded"})
-			return
-		}
-		webBoardCache.invalidate()
-		// composeRawJobContent renders the CANONICAL (comment-free)
-		// frontmatter — fine for an existing job's raw view, but it drops the
-		// annotated skeleton's authoring guidance (field explanations, valid
-		// choices, examples) that file mode's fresh JobTemplate gives a brand
-		// new job. Returning the template verbatim here matches file mode's
-		// UX exactly; the row's own defaults (repo monolith, ...) already
-		// agree with what the template documents, and the first real
-		// save parses whatever the user submits same as file mode always has.
-		webJSON(w, http.StatusOK, map[string]any{
-			"slug": slug, "content": jobs.JobTemplate(slug), "mtime": jobEditMTime(j), "editable": true,
-		})
+	st := jobs.ActiveStore()
+	if st == nil {
+		webJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "no job store wired — jobs are created through kraken serve"})
 		return
 	}
-	path := filepath.Join(jobs.PlutoDir(), slug+jobs.JobSuffix)
-	if _, err := os.Stat(path); err == nil {
+	if jobs.JobBySlug(jobs.LoadJobs(), slug) != nil {
 		webJSON(w, http.StatusConflict, map[string]string{"error": slug + " already exists"})
 		return
 	}
-	content := jobs.JobTemplate(slug)
-	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+	// L-nit: the row is created from jobs.JobTemplate(slug) PARSED, not a
+	// separately hand-typed store.Job literal, so the row's defaults are
+	// exactly what the template documents: a second hardcoded literal here
+	// was a duplicate source of truth that could silently drift from
+	// JobTemplate's own defaults.
+	template := jobs.JobTemplate(slug)
+	parsed := jobs.ParseJob(slug+jobs.JobSuffix, []byte(template))
+	if _, err := st.CreateJob(&store.Job{
+		Slug: slug, Repo: parsed.Repo, Base: parsed.Base,
+		Solo: parsed.Solo, Model: parsed.Model,
+		Color: parsed.Color, Agent: parsed.Agent, Body: parsed.Body,
+	}); err != nil {
+		// ErrSlugTaken is a name clash the caller can fix by typing a
+		// different one, so it is a 409 like the pre-check above and never
+		// the generic 500. The pre-check does not cover it: it tests only
+		// ACTIVE slugs, while CreateJob also refuses an active job's FORMER
+		// slug (the rename reservation, store/jobs.go) — a name no board
+		// client can see, which is exactly why the refusal has to say so
+		// rather than read as a server fault.
+		if errors.Is(err, store.ErrSlugTaken) {
+			webJSON(w, http.StatusConflict, map[string]string{
+				"error": slug + " is taken — an active job already uses that name or reserved it as a former name by being renamed away from it",
+			})
+			return
+		}
 		webJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
-	fi, _ := os.Stat(path)
+	j := jobs.JobBySlug(jobs.LoadJobs(), slug)
+	if j == nil {
+		webJSON(w, http.StatusInternalServerError, map[string]string{"error": "job created but could not be reloaded"})
+		return
+	}
 	webBoardCache.invalidate()
-	webJSON(w, http.StatusOK, map[string]any{"slug": slug, "content": content, "mtime": jobMTime(fi), "editable": true})
+	// composeRawJobContent renders the CANONICAL (comment-free) frontmatter —
+	// fine for an existing job's raw view, but it drops the annotated
+	// skeleton's authoring guidance (field explanations, valid choices,
+	// examples) a brand new job should open with. So the template goes back
+	// verbatim; the row's own defaults already agree with what it documents
+	// (they were parsed from it above), and the first real save parses
+	// whatever the user submits.
+	webJSON(w, http.StatusOK, map[string]any{
+		"slug": slug, "content": jobs.JobTemplate(slug), "mtime": jobEditMTime(j), "editable": true,
+	})
 }
 
-// webJobSave writes an edited job file. Optimistic lock: the save carries the
-// mtime the editor loaded, and a mismatch means someone (nvim, kraken, another
-// tab) wrote meanwhile — refused rather than clobbered. Unparseable content
-// still saves (drafts may be mid-thought) but the parse error rides back.
+// webJobSave writes an edited job's raw text to its row. Optimistic lock:
+// the save carries the token (the row's rev) the editor loaded, and a
+// mismatch means someone (kraken, another tab) wrote meanwhile — refused
+// rather than clobbered. Unparseable content still saves (drafts may be
+// mid-thought) but the parse error rides back.
 func webJobSave(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		webJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "POST only"})
@@ -294,88 +254,67 @@ func webJobSave(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !editableJob(j) {
-		webJSON(w, http.StatusConflict, map[string]string{"error": j.Slug + " has a cell in flight — its file belongs to the crew right now"})
+		webJSON(w, http.StatusConflict, map[string]string{"error": j.Slug + " has a cell in flight — the job belongs to the crew right now"})
 		return
 	}
-	// One parse for both storage modes, hoisted above the branch because the
-	// job: line is checked before anything is written. ParseJob falls back to
-	// the NAME it is given when the job: line is absent or empty, and the name
-	// here is this job's own slug — so an untouched or blank job: line yields
-	// parsed.Slug == j.Slug and saves exactly as it always did. A line that
-	// says something else is the only case this catches.
+	// One parse, done before anything is written because the job: line is
+	// checked first. ParseJob falls back to the NAME it is given when the
+	// job: line is absent or empty, and the name here is this job's own slug
+	// — so an untouched or blank job: line yields parsed.Slug == j.Slug and
+	// saves exactly as it always did. A line that says something else is the
+	// only case this catches.
 	parsed := jobs.ParseJob(j.Slug+jobs.JobSuffix, []byte(req.Content))
 	if parsed.Slug != j.Slug {
 		// Refused rather than applied: a slug is identity (cell dir, tmux
-		// session, branch family, pluto prefix, every peer's prereq
-		// reference), and the raw save writes columns. It is refused rather
-		// than IGNORED for the same reason — a save that quietly keeps the old
-		// name while the editor shows the new one is a lie the next reader
-		// inherits. The echo is bounded (jobcolor.go's rule): the value comes
+		// session, branch family), and the raw save writes columns. It is
+		// refused rather than IGNORED for the same reason — a save that
+		// quietly keeps the old name while the editor shows the new one is a
+		// lie the next reader inherits. The echo is bounded (jobcolor.go's rule): the value comes
 		// from the body, so an unbounded quote would let a client choose the
 		// size of the response.
 		webJSON(w, http.StatusConflict, map[string]string{
 			"error": "job: line says " + core.TruncateOneLine(parsed.Slug, 40) + " but this job is " +
-				j.Slug + " — rename it with POST /api/job/rename, which moves the cell, the branch family and every prereq reference with it",
+				j.Slug + " — rename it with POST /api/job/rename, which moves the cell and the branch family with it",
 		})
 		return
 	}
-	if st := jobs.ActiveStore(); st != nil {
-		// unparseable content still saves (drafts may be mid-thought) but,
-		// mirroring file mode's contract exactly, only the body changes —
-		// jobFieldsFromParsed(parsed) would otherwise write whatever
-		// ParseJob's best-effort extraction pulled from garbled text
-		// (defaults like empty repo, solo false, empty spec, ...) straight
-		// over the row's real frontmatter columns. PRs stay untouched too:
-		// parsed.PRs is equally untrustworthy when Err is set.
-		fields := jobFieldsFromParsed(parsed)
-		if parsed.Err != "" {
-			// L6: "err" rides along even on the unparseable branch — that's
-			// the whole point of the column: pin this job to draft
-			// (deriveState) until a later save parses clean and clears it.
-			fields = map[string]any{"body": req.Content, "err": parsed.Err}
-		}
-		// L10: PRs sync only when the parse succeeded — an unparseable save
-		// leaves them exactly as they were, same as file mode's contract
-		// (parsed.PRs is equally untrustworthy when Err is set). SaveJobEdit
-		// skips that pass entirely when told to, rather than replacing it
-		// with a same-value no-op, so an unparseable save issues no writes
-		// beyond the field update.
-		syncChildren := parsed.Err == ""
-		newRev, conflict, err := saveJobEditWithLock(st, j, int64(req.MTime), false,
-			fields, parsed.PRs, syncChildren)
-		if conflict {
-			webJSON(w, http.StatusConflict, map[string]string{"error": "file changed on disk since you opened it — reload the editor"})
-			return
-		}
-		// There is no ErrSlugTaken arm here any more: this save cannot move a
-		// slug at all (jobFieldsFromParsed carries no "slug", and a job: line
-		// that differs was refused above), so the store's unique-index backstop
-		// has nothing here to fire on. A collision is /api/job/rename's and
-		// /api/job/create's refusal now.
-		if err != nil {
-			webJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
-			return
-		}
-		webBoardCache.invalidate()
-		webJSON(w, http.StatusOK, map[string]any{"ok": true, "mtime": newRev, "warn": parsed.Err})
+	// a job resolved above, so a store is wired (LoadJobs is empty without one)
+	st := jobs.ActiveStore()
+	// unparseable content still saves (drafts may be mid-thought) but only
+	// the body changes — jobFieldsFromParsed(parsed) would otherwise write
+	// whatever ParseJob's best-effort extraction pulled from garbled text
+	// (defaults like empty repo, solo false, empty spec, ...) straight over
+	// the row's real frontmatter columns. PRs stay untouched too: parsed.PRs
+	// is equally untrustworthy when Err is set.
+	fields := jobFieldsFromParsed(parsed)
+	if parsed.Err != "" {
+		// L6: "err" rides along even on the unparseable branch — that's the
+		// whole point of the column: pin this job to draft (deriveState)
+		// until a later save parses clean and clears it.
+		fields = map[string]any{"body": req.Content, "err": parsed.Err}
+	}
+	// L10: PRs sync only when the parse succeeded — an unparseable save
+	// leaves them exactly as they were. SaveJobEdit skips that pass entirely
+	// when told to, rather than replacing it with a same-value no-op, so an
+	// unparseable save issues no writes beyond the field update.
+	syncChildren := parsed.Err == ""
+	newRev, conflict, err := saveJobEditWithLock(st, j, int64(req.MTime), false,
+		fields, parsed.PRs, syncChildren)
+	if conflict {
+		webJSON(w, http.StatusConflict, map[string]string{"error": "job changed since you opened it — reload the editor"})
 		return
 	}
-	if fi, err := os.Stat(j.File); err == nil && req.MTime != 0 && jobMTime(fi) != int64(req.MTime) {
-		webJSON(w, http.StatusConflict, map[string]string{"error": "file changed on disk since you opened it — reload the editor"})
-		return
-	}
-	if err := util.AtomicWrite(j.File, req.Content); err != nil {
+	// There is no ErrSlugTaken arm here: this save cannot move a slug at all
+	// (jobFieldsFromParsed carries no "slug", and a job: line that differs
+	// was refused above), so the store's unique-index backstop has nothing
+	// here to fire on. A collision is /api/job/rename's and
+	// /api/job/create's refusal.
+	if err != nil {
 		webJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
-	fi, _ := os.Stat(j.File)
-	// warn comes from the SAME parse the job: check above ran — one parse of
-	// one string, and the name it was given (j.Slug + the suffix) differs from
-	// this file's basename only for a file whose job: line renames it, which
-	// is now refused before reaching here. Err does not depend on the name at
-	// all.
 	webBoardCache.invalidate()
-	webJSON(w, http.StatusOK, map[string]any{"ok": true, "mtime": jobMTime(fi), "warn": parsed.Err})
+	webJSON(w, http.StatusOK, map[string]any{"ok": true, "mtime": newRev, "warn": parsed.Err})
 }
 
 // --- structured spec editor: frontmatter as a form, body as prose ---
@@ -412,11 +351,12 @@ type jobFormFields struct {
 	// still served on the form GET so a client can show the current pick.
 	Color string `json:"color"`
 	Spec  string `json:"spec"`
-	// MTime is unix-millis (see jobMTime), decoded via mtimeToken so a
-	// legacy client still sending the old string encoding round-trips too.
+	// MTime is the optimistic-lock token (the row's rev), decoded via
+	// mtimeToken so a legacy client still sending the old string encoding
+	// round-trips too.
 	MTime mtimeToken `json:"mtime"`
-	// Force skips the mtime conflict check: an explicit "overwrite what's on
-	// disk" from the editor after a conflict was surfaced, never a default.
+	// Force skips the lock check: an explicit "overwrite what's stored"
+	// from the editor after a conflict was surfaced, never a default.
 	Force bool `json:"force"`
 }
 
@@ -496,9 +436,9 @@ func serializeJobFile(f jobFormFields, state, outcome, session, teardown string,
 		b.WriteString("prs:\n")
 		for _, p := range prs {
 			fmt.Fprintf(&b, "  - url: %s\n    state: %s\n", jobs.OneLine(p.URL), jobs.OneLine(p.State))
-			// watermarks are omitted (not even blank) when unset — same
-			// conditional shape as jobs.patchPRs, so a form save round-trips
-			// a record watchPRs hasn't touched yet byte-for-byte compatibly
+			// watermarks are omitted (not even blank) when unset, so a
+			// record watchPRs hasn't touched yet renders exactly as it did
+			// before watermarks existed
 			if p.LastCommentAt != "" {
 				fmt.Fprintf(&b, "    last-comment-at: %s\n", jobs.OneLine(p.LastCommentAt))
 			}
@@ -522,8 +462,9 @@ func serializeJobFile(f jobFormFields, state, outcome, session, teardown string,
 }
 
 // webJobSaveForm writes an edited form back. Kraken-owned pieces (state,
-// outcome, mid-run log) are re-read fresh from disk and preserved — the form
-// can't touch them by construction. Same optimistic mtime lock as raw save.
+// outcome, mid-run log) are taken from the freshly loaded row and preserved —
+// the form can't touch them by construction. Same optimistic lock as raw
+// save.
 func webJobSaveForm(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		webJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "POST only"})
@@ -549,10 +490,10 @@ func webJobSaveForm(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !editableJob(j) {
-		webJSON(w, http.StatusConflict, map[string]string{"error": j.Slug + " has a cell in flight — its file belongs to the crew right now"})
+		webJSON(w, http.StatusConflict, map[string]string{"error": j.Slug + " has a cell in flight — the job belongs to the crew right now"})
 		return
 	}
-	req.Slug = j.Slug // slug is immutable here (the filename in file mode, the row identity in store mode)
+	req.Slug = j.Slug // slug is immutable here (the row identity; /api/job/rename moves it)
 	// Colour is NOT a form field: POST /api/job/color owns it (webJobColor
 	// explains why). The form still RENDERS it — serializeJobFile below
 	// emits the color: line so the raw view keeps showing it — so it is
@@ -561,62 +502,43 @@ func webJobSaveForm(w http.ResponseWriter, r *http.Request) {
 	// field: a full-replace body with no "color" key decodes to "" and would
 	// otherwise silently wipe the colour with nothing to restore it from.
 	req.Color = j.Color
-	if st := jobs.ActiveStore(); st != nil {
-		_, logSection := splitBodyLog(j.Body)
-		body := strings.TrimSpace(req.Spec)
-		if trimmed := strings.TrimRight(logSection, "\n"); trimmed != "" {
-			if body != "" {
-				body += "\n\n"
-			}
-			body += trimmed
+	// a job resolved above, so a store is wired (LoadJobs is empty without one)
+	st := jobs.ActiveStore()
+	_, logSection := splitBodyLog(j.Body)
+	body := strings.TrimSpace(req.Spec)
+	if trimmed := strings.TrimRight(logSection, "\n"); trimmed != "" {
+		if body != "" {
+			body += "\n\n"
 		}
-		// L6: render what these fields would look like as raw
-		// job-file text and parse it back BEFORE writing, both to surface
-		// any error as warn (unchanged from before) and, now, to persist
-		// that same parsed.Err into the row's err column (L6) — a
-		// form-built save that still fails to round-trip (e.g. an
-		// OneLine-mangled edge case) must pin to draft exactly like an
-		// unparseable raw save does, not silently report warn while saving
-		// clean.
-		content := serializeJobFile(req, j.State, j.Outcome, j.Session, j.Teardown, j.Run, j.PRs, logSection)
-		parsed := jobs.ParseJob(j.Slug+jobs.JobSuffix, []byte(content))
-		fields := map[string]any{
-			"repo": req.Repo, "base": req.Base,
-			"solo": req.Solo, "model": req.Model, "agent": req.Agent,
-			"body": body, "err": parsed.Err,
-		}
-		// L10: form saves never touch PRs (they're not part of
-		// jobFormFields by construction — same as file mode).
-		newRev, conflict, err := saveJobEditWithLock(st, j, int64(req.MTime), req.Force,
-			fields, nil, false)
-		if conflict {
-			webJSON(w, http.StatusConflict, map[string]any{
-				"error": "file changed on disk since you opened it", "conflict": true,
-			})
-			return
-		}
-		if err != nil {
-			webJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
-			return
-		}
-		webBoardCache.invalidate()
-		webJSON(w, http.StatusOK, map[string]any{"ok": true, "mtime": newRev, "warn": parsed.Err})
-		return
+		body += trimmed
 	}
-	if fi, err := os.Stat(j.File); err == nil && !req.Force && req.MTime != 0 && jobMTime(fi) != int64(req.MTime) {
+	// L6: render what these fields would look like as raw job text and parse
+	// it back BEFORE writing, both to surface any error as warn and to
+	// persist that same parsed.Err into the row's err column — a form-built
+	// save that still fails to round-trip (e.g. an OneLine-mangled edge
+	// case) must pin to draft exactly like an unparseable raw save does, not
+	// silently report warn while saving clean.
+	content := serializeJobFile(req, j.State, j.Outcome, j.Session, j.Teardown, j.Run, j.PRs, logSection)
+	parsed := jobs.ParseJob(j.Slug+jobs.JobSuffix, []byte(content))
+	fields := map[string]any{
+		"repo": req.Repo, "base": req.Base,
+		"solo": req.Solo, "model": req.Model, "agent": req.Agent,
+		"body": body, "err": parsed.Err,
+	}
+	// L10: form saves never touch PRs (they're not part of jobFormFields by
+	// construction).
+	newRev, conflict, err := saveJobEditWithLock(st, j, int64(req.MTime), req.Force,
+		fields, nil, false)
+	if conflict {
 		webJSON(w, http.StatusConflict, map[string]any{
-			"error": "file changed on disk since you opened it", "conflict": true,
+			"error": "job changed since you opened it", "conflict": true,
 		})
 		return
 	}
-	_, logSection := splitBodyLog(j.Body)
-	content := serializeJobFile(req, j.State, j.Outcome, j.Session, j.Teardown, j.Run, j.PRs, logSection)
-	if err := util.AtomicWrite(j.File, content); err != nil {
+	if err != nil {
 		webJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
-	fi, _ := os.Stat(j.File)
-	parsed := jobs.ParseJob(filepath.Base(j.File), []byte(content))
 	webBoardCache.invalidate()
-	webJSON(w, http.StatusOK, map[string]any{"ok": true, "mtime": jobMTime(fi), "warn": parsed.Err})
+	webJSON(w, http.StatusOK, map[string]any{"ok": true, "mtime": newRev, "warn": parsed.Err})
 }

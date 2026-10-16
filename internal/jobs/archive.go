@@ -7,7 +7,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"sort"
 	"strings"
 	"time"
 
@@ -28,24 +27,12 @@ import (
 // numbered name (ArchivedName) is the identity every archive ROW action uses
 // — two archived jobs can share a Slug, never an ArchivedName.
 //
-// Preserved pluto artifacts (still plain files on disk — Q12) are named for
-// the job's cell instead: <slug>-<id>.<name>, the same prefix they carried
-// while the job was active, so archiving MOVES them without renaming. The id
-// is what keeps two generations of one slug apart, which is what the archive
-// numbering used to do for files and now does only for rows. Every reader and
-// writer of that prefix goes through PlutoArtifactPrefix — they must agree,
-// or a job's artifacts silently vanish from its card (and, worse, survive its
-// delete forever).
-
-func ArchiveDir() string {
-	return filepath.Join(PlutoDir(), "archive")
-}
+// A job's artifacts are rows in the artifacts table keyed on its immutable
+// id, so archive, unarchive and delete move no files: the rows stay attached
+// to the job wherever its own row goes.
 
 // LoadArchivedJobs returns every archived job, store-backed. Callers all run
-// inside kraken serve, where a store is always wired (`kraken import`'s
-// one-shot migration reads archive-dir files directly via its own
-// readArchivedJobFiles instead, since it runs before/without a live serve
-// process).
+// inside kraken serve, where a store is always wired.
 func LoadArchivedJobs() []*Job {
 	jobs, err := loadArchivedJobsFromStore(ActiveStore())
 	if err != nil {
@@ -68,70 +55,6 @@ func ArchivedJobByName(jobs []*Job, name string) *Job {
 	return nil
 }
 
-// moveSkip is one file movePrefixed did NOT move: where it still is, where it
-// was headed, and why it stayed.
-//
-// Src is the load-bearing field. Every caller's message tells a human about a
-// file that kept its old name, and that file is the SOURCE — reporting the
-// destination named the blocker instead, so acting on the sentence literally
-// meant deleting the wrong file while the stranded copy stayed stranded.
-//
-// Err separates the two skips, which are different problems with different
-// remedies and used to be indistinguishable: nil means the destination was
-// already occupied (a genuine name conflict — resolve it by hand), non-nil
-// means the rename itself failed (permissions, ENAMETOOLONG, a full disk) and
-// carries the reason that was previously discarded.
-type moveSkip struct {
-	Src, Dst string
-	Err      error
-}
-
-// Conflict reports whether this skip is a destination that already existed,
-// as opposed to a rename that failed. The two are worth telling apart at
-// every call site: a conflict is carl's to resolve, a failure is kraken's to
-// report with its cause.
-func (s moveSkip) Conflict() bool { return s.Err == nil }
-
-// String is the one rendering of a skip for a human, so the three callers
-// that log one cannot describe the same situation three ways.
-func (s moveSkip) String() string {
-	if s.Err != nil {
-		return fmt.Sprintf("%s (move to %s failed: %v)", s.Src, s.Dst, s.Err)
-	}
-	return fmt.Sprintf("%s (%s already exists)", s.Src, s.Dst)
-}
-
-// movePrefixed renames every non-dir file in fromDir named
-// fromPrefix.<rest> to toDir/toPrefix.<rest>, skipping job files (the job
-// file itself moves separately) and never overwriting: a conflicting
-// target leaves the source in place and reports it, since silently
-// clobbering either side would lose a deliverable.
-func movePrefixed(fromDir, fromPrefix, toDir, toPrefix string) (moved []string, skipped []moveSkip) {
-	entries, err := os.ReadDir(fromDir)
-	if err != nil {
-		return nil, nil
-	}
-	for _, e := range entries {
-		name := e.Name()
-		if e.IsDir() || !strings.HasPrefix(name, fromPrefix+".") || strings.HasSuffix(name, JobSuffix) {
-			continue
-		}
-		rest := strings.TrimPrefix(name, fromPrefix+".")
-		src := filepath.Join(fromDir, name)
-		dst := filepath.Join(toDir, toPrefix+"."+rest)
-		if _, err := os.Stat(dst); err == nil {
-			skipped = append(skipped, moveSkip{Src: src, Dst: dst})
-			continue
-		}
-		if err := os.Rename(src, dst); err != nil {
-			skipped = append(skipped, moveSkip{Src: src, Dst: dst, Err: err})
-			continue
-		}
-		moved = append(moved, dst)
-	}
-	return moved, skipped
-}
-
 // autoArchivable reports whether the daemon should sweep j into the archive
 // on its own: done, with a real ModTime, older than autoArchiveAfter. An
 // unparseable job (Err set) still archives on this rule — done wins over a
@@ -140,10 +63,11 @@ func autoArchivable(j *Job, now time.Time) bool {
 	return j.State == "done" && !j.ModTime.IsZero() && now.Sub(j.ModTime) > autoArchiveAfter
 }
 
-// ArchiveJob moves an active job (store row + preserved pluto artifacts)
-// into the archive. Only a job with no cell in flight can be archived — same
-// rule as editableJob: never started, or done. A working/blocked job must
-// be killed first (kill returns it to draft, which then archives cleanly).
+// ArchiveJob moves an active job's store row (and with it, by id, its
+// artifact rows) into the archive. Only a job with no cell in flight can be
+// archived — same rule as editableJob: never started, or done. A
+// working/blocked job must be killed first (kill returns the job to draft,
+// which then archives cleanly).
 // Returns the archived name (numbered when the slug was already taken in
 // the archive).
 func ArchiveJob(j *Job, live map[string]bool) (string, error) {
@@ -151,11 +75,11 @@ func ArchiveJob(j *Job, live map[string]bool) (string, error) {
 		return "", fmt.Errorf("%s has a cell in flight (state %s) — kill it first (kill returns the job to draft), then archive", j.Slug, j.State)
 	}
 	// FindCellSession rather than the current name alone. Archiving is
-	// destructive — it removes every uploads dir, moves the preserved
-	// artifacts into archive/, and frees the slug — and a renamed cell whose
-	// tmux convergence failed is live under an OLDER session name, so the
-	// current-name read walks this refusal past a running zeus and leaves it
-	// in a worktree belonging to a job no longer in the active namespace.
+	// destructive — it removes every uploads dir and frees the slug — and a
+	// renamed cell whose tmux convergence failed is live under an OLDER
+	// session name, so the current-name read walks this refusal past a
+	// running zeus and leaves it in a worktree belonging to a job no longer
+	// in the active namespace.
 	if sess, ok := FindCellSession(j, live); ok {
 		return "", fmt.Errorf("%s still has a live cell session %s — kill it first", j.Slug, sess)
 	}
@@ -186,41 +110,6 @@ func ArchiveJob(j *Job, live map[string]bool) (string, error) {
 	for _, s := range append([]string{j.Slug}, j.FormerSlugs...) {
 		if dir := UploadsDir(s, j.ID); dir != "" {
 			os.RemoveAll(dir)
-		}
-	}
-	// Preserved pluto artifacts are still real files even though the job
-	// row is store-backed (Q12 — live cells serve straight off disk, and
-	// api/board.go lists preserved copies from the pluto/archive dirs), so
-	// they still need moving into the archive dir here.
-	//
-	// The prefix is <slug>-<id> on BOTH sides, so this is a plain move rather
-	// than a rename: the id already disambiguates two generations of one
-	// name, which is what the archive's -2/-3 numbering used to be for. The
-	// numbered archived_name still exists as the archived job's identity in
-	// the jobs table; it just no longer has to name files.
-	if err := os.MkdirAll(ArchiveDir(), 0o755); err != nil {
-		fmt.Fprintf(os.Stderr, "kraken: mkdir %s: %v\n", ArchiveDir(), err)
-	} else {
-		prefix := cellName(j)
-		_, skipped := movePrefixed(PlutoDir(), prefix, ArchiveDir(), prefix)
-		// ALSO sweep the pre-cutover bare-slug prefix, renaming onto the id
-		// form as it moves. Without this there is a window that strands
-		// artifacts permanently: every copy preserved before the id landed
-		// carries the bare slug, so the move above matches nothing, and once
-		// the row is archived `kraken cutover` can never recover the files —
-		// it builds its PlutoDir prefix map from ACTIVE jobs, and this job is
-		// no longer one. The window is not hypothetical: autoArchivePass
-		// sweeps any done job older than 24h on its own, so it opens the
-		// moment this ships and closes only when cutover is run.
-		if legacy := util.Slugify(j.Slug); legacy != "" && legacy != prefix {
-			_, legacySkipped := movePrefixed(PlutoDir(), legacy, ArchiveDir(), prefix)
-			skipped = append(skipped, legacySkipped...)
-		}
-		for _, s := range skipped {
-			// s.String() names the file that STAYED and why — the old form
-			// printed the destination, which is the blocker rather than the
-			// stranded copy, and could not say which of the two skips it was.
-			fmt.Fprintf(os.Stderr, "kraken: artifact not moved: %s\n", s)
 		}
 	}
 	j.ArchivedName = name
@@ -406,17 +295,6 @@ func UnarchiveJob(a *Job) error {
 		}
 		return fmt.Errorf("unarchive %s: %w", a.ArchivedName, err)
 	}
-	// Move the preserved artifact file copies back — they never lived in
-	// the DB to begin with. The prefix is <slug>-<id> on BOTH sides, exactly
-	// as ArchiveJob wrote it: archiving no longer renames these files to the
-	// numbered ArchivedName, so unarchiving must not rename them back off it.
-	// Using ArchivedName here would match nothing and strand every artifact
-	// in the archive dir while its job returned to the active board.
-	prefix := cellName(a)
-	_, skipped := movePrefixed(ArchiveDir(), prefix, PlutoDir(), prefix)
-	for _, s := range skipped {
-		fmt.Fprintf(os.Stderr, "kraken: artifact not moved: %s\n", s)
-	}
 	return nil
 }
 
@@ -451,62 +329,12 @@ func unarchiveTakenReason(slug string) string {
 	return fmt.Sprintf("slug %s is taken by an active job", slug)
 }
 
-// DeleteArchivedJob permanently removes an archived job: its store row and
-// its archived artifact copies. Only archived jobs can be hard-deleted —
-// anything active goes through archive first, so deletion is always the
-// reversible-then-irreversible two-step.
+// DeleteArchivedJob permanently removes an archived job's store row. Only
+// archived jobs can be hard-deleted — anything active goes through archive
+// first, so deletion is always the reversible-then-irreversible two-step.
 func DeleteArchivedJob(a *Job) error {
 	if err := ActiveStore().DeleteJob(a.ID); err != nil {
 		return fmt.Errorf("delete %s: %w", a.ArchivedName, err)
 	}
-	// The archived artifact FILE copies too — api/board.go lists them
-	// straight from ArchiveDir(), so a store-only delete would leave
-	// orphaned files behind forever.
-	// The prefix is the job's <slug>-<id>., NOT its ArchivedName: ArchiveJob
-	// moves the files across under that name and never renames them to the
-	// numbered archive name any more. Passing ArchivedName here would match
-	// nothing and silently orphan every one of this job's archived files.
-	removeArchivedArtifactFiles(PlutoArtifactPrefix(a))
 	return nil
-}
-
-// removeArchivedArtifactFiles deletes every preserved artifact copy under
-// ArchiveDir() carrying the given prefix (which already ends in "." — see
-// PlutoArtifactPrefix). The store row itself is deleted separately by the
-// caller; this only cleans up the plain artifact files that ride alongside
-// it. Missing dir or an individual removal failure is logged, not fatal —
-// same best-effort contract as movePrefixed's skipped list.
-func removeArchivedArtifactFiles(prefix string) {
-	entries, err := os.ReadDir(ArchiveDir())
-	if err != nil {
-		return
-	}
-	for _, e := range entries {
-		name := e.Name()
-		if e.IsDir() || !strings.HasPrefix(name, prefix) || strings.HasSuffix(name, JobSuffix) {
-			continue
-		}
-		if err := os.Remove(filepath.Join(ArchiveDir(), name)); err != nil {
-			fmt.Fprintf(os.Stderr, "kraken: artifact not deleted: %v\n", err)
-		}
-	}
-}
-
-// ArchivedArtifactPaths lists an archived job's artifact copies (absolute
-// paths), the archive twin of AllArtifactPaths.
-func ArchivedArtifactPaths(a *Job) []string {
-	entries, err := os.ReadDir(ArchiveDir())
-	if err != nil {
-		return nil
-	}
-	var out []string
-	for _, e := range entries {
-		name := e.Name()
-		if e.IsDir() || !strings.HasPrefix(name, PlutoArtifactPrefix(a)) || strings.HasSuffix(name, JobSuffix) {
-			continue
-		}
-		out = append(out, filepath.Join(ArchiveDir(), name))
-	}
-	sort.Strings(out)
-	return out
 }

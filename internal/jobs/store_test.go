@@ -19,8 +19,7 @@ func useTestStore(t *testing.T) *store.Store {
 	t.Helper()
 	// Sandbox $HOME so any accidental file-path fallthrough (a
 	// code path that should have gone through ActiveStore but didn't) hits
-	// a throwaway temp dir instead of a developer's real ~/.kraken or
-	// ~/Documents/pluto.
+	// a throwaway temp dir instead of a developer's real ~/.kraken.
 	t.Setenv("HOME", t.TempDir())
 	st, err := store.Open(filepath.Join(t.TempDir(), "kraken.db"))
 	if err != nil {

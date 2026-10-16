@@ -20,13 +20,11 @@ import (
 // /api/pr-attach's new out-of-repo refusal. Written from the contract text
 // alone, before any implementation existed.
 
-// prEdgeFileWorld points HOME and KRAKEN_PLUTO_DIR at fresh temp dirs and
-// returns HOME.
+// prEdgeFileWorld points HOME at a fresh temp dir and returns it.
 func prEdgeFileWorld(t *testing.T) string {
 	t.Helper()
 	home := t.TempDir()
 	t.Setenv("HOME", home)
-	t.Setenv("KRAKEN_PLUTO_DIR", t.TempDir())
 	return home
 }
 
@@ -48,8 +46,8 @@ func prEdgeCheckout(t *testing.T, home, name, origin string) {
 	}
 }
 
-// prEdgeWriteJob writes a job file by hand with the given repo: line
-// (omitted entirely when repoLine is false).
+// prEdgeWriteJob stores a job from hand-written text with the given repo:
+// line (omitted entirely when repoLine is false).
 func prEdgeWriteJob(t *testing.T, slug, repo string, repoLine bool) {
 	t.Helper()
 	src := "---\njob: " + slug + "\n"
@@ -57,9 +55,7 @@ func prEdgeWriteJob(t *testing.T, slug, repo string, repoLine bool) {
 		src += "repo: " + repo + "\n"
 	}
 	src += "---\n\n# Spec\n"
-	if err := os.WriteFile(filepath.Join(jobs.PlutoDir(), slug+jobs.JobSuffix), []byte(src), 0o644); err != nil {
-		t.Fatal(err)
-	}
+	seedJobText(t, slug, src)
 }
 
 func prEdgePost(t *testing.T, slug, url string) *httptest.ResponseRecorder {

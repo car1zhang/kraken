@@ -125,7 +125,10 @@ func (m *viewerModel) buildJobLines() []viewLine {
 	head += util.Paint(true, util.Dim, fmt.Sprintf(" · cells %d", m.liveCells()))
 	lines = append(lines, viewLine{text: head, row: -1}, viewLine{row: -1})
 	if len(m.jrows) == 0 {
-		lines = append(lines, viewLine{text: "no jobs in " + jobs.PlutoDir() + " ({{name}} in a pluto note creates one)", row: -1})
+		// The viewer wires no store (only `kraken serve` does), and jobs live
+		// only in kraken.db, so this pane is empty outside serve — say where
+		// the jobs are rather than claiming there are none.
+		lines = append(lines, viewLine{text: "jobs are on the board (" + jobs.ServeBaseURL() + "); the viewer has no database", row: -1})
 		return lines
 	}
 
@@ -176,7 +179,7 @@ func (m *viewerModel) buildJobLines() []viewLine {
 			ageStr = util.Age(now.Sub(j.ModTime))
 		}
 		art := util.Paint(color, util.Dim, "-")
-		if n := len(jobs.AllArtifactPaths(j)); n > 0 {
+		if n := len(jobs.ListArtifacts(j)); n > 0 {
 			art = fmt.Sprintf("%d", n)
 		}
 		table = append(table, []string{
@@ -272,7 +275,9 @@ func (m *viewerModel) handleJobsKey(key string) (tea.Model, tea.Cmd) {
 		if j == nil {
 			return m, nil
 		}
-		arts := jobs.AllArtifactPaths(j)
+		// the live cell's files only: a torn-down job's artifacts are rows
+		// in kraken.db, with no file for `open` to hand an app
+		arts := jobs.ListArtifacts(j)
 		if len(arts) == 0 {
 			m.note, m.noteIsErr = "no artifacts for "+j.Slug, true
 			return m, nil

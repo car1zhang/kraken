@@ -412,6 +412,7 @@ export function App() {
         // that account's session/Fable bars; undefined (first paint, older
         // server, daemon down) simply draws none.
         usage={usage.data}
+        operator={board.board?.operator}
         // Both REQUIRED, deliberately: these replaced optional `artifactChips`
         // / `threadChips` slots that App never filled, which left the modal's
         // artifact list and its branch button rendering nothing at all. An
@@ -501,6 +502,7 @@ export function App() {
           setThread((t) => (t ? { slug: t.slug, tid } : t))
         }
         mutate={mutate}
+        operator={board.board?.operator}
       />
 
       {/* ◆ mind — once, over every view. A capture lands in a mind thread:

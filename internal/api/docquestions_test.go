@@ -1,8 +1,6 @@
 package api
 
 import (
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 
@@ -56,8 +54,8 @@ func TestJobQuestionsEmpty(t *testing.T) {
 }
 
 func TestJobQuestionsNoStore(t *testing.T) {
-	// no useTestStore: ActiveStore() is nil, mirroring a file-mode job (no
-	// question rows can exist without a store to hold them).
+	// no useTestStore: ActiveStore() is nil (no question rows can exist
+	// without a store to hold them).
 	j := &jobs.Job{Slug: "docq-nostore"}
 	if qs := jobQuestions(nil, j); qs != nil {
 		t.Fatalf("want nil with no store wired, got %+v", qs)
@@ -183,33 +181,5 @@ func TestWebAnswerDocQuestionUnknownJob(t *testing.T) {
 	useTestStore(t)
 	if err := webAnswerDocQuestion(webReq{Slug: "docq-no-such-job", ID: "Q1", Text: "x"}); err == nil {
 		t.Fatal("want an error for an unknown job")
-	}
-}
-
-// --- pluto flat-copy artifact listing: the questions.yaml exclusion is
-// gone, mirroring jobs.AllArtifactPaths' own removal of it (questions live
-// in kraken.db now, so a leftover *.questions.yaml file on disk is just
-// another ordinary preserved artifact, not a reserved name). ---
-
-func TestPlutoFlatArtifactsNoLongerExcludesQuestionsCopy(t *testing.T) {
-	t.Setenv("KRAKEN_PLUTO_DIR", t.TempDir())
-	j := &jobs.Job{Slug: "docq-artifacts"}
-	if err := os.MkdirAll(jobs.PlutoDir(), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(jobs.PlutoDir(), "docq-artifacts.explain.md"), []byte("doc"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(jobs.PlutoDir(), "docq-artifacts.questions.yaml"), []byte("stale legacy copy"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	arts := plutoFlatArtifacts(j)
-	names := map[string]bool{}
-	for _, a := range arts {
-		names[a.Name] = true
-	}
-	if len(arts) != 2 || !names["explain.md"] || !names["questions.yaml"] {
-		t.Fatalf("want both explain.md and questions.yaml listed (no more reserved-name exclusion), got %+v", arts)
 	}
 }

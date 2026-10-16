@@ -14,7 +14,7 @@ import (
 
 const (
 	edgeIrisStateHeading   = "## What you know about a job, and what you never add"
-	edgeIrisStateBlocked   = "`blocked` means the cell is waiting for carl at a gate"
+	edgeIrisStateBlocked   = "`blocked` means the cell is waiting for Ada at a gate"
 	edgeIrisStateBoardGet  = "kraken board get <slug>"
 	edgeIrisStateReport    = "You report; you never diagnose."
 	edgeIrisStateNoKnob    = "never name a knob, a threshold or a remedy you have not read in the code"
@@ -33,6 +33,7 @@ var edgeIrisStateRequired = []string{
 // TestEdgeIrisStateEachSubstringExactlyOnce: each of (a)-(e) appears EXACTLY
 // once — absent fails, and so does a duplicated paragraph.
 func TestEdgeIrisStateEachSubstringExactlyOnce(t *testing.T) {
+	t.Setenv("KRAKEN_OPERATOR", "Ada")
 	brief := irisBrief()
 	for _, want := range edgeIrisStateRequired {
 		if n := strings.Count(brief, want); n != 1 {
@@ -45,11 +46,12 @@ func TestEdgeIrisStateEachSubstringExactlyOnce(t *testing.T) {
 // backticks around `blocked`; a plain-text rendering of the same sentence
 // is not (b), and must not appear as a second copy of it.
 func TestEdgeIrisStateBlockedBackticksAreLiteral(t *testing.T) {
+	t.Setenv("KRAKEN_OPERATOR", "Ada")
 	brief := irisBrief()
 	if !strings.Contains(brief, "`blocked`") {
 		t.Errorf("irisBrief() lacks the literal backticked token `blocked`")
 	}
-	if bare := "blocked means the cell is waiting for carl at a gate"; strings.Contains(brief, bare) {
+	if bare := "blocked means the cell is waiting for Ada at a gate"; strings.Contains(brief, bare) {
 		t.Errorf("irisBrief() contains the un-backticked form %q; the contract's (b) carries literal backticks", bare)
 	}
 }
@@ -73,6 +75,7 @@ func TestEdgeIrisStateHeadingIsOwnMarkdownLine(t *testing.T) {
 // "## Credentials in messages" — so the block is neither before the memory
 // section's closing paragraph nor inside the credentials section.
 func TestEdgeIrisStateOrderAndPlacement(t *testing.T) {
+	t.Setenv("KRAKEN_OPERATOR", "Ada")
 	brief := irisBrief()
 	seq := append([]string{edgeIrisStateAnchor}, edgeIrisStateRequired...)
 	seq = append(seq, edgeIrisStateCredsHead)
@@ -100,6 +103,7 @@ func TestEdgeIrisStateOrderAndPlacement(t *testing.T) {
 // TestEdgeIrisStateNoHeadingInsideBlock: the two paragraphs sit UNDER the new
 // heading — no other markdown heading line intervenes between (a) and (e).
 func TestEdgeIrisStateNoHeadingInsideBlock(t *testing.T) {
+	t.Setenv("KRAKEN_OPERATOR", "Ada")
 	brief := irisBrief()
 	a := strings.Index(brief, edgeIrisStateHeading)
 	e := strings.Index(brief, edgeIrisStateNoKnob)
@@ -139,8 +143,9 @@ func TestEdgeIrisStateByteStable(t *testing.T) {
 // TestEdgeIrisStatePreexistingObligationsSurvive: the pre-existing clauses
 // the contract names as unchanged are still present.
 func TestEdgeIrisStatePreexistingObligationsSurvive(t *testing.T) {
+	t.Setenv("KRAKEN_OPERATOR", "Ada")
 	brief := irisBrief()
-	for _, want := range []string{"## Source", "kraken slack ack", "you never start", "carl", core.IrisModel} {
+	for _, want := range []string{"## Source", "kraken slack ack", "you never start", "Ada", core.IrisModel} {
 		if !strings.Contains(brief, want) {
 			t.Errorf("irisBrief() lost pre-existing clause %q", want)
 		}

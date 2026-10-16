@@ -92,11 +92,8 @@ func threadsGet(w http.ResponseWriter, r *http.Request) {
 		webJSON(w, http.StatusNotFound, map[string]string{"error": err.Error()})
 		return
 	}
+	// a job resolved, so a store is wired (LoadJobs is empty without one)
 	st := jobs.ActiveStore()
-	if st == nil {
-		webJSON(w, http.StatusInternalServerError, map[string]string{"error": "no store wired"})
-		return
-	}
 	ts, err := st.ListThreads(j.ID)
 	if err != nil {
 		util.LogEvent("web", "error", "threads", "threads "+slug+": "+err.Error())
@@ -129,10 +126,6 @@ func threadsPost(w http.ResponseWriter, r *http.Request) {
 	j, _, err := webJobFor(req.Slug)
 	if err != nil {
 		webJSON(w, http.StatusNotFound, map[string]string{"error": err.Error()})
-		return
-	}
-	if jobs.ActiveStore() == nil {
-		webJSON(w, http.StatusInternalServerError, map[string]string{"error": "no store wired"})
 		return
 	}
 	op := strings.TrimSpace(req.Op)
@@ -316,11 +309,8 @@ func threadReadHandler(w http.ResponseWriter, r *http.Request) {
 		webJSON(w, http.StatusNotFound, map[string]string{"error": err.Error()})
 		return
 	}
+	// a job resolved, so a store is wired (LoadJobs is empty without one)
 	st := jobs.ActiveStore()
-	if st == nil {
-		webJSON(w, http.StatusInternalServerError, map[string]string{"error": "no store wired"})
-		return
-	}
 	t, err := st.GetThread(j.ID, tid)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {

@@ -21,7 +21,35 @@ func uploadsRoot() string {
 	if d := os.Getenv("KRAKEN_UPLOADS_DIR"); d != "" {
 		return d // tests point at a temp dir
 	}
+	return defaultUploadsRoot()
+}
+
+func defaultUploadsRoot() string {
 	return filepath.Join(util.Home(), ".kraken", "uploads")
+}
+
+// UploadsSandboxed reports whether KRAKEN_UPLOADS_DIR points away from the
+// default ~/.kraken/uploads. The mirror-mode gate on archive/unarchive/delete
+// keys on it: archiving removes the job's uploads dir, which on an
+// unsandboxed mirror is the LIVE deployment's. Only an ABSOLUTE value
+// counts (a relative one resolves against whatever directory serve runs
+// in), and both sides are compared symlink-resolved, so a symlink to the
+// real uploads dir is not a sandbox.
+func UploadsSandboxed() bool {
+	d := os.Getenv("KRAKEN_UPLOADS_DIR")
+	if d == "" || !filepath.IsAbs(d) {
+		return false
+	}
+	return resolvedPath(d) != resolvedPath(defaultUploadsRoot())
+}
+
+// resolvedPath is p with symlinks resolved, or p cleaned when resolution
+// fails (a path that does not exist yet has nothing to resolve).
+func resolvedPath(p string) string {
+	if r, err := filepath.EvalSymlinks(p); err == nil {
+		return r
+	}
+	return filepath.Clean(p)
 }
 
 // UploadsDir is where a job's uploaded images live: <slug>-<id>, the same

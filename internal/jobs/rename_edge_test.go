@@ -550,65 +550,13 @@ func TestEdgeBranchFamilyKeepsFormerArmsAndStaysCapped(t *testing.T) {
 	}
 
 	capped := &Job{ID: 7, Slug: "edge-ren-fam", Run: 2000000000, FormerSlugs: []string{"old-fam"}}
-	if got := len(branchFamily(capped)); got > 4*64 {
+	// 4 bases (current id/bare, former id/bare) × 64 runs × 2 prefixes (the
+	// current one and the legacy carl/).
+	if got := len(branchFamily(capped)); got > 8*64 {
 		t.Errorf("branchFamily size = %d with a typo'd run — the 64 cap must still bound it", got)
 	}
 	if !branchFamily(capped)["carl/old-fam-7"] {
 		t.Error("the capped family still owes the former name's run-1 arm")
-	}
-}
-
-// TestEdgeRenameJobReportsFlatCopyConflictsAsSkipped covers the post-tx file
-// step's error path: "conflicts land in `Skipped`, never an error". A
-// pre-existing target is the recoverable case (re-run after moving it), and the
-// rename itself must still succeed — the store transaction has already
-// committed by then.
-func TestEdgeRenameJobReportsFlatCopyConflictsAsSkipped(t *testing.T) {
-	st := useTestStore(t)
-	pluto := t.TempDir()
-	t.Setenv("KRAKEN_PLUTO_DIR", pluto)
-
-	j := edgeRenJob(t, st, "edge-ren-files")
-	oldPrefix := cellName(j)
-	newPrefix := util.Slugify("edge-ren-files-new") + "-" + strconv.FormatInt(j.ID, 10)
-
-	write := func(name string) {
-		t.Helper()
-		if err := os.WriteFile(filepath.Join(pluto, name), []byte("x"), 0o644); err != nil {
-			t.Fatal(err)
-		}
-	}
-	write(oldPrefix + ".00-overview.md")
-	write(oldPrefix + ".50-contract.md")
-	// the conflict: the target name already exists.
-	write(newPrefix + ".00-overview.md")
-
-	res, err := RenameJob(j, "edge-ren-files-new")
-	if err != nil {
-		t.Fatalf("a flat-copy conflict must not fail the rename: %v", err)
-	}
-	if res == nil {
-		t.Fatal("nil result on success")
-	}
-	if len(res.Skipped) != 1 {
-		t.Fatalf("Skipped = %v, want exactly the one stranded source", res.Skipped)
-	}
-	// Round-3 contract amendment (lead's edit, authors gone): Skipped names
-	// the stranded old-prefix SOURCE, not the occupied destination.
-	if !strings.Contains(res.Skipped[0], oldPrefix+".00-overview.md") {
-		t.Errorf("Skipped[0] = %q, want it to name the stranded old-prefix source", res.Skipped[0])
-	}
-
-	// the non-conflicting copy moved, and the conflicting source stayed put
-	// rather than being clobbered or deleted.
-	if _, err := os.Stat(filepath.Join(pluto, newPrefix+".50-contract.md")); err != nil {
-		t.Errorf("non-conflicting flat copy did not move: %v", err)
-	}
-	if _, err := os.Stat(filepath.Join(pluto, oldPrefix+".50-contract.md")); err == nil {
-		t.Error("the moved copy is still under the old prefix too")
-	}
-	if _, err := os.Stat(filepath.Join(pluto, oldPrefix+".00-overview.md")); err != nil {
-		t.Errorf("the skipped source was not left in place: %v", err)
 	}
 }
 
@@ -619,7 +567,6 @@ func TestEdgeRenameJobReportsFlatCopyConflictsAsSkipped(t *testing.T) {
 // to move.
 func TestEdgeRenameJobNeverMovesCellStateOnDisk(t *testing.T) {
 	st := useTestStore(t)
-	t.Setenv("KRAKEN_PLUTO_DIR", t.TempDir())
 
 	j := edgeRenJob(t, st, "edge-ren-ondisk")
 	oldCell := cellDir(j)

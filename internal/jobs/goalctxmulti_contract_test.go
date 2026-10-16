@@ -296,7 +296,7 @@ func TestContractGMOneLinkRendersExactlyAsBefore(t *testing.T) {
 	j := contractGMJob(t, st, "one-link")
 	contractGMLink(t, st, j.ID, g.ID)
 
-	want := goalContextHeader + "- [week] " + g.Text + goalContextMarker + "\n"
+	want := goalContextHeader() + "- [week] " + g.Text + goalContextMarker + "\n"
 	if got := goalContext(j); got != want {
 		t.Errorf("goalContext at one link =\n%q\nwant\n%q", got, want)
 	}

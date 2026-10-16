@@ -224,49 +224,6 @@ func TestThreadsPostOversizeBody(t *testing.T) {
 	}
 }
 
-// TestThreadsNoStoreWired: threads live ONLY in kraken.db, so a process
-// running without one (a file-mode board) must say so plainly rather than
-// serving an empty list that reads as "this job has no threads".
-func TestThreadsNoStoreWired(t *testing.T) {
-	seedFileModeJob(t, "th-nostore")
-
-	rec := getThreads(t, "slug=th-nostore")
-	if rec.Code != http.StatusInternalServerError {
-		t.Fatalf("GET status %d, want 500, body %s", rec.Code, rec.Body.String())
-	}
-	if got := decodeErr(t, rec); got != "no store wired" {
-		t.Fatalf("GET error = %q", got)
-	}
-
-	rec = postThreads(t, threadsReq{Slug: "th-nostore", Op: "kill", TID: "t1"})
-	if rec.Code != http.StatusInternalServerError {
-		t.Fatalf("POST status %d, want 500, body %s", rec.Code, rec.Body.String())
-	}
-
-	rec = getThreadRead(t, "slug=th-nostore&tid=t1")
-	if rec.Code != http.StatusInternalServerError {
-		t.Fatalf("read status %d, want 500, body %s", rec.Code, rec.Body.String())
-	}
-}
-
-// seedFileModeJob writes one job file into a sandboxed pluto dir with NO
-// store wired, so webJobFor resolves it (from the file) while
-// jobs.ActiveStore() stays nil — the only way to reach the "no store wired"
-// branch, which sits behind the job lookup.
-func seedFileModeJob(t *testing.T, slug string) {
-	t.Helper()
-	dir := t.TempDir()
-	t.Setenv("HOME", t.TempDir())
-	t.Setenv("KRAKEN_PLUTO_DIR", dir)
-	body := "---\nrepo: monolith\n---\n\nsome spec text\n"
-	if err := os.WriteFile(filepath.Join(dir, slug+jobs.JobSuffix), []byte(body), 0644); err != nil {
-		t.Fatal(err)
-	}
-	if j := jobs.JobBySlug(jobs.LoadJobs(), slug); j == nil {
-		t.Fatalf("file-mode job %s not loadable — test seam broken", slug)
-	}
-}
-
 // TestThreadsGetOpenInMirrorMode: the POST gate is swept by mirror_test.go;
 // this pins the other half — a read must stay reachable on a mirror board,
 // exactly like /api/peers/capture.

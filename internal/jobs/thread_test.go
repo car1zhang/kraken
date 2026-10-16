@@ -378,8 +378,8 @@ func TestLiveThreadClaudeRefusesADoubleWriter(t *testing.T) {
 }
 
 // TestThreadVerbsRefuseWithoutAStore pins that thread verbs never silently
-// no-op in file mode: threads live only in kraken.db, so a caller without a
-// wired store (the viewer, a file-mode daemon) must hear about it.
+// no-op without a store: threads live only in kraken.db, so a caller without
+// a wired store (the viewer, a bare CLI process) must hear about it.
 func TestThreadVerbsRefuseWithoutAStore(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	UseStore(nil)
@@ -1132,6 +1132,7 @@ func TestThreadBriefStatesTheContract(t *testing.T) {
 // thread's first token, which is the one placement the recency gradient
 // favors.
 func TestThreadSeedCarriesTheGuard(t *testing.T) {
+	t.Setenv("KRAKEN_OPERATOR", "Ada")
 	seeded := threadSeed("why does the export table hold arrays?")
 	if !strings.HasPrefix(seeded, "why does the export table hold arrays?") {
 		t.Fatalf("carl's question must lead the prompt: %q", seeded)
@@ -1144,7 +1145,7 @@ func TestThreadSeedCarriesTheGuard(t *testing.T) {
 		{"do not spawn agents", "the measured violation: a thread spawning a hermes teammate"},
 		{"leave the doing to zeus", "the escape hatch — say so instead of complying"},
 		{"nothing relays this thread to zeus", "the escape hatch must not promise a handoff that does not exist"},
-		{"carl steers zeus", "the one real channel: carl carrying the ask into zeus' pane"},
+		{"ada steers zeus", "the one real channel: the operator carrying the ask into zeus' pane"},
 	} {
 		if !strings.Contains(lower, want.token) {
 			t.Errorf("thread seed guard is missing %q (%s):\n%s", want.token, want.why, seeded)

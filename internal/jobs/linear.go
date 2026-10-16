@@ -818,7 +818,14 @@ func composeLinearBody(iss core.LinearIssue, cfg core.LinearConfig, media []line
 	var b strings.Builder
 	b.WriteString("---\n")
 	b.WriteString("job: " + linearSlug(iss.Identifier, iss.Title) + "\n")
-	b.WriteString("repo: " + linearOneLine(cfg.DefaultRepo) + "\n")
+	// LINEAR_DEFAULT_REPO wins when set; otherwise the machine's own default
+	// (the sole checkout under the repos dir, or "" — an empty repo: parses,
+	// and submit refuses it with "job has no repo").
+	repo := cfg.DefaultRepo
+	if repo == "" {
+		repo = DefaultRepo()
+	}
+	b.WriteString("repo: " + linearOneLine(repo) + "\n")
 	// No start-flag key of any kind: a ticket lands as a DRAFT for carl to
 	// read and submit, never as work that starts itself the moment someone
 	// assigns it — and since submitting IS starting now, a draft is that

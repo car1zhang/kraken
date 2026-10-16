@@ -98,8 +98,15 @@ const notesDeliveredPrefix = "notes_delivered:"
 // feedback rows the brief already carries, because the brief is read once per
 // phase and this block arrives at the moment the rule applies: a row never
 // stops reading as open, so the only record of a note being handled is zeus
-// SAYING so.
-const notesContextHeader = "\nCarl's unread notes on this job (artifact feedback, answers to your questions, and pending mental-model flags for you to raise or dismiss; each arrives here once — full lists any time: `kraken feedback get <slug>` / `kraken questions get <slug>`). Act on every one and say in your final message what you changed — a feedback row never stops reading as open:\n"
+// SAYING so. The notes are the operator's, named by Operator().
+func notesContextHeader() string {
+	return "\n" + operatorPossessive() + notesContextHeaderTail
+}
+
+// notesContextHeaderTail is the header after the operator's name. It is kept
+// apart so renderNotesBlock substitutes <slug> in THIS text only — a name that
+// happens to contain "<slug>" is rendered literally.
+const notesContextHeaderTail = " unread notes on this job (artifact feedback, answers to your questions, and pending mental-model flags for you to raise or dismiss; each arrives here once — full lists any time: `kraken feedback get <slug>` / `kraken questions get <slug>`). Act on every one and say in your final message what you changed — a feedback row never stops reading as open:\n"
 
 // notesFirstContactLine follows the header the FIRST time a job's notes are
 // delivered at all — the record row does not exist yet. That is the normal
@@ -298,7 +305,7 @@ func notesHash(s string) string {
 // that now exists and so carry no first-contact line of their own.
 func renderNotesBlock(items []noteItem, slug string, first bool) (string, []string) {
 	var b strings.Builder
-	b.WriteString(strings.ReplaceAll(notesContextHeader, "<slug>", slug))
+	b.WriteString("\n" + operatorPossessive() + strings.ReplaceAll(notesContextHeaderTail, "<slug>", slug))
 	if first {
 		b.WriteString(notesFirstContactLine)
 	}

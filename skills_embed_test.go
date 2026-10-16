@@ -172,7 +172,7 @@ func TestSkillsOwnTheCellContract(t *testing.T) {
 			// the cell section: paths in <cellDir> terms, the stop line, the gate
 			"Inside A Kraken Cell", "<cellDir>/artifacts/", "<cellDir>/doc/fragments/",
 			"doc ready for review:", "Use `0` where a count is zero",
-			"`/do` is carl's move", "Never declare the job done",
+			"`/do` is {{operator}}'s move", "Never declare the job done",
 		}},
 		{"info", []string{
 			"Inside A Kraken Cell", "<cellDir>/artifacts/",
@@ -273,7 +273,10 @@ func TestSkillsOwnTheCellContract(t *testing.T) {
 			"ONE source line",
 		}},
 		{"pr", []string{
-			"Inside A Kraken Cell", "carl/", "gh pr create",
+			// the branch rule: a cell's branch is the one kraken minted under
+			// its configurable prefix, so the skill names no prefix of its own
+			// and forbids the rename the old `carl/` step performed.
+			"Inside A Kraken Cell", "a cell never renames its branch", "gh pr create",
 			"git fetch origin && git checkout -B", "NEVER ends the job",
 			"awaiting checks", "Never poll",
 		}},

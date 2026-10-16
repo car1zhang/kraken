@@ -300,6 +300,7 @@ func TestContractFindIrisIgnoresEverythingElse(t *testing.T) {
 // nobody can trace back to a Slack conversation.
 func TestContractIrisBriefPinsTheThreeRules(t *testing.T) {
 	contractIrisSandbox(t)
+	t.Setenv("KRAKEN_OPERATOR", "Ada")
 	brief := irisBrief()
 	if strings.TrimSpace(brief) == "" {
 		t.Fatal("irisBrief() is empty")
@@ -320,10 +321,10 @@ func TestContractIrisBriefPinsTheThreeRules(t *testing.T) {
 			t.Errorf("irisBrief() does not contain %q", want)
 		}
 	}
-	// starting a job is carl's move, stated in the brief that is in context
-	// every turn rather than only in a skill read once
-	if !strings.Contains(strings.ToLower(brief), "carl") {
-		t.Error("irisBrief() never names carl — the brief must say whose move starting is")
+	// starting a job is the operator's move, stated in the brief that is in
+	// context every turn rather than only in a skill read once
+	if !strings.Contains(brief, "Ada's move on the board") {
+		t.Error("irisBrief() never names the operator (KRAKEN_OPERATOR=Ada) — the brief must say whose move starting is")
 	}
 }
 

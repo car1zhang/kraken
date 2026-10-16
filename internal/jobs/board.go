@@ -48,16 +48,17 @@ func SortJobs(jobs []*Job) {
 	sort.SliceStable(jobs, func(a, b int) bool { return ranks[jobs[a]] < ranks[jobs[b]] })
 }
 
-// RepoCandidates lists git checkouts under ~/Developer once for table
+// RepoCandidates lists git checkouts under repoRoot() once for table
 // rendering (ResolveRepo re-reads for the start path, where freshness wins).
 func RepoCandidates() []string {
-	entries, err := os.ReadDir(repoRoot())
+	root := repoRoot()
+	entries, err := os.ReadDir(root)
 	if err != nil {
 		return nil
 	}
 	var out []string
 	for _, e := range entries {
-		if e.IsDir() && isGitRepo(filepath.Join(repoRoot(), e.Name())) {
+		if e.IsDir() && isGitRepo(filepath.Join(root, e.Name())) {
 			out = append(out, e.Name())
 		}
 	}

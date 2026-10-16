@@ -41,10 +41,9 @@ func (s *Store) SetPRWatermark(jobID int64, url, lastCommentAt, bumpedSHA, confl
 // when this call actually changed something — a new row inserted, or an
 // existing row's state genuinely changed value (the UPDATE's WHERE guards
 // on state != ? so a no-op re-write of the same state doesn't count as a
-// change). This matters because syncJobChildren (jobs/import.go) calls
-// UpsertPR unconditionally for every PR on every import pass: re-importing
-// an unchanged file must not churn rev/updated_at (see import_test.go's
-// idempotency coverage), while a save started against a rev that predates a
+// change). This matters because a caller re-asserting a PR it already
+// recorded must not churn rev/updated_at, while a save started against a
+// rev that predates a
 // genuine PR attach/state-change must still see it as stale rather than
 // silently clobbering it — the editor's optimistic lock (UpdateJobFields's
 // rev check).

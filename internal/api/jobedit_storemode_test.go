@@ -5,17 +5,18 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"kraken/internal/jobs"
 	"kraken/internal/store"
 )
 
-// jobedit_storemode_test.go — store-backed coverage for api/jobedit.go's
-// dual-mode endpoints: raw round-trip, rev-based 409, and job/create. The
-// file-mode behavior these mirror is already covered by jobedit_test.go and
-// contract_test.go; useTestStore (storemode_test.go) wires jobs onto a temp
-// DB for the duration of each test.
+// jobedit_storemode_test.go — coverage for api/jobedit.go's endpoints: raw
+// round-trip, rev-based 409, and job/create. useTestStore
+// (storemode_test.go) wires jobs onto a temp DB for the duration of each
+// test.
 
 func mustCreateStoreJob(t *testing.T, st *store.Store, j store.Job) *jobs.Job {
 	t.Helper()
@@ -105,10 +106,9 @@ func TestWebJobRawStoreModeRoundTrip(t *testing.T) {
 // TestWebJobSaveStoreModeUnparseablePreservesFields covers raw
 // content that fails ParseJob must still save (unparseable drafts happen —
 // the editor doesn't block on it), but only the body column changes.
-// Frontmatter columns and PRs must survive exactly as they were,
-// same contract as file mode (the raw bytes just sit on disk regardless of
-// whether they parse back) — jobFieldsFromParsed(parsed) on a failed parse
-// carries only ParseJob's best-effort defaults and must never be applied.
+// Frontmatter columns and PRs must survive exactly as they were —
+// jobFieldsFromParsed(parsed) on a failed parse carries only ParseJob's
+// best-effort defaults and must never be applied.
 func TestWebJobSaveStoreModeUnparseablePreservesFields(t *testing.T) {
 	useTestStore(t)
 	st := jobs.ActiveStore()
@@ -301,6 +301,13 @@ func TestWebJobSaveFormStoreModeRevAndForce(t *testing.T) {
 
 func TestWebJobCreateStoreMode(t *testing.T) {
 	useTestStore(t)
+	// The template's repo: is DefaultRepo() — the sole checkout under the
+	// repos dir — so pin a repos dir holding exactly one.
+	repos := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(repos, "monolith", ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("KRAKEN_REPOS_DIR", repos)
 
 	body := mustJSON(t, webReq{Slug: "brand-new"})
 	req := httptest.NewRequest(http.MethodPost, "/api/job/create", bytes.NewReader(body))
@@ -317,7 +324,7 @@ func TestWebJobCreateStoreMode(t *testing.T) {
 		t.Fatalf("defaults not applied: %+v", j)
 	}
 
-	// creating the same slug again is a 409, same as file mode.
+	// creating the same slug again is a 409.
 	rec2 := httptest.NewRecorder()
 	webJobCreate(rec2, httptest.NewRequest(http.MethodPost, "/api/job/create", bytes.NewReader(body)))
 	if rec2.Code != http.StatusConflict {
@@ -327,11 +334,10 @@ func TestWebJobCreateStoreMode(t *testing.T) {
 
 // TestWebJobCreateStoreModeRowMatchesParsedTemplate covers the L-nit: the
 // store row webJobCreate creates must be exactly what parsing
-// jobs.JobTemplate(slug) produces — the SAME source the file-mode path
-// writes verbatim to disk — not a separately hand-typed literal that could
-// drift from the template's own defaults. A job created then abandoned
-// (never actually saved) must leave the row in the identical state a
-// file-mode create-then-abandon would leave the file in.
+// jobs.JobTemplate(slug) produces — the SAME text the create response hands
+// the editor — not a separately hand-typed literal that could drift from the
+// template's own defaults. A job created then abandoned (never actually
+// saved) must leave the row matching that template.
 func TestWebJobCreateStoreModeRowMatchesParsedTemplate(t *testing.T) {
 	useTestStore(t)
 

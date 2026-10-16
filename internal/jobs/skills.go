@@ -1,6 +1,7 @@
 package jobs
 
 import (
+	"bytes"
 	"fmt"
 	"io/fs"
 	"os"
@@ -11,7 +12,7 @@ import (
 // SkillsFS holds kraken's kraken-owned skill bundle — the five pipeline skills
 // (info, aim, do, pr, dream), each governing a phase, plus two that
 // govern none: load, a reference consulted mid-phase, and handoff, typed into
-// a pane by carl or by the daemon's auto-handoff pass to compact an agent
+// a pane by the operator or by the daemon's auto-handoff pass to compact an agent
 // behind a written record — embedded into the binary at build time. Root's
 // skills_embed.go assigns this during init(), sub-FS'd to the .claude/skills
 // root so each top-level entry here is one skill's own directory. Left nil
@@ -89,7 +90,7 @@ func installSkills(wt string, j *Job) {
 			dlogErr("%s", msg)
 			continue
 		}
-		if err := copyFSTree(sub, dst); err != nil {
+		if err := copyFSTree(sub, dst, []byte(Operator())); err != nil {
 			msg := fmt.Sprintf("skill install for %s: write %s: %v", j.Slug, dst, err)
 			fmt.Fprintln(os.Stderr, "kraken: "+msg)
 			dlogErr("%s", msg)
@@ -104,7 +105,14 @@ func installSkills(wt string, j *Job) {
 // `python3 <path>`, never exec'd directly. path comes from fs.WalkDir over
 // an fs.FS, so it's always forward-slash-joined single path elements with no
 // ".." segments; filepath.Join(dst, path) can't escape dst.
-func copyFSTree(src fs.FS, dst string) error {
+//
+// Every file's literal operatorPlaceholder is replaced by operator on the way
+// out: the embedded skills name the person kraken works for only through that
+// placeholder, so the bundle carries no real name and each machine's cells
+// read their own. It is ONE pass over the embedded bytes, so a name that
+// itself contains "{{operator}}" (or any other brace or quote) lands
+// literally and is never expanded again. The embedded copy is untouched.
+func copyFSTree(src fs.FS, dst string, operator []byte) error {
 	return fs.WalkDir(src, ".", func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
@@ -117,6 +125,10 @@ func copyFSTree(src fs.FS, dst string) error {
 		if err != nil {
 			return err
 		}
-		return os.WriteFile(target, data, 0o644)
+		return os.WriteFile(target, bytes.ReplaceAll(data, operatorPlaceholder, operator), 0o644)
 	})
 }
+
+// operatorPlaceholder is the token the embedded skills write where they name
+// the operator; copyFSTree substitutes Operator() for it at materialization.
+var operatorPlaceholder = []byte("{{operator}}")

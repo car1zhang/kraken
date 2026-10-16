@@ -632,6 +632,7 @@ func TestZeusBriefImageHandling(t *testing.T) {
 // if a rung label reappears in the brief. Adding an anchor back here would be
 // caught there, not by this test.
 func TestZeusBriefLoadEstimate(t *testing.T) {
+	t.Setenv("KRAKEN_OPERATOR", "Ada")
 	for _, j := range []*Job{
 		{Slug: "load-plain"},
 		{Slug: "load-solo", Solo: true},
@@ -643,7 +644,7 @@ func TestZeusBriefLoadEstimate(t *testing.T) {
 			"--unblock",
 			"--scope",
 			// one anchor per axis, so the 1-10 ruler cannot be dropped silently
-			"1-10 is the effort CARL spends",
+			"1-10 is the effort Ada spends",
 			"a one-message reply",
 		} {
 			if !strings.Contains(brief, want) {
@@ -929,11 +930,12 @@ func TestZeusBriefDelegationIsEarned(t *testing.T) {
 // kraken reads zeus' transcript alone, so a teammate's prompt cannot surface
 // anywhere at all.
 func TestZeusBriefNoTerminalQuestions(t *testing.T) {
+	t.Setenv("KRAKEN_OPERATOR", "Ada")
 	for _, j := range []*Job{{Slug: "q-plain"}, {Slug: "q-solo", Solo: true}} {
 		brief := zeusBrief(j)
 		for _, want := range []struct{ token, why string }{
-			{"must NOT ask carl questions through an interactive terminal prompt", "the rule itself"},
-			{"he does not watch it", "why a prompt is invisible"},
+			{"must NOT ask Ada questions through an interactive terminal prompt", "the rule itself"},
+			{"they do not watch it", "why a prompt is invisible"},
 			{"just stalls the cell", "an unseen prompt is not merely useless, it blocks"},
 			{"pick the most defensible default", "what to do instead"},
 			{"FINAL message", "where an unresolved decision goes"},
@@ -947,7 +949,7 @@ func TestZeusBriefNoTerminalQuestions(t *testing.T) {
 	// the spawned-agent ban only makes sense where agents can be spawned
 	plain := zeusBrief(&Job{Slug: "q-crew"})
 	for _, want := range []string{
-		"A teammate or subagent must never ask carl anything at all",
+		"A teammate or subagent must never ask Ada anything at all",
 		"decide and report, never to prompt",
 	} {
 		if !strings.Contains(plain, want) {

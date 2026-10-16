@@ -10,8 +10,9 @@ import (
 	"kraken/internal/jobs"
 )
 
-// postColor drives the handler and returns the status; every test here is
-// file-mode (KRAKEN_PLUTO_DIR), so nothing needs a store or a live cell.
+// postColor drives the handler and returns the status; every test here
+// seeds its job through writeTestJob (a temp store), so nothing needs a
+// live cell.
 func postColor(t *testing.T, slug, color string) int {
 	t.Helper()
 	body := mustJSON(t, map[string]any{"slug": slug, "color": color})
@@ -34,7 +35,6 @@ func jobColorOnDisk(t *testing.T, slug string) string {
 }
 
 func TestWebJobColorSetsAndClears(t *testing.T) {
-	t.Setenv("KRAKEN_PLUTO_DIR", t.TempDir())
 	writeTestJob(t, "hue", "")
 
 	if code := postColor(t, "hue", "purple"); code != http.StatusOK {
@@ -63,7 +63,6 @@ func TestWebJobColorSetsAndClears(t *testing.T) {
 // TestWebJobColorRejectsOffPalette pins the endpoint's allowlist — the one
 // gate standing between a client and a string typed into a live claude.
 func TestWebJobColorRejectsOffPalette(t *testing.T) {
-	t.Setenv("KRAKEN_PLUTO_DIR", t.TempDir())
 	writeTestJob(t, "hue", "")
 
 	for _, bad := range []string{"purpel", "default", "PURPLE", " ", "red # note", "red; rm -rf /"} {
@@ -80,7 +79,6 @@ func TestWebJobColorRejectsOffPalette(t *testing.T) {
 // it goes through core.TruncateOneLine like the parser's message for the
 // same rule — a client can't turn a 400 into a megabyte of response body.
 func TestWebJobColorErrorEchoIsBounded(t *testing.T) {
-	t.Setenv("KRAKEN_PLUTO_DIR", t.TempDir())
 	writeTestJob(t, "hue", "")
 
 	body := mustJSON(t, map[string]any{"slug": "hue", "color": strings.Repeat("z", 5000)})
@@ -100,7 +98,6 @@ func TestWebJobColorErrorEchoIsBounded(t *testing.T) {
 // short strings, so a huge one is refused rather than read into memory, and
 // its 413 stays distinct from a decode error's 400.
 func TestWebJobColorRefusesOversizeBody(t *testing.T) {
-	t.Setenv("KRAKEN_PLUTO_DIR", t.TempDir())
 	writeTestJob(t, "hue", "")
 
 	body := mustJSON(t, map[string]any{"slug": "hue", "color": strings.Repeat("z", 2<<20)})
@@ -116,7 +113,6 @@ func TestWebJobColorRefusesOversizeBody(t *testing.T) {
 }
 
 func TestWebJobColorUnknownJob(t *testing.T) {
-	t.Setenv("KRAKEN_PLUTO_DIR", t.TempDir())
 	if code := postColor(t, "nope", "red"); code != http.StatusNotFound {
 		t.Errorf("unknown slug: status %d, want 404", code)
 	}
@@ -128,7 +124,6 @@ func TestWebJobColorUnknownJob(t *testing.T) {
 // working/blocked states the delivery pass acts on — routing colour through
 // the form would have made the feature unreachable by construction.
 func TestWebJobColorIgnoresEditableGate(t *testing.T) {
-	t.Setenv("KRAKEN_PLUTO_DIR", t.TempDir())
 	writeTestJob(t, "live-job", "state: working\n")
 
 	j := jobs.JobBySlug(jobs.LoadJobs(), "live-job")
@@ -149,7 +144,6 @@ func TestWebJobColorIgnoresEditableGate(t *testing.T) {
 // restore it from. The form must preserve the stored value and ignore any
 // colour the request carries.
 func TestSaveFormNeverWritesColor(t *testing.T) {
-	t.Setenv("KRAKEN_PLUTO_DIR", t.TempDir())
 	writeTestJob(t, "formjob", "color: pink\n")
 
 	save := func(t *testing.T, body map[string]any) {

@@ -22,12 +22,11 @@ import (
 // number the editor neither shows nor sends. store.SetJobLoad exists to skip
 // both, exactly as SetPRWatermark does for the daemon's PR bookkeeping.
 //
-// Store-backed ONLY, and the refusal says so rather than degrading: there is
-// no `load:` frontmatter field and there is deliberately not going to be one
-// — the estimate is bookkeeping about the job, not part of the authored spec
-// — so a file-mode job has nowhere to put it, and a silent no-op would leave
-// a caller (a CLI verb whose whole output is a confirmation line) reporting a
-// write that never happened.
+// With no store wired the refusal says so rather than degrading: there is no
+// `load:` frontmatter field and there is deliberately not going to be one —
+// the estimate is bookkeeping about the job, not part of the authored spec —
+// and a silent no-op would leave a caller (a CLI verb whose whole output is
+// a confirmation line) reporting a write that never happened.
 func SetJobLoad(j *Job, l store.JobLoad) error {
 	st := ActiveStore()
 	if st == nil {

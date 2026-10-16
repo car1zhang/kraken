@@ -12,9 +12,8 @@ import (
 )
 
 // draft_test.go — /api/draft and the in-memory store behind it. Every test
-// here is store-backed rather than file-backed, and that is the point: the
-// draft map keys on jobs.id now, and a file-backed *Job carries no id at all
-// (ParseJob never sets one).
+// here is store-backed, and that is the point: the draft map keys on
+// jobs.id, and a Job built by ParseJob alone carries no id at all.
 
 // resetDraftStore swaps in a fresh, empty draft store pinned to now — tests
 // share the package-level webDraftStore singleton, so each test needs its

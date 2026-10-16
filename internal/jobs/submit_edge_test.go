@@ -25,13 +25,11 @@ import (
 
 // edgeSandbox isolates everything a SubmitJob call can reach on disk. HOME is
 // what ResolveRepo walks (~/Developer) and what every cell path derives from
-// via util.Home(); KRAKEN_PLUTO_DIR keeps any incidental job-file read off
-// the real ~/Documents/pluto. Package TestMain already quarantines the event
-// log and no-ops bindGate.
+// via util.Home(). Package TestMain already quarantines the event log and
+// no-ops bindGate.
 func edgeSandbox(t *testing.T) {
 	t.Helper()
 	t.Setenv("HOME", t.TempDir())
-	t.Setenv("KRAKEN_PLUTO_DIR", t.TempDir())
 }
 
 // edgeFakeRepo makes ResolveRepo(name) resolve inside the sandboxed $HOME — a
@@ -335,8 +333,8 @@ func TestSubmitEdgeNeverStartsTwiceForOneCall(t *testing.T) {
 // --- parser edges: the retired keys still on disk -------------------------
 
 // TestSubmitEdgeParseJobDiscardsRetiredReadyValues covers the corpus rule.
-// `ready` is gone from the model, but every job file in ~/Documents/pluto
-// and every stored row's composed frontmatter still carries the key — so the
+// `ready` is gone from the model, but every stored row's composed
+// frontmatter written before the cutover still carries the key — so the
 // parser must consume and DISCARD it, at any value, exactly as it already
 // does for type/auto-approve/success/skip-doc. Erroring instead would tip
 // the entire corpus into draft-with-a-parse-error on the first read after

@@ -256,11 +256,10 @@ var hookServeAddr atomic.Pointer[string]
 
 // SetHookServeAddr records addr for every StartCell/ReactivateJob hook
 // install for the rest of this process's lifetime. cmd_serve.go calls this
-// once, right after net.Listen resolves the real bind address — file-mode
-// `k daemon`/`k web` never call it, so their cells' hooks fall back to
-// defaultServeAddr exactly as before E7. A package-level setter rather than
-// threading addr through StartCell's signature (jobs.tick() → StartCell is
-// shared with file mode, which has no addr to pass).
+// once, right after net.Listen resolves the real bind address; a process
+// that never calls it leaves hooks on defaultServeAddr. A package-level
+// setter rather than threading addr through every StartCell caller's
+// signature.
 func SetHookServeAddr(addr string) {
 	hookServeAddr.Store(&addr)
 }

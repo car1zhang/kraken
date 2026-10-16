@@ -180,6 +180,18 @@ func kickDream(now time.Time) *Job {
 	if loadLastDreamDate() == today {
 		return nil
 	}
+	// The nightly pass improves kraken's own source, so a machine with no
+	// kraken checkout under the repos dir has nothing for it to work on:
+	// skip the night with one event instead of creating a job whose submit
+	// can only fail. Only the in-memory date is stamped — the stored
+	// watermark keeps its sweep floor, so the night's evidence is still in
+	// the window once a checkout appears (and a restart re-checks, logging
+	// at most once more).
+	if _, err := ResolveRepo("kraken"); err != nil {
+		lastDreamDate.Store(today)
+		dlogEvent("info", "dream-skipped", "dream: skipped for %s — no kraken checkout: %v", today, err)
+		return nil
+	}
 	run, ok := readDreamRun()
 	if !ok {
 		return nil // unreadable watermark degrades to "already ran today"

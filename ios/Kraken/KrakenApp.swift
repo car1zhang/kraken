@@ -74,7 +74,9 @@ struct KrakenApp: App {
                 }
         }
         .onChange(of: scenePhase) {
-            if scenePhase == .background {
+            // No server set yet (fresh install): schedule no background
+            // fetch, since it would have nothing to ask.
+            if scenePhase == .background, KrakenDefaults.isConfigured(KrakenDefaults.storedServerURL) {
                 NotificationManager.shared.scheduleBackgroundRefresh()
             }
             if scenePhase == .active {

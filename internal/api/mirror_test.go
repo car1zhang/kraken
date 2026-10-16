@@ -3,6 +3,8 @@ package api
 import (
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -68,7 +70,7 @@ var mirrorGatedRoutes = []string{
 	// decode — mirror ON gives the shared 403, mirror OFF falls through to the
 	// handler's own 400 for the missing "to" field, neither needing a store nor
 	// a real job. It is gated at all because it renames a live tmux session and
-	// moves preserved artifact files under PlutoDir.
+	// types a notice into the cell's pane.
 	"/api/job/rename",
 	// The mental model's seven WRITES (mm.go), gated via mirrorGated at
 	// registration rather than inline for the reason recall below is: every
@@ -111,10 +113,10 @@ var mirrorGatedRoutes = []string{
 // temp dir.
 var mirrorGatedGlobalRoutes = []string{"/api/update", "/api/ship-ios"}
 
-// mirrorPlutoRoutes mirror mirrorPlutoActions: gated under mirror mode only
-// while PlutoDir is NOT sandboxed (their sole real-world side effect is
-// preserved-artifact file moves under PlutoDir).
-var mirrorPlutoRoutes = []string{"/api/archive", "/api/unarchive", "/api/delete"}
+// mirrorUploadsRoutes mirror mirrorUploadsActions: gated in mirror mode
+// unless KRAKEN_UPLOADS_DIR points away from the default uploads dir
+// (archiving removes the job's uploads dir).
+var mirrorUploadsRoutes = []string{"/api/archive", "/api/unarchive", "/api/delete"}
 
 // retiredRoutes are paths that must no longer be registered at all: both
 // existed only to move a job into or out of the queued column, and neither
@@ -155,35 +157,34 @@ func TestMirrorModeGatesTmuxDrivingRoutes(t *testing.T) {
 	}
 }
 
-// TestMirrorModePlutoRoutesConditional covers the archive/unarchive/delete
-// gate's two halves: 403 while PlutoDir resolves to the real default, live
-// (past the gate, into the handler's own validation) once KRAKEN_PLUTO_DIR
-// points at a sandbox.
-func TestMirrorModePlutoRoutesConditional(t *testing.T) {
+// TestMirrorModeUploadsRoutesConditional covers the archive/unarchive/delete
+// gate's two halves: 403 naming KRAKEN_UPLOADS_DIR while it is unset (or
+// names the default dir), and past the gate into the handler's own
+// validation once it points at a sandbox.
+func TestMirrorModeUploadsRoutesConditional(t *testing.T) {
 	SetMirrorMode(true)
 	t.Cleanup(func() { SetMirrorMode(false) })
 	mux := http.NewServeMux()
 	Register(mux)
 
-	t.Setenv("HOME", t.TempDir())
-	t.Setenv("KRAKEN_PLUTO_DIR", "")
-	for _, path := range mirrorPlutoRoutes {
-		rec := postJSON(t, mux, path, mustJSON(t, webReq{Slug: "nonexistent"}))
-		if rec.Code != http.StatusForbidden {
-			t.Fatalf("unsandboxed %s: status = %d, want 403", path, rec.Code)
+	// past the gate, these handlers reach jobs.LoadJobs/LoadArchivedJobs,
+	// which need a wired store even though "nonexistent" never resolves.
+	useTestStore(t) // also sets HOME to a temp dir
+	for _, val := range []string{"", filepath.Join(os.Getenv("HOME"), ".kraken", "uploads")} {
+		t.Setenv("KRAKEN_UPLOADS_DIR", val)
+		for _, path := range mirrorUploadsRoutes {
+			rec := postJSON(t, mux, path, mustJSON(t, webReq{Slug: "nonexistent"}))
+			if rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), "KRAKEN_UPLOADS_DIR") {
+				t.Fatalf("KRAKEN_UPLOADS_DIR=%q %s: status %d body %q, want a 403 naming KRAKEN_UPLOADS_DIR", val, path, rec.Code, rec.Body.String())
+			}
 		}
 	}
 
-	t.Setenv("KRAKEN_PLUTO_DIR", t.TempDir())
-	// past the gate, these handlers reach jobs.LoadJobs/LoadArchivedJobs,
-	// store-only now (H1) — a wired store is needed even though "nonexistent"
-	// never resolves to a real job (LoadJobs/LoadArchivedJobs themselves
-	// require ActiveStore() != nil to avoid a nil-pointer call).
-	useTestStore(t)
-	for _, path := range mirrorPlutoRoutes {
+	t.Setenv("KRAKEN_UPLOADS_DIR", t.TempDir())
+	for _, path := range mirrorUploadsRoutes {
 		rec := postJSON(t, mux, path, mustJSON(t, webReq{Slug: "nonexistent"}))
 		if rec.Code == http.StatusForbidden {
-			t.Fatalf("sandboxed %s: still 403 — gate should open with KRAKEN_PLUTO_DIR set", path)
+			t.Fatalf("sandboxed %s: still 403 — the gate should open with KRAKEN_UPLOADS_DIR set away from the default", path)
 		}
 	}
 }

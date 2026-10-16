@@ -201,7 +201,7 @@ func mmValidateCommit(c *MMCommit) error {
 		// commit naming "k" would file under whichever repo sorts first. The
 		// resolve stays (it finds the path); acceptance demands the exact name.
 		if !strings.EqualFold(filepath.Base(resolved), name) {
-			return bad("repo %q: must be the checkout's exact directory name under ~/Developer (closest match: %s)", name, filepath.Base(resolved))
+			return bad("repo %q: must be the checkout's exact directory name under %s (closest match: %s)", name, repoRoot(), filepath.Base(resolved))
 		}
 		c.Repo = filepath.Base(resolved)
 		dir := strings.TrimSpace(c.Dir)

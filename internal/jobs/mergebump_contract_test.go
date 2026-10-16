@@ -14,7 +14,7 @@ const contractMergeURL = "https://github.com/car1zhang/kraken/pull/311"
 
 func TestContractMergeBumpMessageWording(t *testing.T) {
 	msg := mergeBumpMessage(contractMergeURL)
-	if !strings.HasPrefix(msg, prWatchPrefix+" ") {
+	if !strings.HasPrefix(msg, prWatchPrefix()+" ") {
 		t.Errorf("message does not begin with prWatchPrefix + space: %q", msg)
 	}
 	for _, want := range []string{

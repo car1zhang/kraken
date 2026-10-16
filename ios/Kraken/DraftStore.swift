@@ -10,7 +10,7 @@ import Observation
 ///
 /// Job-scoped keys ("steer:<slug>") additionally sync upstream via
 /// POST /api/draft, debounced, so a typed-but-unsent message also survives
-/// an app kill or reinstall — carl's "in memory" ask covered same-session
+/// an app kill or reinstall — the original "in memory" ask covered same-session
 /// continuity, this covers the rest. Pane-scoped keys ("send:<pane>",
 /// "shell:<pane>") have no server-side counterpart and stay purely local.
 /// Each debounced sync re-checks the draft's identity right before it POSTs
@@ -73,7 +73,10 @@ final class DraftStore {
             // POST this now-stale text over whatever won since — isCurrent
             // re-reads the live value and this bails unless it's unchanged.
             guard let self, self.isCurrent(key: key, text: text) else { return }
-            let baseURL = UserDefaults.standard.string(forKey: "serverURL") ?? KrakenDefaults.serverURL
+            let baseURL = KrakenDefaults.storedServerURL
+            // No server set: the draft stays local (it is still in `drafts`),
+            // and nothing is sent anywhere.
+            guard KrakenDefaults.isConfigured(baseURL) else { return }
             try? await APIClient.shared.postDraft(baseURL: baseURL, slug: slug, text: text)
             self.syncTasks.removeValue(forKey: key)
         }
@@ -86,7 +89,8 @@ final class DraftStore {
     func hydrate(slug: String) async {
         let key = "\(Self.jobKeyPrefix)\(slug)"
         guard get(key).isEmpty else { return }
-        let baseURL = UserDefaults.standard.string(forKey: "serverURL") ?? KrakenDefaults.serverURL
+        let baseURL = KrakenDefaults.storedServerURL
+        guard KrakenDefaults.isConfigured(baseURL) else { return }
         guard let resp = try? await APIClient.shared.getDraft(baseURL: baseURL, slug: slug),
               !resp.text.isEmpty else { return }
         // Re-check after the await: the user may have started typing (or a

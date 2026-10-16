@@ -81,13 +81,15 @@ func submitLock(id int64) *sync.Mutex {
 //  4. empty spec — the one refusal the old auto-start path never made, which
 //     is exactly how a cell could come up with an empty prompt.
 //
-// Only then does it resolve the repo, then — for a codex job — the codex
-// launcher (codexPreflight), and only then does it start. Both resolutions
-// are deliberately inside the refusal sequence rather than folded into
-// StartCell: a bad `repo:` is a job-file mistake with a fixable message and a
-// missing or stale codex is a machine mistake with one, and discovering
-// either before any worktree/tmux/rotation work happens is what makes it a
-// clean refusal rather than a half-built cell.
+// Only then does it resolve the repo, then check that the branch prefix
+// (KRAKEN_BRANCH_PREFIX) makes a valid git branch name (branchPrefixErr),
+// then — for a codex job — the codex launcher (codexPreflight), and only
+// then does it start. All three checks are deliberately inside the refusal
+// sequence rather than folded into StartCell: a bad `repo:` is a job-file
+// mistake with a fixable message, and a bad branch prefix or a missing or
+// stale codex is a machine mistake with one, and discovering any of them
+// before any worktree/tmux/rotation work happens is what makes it a clean
+// refusal rather than a half-built cell.
 func SubmitJob(j *Job) error {
 	mu := submitLock(j.ID)
 	mu.Lock()
@@ -106,6 +108,9 @@ func SubmitJob(j *Job) error {
 	}
 	repo, err := ResolveRepo(j.Repo)
 	if err != nil {
+		return fmt.Errorf("job %s: %v", j.Slug, err)
+	}
+	if err := branchPrefixErr(); err != nil {
 		return fmt.Errorf("job %s: %v", j.Slug, err)
 	}
 	if err := codexPreflight(j); err != nil {

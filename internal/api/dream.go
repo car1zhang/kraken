@@ -14,11 +14,11 @@ import (
 // There is no new persistence path here and deliberately so. A night report
 // is `00-dream-report.md`, an ordinary artifact of an ordinary job — the
 // dream-<YYYY-MM-DD> job that wrote it — so this handler is a filter over
-// the artifact plumbing board.go already owns: the same cell ∪ store ∪ pluto
-// union jobArtifacts resolves, which is what makes a report survive its
-// cell's teardown without anything having to copy it anywhere. Adding a
-// `dream_reports` table would have meant a second copy of bytes that already
-// exist, kept in sync by hand.
+// the artifact plumbing board.go already owns: the cell dir while the cell
+// is live, the artifacts table once it is not (jobArtifacts), which is what
+// makes a report survive its cell's teardown without anything else having
+// to copy it anywhere. Adding a `dream_reports` table would have meant a
+// second copy of bytes that already exist, kept in sync by hand.
 
 // dreamSlugPrefix identifies a dream job. jobs.CreateDreamJob mints exactly
 // one per local calendar day as `dream-<YYYY-MM-DD>`, so the prefix is both
@@ -51,9 +51,9 @@ func dreamJobHome(j *jobs.Job) string {
 
 // dreamReportBody reads j's night report, trying the homes in jobArtifacts'
 // own precedence: a live cell's files first (Q12 — a live cell's artifacts
-// are never DB-backed), then the store row / preserved flat copy for a job
-// whose cell is gone. ok is false when the job has no report yet, which is
-// the normal state of a dream job that is still running.
+// are never DB-backed), then the store row for a job whose cell is gone. ok
+// is false when the job has no report yet, which is the normal state of a
+// dream job that is still running.
 func dreamReportBody(j *jobs.Job) (string, bool) {
 	for _, home := range []string{"cell", dreamJobHome(j)} {
 		if data, _, ok := resolveArtifact(j, home, dreamReportName); ok && len(data) > 0 {

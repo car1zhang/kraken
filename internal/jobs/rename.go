@@ -16,7 +16,7 @@ import (
 // The shape of this feature is decided by one fact: a job's runtime names are
 // DERIVED from its slug, and almost none of them can be moved. The cell dir
 // and its worktree cannot (renaming a directory under a running agent breaks
-// its pane, and cutover.go's ruling on that is permanent), the git branch and
+// its pane), the git branch and
 // every open PR's head cannot (a `git branch -m` detaches the PR), and the
 // ~/.claude/projects transcript dirs are Claude Code's rather than kraken's.
 // So a rename moves almost NOTHING: it changes one column, records the old
@@ -24,10 +24,10 @@ import (
 // old names — cellDirCandidates, ExistingWorktree, branchFamily,
 // JobProjectDirs, FindCellSession, threadNamePrefixes.
 //
-// Two things DO move, and they are the two that can: the tmux session name
-// (one `tmux rename-session` on a live cell, converged straight away so `k ls`
-// and the board read the new name) and the preserved flat artifact copies in
-// pluto (plain file renames, nothing holds them open).
+// One thing DOES move, because it can: the tmux session name (one `tmux
+// rename-session` on a live cell, converged straight away so `k ls` and the
+// board read the new name). A job's stored artifacts need no move at all —
+// they are rows keyed on the job's immutable id.
 //
 // Everything after the store transaction commits is BEST-EFFORT and lands in
 // Notes rather than in an error. The rename is a fact the moment the row is
@@ -37,22 +37,13 @@ import (
 // happened.
 
 // RenameResult is what a completed rename has to say for itself: the stored
-// slug, any preserved artifact copies that could NOT be moved because a name
-// was already taken at the target, and any best-effort step that failed after
-// the row was written.
+// slug and any best-effort step that failed after the row was written (a
+// Note is a step kraken will retry — the daemon reconverges tmux — or that
+// costs only a missing pane message).
 //
-// Skipped and Notes are separate because they mean different things to the
-// caller: a Skipped path is a file still sitting under the old name that carl
-// may want to move by hand, while a Note is a step kraken will retry (the
-// daemon reconverges tmux) or that costs only a missing pane message.
-//
-// Skipped is precise about WHICH path, because both clients render it under a
-// sentence saying these copies "kept the old name": every entry is the SOURCE
-// path of a file that is still there under the old prefix, never the
-// destination that blocked it. It also holds true name CONFLICTS only — a
-// preserved copy whose rename FAILED outright (permissions, a full disk) is
-// not sitting behind an occupied name, so it goes to Notes with its cause
-// rather than into a list the client describes as conflicts.
+// Skipped is always empty. It listed preserved flat artifact copies that
+// kept the old name, and nothing is preserved as a file any more; the field
+// stays because the web and iOS clients decode it.
 type RenameResult struct {
 	Slug    string
 	Skipped []string
@@ -99,9 +90,8 @@ func RenameJob(j *Job, to string) (*RenameResult, error) {
 	// runtime name is derived from the slug and is LONGER than it: the cell
 	// dir, the worktree inside it, the branch, the tmux session. A committed
 	// over-long slug is not a cosmetic problem — the next StartCell or
-	// ReactivateJob fails on MkdirAll with ENAMETOOLONG, and the pluto moves
-	// blow past the 255-byte filename limit and land in Skipped — and by then
-	// the store row has already moved, so the refusal has to happen here.
+	// ReactivateJob fails on MkdirAll with ENAMETOOLONG — and by then the
+	// store row has already moved, so the refusal has to happen here.
 	if n := len([]rune(newSlug)); n > maxRenameSlugRunes {
 		return nil, fmt.Errorf("%q is too long (%d characters, max %d) — every cell dir, branch and tmux session name is built from the slug", newSlug, n, maxRenameSlugRunes)
 	}
@@ -149,7 +139,6 @@ func RenameJob(j *Job, to string) (*RenameResult, error) {
 	// recovered from it.
 	oldSlug := j.Slug
 	oldSlugified := util.Slugify(oldSlug)
-	oldCellName := cellName(j)
 	oldSess := CellSession(j)
 	live := LiveSessions()[oldSess]
 
@@ -176,9 +165,6 @@ func RenameJob(j *Job, to string) (*RenameResult, error) {
 	if live {
 		res.Notes = append(res.Notes, convergeCellTmux(j, oldSess, oldSlugified)...)
 	}
-	stranded, moveNotes := movePreservedArtifacts(j, oldCellName, oldSlugified)
-	res.Skipped = append(res.Skipped, stranded...)
-	res.Notes = append(res.Notes, moveNotes...)
 	if live {
 		res.Notes = append(res.Notes, noticeCellRename(j, oldSlug, newSlug)...)
 	}
@@ -336,54 +322,6 @@ func renameCellWindow(sess, oldName, newName string) string {
 		return ""
 	}
 	return ""
-}
-
-// movePreservedArtifacts renames the job's preserved flat artifact copies in
-// pluto onto the new <slug>-<id>. prefix. These are the one piece of a job's
-// state a rename CAN move: plain files in a flat directory that nothing holds
-// open, and they are what the board serves for a job whose cell is gone.
-//
-// The legacy sweep mirrors ArchiveJob's, and exists for the same reason: every
-// copy preserved before the id landed carries the bare slug, so the first move
-// matches none of them, and leaving them under the old bare name would strand
-// them — `kraken cutover` builds its prefix map from the job's CURRENT slug
-// and would never look for the old one again.
-//
-// Nothing here is fatal: movePrefixed refuses to overwrite, so a source stays
-// where it is and carl can see what did not move. Failing the rename over an
-// artifact name collision would leave the job under its old name for a reason
-// that has nothing to do with its name.
-//
-// The two return values split movePrefixed's skips along the line the clients
-// actually render, and the split is the whole point of returning two:
-//
-//   - stranded holds the SOURCE paths of true name CONFLICTS — files that kept
-//     the old name because something already sits at the new one. This is what
-//     RenameResult.Skipped carries and what the web and iOS notices list under
-//     "kept the old name … move or delete them by hand", so it must be the
-//     file that kept the old name. Reporting the destination there named the
-//     BLOCKER instead, and acting on that sentence literally meant deleting
-//     the wrong file while the stranded copy stayed stranded.
-//   - notes holds rename FAILURES (permissions, ENAMETOOLONG, a full disk).
-//     These are not conflicts, nothing already sits at the target, and the
-//     notice's "something already sits at the new one" is simply false about
-//     them — so they take the Notes channel, which exists for a best-effort
-//     step that failed, and they carry the cause that used to be discarded.
-func movePreservedArtifacts(j *Job, oldCellName, oldSlugified string) (stranded, notes []string) {
-	newCellName := cellName(j)
-	_, skipped := movePrefixed(PlutoDir(), oldCellName, PlutoDir(), newCellName)
-	if oldSlugified != "" && oldSlugified != oldCellName && oldSlugified != newCellName {
-		_, legacySkipped := movePrefixed(PlutoDir(), oldSlugified, PlutoDir(), newCellName)
-		skipped = append(skipped, legacySkipped...)
-	}
-	for _, s := range skipped {
-		if s.Conflict() {
-			stranded = append(stranded, s.Src)
-			continue
-		}
-		notes = append(notes, "preserved artifact not renamed: "+s.String())
-	}
-	return stranded, notes
 }
 
 // noticeCellRename tells a live cell's zeus that its job was renamed. Zeus'

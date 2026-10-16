@@ -46,7 +46,6 @@ func cdxJobsEdgeScript(t *testing.T, path, body string) string {
 func cdxJobsEdgeSandbox(t *testing.T) {
 	t.Helper()
 	t.Setenv("HOME", t.TempDir())
-	t.Setenv("KRAKEN_PLUTO_DIR", t.TempDir())
 	pathDir := t.TempDir()
 	cdxJobsEdgeScript(t, filepath.Join(pathDir, "codex"), "echo 'codex-cli 0.200.0'")
 	// prepended, not replaced: SubmitJob's earlier rungs may shell out to

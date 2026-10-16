@@ -324,25 +324,17 @@ func TestPRTrackable(t *testing.T) {
 
 // TestWatchPRsSkipsUnparseableJob is the eligibility-gate regression for
 // watchPRs (reviewer finding: watchPRs must not run for a job that failed to
-// parse cleanly). Without the gate, updatePRWatermark's patchPRs pass
-// re-reads the file, reparses it — and because the parser is strict, a
-// hand-edit typo in one prs: entry (e.g. "state: opne") both marks the whole
-// job Err AND silently drops that entry from the in-memory list — then
-// rewrites the WHOLE prs: block from that reduced list. The typo'd entry
-// would vanish from disk forever, and the very same rewrite clears the
-// job's Err on the next parse (the offending line is gone, so nothing is
-// left to error on). The gate (reusing prTrackable, exactly like the
-// tracker itself) must make watchPRs return before it ever touches gh or
-// the file. Proven for real: a fake `gh` on PATH and a real (if empty) git
-// checkout so ResolveRepo succeeds — if the gate didn't fire, this test
-// would observe both the gh call and the file rewrite.
+// parse cleanly): a strict parse of a hand-edit typo in one prs: entry
+// (e.g. "state: opne") both marks the whole job Err AND drops that entry
+// from the in-memory list, so acting on that list would act on a record
+// that is not the job's. The gate (reusing prTrackable, exactly like the
+// tracker itself) must make watchPRs return before it ever touches gh.
+// Proven for real: a fake `gh` on PATH and a real (if empty) git checkout so
+// ResolveRepo succeeds — if the gate didn't fire, this test would observe
+// the gh call.
 func TestWatchPRsSkipsUnparseableJob(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
-	t.Setenv("KRAKEN_PLUTO_DIR", filepath.Join(home, "pluto"))
-	if err := os.MkdirAll(PlutoDir(), 0o755); err != nil {
-		t.Fatal(err)
-	}
 
 	// a real (if empty) git checkout so ResolveRepo can resolve "testrepo" —
 	// this must succeed, so a failure to reach gh proves the ELIGIBILITY
@@ -366,8 +358,7 @@ func TestWatchPRsSkipsUnparseableJob(t *testing.T) {
 
 	// the exact scenario from the finding: a hand-edit typo ("state: opne")
 	// in one prs: entry marks the whole job Err — and, being strict, the
-	// parser already drops that entry from j.PRs in memory, though its raw
-	// text still sits untouched on disk unless a write happens.
+	// parser already drops that entry from j.PRs in memory.
 	content := "---\n" +
 		"job: typojob\n" +
 		"type: build\n" +
@@ -380,13 +371,8 @@ func TestWatchPRsSkipsUnparseableJob(t *testing.T) {
 		"  - url: https://github.com/x/x/pull/2\n" +
 		"    state: opne\n" + // typo — marks the whole job Err, drops this entry from j.PRs
 		"---\n\n# Spec\n"
-	path := filepath.Join(PlutoDir(), "typojob.job.md")
-	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
-		t.Fatal(err)
-	}
 
 	j := ParseJob("typojob.job.md", []byte(content))
-	j.File = path
 	if j.Err == "" {
 		t.Fatal("fixture setup: expected the typo'd prs entry to mark the job Err")
 	}
@@ -400,13 +386,6 @@ func TestWatchPRsSkipsUnparseableJob(t *testing.T) {
 
 	if _, err := os.Stat(ghCalled); err == nil {
 		t.Fatal("watchPRs called gh for an unparseable (Err != \"\") job — the eligibility gate did not fire")
-	}
-	after, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if string(after) != content {
-		t.Fatalf("unparseable job's file was rewritten (watermark write not gated):\nbefore: %s\nafter:  %s", content, string(after))
 	}
 }
 
@@ -651,7 +630,6 @@ func TestDaemonStateClearOffline(t *testing.T) {
 // gateRetry never runs at all, so this exercises the tick-start check in
 // isolation.
 func TestTickStartReconnectClearsStaleOfflineFlag(t *testing.T) {
-	t.Setenv("KRAKEN_PLUTO_DIR", t.TempDir())
 	old := probeOnline
 	probeOnline = func() bool { return true }
 	defer func() { probeOnline = old }()
@@ -828,15 +806,29 @@ func TestRepairFilter(t *testing.T) {
 // merely shares the slug as a prefix.
 //
 // It matches TWO families since branches took the job id: the current
-// carl/<slug>-<id> names, and the pre-cutover bare-slug ones that PRs opened
-// before the change still sit on. Dropping the legacy half would make the
+// <prefix><slug>-<id> names, and the pre-cutover bare-slug ones that PRs
+// opened before the change still sit on — each under BOTH the current prefix
+// and the legacy carl/ one. Dropping the legacy half would make the
 // PR-repair pass stop recognising those PRs as the job's own.
 func TestBranchFamily(t *testing.T) {
+	t.Setenv("KRAKEN_BRANCH_PREFIX", "carl/")
 	fam1 := branchFamily(&Job{Slug: "slug", ID: 7, Run: 1})
 	if len(fam1) != 2 || !fam1["carl/slug-7"] || !fam1["carl/slug"] {
 		t.Fatalf("run 1: got %v, want carl/slug-7 plus the legacy carl/slug", fam1)
 	}
 
+	t.Setenv("KRAKEN_BRANCH_PREFIX", "")
+	famDefault := branchFamily(&Job{Slug: "slug", ID: 7, Run: 1})
+	for _, b := range []string{"kraken/slug-7", "kraken/slug", "carl/slug-7", "carl/slug"} {
+		if !famDefault[b] {
+			t.Errorf("default prefix, run 1: missing %s in %v", b, famDefault)
+		}
+	}
+	if len(famDefault) != 4 {
+		t.Errorf("default prefix, run 1: got %v, want exactly the kraken/ and carl/ pairs", famDefault)
+	}
+
+	t.Setenv("KRAKEN_BRANCH_PREFIX", "carl/")
 	fam3 := branchFamily(&Job{Slug: "slug", ID: 7, Run: 3})
 	want := []string{
 		"carl/slug-7", "carl/slug-7-r2", "carl/slug-7-r3",
@@ -868,7 +860,8 @@ func TestBranchFamily(t *testing.T) {
 	// allocate/iterate billions of entries — the cap holds maxRun at 64,
 	// giving base (r=1) + r2..r64 = 64 names per family, and since the family
 	// covers both the id-form and the legacy bare-slug branches that is 128
-	// entries. The whole call must still return quickly.
+	// entries (under carl/, where the current and legacy prefixes coincide).
+	// The whole call must still return quickly.
 	start := time.Now()
 	famHuge := branchFamily(&Job{Slug: "slug", ID: 7, Run: 2000000000})
 	if elapsed := time.Since(start); elapsed > time.Second {
@@ -957,6 +950,7 @@ func TestTickMirrorSkipsAutoArchive(t *testing.T) {
 // a currently-failing check bumps even on first sight since it's actionable
 // regardless of history, and a PR that isn't (still) open never bumps.
 func TestWatchDecision(t *testing.T) {
+	t.Setenv("KRAKEN_OPERATOR", "Ada")
 	cases := []struct {
 		name                                                string
 		fetch                                               prWatchFetch
@@ -980,7 +974,7 @@ func TestWatchDecision(t *testing.T) {
 			lastCommentAt:       "2024-01-01T00:00:00Z",
 			bumpedSHA:           "sha1",
 			wantBump:            true,
-			wantMessageContains: []string{"new comment or review", "--comments", "[kraken pr-watch — automated notice, not a reply from carl]"},
+			wantMessageContains: []string{"new comment or review", "--comments", "[kraken pr-watch — automated notice, not a reply from Ada]"},
 			wantLastCommentAt:   "2024-01-02T00:00:00Z",
 			wantBumpedSHA:       "sha1",
 		},
@@ -1028,7 +1022,7 @@ func TestWatchDecision(t *testing.T) {
 			lastCommentAt:       "2024-01-01T00:00:00Z",
 			bumpedSHA:           "sha1",
 			wantBump:            true,
-			wantMessageContains: []string{"failing CI", "sha2", "ci/build", "[kraken pr-watch — automated notice, not a reply from carl]", "pristine origin/main"},
+			wantMessageContains: []string{"failing CI", "sha2", "ci/build", "[kraken pr-watch — automated notice, not a reply from Ada]", "pristine origin/main"},
 			wantLastCommentAt:   "2024-01-01T00:00:00Z",
 			wantBumpedSHA:       "sha2",
 		},
@@ -1104,7 +1098,7 @@ func TestWatchDecision(t *testing.T) {
 			bumpedSHA:           "sha1",
 			conflictState:       "clean",
 			wantBump:            true,
-			wantMessageContains: []string{"merge conflicts", "get the branch mergeable", "merge origin/main into your branch", "needs no force-push", "[kraken pr-watch — automated notice, not a reply from carl]"},
+			wantMessageContains: []string{"merge conflicts", "get the branch mergeable", "merge origin/main into your branch", "needs no force-push", "[kraken pr-watch — automated notice, not a reply from Ada]"},
 			wantLastCommentAt:   "2024-01-01T00:00:00Z",
 			wantBumpedSHA:       "sha1",
 			wantConflictState:   "conflicting",
@@ -1119,7 +1113,7 @@ func TestWatchDecision(t *testing.T) {
 			bumpedSHA:           "sha1",
 			conflictState:       "clean",
 			wantBump:            true,
-			wantMessageContains: []string{"merge conflicts with its base branch", "[kraken pr-watch — automated notice, not a reply from carl]"},
+			wantMessageContains: []string{"merge conflicts with its base branch", "[kraken pr-watch — automated notice, not a reply from Ada]"},
 			wantLastCommentAt:   "2024-01-01T00:00:00Z",
 			wantBumpedSHA:       "sha1",
 			wantConflictState:   "conflicting",

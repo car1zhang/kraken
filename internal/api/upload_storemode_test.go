@@ -51,7 +51,7 @@ func TestUploadBytesFallsThroughWhenNotFound(t *testing.T) {
 	}
 }
 
-// TestUploadBytesNoStoreWired covers the file-mode fallthrough
+// TestUploadBytesNoStoreWired covers the storeless fallthrough
 // contract: with no store wired, UploadBytes must always report
 // ok=false so callers fall through to UploadPath.
 func TestUploadBytesNoStoreWired(t *testing.T) {

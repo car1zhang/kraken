@@ -32,8 +32,7 @@ import (
 //   - bad/missing args: a usage message to stderr, exit non-zero.
 //
 // parse/run are split from cmdQuestions so the exit-code paths are testable
-// without going through util.Die's os.Exit — same shape as cmd_import.go's
-// parseImportArgs/runImport split.
+// without going through util.Die's os.Exit.
 func cmdQuestions(args []string) {
 	if len(args) == 0 {
 		util.Die("usage: k questions get|set|add|update|remove <slug> ...")

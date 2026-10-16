@@ -5,7 +5,7 @@
     <rect x="20" y="52" width="188" height="88" rx="2"/>
     <path d="M 20,52 L 32,40 H 220 L 208,52 Z"/>
     <path d="M 208,52 L 220,40 V 128 L 208,140"/>
-    <text x="114" y="96">carl's Mac, dev laptop</text>
+    <text x="114" y="96">your Mac, dev laptop</text>
   </g>
 
   <g class="iface">

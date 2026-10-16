@@ -39,11 +39,11 @@ type Job struct {
 	UpdatedAt    int64 // unix millis
 	ArchivedAt   int64 // 0 means not archived
 	ArchivedName string
-	// Err (L6) mirrors file mode's ParseJob-derived parse-failure detail:
+	// Err (L6) is ParseJob's parse-failure detail for the last saved text:
 	// non-empty pins the job to "draft" in deriveState regardless of
-	// state, same as an unparseable job file does. Persisted by the
-	// editor's store-mode save paths (api/jobedit.go) whenever the saved
-	// content fails to parse; cleared the moment a later save parses clean.
+	// state. Persisted by the editor's save paths (api/jobedit.go)
+	// whenever the saved content fails to parse; cleared the moment a
+	// later save parses clean.
 	Err string
 	// Load is zeus' triage estimate for this job (schema v13's four
 	// load_* columns), written through SetJobLoad and never through
@@ -648,16 +648,11 @@ func isUniqueConstraintErr(err error) bool {
 // when taken — same numbering as jobs.freeArchiveName), which frees the
 // slug for reuse by a new active job. Returns the assigned archived_name.
 //
-// E13: numbers off util.Slugify(slug), not the raw slug column — unifying
-// with jobs.ArchiveJob's file-mode path (jobs/archive.go), which has always
-// called freeArchiveName(util.Slugify(j.Slug)) for the same reason
-// movePrefixed's artifact-move target uses util.Slugify(j.Slug) too: the
-// archive name doubles as a filesystem-safe artifact-file prefix
-// (<archived_name>.<name>), so it must be slugified exactly like the pluto
-// flat-copy prefix already is. A raw slug and its slugified form only
-// diverge for characters slugify strips/normalizes (spaces, caps,
-// punctuation) that job slugs in practice never have — but there's no
-// reason to leave the two paths disagreeing once unifying costs nothing.
+// E13: numbers off util.Slugify(slug), not the raw slug column, so the
+// archived name is the same normalized form every other derived name (cell
+// dir, branch, session) is built from. A raw slug and its slugified form
+// only diverge for characters slugify strips/normalizes (spaces, caps,
+// punctuation) that job slugs in practice never have.
 func (s *Store) ArchiveJob(id int64) (string, error) {
 	tx, err := s.db.Begin()
 	if err != nil {

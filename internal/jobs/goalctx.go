@@ -50,12 +50,14 @@ import (
 const goalContextBytes = 700
 
 // goalContextHeader opens the block. It states WHOSE goals these are (they are
-// carl's, not the job's), and it names the pull verb once — the block is a
-// snapshot, the verb is how zeus re-reads it after carl edits the board, and a
-// snapshot that does not say where the live copy lives is a snapshot zeus has
-// to trust forever. The leading newline separates it from whatever the brief's
-// own last line was.
-const goalContextHeader = "\nCarl's goals right now (re-read any time: `kraken goals get <slug>`):\n"
+// the operator's, named by Operator(), not the job's), and it names the pull
+// verb once — the block is a snapshot, the verb is how zeus re-reads it after
+// the operator edits the board, and a snapshot that does not say where the
+// live copy lives is a snapshot zeus has to trust forever. The leading newline
+// separates it from whatever the brief's own last line was.
+func goalContextHeader() string {
+	return "\n" + operatorPossessive() + " goals right now (re-read any time: `kraken goals get <slug>`):\n"
+}
 
 // goalContextMarker is the literal that flags a goal THIS job was linked to on
 // the board. Those are the lines in the block that are about this cell rather
@@ -112,7 +114,7 @@ func goalContext(j *Job) string {
 // are written by a route (`/api/job/goal`) that deliberately touches neither
 // `rev` nor `updated_at` — so a jobs.Job in hand may predate a link by any
 // amount of time, and re-reading the row is the only way to see it. Every
-// failure — a file-backed job with no row, a missing row, a read error — is
+// failure — no store, a job with no row, a missing row, a read error — is
 // nil, which is the unlinked job's answer.
 func jobGoalIDs(st *store.Store, j *Job) []int64 {
 	if st == nil || j == nil {
@@ -270,7 +272,7 @@ func renderGoalsBlock(st *store.Store, linkedIDs []int64) string {
 	//     child over an earlier one only changes which day goal is silently
 	//     missing from a group that claims to list them.
 	var b strings.Builder
-	b.WriteString(goalContextHeader)
+	b.WriteString(goalContextHeader())
 	written := 0
 	for _, group := range groups {
 		if b.Len()+len(group[0]) > goalContextBytes {

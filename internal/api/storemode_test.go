@@ -11,7 +11,7 @@ import (
 // useTestStore opens a temp-file store, wires the jobs package onto it
 // (jobs.UseStore — the same call kraken serve's cmd_serve.go makes at
 // startup), and unwires it on test cleanup so a store-backed test never
-// leaks into a later, unrelated file-mode test in this package's test
+// leaks into a later, unrelated storeless test in this package's test
 // binary. Mirrors jobs/store_test.go's helper of the same name/shape,
 // duplicated here since it's a test-only unexported helper in a different
 // package with no exported "unwire" of its own.

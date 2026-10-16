@@ -471,7 +471,7 @@ func (b *slackBatch) empty() bool { return len(b.rows) == 0 && len(b.marks) == 0
 // instead — see the daemon's comment on the three calls).
 func slackPass(st *store.Store, all []*core.Peer, now time.Time) {
 	if st == nil {
-		return // file-mode entrypoints have nowhere to put the rows
+		return // no store wired (a storeless test or CLI process): nowhere to put the rows
 	}
 	if !slackPassRunning.CompareAndSwap(false, true) {
 		return

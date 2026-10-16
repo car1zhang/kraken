@@ -542,7 +542,7 @@ func TestPreflightShipIOSRefusals(t *testing.T) {
 			name:  "no credentials at all",
 			creds: false,
 			setup: func(t *testing.T, repo string) { fakeShipScript(t, repo) },
-			want:  []string{"ASC_KEY_ID", "ASC_ISSUER_ID", "ios/TESTFLIGHT.md", "launchctl"},
+			want:  []string{"ASC_KEY_ID", "ASC_ISSUER_ID", "ios/TESTFLIGHT.md", "~/.kraken/asc.env"},
 		},
 		{
 			name:  "no script on this checkout",

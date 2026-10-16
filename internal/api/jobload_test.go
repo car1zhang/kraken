@@ -13,9 +13,7 @@ import (
 )
 
 // jobload_test.go — GET/POST /api/job/load. Store-backed throughout
-// (useTestStore), unlike jobcolor_test.go's file-mode fixtures: the estimate
-// has no job-file spelling at all, so there is nothing a file-mode job could
-// carry.
+// (useTestStore): the estimate has no frontmatter spelling at all.
 
 // seedLoadJob wires a temp store and creates one active job, returning it.
 func seedLoadJob(t *testing.T, slug string) *store.Store {

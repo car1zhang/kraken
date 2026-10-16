@@ -298,8 +298,8 @@ func TestMergeTeammateSettings(t *testing.T) {
 // --- prHookCommand / E7 hook addr propagation ---
 
 // TestPrHookCommandDefaultsMatchPreE7Shape confirms that with neither
-// SetHookServeAddr nor KRAKEN_DB_PATH set (file-mode `k daemon`/`k web`,
-// or a `kraken serve` process that never called SetHookServeAddr), the
+// SetHookServeAddr nor KRAKEN_DB_PATH set (any process that never called
+// SetHookServeAddr), the
 // hook command is byte-identical to before E7 — no flags at all.
 func TestPrHookCommandDefaultsMatchPreE7Shape(t *testing.T) {
 	SetHookServeAddr("")
@@ -639,6 +639,7 @@ func TestCellHealth(t *testing.T) {
 // --- reactivatePrompt ---
 
 func TestReactivatePrompt(t *testing.T) {
+	t.Setenv("KRAKEN_OPERATOR", "Ada")
 	const reorient = "re-orient text"
 	const rebase = "rebase instruction"
 	cases := []struct {
@@ -650,8 +651,8 @@ func TestReactivatePrompt(t *testing.T) {
 	}{
 		{"blank message, no rebase", "", "", "", false},
 		{"blank message, rebase needed", "", rebase, rebase, true},
-		{"message, no rebase", "steer me", "", reorient + "\nsteering from carl: steer me", true},
-		{"message, rebase needed", "steer me", rebase, rebase + "\n" + reorient + "\nsteering from carl: steer me", true},
+		{"message, no rebase", "steer me", "", reorient + "\nsteering from Ada: steer me", true},
+		{"message, rebase needed", "steer me", rebase, rebase + "\n" + reorient + "\nsteering from Ada: steer me", true},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -756,42 +757,6 @@ func TestRecreateFromRemoteMergedBranchFallsBack(t *testing.T) {
 	runIn(origin, "merge", "-q", "--no-ff", "-m", "merge feature", "feature")
 	if needsRebase, ok := recreateFromRemote(repo, "feature", "origin/main"); ok || needsRebase {
 		t.Fatalf("merged branch: needsRebase=%v ok=%v, want false/false", needsRebase, ok)
-	}
-}
-
-// --- AllArtifactPaths ---
-
-// TestAllArtifactPathsNoReservedNames covers the flip side of the retired
-// questions.yaml special-casing: questions are rows in kraken.db now, not a
-// file, so there is no reserved pluto name for AllArtifactPaths to exclude
-// any more — a preserved copy literally named <slug>.questions.yaml is an
-// ordinary deliverable like any other.
-func TestAllArtifactPathsNoReservedNames(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
-	plutoDir := t.TempDir()
-	t.Setenv("KRAKEN_PLUTO_DIR", plutoDir)
-
-	j := &Job{Slug: "artifact-paths-job", ID: 8}
-	realArtifact := filepath.Join(plutoDir, "artifact-paths-job-8.figures-a.svg")
-	namedLikeQuestions := filepath.Join(plutoDir, "artifact-paths-job-8.questions.yaml")
-	if err := os.WriteFile(realArtifact, []byte("svg"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(namedLikeQuestions, []byte("real deliverable"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	paths := AllArtifactPaths(j)
-	wantPresent := map[string]bool{realArtifact: false, namedLikeQuestions: false}
-	for _, p := range paths {
-		if _, ok := wantPresent[p]; ok {
-			wantPresent[p] = true
-		}
-	}
-	for want, found := range wantPresent {
-		if !found {
-			t.Fatalf("want %q to appear in AllArtifactPaths, got %+v", want, paths)
-		}
 	}
 }
 

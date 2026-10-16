@@ -17,7 +17,6 @@ func TestPrAttachHandlerHappyPath(t *testing.T) {
 	// and its dedup, not about the repo gate (prattach_*_test.go cover that),
 	// and against the real ~/Developer/monolith a carl/kraken URL is a 409.
 	t.Setenv("HOME", t.TempDir())
-	t.Setenv("KRAKEN_PLUTO_DIR", t.TempDir())
 	writeTestJob(t, "pr-attach-happy", "")
 
 	body := mustJSON(t, prAttachReq{Slug: "pr-attach-happy", URL: "https://github.com/carl/kraken/pull/9"})
@@ -71,7 +70,6 @@ func TestPrAttachHandlerStoreMode(t *testing.T) {
 }
 
 func TestPrAttachHandlerRefusals(t *testing.T) {
-	t.Setenv("KRAKEN_PLUTO_DIR", t.TempDir())
 	writeTestJob(t, "pr-attach-refuse", "")
 
 	cases := []struct {

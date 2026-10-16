@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"sort"
@@ -700,44 +701,34 @@ type webBoard struct {
 	// spelling of "no background", webJob.load's rule. Additive, same policy
 	// as Update and ShipIOS.
 	Background *webBackground `json:"background,omitempty"`
+	// Operator is the name of the person this kraken works for (jobs.Operator:
+	// KRAKEN_OPERATOR, else $USER, else "the operator"), so a client can label
+	// that person's turns without carrying a name of its own. Additive, same
+	// policy as Update and ShipIOS.
+	Operator string `json:"operator"`
 }
 
-// jobArtifacts collects a job's viewable artifacts. A live cell always
-// serves straight from the cell dir (Q12), unchanged regardless of storage
-// mode. Once the cell is gone: file mode keeps its original pluto-copy
-// listing; store mode (L4+E6) UNIONS three sources — the (normally empty,
-// post-teardown) cell-dir walk, the artifacts table (the block-event
-// sync's mirror, which — unlike the pluto flat-copy preservation — keeps
-// nested subdirs), and the pluto flat <slug>.<name> copies — deduped by
-// name with precedence cell > store > pluto. The pluto source can't be
-// dropped in store mode: a job's root-level *.md notes are preserved
-// straight from the worktree root by cell.go's preserveArtifacts, never
-// through CellArtifacts()/artifacts/, so jobs/sync.go's syncCellArtifacts
-// (which only ever mirrors the artifacts/ subdir) never captures them into
-// the store's artifacts table at all — the pluto flat copy is the SOLE
-// record of that deliverable, store mode or not. Dropping it (the
-// pre-L4/E6 behavior: store mode returned cell ∪ store only) made a job's
-// root-level notes vanish from the board entirely the moment its cell was
-// torn down.
+// jobArtifacts collects a job's viewable artifacts from exactly one source.
+// A live cell serves straight from the cell dir (Q12). Any other job serves
+// the artifacts table — the block-event sync's mirror, which teardown's
+// final pass completes with the worktree's uncommitted root notes
+// (jobs/sync.go) — under the URL home "pluto" for an active job and
+// "archive" (keyed on ArchivedName) for an archived one. The home names are
+// namespace names that shipped iOS builds decode, not directories: nothing
+// here reads the filesystem once the cell is not live.
 //
-// Both branches end in sortedArtifacts — see its comment for why sources that
-// are each sorted do not append into a sorted list, and why the live branch
-// goes through it too even though its single source already is.
+// Both branches end in sortedArtifacts — the wire order is the reading
+// order, and the guarantee must not rest on either source happening to
+// arrive sorted.
 func jobArtifacts(j *jobs.Job, live bool) []webArtifact {
-	seen := map[string]bool{}
-	var out []webArtifact
-	add := func(entries []webArtifact) {
-		for _, e := range entries {
-			if seen[e.Name] {
-				continue // lower-precedence source already lost this name
-			}
-			seen[e.Name] = true
-			out = append(out, e)
+	if !live {
+		if j.ArchivedName != "" {
+			return sortedArtifacts(storeArtifactList(j.ArchivedName, j.ID, "archive"))
 		}
+		return sortedArtifacts(storeArtifactList(j.Slug, j.ID, "pluto"))
 	}
-
 	root := jobs.CellArtifacts(j)
-	var cellEntries []webArtifact
+	var out []webArtifact
 	for _, p := range jobs.ListArtifacts(j) {
 		// name is the path relative to the artifacts dir, so nested files
 		// read as "icon-variations/icon-v1.png" and clients can group by dir
@@ -745,19 +736,8 @@ func jobArtifacts(j *jobs.Job, live bool) []webArtifact {
 		if rel, err := filepath.Rel(root, p); err == nil {
 			name = rel
 		}
-		cellEntries = append(cellEntries, webArtifact{Name: name, URL: "/api/artifact/" + j.Slug + "/cell/" + name})
+		out = append(out, webArtifact{Name: name, URL: artifactURL(j.Slug, "cell", filepath.ToSlash(name))})
 	}
-	add(cellEntries)
-
-	// Q12: a live cell always serves straight from the cell dir — nothing
-	// else to add once cellEntries is in. It still goes through the sort:
-	// its one source is already ordered, so this is a no-op today, but the
-	// wire guarantee must not rest on that staying true.
-	if live {
-		return sortedArtifacts(out)
-	}
-	add(storeArtifactList(j.Slug, j.ID, "pluto"))
-	add(plutoFlatArtifacts(j))
 	return sortedArtifacts(out)
 }
 
@@ -767,59 +747,23 @@ func jobArtifacts(j *jobs.Job, live bool) []webArtifact {
 // it, so a future second source added to either producer inherits the
 // guarantee instead of silently breaking it.
 //
-// It exists because each source arrives sorted WITHIN itself (ListArtifacts'
-// sort.Strings, the store's ORDER BY path, ReadDir's lexical order) and
-// appending sorted lists does not produce a sorted one: a job whose
-// artifacts/ tree is mirrored in the store while a root-level note survives
-// only as a pluto flat copy served 00-overview.md AFTER 90-build-report.md.
-// That was survivable while the list was a row of chips you scan, and stopped
-// being so once the clients gained next/prev — the wire order IS the reading
-// order now, and the overview was four steps from the front of its own set.
-//
-// Sorting the deduped union rather than the sources keeps jobArtifacts' cell
-// > store > pluto precedence intact: `add` has already dropped the losers by
-// the time this runs, so no entry here can displace a higher-precedence one.
-// Pinned by TestJobArtifactsStoreModeUnionIsGloballySorted (torn-down, the
-// multi-source case) and TestJobArtifactsLiveCellIsSorted (live, the
-// single-source case that reaches the wire without passing through the union).
+// It exists because the list once came from several sources, each sorted
+// WITHIN itself, and appending sorted lists does not produce a sorted one —
+// a torn-down job served 00-overview.md AFTER 90-build-report.md. The wire
+// order IS the reading order (the clients page through it with next/prev),
+// so it is enforced here rather than assumed of whichever source a producer
+// reads today.
 func sortedArtifacts(out []webArtifact) []webArtifact {
 	sort.SliceStable(out, func(a, b int) bool { return out[a].Name < out[b].Name })
 	return out
 }
 
-// plutoFlatArtifacts scans PlutoDir for j's <slug>-<id>.<name> flat copies —
-// preserveArtifacts' preservation format (cell.go). Pulled out of
-// jobArtifacts so both the file-mode branch and the store-mode union
-// (L4+E6) share one implementation.
-//
-// The prefix comes from jobs.PlutoArtifactPrefix rather than being spelled
-// out here: this reader and preserveArtifacts' writer disagreeing about the
-// string is a job whose preserved artifacts silently vanish from its card.
-func plutoFlatArtifacts(j *jobs.Job) []webArtifact {
-	prefix := jobs.PlutoArtifactPrefix(j)
-	entries, err := os.ReadDir(jobs.PlutoDir())
-	if err != nil {
-		return nil
-	}
-	var out []webArtifact
-	for _, e := range entries {
-		name := e.Name()
-		if e.IsDir() || !strings.HasPrefix(name, prefix) || strings.HasSuffix(name, jobs.JobSuffix) {
-			continue
-		}
-		out = append(out, webArtifact{Name: strings.TrimPrefix(name, prefix), URL: "/api/artifact/" + j.Slug + "/pluto/" + strings.TrimPrefix(name, prefix)})
-	}
-	return out
-}
-
 // storeArtifactList lists jobID's DB-mirrored artifacts (store/artifacts.go,
 // populated by the block-event sync — jobs/sync.go) as webArtifacts under
-// the given URL "home" segment. The URL scheme is unchanged from file mode
-// on purpose (Q12 only moves where the BYTES are served from, not the wire
-// shape): ArtifactBytes/artifactHandler resolve any non-"cell" home through
-// the store first whenever one is wired, falling back to ArtifactPath's
-// filesystem lookup otherwise. home is "pluto" for an active (done) job's
-// artifacts, "archive" for an archived job's.
+// the given URL "home" segment, which ArtifactBytes/artifactHandler resolve
+// through the store. home is "pluto" for an active job's artifacts,
+// "archive" for an archived job's — namespace names kept for the wire, not
+// directories.
 func storeArtifactList(slug string, jobID int64, home string) []webArtifact {
 	st := jobs.ActiveStore()
 	if st == nil || jobID == 0 {
@@ -831,17 +775,35 @@ func storeArtifactList(slug string, jobID int64, home string) []webArtifact {
 	}
 	out := make([]webArtifact, 0, len(rows))
 	for _, a := range rows {
-		out = append(out, webArtifact{Name: a.Path, URL: "/api/artifact/" + slug + "/" + home + "/" + a.Path})
+		out = append(out, webArtifact{Name: a.Path, URL: artifactURL(slug, home, a.Path)})
 	}
 	return out
 }
 
-// ArtifactPath resolves an artifact request to a real file, refusing anything
-// that escapes the two artifact homes (the URL is attacker-adjacent input:
-// any local process can hit the port). A cell name may be a subpath
-// (icon-variations/icon-v1.png) so folders are navigable, but every segment is
-// validated against traversal and hidden files.
+// artifactURL builds /api/artifact/<slug>/<home>/<name> with every path
+// segment url.PathEscape'd on its own — name's "/" separators kept, each
+// segment between them escaped — so a name carrying "#", "%", "?" or a
+// space round-trips: net/http decodes r.URL.Path back to the raw name
+// before artifactHandler splits it.
+func artifactURL(slug, home, name string) string {
+	segs := strings.Split(name, "/")
+	for i, s := range segs {
+		segs[i] = url.PathEscape(s)
+	}
+	return "/api/artifact/" + url.PathEscape(slug) + "/" + url.PathEscape(home) + "/" + strings.Join(segs, "/")
+}
+
+// ArtifactPath resolves a "cell" artifact request to a real file under the
+// live cell's artifacts dir, refusing anything that escapes it (the URL is
+// attacker-adjacent input: any local process can hit the port). A name may
+// be a subpath (icon-variations/icon-v1.png) so folders are navigable, but
+// every segment is validated against traversal and hidden files. Every other
+// home is served from the artifacts table (ArtifactBytes) and has no file
+// here: ("", false).
 func ArtifactPath(j *jobs.Job, home, name string) (string, bool) {
+	if home != "cell" {
+		return "", false
+	}
 	name = strings.TrimPrefix(name, "/")
 	if name == "" {
 		return "", false
@@ -851,35 +813,9 @@ func ArtifactPath(j *jobs.Job, home, name string) (string, bool) {
 			return "", false // no traversal, no empty/hidden segments
 		}
 	}
-	var p, root string
-	switch home {
-	case "cell":
-		root = jobs.CellArtifacts(j)
-		p = filepath.Join(root, name)
-	case "pluto":
-		// pluto copies are flat (<slug>-<id>.<name>), never nested
-		if strings.Contains(name, "/") {
-			return "", false
-		}
-		root = jobs.PlutoDir()
-		p = filepath.Join(root, jobs.PlutoArtifactPrefix(j)+name)
-	case "archive":
-		// Archived copies carry the SAME <slug>-<id>. prefix as live ones:
-		// ArchiveJob moves them across without renaming, because the id
-		// already disambiguates two generations of a name — which is what
-		// the archive's numbered -2/-3 prefix used to be for. ArchivedName
-		// remains the archived job's identity in the jobs table; it just no
-		// longer names files.
-		if j.ArchivedName == "" || strings.Contains(name, "/") {
-			return "", false
-		}
-		root = jobs.ArchiveDir()
-		p = filepath.Join(root, jobs.PlutoArtifactPrefix(j)+name)
-	default:
-		return "", false
-	}
-	// the flat homes join <prefix>.<name>, so a name like "job.md" would
-	// reassemble the job FILE's own path — job files are never artifacts
+	root := jobs.CellArtifacts(j)
+	p := filepath.Join(root, name)
+	// job files are never artifacts, in any home
 	if strings.HasSuffix(p, jobs.JobSuffix) {
 		return "", false
 	}
@@ -894,24 +830,15 @@ func ArtifactPath(j *jobs.Job, home, name string) (string, bool) {
 }
 
 // ArtifactBytes is ArtifactPath's store-backed twin (Q12): resolves
-// job+name straight from the artifacts table instead of a filesystem home,
-// for any non-"cell" home once a store is wired — a done/archived job's
-// "pluto"/"archive" homes no longer need a file on disk to serve from. ok
-// is false whenever no store is wired, j has no store row, or the path
-// isn't found in the table — callers fall back to ArtifactPath, which is
-// always safe (preserveArtifacts/movePrefixed still write the file copies
-// too, per jobs/cell.go and jobs/archive.go's own store-mode branches).
+// job+name straight from the artifacts table, for any non-"cell" home — the
+// ONLY way a done or archived job's "pluto"/"archive" artifacts are served.
+// ok is false whenever no store is wired, j has no store row, or the path
+// isn't found in the table, and there is no file fallback behind it.
 //
-// L11: home is now a required parameter, refused outright when "cell" —
-// Q12's rule is that a live cell's artifacts are NEVER DB-backed, only
-// ever served straight off disk. Without this, a caller that fell back to
-// ArtifactBytes after an ArtifactPath("cell", ...) miss (feedback.go's
-// resolveArtifact does exactly this for non-cell homes: ArtifactBytes
-// first, ArtifactPath as the fallback — the same precedence artifactHandler
-// itself serves bytes from, B6) could have the DB serve bytes for a
-// same-named artifact that actually lives under a DIFFERENT home (e.g. a
-// "pluto" flat copy sharing a filename with a would-be cell file) —
-// silently mislabeling which home the returned bytes actually came from.
+// L11: home is a required parameter, refused outright when "cell" — Q12's
+// rule is that a live cell's artifacts are NEVER DB-backed, only ever
+// served straight off disk, so the table must not answer for a name that
+// was asked of the cell home.
 // Also refuses any name ending in jobs.JobSuffix — mirroring ArtifactPath's
 // own "job files are never artifacts" refusal, which ArtifactBytes never
 // had (a name reconstructing to a job file's own
@@ -1085,7 +1012,7 @@ func buildWebBoard() webBoard {
 	st, ok := jobs.ReadDaemonStatus()
 	all, _ := core.OrderAll(core.DiscoverAll())
 	activeStore := jobs.ActiveStore()
-	board := webBoard{Daemon: st, DaemonOK: ok && jobs.ProcessAlive(st.PID), CellCap: legacyCellCap, Jobs: []webJob{}, Contract: apiContract, Stale: util.IsSelfStale(), Update: currentUpdate(), ShipIOS: currentShipIOS(), Goals: currentGoals(activeStore), Background: currentBackground(activeStore)}
+	board := webBoard{Daemon: st, DaemonOK: ok && jobs.ProcessAlive(st.PID), CellCap: legacyCellCap, Jobs: []webJob{}, Contract: apiContract, Stale: util.IsSelfStale(), Update: currentUpdate(), ShipIOS: currentShipIOS(), Goals: currentGoals(activeStore), Background: currentBackground(activeStore), Operator: jobs.Operator()}
 	order := jobs.LoadBoardOrder()
 	// The card chips, in two steps with two different scopes, deliberately: ONE
 	// unfiltered query for every link in job_goals (jobGoalLinks — small, and
@@ -1333,21 +1260,9 @@ func webJSON(w http.ResponseWriter, status int, v any) {
 	_ = json.NewEncoder(w).Encode(v)
 }
 
-// jobMTime is a job file's mtime as unix milliseconds — the wire format for
-// every editor endpoint. UnixMilli (~1.75e12) fits safely in both a Swift
-// Int64 and a JS number, unlike UnixNano, which overflows JS's 2^53
-// safe-integer range and forced the old string encoding. fi is nil when the
-// preceding os.Stat failed; callers get 0 rather than a panic.
-func jobMTime(fi os.FileInfo) int64 {
-	if fi == nil {
-		return 0
-	}
-	return fi.ModTime().UnixMilli()
-}
-
-// mtimeToken decodes an mtime from the wire as either a JSON number (current
-// format) or a legacy JSON string (older clients that still send the
-// pre-UnixMilli encoding), normalizing to unix-millis. An empty string or
+// mtimeToken decodes the editor's optimistic-lock token (the row's rev,
+// carried in the wire field "mtime") as either a JSON number (current
+// format) or a legacy JSON string (older clients). An empty string or
 // JSON null decodes to 0, which callers treat as "skip the optimistic-lock
 // check" — the same meaning "0" already carried under the string encoding.
 type mtimeToken int64

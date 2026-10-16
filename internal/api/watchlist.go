@@ -425,7 +425,7 @@ func watchItemHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if bad := rejectKeys(raw, carlOwnedWatchKeys); bad != "" {
-		webJSON(w, http.StatusBadRequest, map[string]string{"error": bad + " is carl's, not yours — the store preserves it on every agent write; judge a row from the board instead"})
+		webJSON(w, http.StatusBadRequest, map[string]string{"error": bad + " is the operator's, not yours — the store preserves it on every agent write; judge a row from the board instead"})
 		return
 	}
 	st := jobs.ActiveStore()
@@ -446,7 +446,7 @@ func watchItemHandler(w http.ResponseWriter, r *http.Request) {
 		var itemKeys map[string]json.RawMessage
 		if err := json.Unmarshal(raw["item"], &itemKeys); err == nil {
 			if bad := rejectKeys(itemKeys, carlOwnedWatchKeys); bad != "" {
-				webJSON(w, http.StatusBadRequest, map[string]string{"error": "item." + bad + " is carl's, not yours — drop it; the store preserves it across your writes"})
+				webJSON(w, http.StatusBadRequest, map[string]string{"error": "item." + bad + " is the operator's, not yours — drop it; the store preserves it across your writes"})
 				return
 			}
 		}

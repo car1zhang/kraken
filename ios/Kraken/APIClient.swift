@@ -1,7 +1,27 @@
 import Foundation
 
 enum KrakenDefaults {
-    static let serverURL = "http://100.90.94.3:7777"
+    /// Empty on a fresh install: no address is right for every operator's
+    /// Mac, and a preset one pointed every new install at somebody else's
+    /// tailnet. Every `@AppStorage("serverURL")` defaults to this, so an empty
+    /// string IS "no server set" — `isConfigured` is the one test of it, and
+    /// the board shows a first-run "set your server" state instead of polling.
+    /// A URL an install already stored is untouched: @AppStorage only falls
+    /// back to this default when the key has never been written.
+    static let serverURL = ""
+
+    /// Whether a stored server URL names a server at all (anything but
+    /// whitespace). It does not validate the URL — a malformed one still
+    /// fails loudly at the request, which is the useful error for a typo.
+    static func isConfigured(_ raw: String?) -> Bool {
+        !(raw ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    /// The stored server URL for code outside a SwiftUI view (background
+    /// refresh, draft sync), `serverURL` when none was ever stored.
+    static var storedServerURL: String {
+        UserDefaults.standard.string(forKey: "serverURL") ?? serverURL
+    }
 }
 
 enum KrakenError: Error, LocalizedError {
@@ -88,6 +108,13 @@ actor APIClient {
     }
 
     private func buildURL(baseURL: String, path: String, query: [(String, String)] = []) throws -> URL {
+        // No server set (a fresh install): refuse before building anything.
+        // "" + "/api/board" parses as a RELATIVE URL, so without this the
+        // request would be issued and fail later with a confusing
+        // "unsupported URL" instead of saying what is actually missing.
+        guard KrakenDefaults.isConfigured(baseURL) else {
+            throw KrakenError.message("no server set — enter your Mac's address in Settings")
+        }
         // Settings lets the user type a server URL freehand; trim a trailing
         // slash so "http://host:7777/" + "/api/board" doesn't produce a
         // double slash (net/http's ServeMux would 301-redirect it, which

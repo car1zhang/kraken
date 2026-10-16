@@ -21,6 +21,13 @@ func resetDreamGuards(t *testing.T) {
 	t.Helper()
 	lastDreamDate.Store("")
 	t.Cleanup(func() { lastDreamDate.Store("") })
+	// kickDream skips the night when no kraken checkout resolves; give the
+	// cadence tests one (a bare .git dir is all isGitRepo checks).
+	repos := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(repos, "kraken", ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("KRAKEN_REPOS_DIR", repos)
 }
 
 // dreamStub replaces the dreamPass seam — nothing here sweeps, mines, or

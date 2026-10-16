@@ -46,37 +46,11 @@ func contractRenameSet(ss []string) map[string]bool {
 	return out
 }
 
-func contractRenamePluto(t *testing.T) string {
-	t.Helper()
-	dir := PlutoDir()
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		t.Fatalf("mkdir pluto: %v", err)
-	}
-	return dir
-}
-
-func contractRenameWrite(t *testing.T, dir, name, body string) {
-	t.Helper()
-	if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o644); err != nil {
-		t.Fatalf("write %s: %v", name, err)
-	}
-}
-
-func contractRenameRead(t *testing.T, dir, name string) string {
-	t.Helper()
-	b, err := os.ReadFile(filepath.Join(dir, name))
-	if err != nil {
-		t.Fatalf("read %s: %v", name, err)
-	}
-	return string(b)
-}
-
 // TestContractRenameHappyPath is jobs.RenameJob's whole success contract:
 // the stored slug is the SLUGIFIED target, the result names it, and j is
 // updated in place (Slug, Rev, FormerSlugs).
 func TestContractRenameHappyPath(t *testing.T) {
 	st := useTestStore(t)
-	contractRenamePluto(t)
 	j := contractRenameSeed(t, st, "alpha", "")
 	oldRev := j.Rev
 
@@ -109,7 +83,6 @@ func TestContractRenameHappyPath(t *testing.T) {
 // including the raw form "Alpha", which slugifies to the current name.
 func TestContractRenameNoOpChangesNothing(t *testing.T) {
 	st := useTestStore(t)
-	contractRenamePluto(t)
 	j := contractRenameSeed(t, st, "alpha", "")
 	oldRev := j.Rev
 
@@ -138,7 +111,6 @@ func TestContractRenameNoOpChangesNothing(t *testing.T) {
 // table. The contract states it flatly — "There is NO cell-state gate".
 func TestContractRenameHasNoCellStateGate(t *testing.T) {
 	st := useTestStore(t)
-	contractRenamePluto(t)
 
 	for i, state := range []string{"working", "blocked"} {
 		slug := "live" + strconv.Itoa(i)
@@ -156,49 +128,31 @@ func TestContractRenameHasNoCellStateGate(t *testing.T) {
 	}
 }
 
-// TestContractRenameMovesPlutoFlatCopies covers the file half of the
-// post-transaction work: the preserved flat copies move from the OLD cell
-// name's prefix to the new one, the ArchiveJob-style legacy bare-slug sweep
-// carries pre-cutover copies along with them, and the stranded source is
-// REPORTED in Skipped rather than failing the rename.
-func TestContractRenameMovesPlutoFlatCopies(t *testing.T) {
+// TestContractRenameKeepsArtifactRows: a job's artifacts are rows keyed on
+// its id, so a rename moves nothing and loses nothing — the rows are still
+// there under the renamed job, Skipped is empty, and no Note names a path.
+func TestContractRenameKeepsArtifactRows(t *testing.T) {
 	st := useTestStore(t)
-	pluto := contractRenamePluto(t)
 	j := contractRenameSeed(t, st, "alpha", "")
-	id := strconv.FormatInt(j.ID, 10)
-
-	contractRenameWrite(t, pluto, "alpha-"+id+".report.md", "REPORT")
-	contractRenameWrite(t, pluto, "alpha.legacy.md", "LEGACY")
-	contractRenameWrite(t, pluto, "alpha-"+id+".clash.md", "SOURCE")
-	contractRenameWrite(t, pluto, "omega-"+id+".clash.md", "ALREADY THERE")
+	if err := st.SyncArtifacts(j.ID, []store.ArtifactFile{{Path: "report.md", Bytes: []byte("REPORT"), Mtime: 1}}, nil); err != nil {
+		t.Fatal(err)
+	}
 
 	res, err := RenameJob(j, "omega")
 	if err != nil {
-		t.Fatalf("RenameJob: %v — a conflicting flat copy is reported, never fatal", err)
+		t.Fatalf("RenameJob: %v", err)
 	}
-
-	if got := contractRenameRead(t, pluto, "omega-"+id+".report.md"); got != "REPORT" {
-		t.Errorf("moved report content = %q, want REPORT", got)
+	arts, err := st.ListArtifacts(j.ID)
+	if err != nil || len(arts) != 1 || arts[0].Path != "report.md" || string(arts[0].Bytes) != "REPORT" {
+		t.Fatalf("artifact rows after rename = %+v (%v), want the one report.md row", arts, err)
 	}
-	if _, err := os.Stat(filepath.Join(pluto, "alpha-"+id+".report.md")); err == nil {
-		t.Error("the old-prefix flat copy is still there — it must have MOVED")
+	if len(res.Skipped) != 0 {
+		t.Errorf("Skipped = %v, want empty — nothing is a file to strand any more", res.Skipped)
 	}
-	if got := contractRenameRead(t, pluto, "omega-"+id+".legacy.md"); got != "LEGACY" {
-		t.Errorf("legacy bare-slug sweep did not carry the pre-cutover copy: got %q", got)
-	}
-
-	if got := contractRenameRead(t, pluto, "omega-"+id+".clash.md"); got != "ALREADY THERE" {
-		t.Errorf("the pre-existing destination was overwritten: %q", got)
-	}
-	if got := contractRenameRead(t, pluto, "alpha-"+id+".clash.md"); got != "SOURCE" {
-		t.Errorf("a skipped source was removed anyway: %q", got)
-	}
-	// Round-3 contract amendment (lead's edit, authors gone): Skipped entries
-	// are the stranded SOURCE paths — the file carl must act on — not the
-	// destination that blocked them. The shape was a recorded authoring-time
-	// silence; the amendment resolved it the other way.
-	if !strings.Contains(strings.Join(res.Skipped, "\n"), "alpha-"+id+".clash.md") {
-		t.Errorf("Skipped = %v, want the stranded old-prefix source reported", res.Skipped)
+	for _, n := range res.Notes {
+		if strings.Contains(n, string(filepath.Separator)) {
+			t.Errorf("note %q carries a path", n)
+		}
 	}
 }
 
@@ -306,7 +260,6 @@ func TestContractRenameJobProjectDirsNeverShrinks(t *testing.T) {
 // resolving after a rename.
 func TestContractRenameLoadJobBySlugFallsBackToFormerSlug(t *testing.T) {
 	st := useTestStore(t)
-	contractRenamePluto(t)
 	j := contractRenameSeed(t, st, "alpha", "")
 	if _, err := RenameJob(j, "omega"); err != nil {
 		t.Fatalf("RenameJob: %v", err)
@@ -331,7 +284,6 @@ func TestContractRenameLoadJobBySlugFallsBackToFormerSlug(t *testing.T) {
 // fixture.
 func TestContractRenameCurrentSlugBeatsFormer(t *testing.T) {
 	st := useTestStore(t)
-	contractRenamePluto(t)
 
 	first := contractRenameSeed(t, st, "shared", "")
 	if _, err := RenameJob(first, "one"); err != nil {

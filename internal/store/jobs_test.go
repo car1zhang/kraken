@@ -286,9 +286,8 @@ func TestArchiveFreesSlug(t *testing.T) {
 
 // TestArchiveJobNumbersOffSlugifiedName covers E13: ArchiveJob's
 // archived_name is derived from util.Slugify(slug), not the raw slug
-// column — unified with jobs.ArchiveJob's file-mode path
-// (freeArchiveName(util.Slugify(j.Slug))), since the archive name doubles
-// as a filesystem-safe artifact-file prefix.
+// column, so the archived name is the same normalized form every other
+// derived name is built from.
 func TestArchiveJobNumbersOffSlugifiedName(t *testing.T) {
 	s := openTest(t)
 	id, err := s.CreateJob(&Job{Slug: "Weird Slug!!"})
