@@ -178,7 +178,11 @@ func TestSkillsOwnTheCellContract(t *testing.T) {
 			"Inside A Kraken Cell", "<cellDir>/artifacts/",
 			"explanation ready:", "go deeper", "Use `0` where a count is zero",
 			// /info's defining constraint: lighter than /aim, and never any questions
-			"No open questions. Ever.", "never gets a `/do`", "never opens a PR",
+			"No open questions. Ever.", "usually ends at its explanation and opens no PR",
+			// the one way an explanation job reaches phase 2: the operator's /do
+			// or a plain-language change request after the explanation
+			"plain-language instruction to change", "is the same gate opening",
+			"answered with an offer, never built",
 			"Never run `kraken questions` write verbs",
 			// /info acts on its feedback and never closes it. The token is the
 			// PROHIBITION rather than the verb: the verb belongs to dream alone,
