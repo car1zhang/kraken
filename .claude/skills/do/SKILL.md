@@ -180,7 +180,7 @@ When a kraken job brief sends you here, these deltas apply — the brief wins wh
 
   `manual test ready: <urls + what to try>`
 
-  and STOP (end the turn). Do not proceed to a PR on your own — {{operator}}'s reply is what passes the gate.
+  and STOP (end the turn). Do not proceed to a PR on your own — {{operator}}'s reply is what passes the gate. When the change has a running surface (a server, the board, an app), the stack is UP when that line goes out and stays up until the reply: bring it up from the worktree on ports of its own — never by replacing an instance that is already running — before you write the line, and fill the urls slot with a live URL {{operator}} can open, never a command for them to run first. When it has none (a CLI verb, a library, docs or skill text), say so in the line and name the exact command and what its output should show, or the diff to read. A gate that offers a command with nothing listening, for a change that does serve something, is not a gate they can pass by clicking around; the next bullet is where any stack comes down.
 - **When their reply passes it**, shut any test services down and follow `.claude/skills/pr/SKILL.md` in your worktree for branch and PR conventions — read it BY PATH; do NOT invoke `/pr` by name, since a personal skill of that name would shadow it.
 - Never declare the job done — accepting or merging is {{operator}}'s move, never yours.
 
