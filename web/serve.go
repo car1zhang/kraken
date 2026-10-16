@@ -229,6 +229,11 @@ func uploadGetHandler(w http.ResponseWriter, r *http.Request) {
 // artifacts long after the file changed on disk.
 func artifactHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
+	// r.URL.Path is the DECODED path: the board builds these URLs with every
+	// segment url.PathEscape'd (api's artifactURL), so a name carrying "#",
+	// "%" or a space arrives here as the raw name. No segment can carry an
+	// escaped "/" (names are split on "/" before escaping), so splitting the
+	// decoded path is unambiguous.
 	parts := strings.SplitN(strings.TrimPrefix(r.URL.Path, "/api/artifact/"), "/", 3)
 	if len(parts) != 3 {
 		http.NotFound(w, r)
@@ -246,18 +251,19 @@ func artifactHandler(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	// Q12: a live cell always serves straight from the cell dir ("cell"
-	// home skips this branch entirely); a store-backed done/archived job's
-	// "pluto"/"archive" homes serve from the DB instead of a preserved file
-	// copy. ArtifactBytes returns ok=false whenever no store is wired or the
-	// path isn't in the table, so this always falls through to the
-	// filesystem lookup below when appropriate.
+	// Q12: a live cell always serves straight from the cell dir; every
+	// other home ("pluto" for a done job, "archive" for an archived one —
+	// namespace names, not directories) serves from the artifacts table
+	// alone, so a name the table lacks is a 404 with no file fallback.
 	if parts[1] != "cell" {
-		if data, mimeType, ok := api.ArtifactBytes(j, parts[1], parts[2]); ok {
-			w.Header().Set("Content-Type", mimeType)
-			http.ServeContent(w, r, parts[2], time.Time{}, bytes.NewReader(data))
+		data, mimeType, ok := api.ArtifactBytes(j, parts[1], parts[2])
+		if !ok {
+			http.NotFound(w, r)
 			return
 		}
+		w.Header().Set("Content-Type", mimeType)
+		http.ServeContent(w, r, parts[2], time.Time{}, bytes.NewReader(data))
+		return
 	}
 	p, ok := api.ArtifactPath(j, parts[1], parts[2])
 	if !ok {

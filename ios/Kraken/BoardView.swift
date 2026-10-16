@@ -949,6 +949,35 @@ final class BoardRouteStamp {
     var generation = 0
 }
 
+/// The board's first-run state: no server URL stored yet (a fresh install —
+/// `KrakenDefaults.serverURL` is empty). It says what is missing and where to
+/// set it, and issues no request of any kind; BoardView renders it INSTEAD of
+/// the board composition, so none of the board's polls exist while it shows.
+struct BoardNoServerView: View {
+    /// Switches to the Settings tab, where the server URL is entered.
+    let openSettings: () -> Void
+
+    var body: some View {
+        VStack(spacing: 14) {
+            Image(systemName: "antenna.radiowaves.left.and.right")
+                .font(.system(size: 34))
+                .foregroundStyle(KTheme.accent)
+            Text("Set your server")
+                .font(.voice(17, weight: .semibold))
+            Text("Enter the address of the Mac running kraken serve — for example \(SettingsView.serverURLPlaceholder) — on the Settings screen. The board loads as soon as it is saved.")
+                .font(.voice(13))
+                .foregroundStyle(KTheme.text2)
+                .multilineTextAlignment(.center)
+            Button("Open Settings", action: openSettings)
+                .buttonStyle(.borderedProminent)
+        }
+        .padding(24)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background { ThemeBackgroundView().ignoresSafeArea() }
+        .navigationTitle("Board")
+    }
+}
+
 struct BoardView: View {
     @AppStorage("serverURL") private var serverURL = KrakenDefaults.serverURL
     @Environment(\.scenePhase) private var scenePhase
@@ -1023,7 +1052,19 @@ struct BoardView: View {
     // nesting position here IS its position in the modifier chain.
     var body: some View {
         NavigationStack {
-            withRouting(withSheets(withPolling(boardStack)))
+            // A fresh install has no server URL (KrakenDefaults.serverURL is
+            // empty). The whole board composition — and with it every poll
+            // `.task` hung off it in withPolling — is simply not rendered
+            // then, so no board request is issued until a URL is saved; the
+            // @AppStorage read re-evaluates this the moment Settings writes
+            // one, and the polls start on the composition's first appear.
+            if KrakenDefaults.isConfigured(serverURL) {
+                withRouting(withSheets(withPolling(boardStack)))
+            } else {
+                BoardNoServerView {
+                    router.selectedTab = .settings
+                }
+            }
         }
     }
 

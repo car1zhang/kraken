@@ -392,7 +392,7 @@ func PreflightShipIOS() (ShipPreflightInfo, error) {
 			"Both are shown at App Store Connect → Users and Access → Integrations → App Store Connect API; "+
 			"the matching AuthKey_<key id>.p8 belongs in ~/.appstoreconnect/private_keys/. "+
 			"A ship started from the board inherits `kraken serve`'s launchd environment, not a login shell's, "+
-			"so set them there too (launchctl setenv) for the button to work. Setup: ios/TESTFLIGHT.md",
+			"so put them in ~/.kraken/asc.env (KEY=VALUE per line) for the button to work. Setup: ios/TESTFLIGHT.md",
 			strings.Join(missing, " and "))
 	}
 

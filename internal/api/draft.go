@@ -125,7 +125,7 @@ func draftGet(w http.ResponseWriter, r *http.Request) {
 // so there is no state for the client to reconcile, whereas erroring here would
 // pop a failure toast on the composer of a card that is merely mid-refresh.
 // The zero-id case is unreachable under `kraken serve`, which always has a
-// store wired — it exists for file-backed jobs, which carry no id at all.
+// store wired — only a Job built by ParseJob alone carries no id.
 func draftPost(w http.ResponseWriter, r *http.Request) {
 	var req webReq
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {

@@ -8,8 +8,7 @@ import (
 )
 
 // Feedback is one doc-feedback entry: a frozen artifact snapshot plus the
-// user's plaintext note — mirrors what jobs/feedback.go wrote under
-// ~/Documents/pluto/doc-feedback/ before rows became the only store.
+// user's plaintext note. Rows are the only feedback store.
 // JobID (schema v5) is the row's immutable owning-job id and is now the KEY
 // every read (ListFeedback/ListFeedbackMeta) and ownership check
 // (api.lookupOwnedFeedback) scopes on, exactly like ArchiveJob/UnarchiveJob

@@ -31,8 +31,9 @@ describe("threadBlockHTML", () => {
     expect(threadBlockHTML({ kind: "user", text: "hi" }, false, "t1")).toContain(
       '<div class="blk user">',
     );
+    // no operator name passed (an older server's board): the fallback label
     expect(threadBlockHTML({ kind: "user", text: "hi" }, false, "t1")).toContain(
-      "❯ carl",
+      "❯ you",
     );
     expect(
       threadBlockHTML({ kind: "thinking", text: "hm" }, false, "t1"),

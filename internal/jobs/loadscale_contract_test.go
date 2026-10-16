@@ -216,6 +216,7 @@ func contractEqualLabels(t *testing.T, got, want []string, source, axis string) 
 // already gives — the estimate is about what CARL spends to unblock the cell,
 // which has nothing to do with whether the cell delegates.
 func TestContractZeusBriefLoadScale(t *testing.T) {
+	t.Setenv("KRAKEN_OPERATOR", "Ada")
 	for _, j := range []*Job{
 		{Slug: "scale-plain"},
 		{Slug: "scale-solo", Solo: true},
@@ -238,7 +239,7 @@ func TestContractZeusBriefLoadScale(t *testing.T) {
 		// (2) the two pins the existing suite already holds, kept so this change
 		// cannot quietly retire the 1-10 ruler while rewriting the paragraph.
 		for _, want := range []string{
-			"1-10 is the effort CARL spends",
+			"1-10 is the effort Ada spends",
 			"a one-message reply",
 		} {
 			if !strings.Contains(brief, want) {
@@ -254,7 +255,7 @@ func TestContractZeusBriefLoadScale(t *testing.T) {
 			{"ships PRs on trust", "rule 1's evidence — why a review gate is a 1 and not a 6"},
 			{"the reply BUYS", "rule 2: scope is strictly the work still ahead"},
 			{"never the work under review", "rule 2's other half — the feature behind the gate is not the scope"},
-			{"only when carl is the blocker", "the clear rule, with teeth"},
+			{"only when Ada is the blocker", "the clear rule, with teeth"},
 			// Contract amendments after review round 1, appended by the lead —
 			// the blind files were authored against the pre-amendment text, so
 			// obligations 6-legend and 7b would otherwise be pinned by nothing.

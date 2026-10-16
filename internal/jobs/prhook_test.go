@@ -11,11 +11,13 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+
+	"kraken/internal/store"
 )
 
 // prhook_test.go — the pr-hook verb's pure pieces: payload parsing/URL
-// extraction (extractPRURLs never touches gh, stdin, or a job file) and the
-// shared attach path (appendJobPR) against a real file on disk.
+// extraction (extractPRURLs never touches gh, stdin, or the store) and the
+// shared attach path (appendJobPR) against a temp store.
 
 func TestExtractPRURLs(t *testing.T) {
 	const prefix = "github.com/carl/kraken"
@@ -140,36 +142,25 @@ func TestOriginToPrefix(t *testing.T) {
 }
 
 func TestAppendJobPR(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "yelp-dedupe.job.md")
-	if err := os.WriteFile(path, []byte(sampleJob), 0o644); err != nil {
-		t.Fatal(err)
+	// no store: there is nowhere to record a PR, and appendJobPR says so
+	if _, err := appendJobPR(ParseJob("yelp-dedupe.job.md", []byte(sampleJob)), JobPR{URL: "https://github.com/carl/kraken/pull/1", State: "open"}); err == nil {
+		t.Fatal("appendJobPR with no store wired: want an error")
 	}
-	j := ParseJob("yelp-dedupe.job.md", []byte(sampleJob))
-	j.File = path
+	st := useTestStore(t)
+	mustCreateJob(t, st, store.Job{Slug: "yelp-dedupe", Repo: "monolith", Body: "body\n"})
+	j := LoadJobBySlug("yelp-dedupe")
 
 	attached, err := appendJobPR(j, JobPR{URL: "https://github.com/carl/kraken/pull/1", State: "open"})
 	if err != nil || !attached {
 		t.Fatalf("first append: attached=%v err=%v, want true, nil", attached, err)
 	}
 
-	data, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatal(err)
+	reloaded := LoadJobBySlug("yelp-dedupe")
+	if len(reloaded.PRs) != 1 || reloaded.PRs[0].URL != "https://github.com/carl/kraken/pull/1" || reloaded.PRs[0].State != "open" {
+		t.Fatalf("prs after append: %+v", reloaded.PRs)
 	}
-	reparsed := ParseJob("yelp-dedupe.job.md", data)
-	if reparsed.Err != "" {
-		t.Fatalf("reparsed job errored: %s", reparsed.Err)
-	}
-	if len(reparsed.PRs) != 1 || reparsed.PRs[0].URL != "https://github.com/carl/kraken/pull/1" || reparsed.PRs[0].State != "open" {
-		t.Fatalf("prs after append: %+v", reparsed.PRs)
-	}
-	orig := ParseJob("yelp-dedupe.job.md", []byte(sampleJob))
-	if reparsed.Body != orig.Body {
-		t.Fatal("appendJobPR mutated the body")
-	}
-	if reparsed.Repo != "monolith" || reparsed.Slug != "yelp-dedupe" {
-		t.Fatal("appendJobPR clobbered other frontmatter")
+	if reloaded.Body != "body\n" || reloaded.Repo != "monolith" {
+		t.Fatal("appendJobPR clobbered other fields")
 	}
 
 	// dedup: re-attaching the same URL is a no-op
@@ -183,12 +174,8 @@ func TestAppendJobPR(t *testing.T) {
 	if err3 != nil || !attached3 {
 		t.Fatalf("second append: attached=%v err=%v, want true, nil", attached3, err3)
 	}
-	data2, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if reparsed2 := ParseJob("yelp-dedupe.job.md", data2); len(reparsed2.PRs) != 2 {
-		t.Fatalf("prs after second append: %+v", reparsed2.PRs)
+	if prs := LoadJobBySlug("yelp-dedupe").PRs; len(prs) != 2 {
+		t.Fatalf("prs after second append: %+v", prs)
 	}
 }
 
@@ -234,13 +221,9 @@ func TestPostPRAttachSuccessAndFailure(t *testing.T) {
 }
 
 func TestAttachJobPRWrapper(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "yelp-dedupe.job.md")
-	if err := os.WriteFile(path, []byte(sampleJob), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	j := ParseJob("yelp-dedupe.job.md", []byte(sampleJob))
-	j.File = path
+	st := useTestStore(t)
+	mustCreateJob(t, st, store.Job{Slug: "yelp-dedupe", Repo: "monolith"})
+	j := LoadJobBySlug("yelp-dedupe")
 
 	attached, err := AttachJobPR(j, "https://github.com/carl/kraken/pull/3")
 	if err != nil || !attached {
@@ -256,8 +239,7 @@ func TestAttachJobPRWrapper(t *testing.T) {
 // a reachable /api/pr-attach must be used instead of writing the job file
 // directly.
 func TestPrHookAttachesViaServerWhenAvailable(t *testing.T) {
-	t.Setenv("KRAKEN_PLUTO_DIR", t.TempDir())
-	path := filepath.Join(PlutoDir(), "yelp-dedupe.job.md")
+	path := filepath.Join(t.TempDir(), "yelp-dedupe.job.md")
 	if err := os.WriteFile(path, []byte("---\njob: yelp-dedupe\ntype: build\nrepo: kraken-test-nonexistent-repo-xyz\nready: true\nprereqs: []\nsolo: false\n---\n\nbody\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -329,8 +311,7 @@ func withStderrCapture(t *testing.T, fn func()) string {
 // authoritative once serve owns the DB (single-writer rule), so a hook
 // process must never write it.
 func TestPrHookSkipsDirectWriteWhenServerUnreachable(t *testing.T) {
-	t.Setenv("KRAKEN_PLUTO_DIR", t.TempDir())
-	path := filepath.Join(PlutoDir(), "yelp-dedupe.job.md")
+	path := filepath.Join(t.TempDir(), "yelp-dedupe.job.md")
 	if err := os.WriteFile(path, []byte("---\njob: yelp-dedupe\ntype: build\nrepo: kraken-test-nonexistent-repo-xyz\nready: true\nprereqs: []\nsolo: false\n---\n\nbody\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -367,8 +348,6 @@ func TestPrHookSkipsDirectWriteWhenServerUnreachable(t *testing.T) {
 // nil here must not block the attach attempt, since the POST only needs
 // slug+url and the server does its own job lookup.
 func TestPrHookAttachesForStoreOnlyJob(t *testing.T) {
-	t.Setenv("KRAKEN_PLUTO_DIR", t.TempDir()) // empty: no job file for this slug anywhere
-
 	var gotBody []byte
 	var hits int
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -404,28 +383,19 @@ func TestPrHookAttachesForStoreOnlyJob(t *testing.T) {
 }
 
 func TestLoadJobBySlug(t *testing.T) {
-	t.Setenv("KRAKEN_PLUTO_DIR", t.TempDir())
-	if err := os.WriteFile(filepath.Join(PlutoDir(), "yelp-dedupe.job.md"), []byte(sampleJob), 0o644); err != nil {
-		t.Fatal(err)
+	// no store wired: jobs live only in kraken.db, so nothing resolves
+	if j := LoadJobBySlug("yelp-dedupe"); j != nil {
+		t.Fatalf("LoadJobBySlug with no store = %+v, want nil", j)
 	}
-	// fast path: filename matches slug
+	st := useTestStore(t)
+	mustCreateJob(t, st, store.Job{Slug: "yelp-dedupe", Repo: "monolith"})
 	j := LoadJobBySlug("yelp-dedupe")
 	if j == nil || j.Slug != "yelp-dedupe" || j.Repo != "monolith" {
-		t.Fatalf("LoadJobBySlug fast path: %+v", j)
+		t.Fatalf("LoadJobBySlug: %+v", j)
 	}
 	// suffix tolerated
 	if j := LoadJobBySlug("yelp-dedupe.job.md"); j == nil || j.Slug != "yelp-dedupe" {
 		t.Fatalf("LoadJobBySlug with suffix: %+v", j)
-	}
-	// fallback: frontmatter job: override with a mismatched filename — the
-	// direct "<slug>.job.md" path doesn't exist, so this only resolves via
-	// the full LoadJobs()+JobBySlug scan
-	override := "---\njob: overridden\nrepo: monolith\nready: true\n---\n\nbody\n"
-	if err := os.WriteFile(filepath.Join(PlutoDir(), "filename-mismatch.job.md"), []byte(override), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if j := LoadJobBySlug("overridden"); j == nil || j.Repo != "monolith" {
-		t.Fatalf("LoadJobBySlug fallback: %+v", j)
 	}
 	// missing slug
 	if j := LoadJobBySlug("no-such-job"); j != nil {

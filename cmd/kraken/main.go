@@ -15,6 +15,11 @@ import (
 )
 
 func main() {
+	// ~/.kraken/env first, before any verb runs, so serve, every CLI verb and
+	// every hook read the same knobs (launchd hands serve only its plist's
+	// environment). A variable already set in the environment wins, except
+	// PATH: the file's PATH is prepended to the inherited one.
+	util.ApplyEnvFile(util.EnvFilePath())
 	// Under launchd there is no locale, and in the C locale tmux treats TAB
 	// as unprintable — every -F field separator comes back as "_" and
 	// discovery parses zero panes. Give our tmux children a UTF-8 locale.
@@ -51,10 +56,6 @@ func main() {
 		cmdLogEvent(rest)
 	case "serve":
 		cmdServe(rest)
-	case "import":
-		cmdImport(rest)
-	case "cutover":
-		cmdCutover(rest)
 	case "update":
 		cmdUpdate(rest)
 	case "ship-ios":
@@ -85,6 +86,8 @@ func main() {
 		cmdWatchlist(rest)
 	case "load":
 		cmdLoad(rest)
+	case "artifacts":
+		cmdArtifacts(rest)
 	case "mm":
 		cmdMM(rest)
 	case "slack":
@@ -154,23 +157,6 @@ Commands:
                       --tailnet binds the Mac's tailscale IP (100.64.0.0/10)
                       instead of localhost; -addr sets an explicit bind and
                       overrides both -p and --tailnet
-  k import [--dry-run] [--force] [--reimport]
-                      one-shot sqlite-migration cutover: sweeps every file
-                      store (job files, board order, uploads, artifacts,
-                      event logs, doc feedback) into ~/.kraken/kraken.db.
-                      Refuses while a daemon/serve is running, or against an
-                      already-populated/already-imported database without
-                      --force/--reimport; --dry-run reports counts without
-                      writing anything. Human-run once per machine at cutover.
-  k cutover [--commit]
-                      one-shot id-scoped renaming: moves the flat preserved
-                      artifact copies in ~/Documents/pluto (and archive/) onto
-                      the <slug>-<id>. prefix, so a name reused by a later job
-                      can no longer claim an earlier job's files. Dry run by
-                      default — prints every intended rename and changes
-                      nothing; --commit performs them. Deliberately narrow: it
-                      never touches cell directories or the token tables. Run
-                      with no active jobs. Human-run once per machine.
   k update [--force] [--dry-run] [--test]
                       self-update: fast-forward the kraken checkout to
                       origin/main, rebuild, reinstall, and restart the launchd
@@ -204,19 +190,19 @@ Commands:
                       unreachable serve prints a clean message to stderr and
                       exits non-zero.
   k goals get [slug]
-                      cell-side verb zeus uses to re-read carl's current
+                      cell-side verb zeus uses to re-read your current
                       goals, proxied the same way as 'k questions': prints
                       this week's and today's goals as JSON, day goals
                       carrying the weekly goal they sit under. With a slug it
                       also names every goal that job serves (a job may serve
                       several, or none), first one first. READ
-                      ONLY — the goals are carl's, written from the board, so
+                      ONLY — the goals are yours, written from the board, so
                       there is deliberately no set/add/remove op here. The
                       same block is staged into every cell's brief at spawn
                       and refreshed mid-run, so this verb is for re-reading
                       it, not for discovering it.
   k feedback get|sweep|addressed <slug> ...
-                      cell-side verb zeus uses to read carl's per-artifact
+                      cell-side verb zeus uses to read your per-artifact
                       feedback and record how it addressed an entry, proxied
                       the same way as 'k questions'; get prints open+
                       addressed entries as JSON, addressed <slug> <id>
@@ -226,21 +212,31 @@ Commands:
                       sweep [--since <unix-millis>] takes NO slug: it is the
                       nightly dream pass' cross-job read, every note in the
                       window (last 24h by default) with its job slug and a
-                      snapshot_url for the artifact bytes carl was looking at.
+                      snapshot_url for the artifact bytes you were looking at.
   k load get|set|clear <slug> ...
                       cell-side verb zeus uses to record what a BLOCKED job
                       costs and buys, proxied the same way as 'k questions':
                       set <slug> --unblock <1-10> --scope <1-10> [--note "..."]
-                      writes how much effort unblocking it takes carl against
+                      writes how much effort unblocking it takes you against
                       how big the claude work that reply unblocks is, and the
                       board ranks blocked cards by the ratio scope/unblock.
                       Both numbers or neither — a half estimate has no ratio,
                       and 'clear' is how an estimate is removed. get prints
                       the pair as JSON ({"load": null} when unestimated).
+  k artifacts get <slug> [name]
+  k artifacts get --archived <slug> [name]
+                      read any job's artifacts — a sibling's, or a torn-down
+                      job's — proxied the same way as 'k questions': with no
+                      name it prints one artifact name per line, in the
+                      board's order; with a name it prints that artifact's
+                      bytes to stdout. When an active and an archived job
+                      share the slug the active one answers; --archived
+                      picks the archived one (by its archived name or its
+                      original slug).
   k mm mark|drop|note|get|show|source|commit|revise|flag|flags|lsp ...
-                      CARL's verbs for the mental model — what he has read,
+                      YOUR verbs for the mental model — what you have read,
                       decided and noted — proxied the same way as 'k questions'.
-                      mark/drop/note are carl's own: for his shell and the
+                      mark/drop/note are your own: for your shell and the
                       Zed capture task.
                       mark --worktree <dir> --file <path> --start-row <n>
                       [--note "..."] records a range of code as read, taking
@@ -283,7 +279,7 @@ Commands:
                       sentence, so reword by removing and re-adding; remove
                       takes a bare id and CLOSES the row, which leaves every
                       list while staying readable by id (nothing is deleted).
-                      verdict/comment are carl's, set from the board — sending
+                      verdict/comment are yours, set from the board — sending
                       either here is a 400, not a silent drop.
   k slack inbox|status|ack ...
                       iris-side verbs for the Slack intake inbox, proxied the
@@ -305,7 +301,7 @@ Commands:
                       unknown slug is an error naming it, never empty output.
   k cell steer|submit|answer <slug> ...
                       agent-side control of one job's cell, proxied to the
-                      BOARD's own routes so every guard carl's clicks go
+                      BOARD's own routes so every guard your clicks go
                       through applies unchanged: steer <slug> sends a message
                       into the cell's zeus (the message on stdin); submit
                       <slug> starts its cell, printing the server's own
@@ -323,7 +319,7 @@ Commands:
                       a DRAFT. The route is guarded server-side: it refuses
                       any state:, the retired ready:/prereqs: keys, an
                       unparseable body, and any started job — iris drafts, and
-                      submitting (which starts the cell) stays carl's move on
+                      submitting (which starts the cell) stays your move on
                       the board.
   k mine digest|reduce [--since <unix-millis>] ...
                       the nightly dream pass' mechanical read of claude's own

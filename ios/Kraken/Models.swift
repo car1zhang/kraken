@@ -56,6 +56,11 @@ struct WebBoard: Decodable {
     // degrade below yields a non-nil object with a zero stamp while the
     // server's wire treats zero as unset.
     let background: WebBackground?
+    // The name kraken's agents use for the person running it (`operator` on
+    // the wire — a Swift keyword, hence the property name). Additive and
+    // absent on older servers; decoded so the shape is modeled, rendered
+    // nowhere in the app yet.
+    let operatorName: String?
 
     enum CodingKeys: String, CodingKey {
         case daemon
@@ -68,6 +73,7 @@ struct WebBoard: Decodable {
         case shipIOS = "ship_ios"
         case goals
         case background
+        case operatorName = "operator"
     }
 }
 

@@ -3,7 +3,7 @@
 
   <g class="node holds">
     <rect x="40" y="50" width="400" height="140" rx="8"/>
-    <text x="240" y="72">carl's Mac</text>
+    <text x="240" y="72">your Mac</text>
     <g class="proc">
       <rect x="70" y="90" width="150" height="70" rx="2"/>
       <rect x="74" y="94" width="142" height="62" rx="1"/>

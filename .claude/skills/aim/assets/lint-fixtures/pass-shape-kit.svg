@@ -103,7 +103,7 @@
     <rect x="660" y="380" width="158" height="58" rx="2"/>
     <path d="M 660,380 L 672,368 H 830 L 818,380 Z"/>
     <path d="M 818,380 L 830,368 V 426 L 818,438"/>
-    <text x="739" y="409">carl's Mac</text>
+    <text x="739" y="409">your Mac</text>
   </g>
 
   <!-- row 5: cloud -->

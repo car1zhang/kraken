@@ -539,8 +539,7 @@ func TestCellActive(t *testing.T) {
 				t.Errorf("got %v, want %v", got, c.want)
 			}
 			// every case must also hold with a nil skip set unless it
-			// deliberately depends on one: nil is the no-store/file-mode
-			// default, and it must never change a verdict on its own.
+			// deliberately depends on one: nil is the no-store default, and it must never change a verdict on its own.
 			if c.skipPanes == nil {
 				if got := cellActive(c.sess, c.peers, c.members, pq, nil); got != c.want {
 					t.Errorf("nil skip set: got %v, want %v", got, c.want)

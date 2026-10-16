@@ -215,33 +215,36 @@ func captureSourceJSON(s CaptureSource) string {
 // source pointer as JSON, and the item contract the thread commits against —
 // staged at the recency point so the thread never has to re-derive it. It
 // carries the pointer, never the artifact body: the thread is forked from
-// zeus and reads the source itself if it needs more. PURE.
+// zeus and reads the source itself if it needs more. Pure apart from naming
+// the operator (Operator(), read from the environment).
 func mindSeed(req CaptureRequest) string {
+	op := Operator()
 	var b strings.Builder
-	b.WriteString("carl highlighted this passage and sent it to you to become an item in his mental model:\n\n")
+	b.WriteString(op + " highlighted this passage and sent it to you to become an item in their mental model:\n\n")
 	b.WriteString(captureQuote(req.Text))
 	b.WriteString("\nsource: ")
 	b.WriteString(captureSourceJSON(req.Source))
-	b.WriteString("\n\nThe item you build with him:\n")
+	b.WriteString("\n\nThe item you build with them:\n")
 	b.WriteString("- title: ≤ 120 runes, stated as a CLAIM (what is true), never a topic\n")
-	b.WriteString("- scope: `universal` (true everywhere carl works), or `repo` with `repo` (the checkout name) and `dir` (repo-relative, \"\" for the whole repo) — where the knowledge applies\n")
+	b.WriteString("- scope: `universal` (true everywhere " + op + " works), or `repo` with `repo` (the checkout name) and `dir` (repo-relative, \"\" for the whole repo) — where the knowledge applies\n")
 	b.WriteString("- kind: `decision`, `reading` or `note`\n")
-	b.WriteString("- body: ≤ 8,000 runes — what carl now knows, in his terms\n")
+	b.WriteString("- body: ≤ 8,000 runes — what " + op + " now knows, in their terms\n")
 	b.WriteString("- quote: the passage above, verbatim; source: the source JSON above, verbatim\n")
-	b.WriteString("Fill those fields in SILENTLY. What carl reads is your paraphrase of what he now understands — at most four sentences, in his terms, no field list, no mechanism explanation, no quote-back — and at most one question; he confirms, denies, or digs deeper, one point per turn. When he says finalize, run `kraken mm commit` with the item as JSON on stdin — {\"title\",\"scope\",\"repo\",\"dir\",\"kind\",\"body\",\"quote\",\"source\"} — and tell him the id in one line.\n")
+	b.WriteString("Fill those fields in SILENTLY. What " + op + " reads is your paraphrase of what they now understand — at most four sentences, in their terms, no field list, no mechanism explanation, no quote-back — and at most one question; they confirm, deny, or dig deeper, one point per turn. When they say finalize, run `kraken mm commit` with the item as JSON on stdin — {\"title\",\"scope\",\"repo\",\"dir\",\"kind\",\"body\",\"quote\",\"source\"} — and tell them the id in one line.\n")
 	return b.String()
 }
 
 // mindCaptureMessage is what a further capture types into an existing mind
 // thread: the passage verbatim and its source JSON, with a one-line pointer
-// back to the contract the seed already stated. PURE.
+// back to the contract the seed already stated. Pure apart from Operator().
 func mindCaptureMessage(req CaptureRequest) string {
+	op := Operator()
 	var b strings.Builder
-	b.WriteString("carl highlighted another passage for his mental model:\n\n")
+	b.WriteString(op + " highlighted another passage for their mental model:\n\n")
 	b.WriteString(captureQuote(req.Text))
 	b.WriteString("\nsource: ")
 	b.WriteString(captureSourceJSON(req.Source))
-	b.WriteString("\n\nSame item contract as before: propose a title, scope, kind and body for it (or fold it into the item you are building, if it belongs there), and commit with `kraken mm commit` only when carl says finalize.\n")
+	b.WriteString("\n\nSame item contract as before: propose a title, scope, kind and body for it (or fold it into the item you are building, if it belongs there), and commit with `kraken mm commit` only when " + op + " says finalize.\n")
 	return b.String()
 }
 

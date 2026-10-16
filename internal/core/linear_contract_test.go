@@ -195,9 +195,10 @@ func TestContractLinearEnvPathIsHomeRelative(t *testing.T) {
 	}
 }
 
-// Contract: DefaultRepo defaults to "monolith" and States to ["Today"] when
-// their keys are absent; an absent file is not an error and an empty APIKey
-// is how "feature off" is spelled — there is no error value for it.
+// Contract: DefaultRepo is empty (the job composer derives the machine's
+// default) and States defaults to ["Today"] when their keys are absent; an
+// absent file is not an error and an empty APIKey is how "feature off" is
+// spelled — there is no error value for it.
 func TestContractLoadLinearConfigDefaults(t *testing.T) {
 	contractLinearEnv(t) // no file written at all
 
@@ -205,8 +206,8 @@ func TestContractLoadLinearConfigDefaults(t *testing.T) {
 	if cfg.APIKey != "" {
 		t.Fatalf("APIKey = %q with nothing configured, want empty", cfg.APIKey)
 	}
-	if cfg.DefaultRepo != "monolith" {
-		t.Fatalf("DefaultRepo = %q, want %q", cfg.DefaultRepo, "monolith")
+	if cfg.DefaultRepo != "" {
+		t.Fatalf("DefaultRepo = %q, want empty", cfg.DefaultRepo)
 	}
 	if len(cfg.States) != 1 || cfg.States[0] != "Today" {
 		t.Fatalf("States = %#v, want [\"Today\"]", cfg.States)

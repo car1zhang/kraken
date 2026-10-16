@@ -6,6 +6,9 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"kraken/internal/jobs"
+	"kraken/internal/store"
 )
 
 func ipNet(ip string, bits int) *net.IPNet {
@@ -61,8 +64,7 @@ func TestTailscaleIP(t *testing.T) {
 func TestArtifactHandlerNoStore(t *testing.T) {
 	// Artifacts are rewritten in place by agents; every response — including
 	// 404s — must carry no-store so browsers never serve a stale copy.
-	dir := t.TempDir()
-	t.Setenv("KRAKEN_PLUTO_DIR", dir)
+	st := useTestStore(t)
 	for _, path := range []string{
 		"/api/artifact/no-such-job-xyz/cell/report.html", // unresolvable slug
 		"/api/artifact/malformed",                        // too few parts
@@ -78,17 +80,23 @@ func TestArtifactHandlerNoStore(t *testing.T) {
 	}
 
 	// 200 path — pins that http.ServeFile leaves the header intact on a
-	// successfully served artifact.
-	for name, content := range map[string]string{
-		"nscache.job.md":      "---\njob: nscache\nrepo: x\n---\n\n# Spec\n",
-		"nscache.report.html": "<p>hi</p>",
-	} {
-		if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0o644); err != nil {
-			t.Fatal(err)
-		}
+	// successfully served (cell-home) artifact.
+	if _, err := st.CreateJob(&store.Job{Slug: "nscache", Repo: "x"}); err != nil {
+		t.Fatal(err)
+	}
+	j := jobs.JobBySlug(jobs.LoadJobs(), "nscache")
+	if j == nil {
+		t.Fatal("job nscache not loadable")
+	}
+	root := jobs.CellArtifacts(j)
+	if err := os.MkdirAll(root, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "report.html"), []byte("<p>hi</p>"), 0o644); err != nil {
+		t.Fatal(err)
 	}
 	rec := httptest.NewRecorder()
-	artifactHandler(rec, httptest.NewRequest("GET", "/api/artifact/nscache/pluto/report.html", nil))
+	artifactHandler(rec, httptest.NewRequest("GET", "/api/artifact/nscache/cell/report.html", nil))
 	if rec.Code != 200 {
 		t.Fatalf("served artifact: status = %d, want 200 (body %q)", rec.Code, rec.Body.String())
 	}

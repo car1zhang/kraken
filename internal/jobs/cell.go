@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"hash/fnv"
-	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -158,10 +157,10 @@ func LegacyCellWorktree(j *Job, repo string) string {
 // tree.
 //
 // A zero id is the real hazard and it is reachable: ParseJob never sets ID
-// (the id is minted by the store and never appears in the .job.md file), and
-// LoadJobs falls back to LoadJobsFromFiles whenever no store is wired, so a
-// file-backed *Job carries ID == 0. Failing loudly here is what stops that
-// becoming a directory named for a job that does not exist.
+// (the id is minted by the store and never appears in job text), so a *Job
+// built by parsing rather than loaded from a row carries ID == 0. Failing
+// loudly here is what stops that becoming a directory named for a job that
+// does not exist.
 func checkCellIdentity(j *Job) error {
 	if j == nil {
 		return fmt.Errorf("no job")
@@ -361,52 +360,65 @@ func cellArtifactsIn(dir string) string {
 	return filepath.Join(dir, "artifacts")
 }
 
-// AllArtifactPaths lists a job's artifacts from both homes: the live cell's
-// artifacts dir and the preserved <slug>-<id>.<name> copies in pluto (which
-// are all that remain after teardown). Questions are rows in kraken.db, not
-// files, so there is no reserved name to exclude here any more.
-//
-// The prefix carries the id for the same reason cellName does: matching on
-// the bare slug served an ARCHIVED job's preserved copies off a new
-// same-slug job's card.
-func AllArtifactPaths(j *Job) []string {
-	out := ListArtifacts(j)
-	prefix := PlutoArtifactPrefix(j)
-	entries, err := os.ReadDir(PlutoDir())
-	if err != nil {
-		return out
+// legacyBranchPrefix is the prefix every cell branch carried before the
+// prefix became a knob. branchFamily keeps matching it so PRs opened on those
+// heads stay attached to their jobs whatever the current prefix is.
+const legacyBranchPrefix = "carl/"
+
+// branchPrefix is the namespace every cell branch is created under:
+// KRAKEN_BRANCH_PREFIX trimmed, with a trailing "/" appended when missing;
+// unset or blank means "kraken/". Read on every call and never stamped on the
+// job row, so changing it while jobs exist moves their NEXT branch name (a
+// reactivation creates the branch under the new prefix). branchFamily matches
+// only the CURRENT prefix and the legacy carl/ one: a move from carl/ keeps
+// earlier PRs attached, but a move between two other prefixes (team-a/ to
+// team-b/) leaves PRs recorded under the old one outside the family, and the
+// repair pass no longer recognises them as the job's own.
+func branchPrefix() string {
+	p := strings.TrimSpace(os.Getenv("KRAKEN_BRANCH_PREFIX"))
+	if p == "" {
+		return "kraken/"
 	}
-	for _, e := range entries {
-		if e.IsDir() || !strings.HasPrefix(e.Name(), prefix) || strings.HasSuffix(e.Name(), JobSuffix) {
-			continue
+	if !strings.HasSuffix(p, "/") {
+		p += "/"
+	}
+	return p
+}
+
+// branchPrefixErr reports whether branchPrefix() can lead a git branch name:
+// nil when `<prefix>x` passes `git check-ref-format --branch`, else an error
+// naming KRAKEN_BRANCH_PREFIX and its raw value. Two callers refuse with it
+// before any worktree work: SubmitJob (after the repo resolves) and
+// ReactivateJob (its first statement), so a bad prefix (a space, "..", a
+// trailing ".lock") is a sentence rather than a half-built cell failing
+// inside `git worktree add`. ReactivateJob checks it even on a resume-mode
+// reactivation, which reuses the surviving worktree and creates no branch;
+// that refusal is an accepted cost, since it names the knob to fix. Only git
+// REJECTING the name refuses: a git that cannot be run at all is no evidence
+// about the prefix, so that case returns nil and is left to the start path's
+// own git failure.
+func branchPrefixErr() error {
+	p := branchPrefix()
+	out, err := exec.Command("git", "check-ref-format", "--branch", p+"x").CombinedOutput()
+	if _, rejected := err.(*exec.ExitError); rejected {
+		msg := strings.TrimSpace(string(out))
+		if msg == "" {
+			msg = err.Error()
 		}
-		out = append(out, filepath.Join(PlutoDir(), e.Name()))
+		// Quote the variable exactly as set: the normalised prefix (trimmed,
+		// "/" appended) is not what the operator typed, so name both when
+		// they differ.
+		raw := os.Getenv("KRAKEN_BRANCH_PREFIX")
+		shown := fmt.Sprintf("KRAKEN_BRANCH_PREFIX=%q", raw)
+		if raw != p {
+			shown += fmt.Sprintf(" (normalised to %q)", p)
+		}
+		return fmt.Errorf("%s does not make a valid git branch name (%s) — fix it in ~/.kraken/env or the environment", shown, msg)
 	}
-	return out
+	return nil
 }
 
-// PlutoArtifactPrefix is the filename prefix a job's preserved flat artifact
-// copies carry in ~/Documents/pluto (and, after archiving, in its archive/
-// subdir): "<slug>-<id>.". One definition, because a writer and a reader that
-// disagree about this string is a job whose artifacts silently vanish from
-// its card.
-func PlutoArtifactPrefix(j *Job) string {
-	// No store wired means no ids at all: ParseJob never sets one, so every
-	// file-backed job carries ID == 0. Fall back to the bare slug, which is
-	// both the pre-cutover spelling and the only name available — and which
-	// cannot be ambiguous in that mode, since without a store there is no
-	// archive namespace for a second generation of the slug to live in.
-	//
-	// This is a READ-side accommodation only. The paths that create or
-	// destroy cell state go through checkCellIdentity and refuse a zero id
-	// outright, so this can never quietly produce a directory.
-	if j.ID < 1 {
-		return util.Slugify(j.Slug) + "."
-	}
-	return cellName(j) + "."
-}
-
-// branchForRun names the branch for a given cell run: carl/<slug>-<id>
+// branchForRun names the branch for a given cell run: <prefix><slug>-<id>
 // normally, -rN appended only for fallback runs (an existing branch with
 // unmerged commits that a forced reuse would orphan — see ensureUsableBranch).
 //
@@ -414,10 +426,18 @@ func PlutoArtifactPrefix(j *Job) string {
 // resolves to a branch another job already has checked out. It goes AFTER the
 // slug so `git branch` stays readable and searchable by job name.
 func branchForRun(j *Job, run int) string {
+	return branchName(branchPrefix(), cellName(j), run)
+}
+
+// branchName is the one spelling of a run's branch under a prefix:
+// <prefix><base> for run 1 (and anything below it), <prefix><base>-rN for
+// N ≥ 2. branchForRun and branchFamily both go through it so the name a cell
+// is created on and the names the repair pass matches cannot disagree.
+func branchName(prefix, base string, run int) string {
 	if run >= 2 {
-		return fmt.Sprintf("carl/%s-r%d", cellName(j), run)
+		return fmt.Sprintf("%s%s-r%d", prefix, base, run)
 	}
-	return "carl/" + cellName(j)
+	return prefix + base
 }
 
 func CellBranch(j *Job) string {
@@ -431,8 +451,8 @@ func CellBranch(j *Job) string {
 // apart from another job's foreign ones attached by the historical raw-text
 // scan; exact matches only; pure, so it's table-testable without gh.
 //
-// It enumerates TWO families: the current carl/<slug>-<id> names and the
-// pre-cutover carl/<slug> ones. The legacy half is not tidiness — PRs opened
+// It enumerates TWO families: the current <prefix><slug>-<id> names and the
+// pre-cutover <prefix><slug> ones. The legacy half is not tidiness — PRs opened
 // before the id landed sit on bare-slug branches (four were open on the day
 // this changed), and dropping those names from the family makes the repair
 // pass stop recognising a job's own PRs as its own. That failure is silent
@@ -459,34 +479,38 @@ func branchFamily(j *Job) map[string]bool {
 	if maxRun > 64 {
 		maxRun = 64
 	}
-	fam := make(map[string]bool, maxRun*2)
-	addBranchRuns(fam, cellName(j), maxRun)
-	addBranchRuns(fam, util.Slugify(j.Slug), maxRun)
+	// Every base is enumerated under the CURRENT prefix and under the legacy
+	// carl/ one: branches created before the prefix became a knob (and every
+	// PR head on them) carry carl/, and a prefix change is otherwise exactly
+	// the silent PR-detachment described above. A map, so when the current
+	// prefix IS carl/ the two passes collapse with no duplicates.
+	prefixes := []string{branchPrefix(), legacyBranchPrefix}
+	fam := make(map[string]bool, maxRun*4)
+	addBranchRuns(fam, prefixes, cellName(j), maxRun)
+	addBranchRuns(fam, prefixes, util.Slugify(j.Slug), maxRun)
 	for _, f := range j.FormerSlugs {
 		if name := formerCellName(j, f); name != "" {
-			addBranchRuns(fam, name, maxRun)
+			addBranchRuns(fam, prefixes, name, maxRun)
 		}
 		if s := util.Slugify(f); s != "" {
-			addBranchRuns(fam, s, maxRun)
+			addBranchRuns(fam, prefixes, s, maxRun)
 		}
 	}
 	return fam
 }
 
-// addBranchRuns adds carl/<base> and carl/<base>-r2..rN to fam — one name's
-// whole run history, in branchForRun's own spelling. Extracted so the current
-// name, the pre-cutover bare-slug name and every former name are all
-// enumerated by ONE rule: three hand-written loops is three chances for the
-// families to disagree about what -rN looks like.
-func addBranchRuns(fam map[string]bool, base string, maxRun int) {
+// addBranchRuns adds <prefix><base> and <prefix><base>-r2..rN to fam for each
+// prefix — one name's whole run history, in branchName's own spelling.
+// Extracted so the current name, the pre-cutover bare-slug name and every
+// former name are all enumerated by ONE rule: three hand-written loops is
+// three chances for the families to disagree about what -rN looks like.
+func addBranchRuns(fam map[string]bool, prefixes []string, base string, maxRun int) {
 	if base == "" {
 		return
 	}
-	for r := 1; r <= maxRun; r++ {
-		if r >= 2 {
-			fam[fmt.Sprintf("carl/%s-r%d", base, r)] = true
-		} else {
-			fam["carl/"+base] = true
+	for _, p := range prefixes {
+		for r := 1; r <= maxRun; r++ {
+			fam[branchName(p, base, r)] = true
 		}
 	}
 }
@@ -781,8 +805,13 @@ func codexCellArgs(j *Job, launcher string) []string {
 // a codex cell — the claude path delivers the same text through
 // --append-system-prompt instead.
 func codexAgentsMD(brief string) string {
-	return "<!-- kraken-generated brief — DO NOT COMMIT. Not part of the repo; rewritten every spawn. -->\n\n" + brief
+	return codexAgentsHeader + "\n\n" + brief
 }
+
+// codexAgentsHeader is the first line codexAgentsMD writes. rootNotes
+// matches on it so the artifact sync never captures kraken's own generated
+// AGENTS.md as a deliverable.
+const codexAgentsHeader = "<!-- kraken-generated brief — DO NOT COMMIT. Not part of the repo; rewritten every spawn. -->"
 
 // codexZeusLaunch builds the launch command for a codex-zeus cell, the codex
 // analogue of spawnCommand's claude path. A resume inserts `resume <id>` right
@@ -1041,8 +1070,8 @@ func StartCell(j *Job, repo string) error {
 // flags/env, so anything serve resolved that isn't the default has to be
 // baked into the command string itself. Likewise --db-path when
 // KRAKEN_DB_PATH is set in this (kraken serve's own) process environment.
-// File-mode `k daemon`/`k web` cells never call SetHookServeAddr, so their
-// hook commands are byte-identical to before E7.
+// A process that never calls SetHookServeAddr (any process but serve) bakes
+// in no address flag, so its hooks fall back to defaultServeAddr.
 func prHookCommand(slug, krakenBin string) string {
 	return krakenBin + " pr-hook" + hookCommandFlags() + " " + slug
 }
@@ -1827,6 +1856,18 @@ func teardownCell(j *Job, repo string, live map[string]bool, force bool) error {
 			return fmt.Errorf("tmux kill-session: %v", err)
 		}
 	}
+	// mandatory final pass (spec Q11): the artifacts dir and the worktree's
+	// uncommitted root notes are mirrored into the store — the ONLY record of
+	// them once this function finishes. It runs after the session kill (so
+	// zeus has stopped writing) and BEFORE the worktree removal below, since
+	// the root notes live in the worktree. No-op when no store is wired.
+	// A failure STOPS the teardown here, before anything is deleted: the
+	// table is the only copy that would survive the removals below. The
+	// session is already gone, which a retry tolerates exactly as a resumed
+	// teardown does; the caller leaves the job's state as it was.
+	if err := syncArtifactsAtTeardown(j); err != nil {
+		return fmt.Errorf("artifact sync failed: %v — not tearing down (the worktree and cell dir are kept)", err)
+	}
 	if wt := ExistingWorktree(j, repo); wt != "" {
 		args := []string{"-C", repo, "worktree", "remove"}
 		if force {
@@ -1843,10 +1884,6 @@ func teardownCell(j *Job, repo string, live map[string]bool, force bool) error {
 			return fmt.Errorf("git worktree remove: %s", strings.TrimSpace(string(out)))
 		}
 	}
-	// mandatory final pass (spec Q11): whatever's in the artifacts dir right
-	// now is the last chance to mirror it into the store before it's gone —
-	// no-op when no store is wired.
-	syncArtifactsNow(j, "teardown")
 	// the cell's side threads died with the session above (their windows were
 	// part of it), so their rows must stop claiming live panes — tmux recycles
 	// those ids. Rows survive, pointing at their transcripts; nothing is
@@ -1856,9 +1893,8 @@ func teardownCell(j *Job, repo string, live map[string]bool, force bool) error {
 	if err := CloseThreadsForTeardown(j); err != nil {
 		fmt.Fprintf(os.Stderr, "kraken: closing %s's thread rows failed: %v\n", j.Slug, err)
 	}
-	// the cell dir (doc source, artifacts) goes too: artifacts were
-	// preserved into pluto before teardown, and the mid-run log in the job
-	// file is the durable trail.
+	// the cell dir (doc source, artifacts) goes too: the final sync above
+	// mirrored the artifacts into the store, which is their durable home.
 	//
 	// existingCellDir, because a renamed job's dir is still under the name it
 	// was created with — removing cellDir(j) would delete nothing and leave a
@@ -2173,23 +2209,16 @@ func RetryCell(j *Job) error {
 // draft by clearing state — the only field that ever made it not-a-draft.
 // (It used to clear a `ready` flag too, since leaving that set would have
 // handed the job straight back to the daemon's queue loop; there is no such
-// flag and no such loop now, and nothing restarts a job but carl.) Artifacts
-// are preserved first; the worktree goes too (a draft re-submitted later
-// needs a clean StartCell).
+// flag and no such loop now, and nothing restarts a job but carl.)
+// teardownCell's final sync mirrors the artifacts into the store; the
+// worktree goes too (a draft re-submitted later needs a clean StartCell).
 func KillJob(j *Job) ([]string, error) {
 	repo, err := ResolveRepo(j.Repo)
 	if err != nil {
 		return nil, fmt.Errorf("job %s: %v", j.Slug, err)
 	}
 	stampSessionBeforeTeardown(j)
-	copied, perr := preserveArtifacts(j, repo)
 	var msgs []string
-	for _, c := range copied {
-		msgs = append(msgs, "preserved artifact "+c)
-	}
-	if perr != nil {
-		return msgs, fmt.Errorf("artifact preservation failed: %v — not tearing down", perr)
-	}
 	// guard before the intent write: a refused self-teardown must not leave a
 	// dangling marker on a live cell for the daemon to act on later. Every
 	// session candidate, exactly as teardownCell loops them — a renamed cell
@@ -2216,161 +2245,6 @@ func KillJob(j *Job) ([]string, error) {
 }
 
 // --- accept/done ---
-
-// preserveEntry pairs one preserved file's absolute source path with its
-// flattened pluto dest name (artifactPreserveList/preserveArtifacts).
-type preserveEntry struct {
-	src, dest string
-}
-
-// dedupeDestName returns name unchanged the first time it's seen, or a name
-// with a -2, -3, ... suffix inserted before its extension when name (or an
-// already-generated suffixed variant) collides. Closed under its own
-// output: every candidate it tries — the plain name AND every generated
-// suffix — is checked against claimed before being returned, and then
-// registered into claimed itself (shared across one artifactPreserveList
-// call). Counting only the ORIGINAL name's collisions (the pre-fix
-// behavior) isn't enough: a walk of x/a.svg, x-a.svg, x-a-2.svg would
-// generate "x-a-2.svg" for both the second AND third file, since the third
-// file's own literal name was never registered as claimed — the loser was
-// silently overwritten in the caller's mind and then destroyed at teardown
-// with nothing preserved for it. Deterministic, in walk order.
-func dedupeDestName(name string, claimed map[string]int) string {
-	cand := name
-	for n := 1; claimed[cand] > 0; {
-		n++
-		ext := filepath.Ext(name)
-		cand = fmt.Sprintf("%s-%d%s", strings.TrimSuffix(name, ext), n, ext)
-	}
-	claimed[cand]++
-	return cand
-}
-
-// artifactPreserveList walks root (a cell's artifacts dir) and returns one
-// preserveEntry (absolute src path, flattened dest name) for every
-// non-hidden regular file, recursing into subdirectories exactly like
-// ListArtifacts (internal/jobs/status.go) does for the live board view.
-// Nested paths are flattened for pluto's flat <slug>.<name> namespace by
-// replacing "/" with "-" (figures/a.svg becomes figures-a.svg);
-// preserveArtifacts then prefixes <slug>. on top of dest as usual. A dest
-// name collision (e.g. figures/a.svg and a top-level file literally named
-// figures-a.svg both flatten to "figures-a.svg") is de-duped deterministically
-// within this one call via dedupeDestName — otherwise the loser was silently
-// dropped and then destroyed at teardown with nothing preserved for it.
-// Entries are followed-then-checked for being a regular file (os.Stat, not
-// d.Type().IsRegular()): a valid symlink to a regular file is preserved,
-// same as ListArtifacts and the store sync both already treat it via
-// ReadFile; only a dangling symlink, a directory, or a device is skipped
-// (keep()'s ReadFile would otherwise hard-block Done forever on a dangling
-// one). A root that's missing, or that exists but isn't a directory, reads
-// as "nothing to preserve" (nil, nil). Any other walk error (permission
-// denied, I/O failure mid-walk) is propagated rather than swallowed:
-// preserveArtifacts gates cell-dir DESTRUCTION on having preserved
-// everything, so a partial listing must never read as a complete one.
-func artifactPreserveList(root string) ([]preserveEntry, error) {
-	fi, err := os.Stat(root)
-	if err != nil || !fi.IsDir() {
-		return nil, nil
-	}
-	var out []preserveEntry
-	claimed := map[string]int{}
-	err = filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
-		if err != nil {
-			return err // unreadable entry: abort — a partial listing must not read as complete
-		}
-		if d.IsDir() {
-			if p != root && strings.HasPrefix(d.Name(), ".") {
-				return fs.SkipDir
-			}
-			return nil
-		}
-		if strings.HasPrefix(d.Name(), ".") {
-			return nil
-		}
-		if pfi, statErr := os.Stat(p); statErr != nil || !pfi.Mode().IsRegular() {
-			return nil // dangling symlink, symlinked dir, device, etc: not a real file to copy
-		}
-		rel, relErr := filepath.Rel(root, p)
-		if relErr != nil {
-			return nil // outside root: shouldn't happen, skip rather than fail the walk
-		}
-		dest := dedupeDestName(strings.ReplaceAll(filepath.ToSlash(rel), "/", "-"), claimed)
-		out = append(out, preserveEntry{src: p, dest: dest})
-		return nil
-	})
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
-// preserveArtifacts copies a finishing cell's deliverables into the pluto dir
-// as <slug>.<name> (never overwriting): everything in the cell's artifacts/
-// dir, recursing into subdirectories, plus uncommitted root-level *.md in
-// the worktree (where a solo zeus might leave a doc outside artifacts/) —
-// unconditionally: Q14 removed the
-// build/info job-type split, so this sweep no longer skips itself for jobs
-// that also ship deliverables via a PR; a job's own uncommitted root notes
-// are always worth preserving regardless of whether it opened one. Teardown
-// deletes both origins.
-func preserveArtifacts(j *Job, repo string) ([]string, error) {
-	var copied []string
-	var firstErr error
-	keep := func(src, name string) {
-		data, err := os.ReadFile(src)
-		if err != nil {
-			// a failed copy must block teardown — teardown deletes the source
-			if firstErr == nil {
-				firstErr = fmt.Errorf("preserve %s: %v", src, err)
-			}
-			return
-		}
-		dst := filepath.Join(PlutoDir(), PlutoArtifactPrefix(j)+name)
-		// A collision here used to be routine and silently lost the NEW
-		// job's file: the prefix was the bare slug, so an earlier job of the
-		// same name already owned the path and this returned quietly, leaving
-		// teardown to delete the source. With the id in the prefix a
-		// collision can only be this same job's own earlier copy — a genuine
-		// re-teardown — so overwriting is the correct resolution rather than
-		// skipping, and the destination is refreshed from the live artifact.
-		if err := os.WriteFile(dst, data, 0o644); err != nil {
-			if firstErr == nil {
-				firstErr = fmt.Errorf("preserve %s: %v", dst, err)
-			}
-			return
-		}
-		copied = append(copied, dst)
-	}
-	entries, err := artifactPreserveList(CellArtifacts(j))
-	if err != nil && firstErr == nil {
-		firstErr = fmt.Errorf("list artifacts: %w", err)
-	}
-	for _, e := range entries {
-		keep(e.src, e.dest)
-	}
-	wt := ExistingWorktree(j, repo)
-	if wt == "" {
-		return copied, firstErr
-	}
-	out, err := exec.Command("git", "-C", wt, "status", "--porcelain").Output()
-	if err != nil {
-		return copied, firstErr
-	}
-	for _, line := range strings.Split(string(out), "\n") {
-		if len(line) < 4 {
-			continue
-		}
-		name := strings.TrimSpace(line[3:])
-		if _, renamed, ok := strings.Cut(name, " -> "); ok {
-			name = renamed
-		}
-		if strings.Contains(name, "/") || !strings.HasSuffix(name, ".md") {
-			continue
-		}
-		keep(filepath.Join(wt, name), name)
-	}
-	return copied, firstErr
-}
 
 // teardownFinalFields maps a teardown-intent marker to the WriteJobFields
 // args that finish it: the final state, plus clearing the marker itself.
@@ -2412,26 +2286,19 @@ func ResumeTeardown(j *Job) error {
 	return WriteJobFields(j, fields...)
 }
 
-// DoneJob completes a started job: preserve artifacts, force-teardown the
-// cell, stamp state done + outcome. Called from the board's Done action
-// (webDone). The caller has validated the job is started and not done.
-// The teardown intent lands in the job file before the first destructive step
-// so an interrupted run is resumable (ResumeTeardown) instead of stranding
-// the job between states.
+// DoneJob completes a started job: force-teardown the cell (whose final
+// sync mirrors the artifacts into the store), stamp state done + outcome.
+// Called from the board's Done action (webDone). The caller has validated
+// the job is started and not done. The teardown intent lands in the job
+// row before the first destructive step so an interrupted run is resumable
+// (ResumeTeardown) instead of stranding the job between states.
 func DoneJob(j *Job, outcome string) ([]string, error) {
 	repo, err := ResolveRepo(j.Repo)
 	if err != nil {
 		return nil, fmt.Errorf("job %s: %v", j.Slug, err)
 	}
 	stampSessionBeforeTeardown(j)
-	copied, perr := preserveArtifacts(j, repo)
 	var msgs []string
-	for _, c := range copied {
-		msgs = append(msgs, "preserved artifact "+c)
-	}
-	if perr != nil {
-		return msgs, fmt.Errorf("artifact preservation failed: %v — not tearing down (teardown deletes the source)", perr)
-	}
 	// guard before the intent write: a refused self-teardown must not leave a
 	// dangling marker on a live cell for the daemon to act on later. Every
 	// session candidate, exactly as teardownCell loops them — see KillJob's
@@ -2514,7 +2381,7 @@ func doneReorient(j *Job, branch, branchDesc string) string {
 	if len(j.PRs) > 0 {
 		prTail = " Your earlier PRs are recorded on the job — re-read the current repo state and their merge state before acting, then ship adjustments as a new PR from the current branch (or as follow-up commits onto a PR for this branch that is still open)."
 	}
-	return "this job was marked done, but carl has reactivated it for adjustments — it was not truly finished. You are resumed in a fresh cell: same worktree path, on branch " + branch + " " + branchDesc + "." + prTail
+	return "this job was marked done, but " + Operator() + " has reactivated it for adjustments — it was not truly finished. You are resumed in a fresh cell: same worktree path, on branch " + branch + " " + branchDesc + "." + prTail
 }
 
 // reactivatePrompt assembles the resumed claude's prompt from three pure
@@ -2531,12 +2398,12 @@ func reactivatePrompt(reorient, message, rebaseNote string) (prompt string, hasP
 		return "", false
 	}
 	if rebaseNote == "" {
-		return reorient + "\nsteering from carl: " + message, true
+		return reorient + "\nsteering from " + Operator() + ": " + message, true
 	}
 	if message == "" {
 		return rebaseNote, true
 	}
-	return rebaseNote + "\n" + reorient + "\nsteering from carl: " + message, true
+	return rebaseNote + "\n" + reorient + "\nsteering from " + Operator() + ": " + message, true
 }
 
 // recreateFromRemote checks whether the job's branch still lives on origin
@@ -2606,6 +2473,11 @@ func recreateFromRemote(repo, branch, base string) (needsRebase bool, ok bool) {
 // resumes the session promptless — nothing is submitted, it just comes up
 // idle.
 func ReactivateJob(j *Job, session, message string) error {
+	// A bad branch prefix refuses before any worktree work, exactly as
+	// SubmitJob refuses it.
+	if err := branchPrefixErr(); err != nil {
+		return fmt.Errorf("job %s: %v", j.Slug, err)
+	}
 	if j.Err != "" {
 		return fmt.Errorf("job %s is unparseable (%s) — fix the frontmatter first", j.Slug, j.Err)
 	}
@@ -2691,7 +2563,7 @@ func ReactivateJob(j *Job, session, message string) error {
 	bindGate(j, "reactivate "+j.Slug)
 	var reorient, rebaseNote string
 	if mode == "resume" {
-		reorient = "your cell died mid-run (the tmux session was lost), and carl has reactivated it. Your worktree is EXACTLY as you left it — uncommitted changes preserved, branch " + CellBranch(j) + " untouched. Re-orient with git status and the job's mid-run log, then continue the job from where it stopped."
+		reorient = "your cell died mid-run (the tmux session was lost), and " + Operator() + " has reactivated it. Your worktree is EXACTLY as you left it — uncommitted changes preserved, branch " + CellBranch(j) + " untouched. Re-orient with git status and the job's mid-run log, then continue the job from where it stopped."
 	} else {
 		base, err := baseRef(j, repo)
 		if err != nil {
@@ -2735,6 +2607,20 @@ func ReactivateJob(j *Job, session, message string) error {
 		if err != nil {
 			return fmt.Errorf("git worktree add: %s", strings.TrimSpace(string(out)))
 		}
+		// the root notes teardown captured go back where zeus left them — at
+		// the worktree root, never into artifacts/ (restoreCellArtifacts above
+		// ran before this worktree existed, so it could not place them) — and
+		// never over a file the fresh checkout already has (those are staged
+		// in <reDir>/root-notes/ instead); zeus is told which went back and
+		// where the others are (rootNotesNote, below)
+		var rootNotesNote string
+		if st := ActiveStore(); st != nil {
+			written, skipped, stageDir, err := restoreRootNotes(st, j.ID, wt)
+			if err != nil {
+				return fmt.Errorf("job %s: %v (worktree left at %s)", j.Slug, err, wt)
+			}
+			rootNotesNote = rootNotesReorient(stageDir, written, skipped)
+		}
 		// fresh worktree, same as StartCell: no hook until installed, and a
 		// done→adjust reactivation is exactly when new PRs are about to ship
 		installHookSettings(wt, j)
@@ -2749,6 +2635,9 @@ func ReactivateJob(j *Job, session, message string) error {
 			reorient = doneReorient(j, branch, branchDesc)
 		} else {
 			reorient = "your cell died mid-run and its worktree was lost, so it was recreated fresh: branch " + branch + " " + branchDesc + ". Any uncommitted work from the previous run is gone — re-read the job's mid-run log and the repo state, then continue the job."
+		}
+		if rootNotesNote != "" {
+			reorient += " " + rootNotesNote
 		}
 	}
 	// both modes land here with a real worktree: freshly recreated above, or

@@ -166,20 +166,16 @@ func TestJobRepoOriginPrefix_SSHOriginNormalized(t *testing.T) {
 
 const logicHookURL = "https://github.com/carl/kraken/pull/9"
 
-// logicRunHook drives PrHook for a job whose repo does not resolve (so no
-// local filtering can drop the URL) against srvAddr, returning stderr. It
+// logicRunHook drives PrHook for a job the hook process cannot load (it
+// opens no store, so no local filtering can drop the URL) against srvAddr,
+// returning stderr. It
 // also points KRAKEN_DB_PATH at a temp path so the test can assert the hook
 // never opened kraken.db.
 func logicRunHook(t *testing.T, slug, srvAddr string) (stderr, dbPath string) {
 	t.Helper()
 	t.Setenv("HOME", t.TempDir())
-	t.Setenv("KRAKEN_PLUTO_DIR", t.TempDir())
 	dbPath = filepath.Join(t.TempDir(), "kraken.db")
 	t.Setenv("KRAKEN_DB_PATH", dbPath)
-	src := "---\njob: " + slug + "\nrepo: kraken-logic-no-such-repo\n---\n\n# Spec\n"
-	if err := os.WriteFile(filepath.Join(PlutoDir(), slug+".job.md"), []byte(src), 0o644); err != nil {
-		t.Fatal(err)
-	}
 	t.Setenv("KRAKEN_SERVE_ADDR", srvAddr)
 	payload := `{"tool_name":"Bash","tool_input":{"command":"gh pr create"},"tool_output":{"stdout":"` + logicHookURL + `\n"}}`
 	withStdin(t, payload, func() {

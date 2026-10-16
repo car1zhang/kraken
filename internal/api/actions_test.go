@@ -6,8 +6,6 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 
@@ -15,20 +13,17 @@ import (
 	"kraken/internal/store"
 )
 
-// writeTestJobBody writes a job file with a caller-chosen body (spec text),
+// writeTestJobBody stores a job with a caller-chosen body (spec text),
 // unlike writeTestJob which always seeds "# Spec\n" — needed for the
 // empty-spec queue guard tests below.
 func writeTestJobBody(t *testing.T, slug, extraFrontmatter, body string) {
 	t.Helper()
 	src := "---\njob: " + slug + "\ntype: build\nrepo: monolith\n" +
 		extraFrontmatter + "---\n\n" + body
-	if err := os.WriteFile(filepath.Join(jobs.PlutoDir(), slug+jobs.JobSuffix), []byte(src), 0o644); err != nil {
-		t.Fatal(err)
-	}
+	seedJobText(t, slug, src)
 }
 
 func TestWebAnswerQuestionBadDigit(t *testing.T) {
-	t.Setenv("KRAKEN_PLUTO_DIR", t.TempDir())
 	writeTestJob(t, "q-bad-digit", "state: blocked\n")
 	for _, bad := range []string{"", "0", "10", "x", "1 2", " "} {
 		if err := webAnswerQuestion(webReq{Slug: "q-bad-digit", Text: bad}); err == nil {
@@ -40,7 +35,6 @@ func TestWebAnswerQuestionBadDigit(t *testing.T) {
 }
 
 func TestWebAnswerQuestionNotLive(t *testing.T) {
-	t.Setenv("KRAKEN_PLUTO_DIR", t.TempDir())
 	// state: blocked but no matching tmux session exists in the test
 	// environment, so this must fail past digit validation on liveness
 	writeTestJob(t, "q-not-live", "state: blocked\n")
@@ -81,7 +75,6 @@ func TestAnswerableSingleDigit(t *testing.T) {
 // board's column gating is what restricts the drag to BLOCKED, not this
 // check (see webDone's doc comment).
 func TestWebDoneValidation(t *testing.T) {
-	t.Setenv("KRAKEN_PLUTO_DIR", t.TempDir())
 	writeTestJob(t, "draft-job", "")
 	if err := webDone(webReq{Slug: "draft-job"}); err == nil || !strings.Contains(err.Error(), "hasn't started") {
 		t.Fatalf("expected 'hasn't started' error, got %v", err)
@@ -93,7 +86,6 @@ func TestWebDoneValidation(t *testing.T) {
 }
 
 func TestWebSteerNotLive(t *testing.T) {
-	t.Setenv("KRAKEN_PLUTO_DIR", t.TempDir())
 	writeTestJob(t, "steer-not-live", "state: blocked\n")
 	err := webSteer(webReq{Slug: "steer-not-live", Text: "pivot to plan B"})
 	if err == nil || !strings.Contains(err.Error(), "no live cell") {
@@ -102,7 +94,6 @@ func TestWebSteerNotLive(t *testing.T) {
 }
 
 func TestWebSteerEmptyMessage(t *testing.T) {
-	t.Setenv("KRAKEN_PLUTO_DIR", t.TempDir())
 	writeTestJob(t, "steer-empty", "state: blocked\n")
 	if err := webSteer(webReq{Slug: "steer-empty", Text: "   "}); err == nil {
 		t.Fatal("empty steering message should be rejected")
@@ -134,7 +125,6 @@ func useSubmitSeam(t *testing.T, err error) *[]string {
 }
 
 func TestWebSubmitCallsTheSeamOnce(t *testing.T) {
-	t.Setenv("KRAKEN_PLUTO_DIR", t.TempDir())
 	writeTestJobBody(t, "submit-ok", "", "Some real spec content.\n")
 	got := useSubmitSeam(t, nil)
 
@@ -147,7 +137,6 @@ func TestWebSubmitCallsTheSeamOnce(t *testing.T) {
 }
 
 func TestWebSubmitSurfacesTheSeamError(t *testing.T) {
-	t.Setenv("KRAKEN_PLUTO_DIR", t.TempDir())
 	writeTestJobBody(t, "submit-fails", "", "a real spec\n")
 	useSubmitSeam(t, errors.New("submit-fails has an empty spec — write one before submitting"))
 
@@ -158,7 +147,6 @@ func TestWebSubmitSurfacesTheSeamError(t *testing.T) {
 }
 
 func TestWebSubmitUnknownSlug(t *testing.T) {
-	t.Setenv("KRAKEN_PLUTO_DIR", t.TempDir())
 	got := useSubmitSeam(t, nil)
 
 	if err := webSubmit(webReq{Slug: "no-such-job"}); err == nil {
@@ -199,7 +187,7 @@ func postReorder(t *testing.T, column string, slugs []string) *httptest.Response
 // file mode retired outright, no nil-store fallback left in order.go) — so
 // every reorder test that actually reaches SaveColumnOrder needs a wired
 // store, with the jobs themselves created as store rows to match (LoadJobs
-// only reads files when NO store is wired at all).
+// returns nothing when NO store is wired at all).
 func TestWebReorderHappyPath(t *testing.T) {
 	useTestStore(t)
 	st := jobs.ActiveStore()
@@ -225,7 +213,6 @@ func TestWebReorderHappyPath(t *testing.T) {
 }
 
 func TestWebReorderUnknownColumn(t *testing.T) {
-	t.Setenv("KRAKEN_PLUTO_DIR", t.TempDir())
 	t.Setenv("HOME", t.TempDir())
 	rec := postReorder(t, "bogus", []string{"x"})
 	if rec.Code != http.StatusConflict {
@@ -263,7 +250,6 @@ func TestWebReorderDropsDepartedSlug(t *testing.T) {
 // a client that still posts it gets the same 409 any other unknown column
 // gets, rather than silently writing an order nothing will ever render.
 func TestWebReorderQueuedColumnRetired(t *testing.T) {
-	t.Setenv("KRAKEN_PLUTO_DIR", t.TempDir())
 	t.Setenv("HOME", t.TempDir())
 	rec := postReorder(t, "queued", []string{"x"})
 	if rec.Code != http.StatusConflict {
@@ -293,7 +279,6 @@ func TestWebReorderQueuedColumnRetired(t *testing.T) {
 // --- POST /api/stop ---
 
 func TestWebStopRejectsDeadCell(t *testing.T) {
-	t.Setenv("KRAKEN_PLUTO_DIR", t.TempDir())
 	writeTestJob(t, "stop-not-live", "state: working\n")
 	err := webStop(webReq{Slug: "stop-not-live"})
 	if err == nil || !strings.Contains(err.Error(), "no live cell") {

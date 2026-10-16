@@ -476,14 +476,11 @@ func currentArtifactHome(j *jobs.Job) string {
 
 // resolveArtifact reads name's current bytes for j under home. For home
 // "cell" this is a straight file read (ArtifactPath) — Q12's rule that a
-// live cell's artifacts are never DB-backed. For every other home it tries
-// ArtifactBytes (the store) first, ArtifactPath (the file) as the fallback
-// — the SAME precedence web/serve.go's artifactHandler actually serves
-// bytes from (B6): resolveArtifact used to try the file first, which meant
-// an edit's re-frozen snapshot could capture different bytes than what carl
-// just viewed through the artifact route whenever a done/archived job's DB
-// row and preserved flat copy had drifted apart. ext is the extension
-// (without the dot) stamped alongside the snapshot.
+// live cell's artifacts are never DB-backed. Every other home reads the
+// store (ArtifactBytes) — the same single source web/serve.go's
+// artifactHandler serves those bytes from (B6), so a re-frozen snapshot
+// always captures what was just viewed. ext is the extension (without the
+// dot) stamped alongside the snapshot.
 func resolveArtifact(j *jobs.Job, home, name string) (data []byte, ext string, ok bool) {
 	ext = strings.TrimPrefix(filepath.Ext(name), ".")
 	if home == "cell" {
@@ -496,11 +493,6 @@ func resolveArtifact(j *jobs.Job, home, name string) (data []byte, ext string, o
 	}
 	if b, _, bok := ArtifactBytes(j, home, name); bok {
 		return b, ext, true
-	}
-	if p, pok := ArtifactPath(j, home, name); pok {
-		if b, err := os.ReadFile(p); err == nil {
-			return b, ext, true
-		}
 	}
 	return nil, "", false
 }
@@ -563,8 +555,8 @@ func feedbackCreate(w http.ResponseWriter, st *store.Store, req feedbackReq) {
 // feedbackEdit UPDATEs the note and re-freezes the snapshot from the
 // artifact as CURRENTLY served (Q4) — resolved via the job's present
 // state/home, since the row itself carries no home. If the artifact no
-// longer resolves (the job's cell was torn down and no pluto/archive copy
-// survived, say), or resolves to zero bytes (a mid-truncate read, an
+// longer resolves (the job's cell was torn down and the artifacts table
+// lacks the name, say), or resolves to zero bytes (a mid-truncate read, an
 // artifacts row written with empty bytes), this falls back to the row's
 // OWN existing snapshot bytes rather than passing nil/empty and silently
 // blanking a perfectly good frozen copy — a caller must never lose the

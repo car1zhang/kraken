@@ -198,7 +198,7 @@ func serveSetup(opts web.Options, mirror bool) (ln net.Listener, st *store.Store
 const backupsKeep = 7
 
 // backupsDir is where kraken serve's nightly backups land, overridable for
-// tests — same KRAKEN_*_DIR override pattern as jobs.PlutoDir/UploadsDir.
+// tests.
 func backupsDir() string {
 	if d := os.Getenv("KRAKEN_BACKUPS_DIR"); d != "" {
 		return d

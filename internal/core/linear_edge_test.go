@@ -92,8 +92,8 @@ func TestEdgeLoadLinearConfigMissingFileIsEnvOnly(t *testing.T) {
 	if cfg.APIKey != "" {
 		t.Errorf("APIKey = %q with nothing configured, want empty (feature off)", cfg.APIKey)
 	}
-	if cfg.DefaultRepo != "monolith" {
-		t.Errorf("DefaultRepo = %q, want monolith", cfg.DefaultRepo)
+	if cfg.DefaultRepo != "" {
+		t.Errorf("DefaultRepo = %q, want empty (no hardcoded default)", cfg.DefaultRepo)
 	}
 	if len(cfg.States) != 1 || cfg.States[0] != "Today" {
 		t.Errorf("States = %#v, want [Today]", cfg.States)
@@ -156,7 +156,7 @@ func TestEdgeLoadLinearConfigBinaryFileDegrades(t *testing.T) {
 	if cfg.APIKey != edgeLinearKey {
 		t.Errorf("APIKey = %q, want the process env's value — a binary file must degrade, not win", cfg.APIKey)
 	}
-	if cfg.DefaultRepo != "monolith" || len(cfg.States) == 0 {
+	if cfg.DefaultRepo != "" || len(cfg.States) == 0 {
 		t.Errorf("defaults lost on a binary file: %+v", cfg)
 	}
 }

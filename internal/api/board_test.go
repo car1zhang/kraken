@@ -19,17 +19,14 @@ import (
 	"kraken/internal/util"
 )
 
-// writeTestJob writes a minimal parseable job file under a fresh
-// KRAKEN_PLUTO_DIR and returns its slug — the shared fixture for the
-// webXxx move-validation tests below, none of which need a live cell to
-// reach their validation error.
+// writeTestJob stores a minimal parseable job (seedJobText) — the shared
+// fixture for the webXxx move-validation tests below, none of which need a
+// live cell to reach their validation error.
 func writeTestJob(t *testing.T, slug, extraFrontmatter string) {
 	t.Helper()
 	src := "---\njob: " + slug + "\ntype: build\nrepo: monolith\n" +
 		extraFrontmatter + "---\n\n# Spec\n"
-	if err := os.WriteFile(filepath.Join(jobs.PlutoDir(), slug+jobs.JobSuffix), []byte(src), 0o644); err != nil {
-		t.Fatal(err)
-	}
+	seedJobText(t, slug, src)
 }
 
 // mustJSON marshals v for use as an httptest request body.
@@ -251,7 +248,7 @@ func TestWebTokensForMirrorsFields(t *testing.T) {
 }
 
 func TestJobTokensIndexNoStoreIsNil(t *testing.T) {
-	// no store wired (a file-mode entrypoint, or a test) is not an error:
+	// no store wired (a storeless CLI process, or a test) is not an error:
 	// the board simply serves no tokens key on any job.
 	if got := jobTokensIndex(nil); got != nil {
 		t.Fatalf("jobTokensIndex(nil) = %+v, want nil", got)
@@ -559,12 +556,10 @@ func TestBoardCacheSingleFlight(t *testing.T) {
 	}
 }
 
-// TestArchivedArtifactServing covers both the DB-mirrored artifact LISTING
-// (archivedWebArtifacts, store-only now — LoadArchivedJobs has no file-mode
-// fallback left; see jobs/archive.go's own doc comment) and the FLAT-FILE
-// resolution a GET /api/artifact/.../archive/... request actually reads
-// bytes from (ArtifactPath, unchanged — archived pluto copies are still
-// plain files on disk regardless of storage mode).
+// TestArchivedArtifactServing covers the DB-mirrored artifact LISTING of
+// an archived job (archivedWebArtifacts) and the bytes behind it
+// (ArtifactBytes): the archive home is served from the artifacts table
+// alone, so ArtifactPath resolves no file for it.
 func TestArchivedArtifactServing(t *testing.T) {
 	useTestStore(t)
 	st := jobs.ActiveStore()
@@ -576,37 +571,21 @@ func TestArchivedArtifactServing(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := os.MkdirAll(jobs.ArchiveDir(), 0o755); err != nil {
-		t.Fatal(err)
-	}
 	a := jobs.ArchivedJobByName(jobs.LoadArchivedJobs(), name)
 	if a == nil {
 		t.Fatal("archived job not found")
-	}
-	// Archived copies keep the <slug>-<id>. prefix they had while live —
-	// ArchiveJob moves them without renaming, since the id already keeps two
-	// generations of one slug apart. ArchivedName still identifies the ROW.
-	if err := os.WriteFile(filepath.Join(jobs.ArchiveDir(), jobs.PlutoArtifactPrefix(a)+"report.md"), []byte("x"), 0o644); err != nil {
-		t.Fatal(err)
 	}
 	arts := archivedWebArtifacts(a)
 	if len(arts) != 1 || arts[0].Name != "report.md" || arts[0].URL != "/api/artifact/"+name+"/archive/report.md" {
 		t.Fatalf("unexpected artifacts: %+v", arts)
 	}
-	if p, ok := ArtifactPath(a, "archive", "report.md"); !ok || p != filepath.Join(jobs.ArchiveDir(), jobs.PlutoArtifactPrefix(a)+"report.md") {
-		t.Fatalf("artifactPath archive: %q %v", p, ok)
+	if data, _, ok := ArtifactBytes(a, "archive", "report.md"); !ok || string(data) != "x" {
+		t.Fatalf("ArtifactBytes archive: %q %v", data, ok)
 	}
-	// traversal and job files are refused
-	if _, ok := ArtifactPath(a, "archive", "../"+jobs.PlutoArtifactPrefix(a)+"report.md"); ok {
-		t.Fatal("traversal allowed")
-	}
-	if _, ok := ArtifactPath(a, "archive", "job.md"); ok {
-		// <name>.job.md must not be reachable as artifact "job.md"
-		t.Fatal("job file served as artifact")
-	}
-	// an active job (no ArchivedName) never resolves in the archive home
-	if _, ok := ArtifactPath(&jobs.Job{Slug: "foo"}, "archive", "report.md"); ok {
-		t.Fatal("active job resolved in archive home")
+	for _, home := range []string{"archive", "pluto"} {
+		if p, ok := ArtifactPath(a, home, "report.md"); ok {
+			t.Fatalf("ArtifactPath(%s) resolved a file %q — non-cell homes have none", home, p)
+		}
 	}
 }
 

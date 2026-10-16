@@ -176,6 +176,12 @@ export interface SteerOverlayProps {
    * `job` and does not depend on this at all.
    */
   usage?: WebUsage;
+  /**
+   * `board.operator` — the name the transcript panel labels the operator's
+   * turns with and the load tooltip says the unblock costs. Optional: an older
+   * server sends none, and both fall back to "you" / "the operator".
+   */
+  operator?: string;
   onClose: () => void;
   /**
    * A rename succeeded — the caller re-points `slug` at the SAME job under its
@@ -273,6 +279,7 @@ function SteerBody({
   requireText = false,
   job,
   usage,
+  operator,
   onClose,
   onRenamed,
   mutate,
@@ -867,7 +874,7 @@ function SteerBody({
               one where most of what zeus explains can be highlighted for the
               ◆ mind button. Withheld for an archived job, whose synthetic
               slug no route answers for. */}
-          {job && !job.archived ? <ZeusTranscriptPanel slug={jobSlug} /> : null}
+          {job && !job.archived ? <ZeusTranscriptPanel slug={jobSlug} operator={operator} /> : null}
           {/* Conditional rather than a `hidden={…}` wrapper like its siblings
               above, and deliberately so: "no estimate" is the absence of the
               element, not an element with nothing in it. A hidden wrapper keeps
@@ -877,7 +884,7 @@ function SteerBody({
               the sequence a reader is deciding on: what zeus says it is stuck
               on, what was last said to it, and what unsticking it costs. */}
           {load && loadDerived ? (
-            <LoadDrill load={load} roi={loadDerived.roi} band={loadDerived.band} />
+            <LoadDrill load={load} roi={loadDerived.roi} band={loadDerived.band} operator={operator} />
           ) : null}
           {/* artifactListHTML (app.js) — EVERY artifact as an openable chip,
               no cap and no "+N more": the card's band-2 surface is now a bare
@@ -1108,7 +1115,7 @@ const TRANSCRIPT_POLL_MS = 3000;
  * innerHTML every 3s would reset the scroll AND collapse any selection carl
  * is in the middle of making.
  */
-function ZeusTranscriptPanel({ slug }: { slug: string }) {
+function ZeusTranscriptPanel({ slug, operator }: { slug: string; operator?: string }) {
   const [open, setOpen] = useState(false);
   const read = usePoll<JobTranscript>(
     (signal) => fetchJobTranscriptTurns(slug, TRANSCRIPT_TURNS, signal),
@@ -1124,7 +1131,7 @@ function ZeusTranscriptPanel({ slug }: { slug: string }) {
     if (!el) return;
     const html = blocks.length
       ? blocks
-          .map((b) => threadBlockHTML(b, false, "", { session, speaker: "zeus" }))
+          .map((b) => threadBlockHTML(b, false, "", { session, speaker: "zeus" }, operator))
           .join("")
       : "";
     if (html === last.current) return;
@@ -1133,7 +1140,7 @@ function ZeusTranscriptPanel({ slug }: { slug: string }) {
     last.current = html;
     el.innerHTML = html;
     el.scrollTop = atBottom ? el.scrollHeight : prevTop;
-  }, [blocks, session]);
+  }, [blocks, session, operator]);
   // Unfolding lands on the NEWEST turn: `display: none` forgets the body's
   // scroll position, and the paint above only moves it when the markup
   // changes, so a reopen on unchanged markup would otherwise sit at the top —
@@ -1173,10 +1180,13 @@ function LoadDrill({
   load,
   roi,
   band,
+  operator,
 }: {
   load: WebJobLoad;
   roi: number;
   band: LoadBand;
+  /** board.operator; the tooltip says "the operator" without one */
+  operator?: string;
 }) {
   // The wire promises 1..10 whenever the object is present, and loadROI has
   // already refused anything at or below 0 — the fallback is for the number
@@ -1209,7 +1219,9 @@ function LoadDrill({
   // deliberately does replace the visible text, because there the visible text
   // is `⚡ 4.0× 2→8` and has no spoken form worth hearing.
   const summary =
-    "zeus' triage estimate for this block. unblock is what answering costs CARL — reading, context, decisions. " +
+    "zeus' triage estimate for this block. unblock is what answering costs " +
+    (operator?.trim() || "the operator") +
+    " — reading, context, decisions. " +
     "next step is how big the claude work that answer buys is likely to be. roi is the second over the first, " +
     "so a cheap answer buying a long session ranks above an expensive one buying a message.";
   return (

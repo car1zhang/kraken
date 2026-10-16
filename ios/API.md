@@ -16,7 +16,7 @@ the auto-approve feature (and `auto_approve` on the job form GET/POST) was
 removed. v4 bumped when the job-level `type` (`build`|`info`) concept was
 deleted (Q14) — `type` removed from `/api/board`'s job objects and from the
 job form GET/POST shapes; the pipeline distinction now lives in `/aim` vs
-`/info` skill choice plus carl's `/do` steering, never a wire field. v5
+`/info` skill choice plus the operator's `/do` steering, never a wire field. v5
 bumped when `skip_doc` was removed from the job form GET/POST shapes (the
 doc phase now runs purely from zeus' own read of the job spec text, never a
 stored flag) and `doc_questions_err` was removed from `/api/board`'s job
@@ -94,6 +94,7 @@ the way in (`mtimeToken`), for old clients — but always emit a number.
 | `ship_ios` | object (`webShipIOS`) | always | the TestFlight ship button's state (see `POST /api/ship-ios` under Misc). Added additively, no contract bump. Modeled in the iOS app as `WebShipIOS` (Models.swift), **Optional** on `WebBoard` for the same reason `update` is |
 | `goals` | object (`{"week": [goal], "day": [goal]}`) | always (both arrays `[]`, never `null`) | the CURRENT local week's and today's goals — the same two arrays `GET /api/goals` serves, from the same store call, so the board key and that endpoint can never disagree. Periods are `store.GoalPeriods(time.Now())`: `day` is today's local `2006-01-02` date, `week` is the local Monday of this week. Added additively, no contract bump. Modeled in the iOS app as `WebGoals` (Models.swift), **Optional** on `WebBoard` for the same reason `update` is, and hand-decoded for the same blast-radius reason (see that struct's comment) |
 | `background` | object (`{"updated_at": number}`) | omitted when no background is set | the board's optional background image (api/background.go): the upload stamp alone (unix millis), never the bytes — `GET /api/background` serves those, with `?v=<updated_at>` as the cache-buster. ABSENT is the wire's only "no background". Added additively, no contract bump. Modeled in the iOS app as `WebBackground` (Models.swift), **Optional** on `WebBoard`; the app decodes it but does not render a background yet (a noted follow-up) |
+| `operator` | string | always | the name kraken's agents use for the person running it — `jobs.Operator()`: `KRAKEN_OPERATOR` (from the environment or `~/.kraken/env`), else `$USER`, else `"the operator"`. The web board labels the operator's turns in a side thread with it (falling back to `you` when the key is absent, i.e. an older server). Added additively, no contract bump. Modeled in the iOS app as `operatorName: String?` (JSON key `operator` — `operator` is a Swift keyword), **Optional** on `WebBoard`; the app decodes it but renders nothing from it yet |
 
 `webUpdate` (api/update.go) — assembled by one function (`currentUpdate`)
 shared with `GET /api/update/status`, so the board key and the poller's
@@ -185,7 +186,7 @@ payload, so a client sees exactly what it has always seen.
 | `agent` | string | omitempty | which coding agent the cell's zeus runs — `codex` for a codex cell, absent for the claude default so a card without the key renders exactly as it always has. Set from the job's `agent:` frontmatter (`claude` \| `codex`). Additive, no contract bump |
 | `threads` | array (`webThread`) | omitempty | this job's side threads — every fork of zeus' session, live or closed, served straight from `threads` rows in `kraken.db`; a closed thread outlives its cell (its transcript is still readable), so the array survives teardown. Additive, no contract bump |
 | `tokens` | object (`webTokens`) | omitempty | this job's summed token spend, straight from its `job_tokens` row. **Absent means NEVER MEASURED, which is not the same as zero** — a job that was measured and cost nothing serves the object with all-zero counters. Present for done and archived jobs too (the row outlives the cell). Additive, no contract bump |
-| `load` | object (`webJobLoad`) | omitempty | zeus' two 1–10 triage estimates for this job — how expensive carl's unblock is, and how big the claude work it buys. **Absent means "no estimate to act on", which is not the same as an estimate of zero**, and unlike `tokens` it covers THREE cases: never estimated, cleared (a clear zeroes `at`, and a zero `at` serves no object), and archived. **Withheld on archived jobs regardless of whether one exists** — the four columns survive archival and the key returns on unarchive; the archived loop drops it because a card that cannot be blocked cannot pose the question the badge answers. Served on every active job whatever its display state, so the key never flickers as a card moves column — the blocked-only rule is a RENDERING rule the clients apply, not a payload rule. The ROI the badge renders is DERIVED by the client (`scope / unblock`) and deliberately never on the wire. Additive, no contract bump |
+| `load` | object (`webJobLoad`) | omitempty | zeus' two 1–10 triage estimates for this job — how expensive the operator's unblock is, and how big the claude work it buys. **Absent means "no estimate to act on", which is not the same as an estimate of zero**, and unlike `tokens` it covers THREE cases: never estimated, cleared (a clear zeroes `at`, and a zero `at` serves no object), and archived. **Withheld on archived jobs regardless of whether one exists** — the four columns survive archival and the key returns on unarchive; the archived loop drops it because a card that cannot be blocked cannot pose the question the badge answers. Served on every active job whatever its display state, so the key never flickers as a card moves column — the blocked-only rule is a RENDERING rule the clients apply, not a payload rule. The ROI the badge renders is DERIVED by the client (`scope / unblock`) and deliberately never on the wire. Additive, no contract bump |
 | `goal` | object (`{"id": number, "text": string, "done": bool}`) | omitempty | the job's PRIMARY goal — durably `goals[0]`, the head of the array below, present under exactly the same condition and never on its own. Retained beside `goals` so a client that predates multi-goal links keeps rendering one goal rather than none. Additive, no contract bump. Modeled in the iOS app as `WebJobGoal` on `WebJob` |
 | `goals` | array (`[{"id": number, "text": string, "done": bool}]`) | omitempty | EVERY goal this job links (`job_goals`), in link-position order, present exactly when it links at least one — each from ANY period and done or not, so a job carried over from last week still names the goals it belongs to. Written only by `POST /api/job/goal` (below), never by `saveform`: the link is deliberately absent from the job form's field set, so a full form save cannot touch it. Additive, no contract bump. Modeled in the iOS app as `WebJobGoalList` on `WebJob` (a wrapper struct, because its decode is hand-written) and rendered as ONE card chip per goal (`GoalChip`, GoalsDrawer.swift) — `◎` plus the goal text truncated by the same 24-character rule web's `goalChipText` uses, muted when `done`, full text in the accessibility label since a phone has no tooltip; no `+N` badge for the rest, the chips wrap. That decode is tolerant in two places, since chips are cosmetic and the board is not: a `goals` that is not an array degrades to an empty list, and a malformed ELEMENT is dropped while the rest survive |
 | `account` | object (`{"slug": string, "email": string, "at": number}`) | omitempty | the pool slot this cell is BOUND to (schema v28's three `jobs` columns) — the login every claude in the cell bills, delivered to its panes as `CLAUDE_SECURESTORAGE_CONFIG_DIR=~/.claude-pool/<slug>` and stamped at spawn (rebound in place by the limit rescue). **Which POOL the slug names is decided by the job's `agent`, not by this object**: with `agent: "codex"` the slug names a slot under `~/.codex-pool/accounts/<slug>`, delivered to the cell's pane as `CODEX_HOME=<that dir>` and matched against `/api/usage`'s `codex_accounts`; otherwise it is a `~/.claude-pool` slot matched against `accounts`. The two pools are disjoint and a slugified email can name a slot in both, so a client that joined on the slug alone would draw one pool's percentages under the other pool's cell. `slug` is the slot directory name and is the same key `/api/usage`'s account rows carry, so a client joins the two on `agent` plus it and never on the email; `email` may be `""` for a slot ccp has no identity for yet; `at` is unix MILLIS of the bind stamp. **Absence is the wire's only spelling of UNBOUND** — the cell runs on the machine's main login exactly as every cell did before per-cell binding — and it covers two live states no client separates (the pool was dry or fully excluded at spawn; rotation is pinned `manual`, where kraken takes no account decision at all) plus a third, ARCHIVED: **withheld on archived jobs regardless of whether a binding exists**, which is `load`'s call rather than `tokens`' and for `load`'s reason — a card with no cell is not spending on anything, so the badge would answer a question it cannot pose. The columns survive archival and the key returns on unarchive. Served on every active bound job whatever its display state, so the key never flickers as a card moves column; the live-cards-only rule is a RENDERING rule the clients apply, not a payload rule. Additive, no contract bump. Rendered on web as one card chip (`AccountChip` — `⬢` plus the email's LOCAL PART, falling back to the slug, full address + slot + bind age in `title`/`aria-label`) and as the steer modal's read-only `.steer-account` section (bound-to, bind age, and that slot's bars joined from the 60s `/api/usage` poll — session/Fable for a claude cell, weekly plus a session bar only when the codex slot reports a genuinely shorter window for a codex one; no bars at all when the poll carries no row for it, never a fabricated percentage). Modeled in the iOS app as `WebJobAccount` on `WebJob`, **decode-only** this pass — nothing on the phone renders it yet. That decode is TOLERANT, the same way `goals` above is and for the same reason: `WebBoard.jobs` is a strictly decoded array, so a throw inside one job's `account` would take the entire board payload with it, and a cosmetic badge must never cost the board it is drawn on. A present-but-MALFORMED object (a retyped `slug`, a future server, a hand-edited response) degrades to nil — the card silently loses its badge — rather than failing the decode; absent and null are a different case absorbed one level up. `slug` stays required inside the object precisely so a malformed one is detectable: an object with no slug names no account at all |
@@ -243,7 +244,7 @@ field set, same json tags as the old `questions.yaml` record it replaces):
 | `context` | string | omitempty | |
 | `importance` | string | always | `P0` \| `P1` \| `P2` |
 | `recommendation` | string | omitempty | zeus' suggested answer |
-| `answer` | string | omitempty | carl's answer once posted; absent means still open |
+| `answer` | string | omitempty | the operator's answer once posted; absent means still open |
 | `answered_at` | string | omitempty | RFC3339 timestamp, set alongside `answer` |
 
 `webFeedback` (one `feedback` row, `store.Feedback`'s wire twin):
@@ -264,11 +265,11 @@ window of the same cell):
 | key | type | optionality | notes |
 |---|---|---|---|
 | `tid` | string | always | `t<digits>` counting from `t1`, unique per job and never recycled; the target every op below takes |
-| `title` | string | omitempty | carl's name for the thread; absent for one branched without a title — clients fall back to the tid |
+| `title` | string | omitempty | the operator's name for the thread; absent for one branched without a title — clients fall back to the tid |
 | `state` | string | always | `live` \| `closed`. `closed` = the tmux window is gone; the row (and the transcript it points at) survives, and `revive` resumes the same claude session |
 | `pane` | string | omitempty | the live thread's tmux pane, e.g. `%42` — usable with `GET /api/peers/capture`. Cleared on close (tmux recycles pane ids), so it is absent for a closed thread rather than stale |
 | `model` | string | omitempty | the tier this thread was branched on — `haiku` \| `sonnet` \| `opus` \| `fable`, the alias rather than the resolved id. Absent for a thread branched with no pick (and for every thread branched before the field existed), which falls back to the job's `model` and then kraken's default; a revive re-reads this row, so a thread never changes tier mid-conversation |
-| `role` | string | always | `ask` (an ordinary side thread — every row branched before schema v33 reads back as `ask`) \| `mind` (the job's mind thread, branched by `POST /api/mm/capture`: the one thread allowed to write carl's mental model). Clients show a `mind` chip. Additive |
+| `role` | string | always | `ask` (an ordinary side thread — every row branched before schema v33 reads back as `ask`) \| `mind` (the job's mind thread, branched by `POST /api/mm/capture`: the one thread allowed to write the operator's mental model). Clients show a `mind` chip. Additive |
 | `created_at` | number | always | unix millis the thread was branched |
 | `closed_at` | number | omitempty | unix millis the thread was closed; absent (0) while live |
 
@@ -326,12 +327,12 @@ Four rules for any client rendering this:
   halves — the four totals are unaffected.
 
 `webJobLoad` (the job's `load_*` columns — zeus' two triage estimates for a
-BLOCKED job: how much effort carl must spend to unblock it, and how big the
+BLOCKED job: how much effort the operator must spend to unblock it, and how big the
 claude work that reply buys):
 
 | key | type | optionality | notes |
 |---|---|---|---|
-| `unblock` | number | always | 1..10 — carl's cost to unblock. 1 = a mechanical action; 5 = moderate thought; 10 = deep thought, many decisions, lots of context |
+| `unblock` | number | always | 1..10 — the operator's cost to unblock. 1 = a mechanical action; 5 = moderate thought; 10 = deep thought, many decisions, lots of context |
 | `scope` | number | always | 1..10 — the size of the claude work that unblock releases. 1 = a one-message reply; 5 = a moderate implementation slice; 10 = many subagents and a massive scoped implementation |
 | `note` | string | always | zeus' one-line rationale; may be `""`. One-lined and capped at 200 **runes** (not bytes) server-side, so it is safe to render on one line without re-truncating |
 | `at` | number | always | unix millis the estimate was written; always > 0 while the object is present. Stamped SERVER-SIDE — a client never sends it |
@@ -370,7 +371,7 @@ with ` — <note>` appended when the note is non-empty.
 
 The **age clause is required**, and it is the only thing either client renders
 `at` for. Without it a stale estimate is indistinguishable from a fresh one on
-exactly the card the feature exists for: zeus estimates, carl answers, the cell
+exactly the card the feature exists for: zeus estimates, the operator answers, the cell
 later dies, the daemon's `health` files the card back under BLOCKED — and with
 zeus gone nothing rewrites the estimate, so the badge keeps describing a
 question answered hours ago. Each client formats the age with its own existing
@@ -446,7 +447,7 @@ old single-use-per-question restriction is gone too. Refused (409) when:
 
 ### `POST /api/feedback`
 
-One endpoint, three carl-facing forms distinguished by which fields are
+One endpoint, three operator-facing forms distinguished by which fields are
 present (plus a fourth, zeus-facing form below) — `feedbackReq`:
 
 | key | type | optionality | notes |
@@ -460,7 +461,7 @@ present (plus a fourth, zeus-facing form below) — `feedbackReq`:
 
 - **Create** — `{slug, home, name, feedback}`: resolves the artifact the
   same way the artifact route does, INSERTs a row (snapshot of the artifact
-  as currently served, note, carl's session, submit timestamp). Works for
+  as currently served, note, the operator's session, submit timestamp). Works for
   done/archived jobs too (Q2) — feedback rows are the only store, so there
   is no live/dead split.
 - **Edit** — `{slug, id, feedback}`: UPDATEs the note and re-freezes the
@@ -526,7 +527,7 @@ Response: `{"feedback": [webSweepFeedback]}` — always an array, never `null`.
 | `id` | number | always | the feedback row id |
 | `job` | string | always | the owning job's slug (an archived job's numbered archive name) — this read spans jobs, so the row names its own |
 | `artifact` | string | always | artifact name/path the note was left on |
-| `note` | string | always | carl's note text |
+| `note` | string | always | the operator's note text |
 | `at` | number | always | unix millis, submit time (immutable — an edit does not restamp it) |
 | `addressed` | string | omitempty | the nightly dream pass' account of the durable fix it shipped for the note — that pass is its only writer, so absent means "no durable fix has shipped", not "nobody handled it" |
 | `addressed_at` | string | omitempty | RFC3339 |
@@ -538,7 +539,7 @@ read, so it stays reachable under `--mirror`.
 ### `GET /api/feedback/snapshot?id=<row id>`
 
 Not JSON — serves the raw bytes a feedback row froze at submit (or last edit)
-time: the artifact exactly as carl was looking at it when he wrote the note.
+time: the artifact exactly as the operator was looking at it when they wrote the note.
 The first read path this column has ever had. **Additive, no contract bump.**
 
 The bytes are served INERT, and deliberately so: a snapshot is untrusted
@@ -563,7 +564,7 @@ Unlike questions and feedback, watch items are GLOBAL — they belong to no job,
 so there is no `slug` on this route or either of its writes.
 
 **A watch item is a row in its own `watch_items` table.** The observation is
-the row's own sentence; the same row carries the dream-loop workflow and carl's
+the row's own sentence; the same row carries the dream-loop workflow and the operator's
 judgement. It spent one release as a knowledge-graph EDGE with a thin `kg_watch`
 overlay before moving back into its own table; the knowledge graph itself has
 since been removed. Two consequences for a client:
@@ -605,17 +606,17 @@ property is `watchClass` behind an explicit CodingKey.
 | `suggested_fix` | string | omitempty | the agent's proposed correction |
 | `pr_url` | string | omitempty | |
 | `updated_at` | number | always | unix millis — the AGENT's last write; a verdict deliberately does not bump it |
-| `verdict` | string | omitempty | carl-owned: `fine`\|`fix` |
-| `comment` | string | omitempty | carl-owned |
-| `commented_at` | string | omitempty | carl-owned, RFC3339, stamped server-side |
+| `verdict` | string | omitempty | operator-owned: `fine`\|`fix` |
+| `comment` | string | omitempty | operator-owned |
+| `commented_at` | string | omitempty | operator-owned, RFC3339, stamped server-side |
 
 The row's columns have two owners, and the two writes below are split to
 match — the store enforces it column by column (`UpdateWatchItem` never
-writes carl's trio; `SetWatchVerdict` never writes anything else).
+writes the operator's trio; `SetWatchVerdict` never writes anything else).
 
 ### `POST /api/watchlist`
 
-**Carl's write** — the board's DREAM view judging an item. Web-UI/iOS-facing.
+**The operator's write** — the board's DREAM view judging an item. Web-UI/iOS-facing.
 Nothing else: it cannot express an observation edit, and a request that even
 MENTIONS an agent-owned key (`observation`, `class`, `state`, `sightings`,
 `first_seen`, `last_seen`, `evidence`, `suggested_fix`, `pr_url`,
@@ -697,7 +698,7 @@ sentence, so an accepted reword would silently split one tracked pattern in
 two. Remove and re-add to reword.
 
 **`remove` CLOSES the row.** `expired_at` is stamped; the row leaves every read
-but stays readable by id, carl's verdict on it included — no watch row is ever
+but stays readable by id, the operator's verdict on it included — no watch row is ever
 deleted. Closing a closed row is a 200, not a 404: the caller asked for it to
 be gone and it is gone. A later add of the same wording therefore creates a
 FRESH row rather than reviving the closed one, since the fold matches live rows
@@ -717,7 +718,7 @@ three shapes are CLI-facing only (the iOS app never calls this route), so the
 added keys are not a contract bump.
 
 Errors: 400 (unknown op, missing item, blank observation, bad class or state,
-an immutable key on update, missing id on update/remove, a carl-owned key),
+an immutable key on update, missing id on update/remove, an operator-owned key),
 404 (an id naming no row, on update/remove/verdict — and, on update and
 verdict only, a row that has been CLOSED, which every read already hides),
 413 (body over 1MB), 500. Gated under `--mirror`.
@@ -726,7 +727,7 @@ verdict only, a row that has been CLOSED, which every read already hides),
 
 The board's DREAM view: the night reports, newest first. **Additive, no
 contract bump.** A report is the `00-dream-report.md` artifact of a job whose
-slug starts `dream-`, resolved through the same cell ∪ store ∪ pluto artifact
+slug starts `dream-`, resolved through the same cell ∪ store artifact
 plumbing every other artifact read uses — so a report survives its cell's
 teardown with no second persistence path. Both the active and archived job
 namespaces are swept.
@@ -917,7 +918,7 @@ A read stays reachable under `--mirror`.
 Request: `webReq` — `slug` (string), `text` (string: free-text message, required non-empty).
 Response: same as above.
 
-`text` is delivered to zeus' pane verbatim — no `"from carl: "` prefix — so
+`text` is delivered to zeus' pane verbatim — no `"from <operator>: "` prefix — so
 a message starting with `/` invokes a real slash command in zeus' Claude
 session (e.g. `/do`) rather than being typed as plain conversation text.
 
@@ -1096,10 +1097,10 @@ in Models.swift and drawn on the card.
 ## Artifact library
 
 Four routes over the `saved_artifacts` table (internal/api/library.go,
-internal/store/saved.go): the artifacts carl asked to KEEP. A library entry
+internal/store/saved.go): the artifacts the operator asked to KEEP. A library entry
 is a **frozen copy** of an artifact's bytes as they stood at save time, not a
 bookmark — agents rewrite artifacts in place and cell dirs are deleted at
-teardown, so an entry that followed the live file would change under carl and
+teardown, so an entry that followed the live file would change under the operator and
 eventually 404. The copy is addressed by its own row id and survives the job
 it came from (the row carries no foreign key onto `jobs`, the `job_tokens`
 survival rule), archiving and hard delete included.
@@ -1191,7 +1192,7 @@ documented under "The mind layer" below. A client reaches only `capture`,
 `flag`, `flag/raise` and `flag/dismiss` are agent-side (`kraken mm …`).
 
 **Seven of the nine ARE modeled in `Models.swift` and `APIClient.swift`** — the
-phone has full parity with the board, writes included (carl, gate R2: "I need
+phone has full parity with the board, writes included (the operator, gate R2: "I need
 ios parity even in v1 with full writes"). `GET /api/mm` decodes as
 `MMPage`/`WebMMItem`/`WebMMAnchor`; the six client-reachable writes are
 `APIClient.markArtifactRead`, `markElementRead`, `markDecision`, `markDetail`,
@@ -1228,18 +1229,18 @@ from SERVER state with a refetch after each write, never from a local latch,
 which is what lets the daemon's verify pass retire a mark behind the app's
 back and have the control drop back to unmarked on the next read.
 
-A mental-model item is one thing carl has **read, decided or noted**, frozen at
-the moment he marked it. The freeze is the whole feature: an artifact mark
+A mental-model item is one thing the operator has **read, decided or noted**,
+frozen at the moment they marked it. The freeze is the whole feature: an artifact mark
 keeps a SNAPSHOT of the bytes, an element mark keeps the element's own text,
 and a code mark keeps the blob's text plus the commit and line range it was
-read at. A daemon pass then asks whether what he read is still there, and when
+read at. A daemon pass then asks whether what they read is still there, and when
 it is not the item is **invalidated one-way** — never deleted, never
 resurrected — so the frozen copy is what the board renders as "what you knew"
 against what is there now.
 
-The mental model is **carl's**. Agents never write it: no pipeline skill
-documents these routes, and the write verbs (`k mm mark|note`) are for carl's
-own shell and his Zed capture task. It is off the board's hot payload
+The mental model is **the operator's**. Agents never write it: no pipeline skill
+documents these routes, and the write verbs (`k mm mark|note`) are for the
+operator's own shell and their Zed capture task. It is off the board's hot payload
 entirely — no key on a job object, no board-cache interaction — with its own
 view and its own poll, exactly the artifact library's posture.
 
@@ -1281,19 +1282,19 @@ verbatim; the web Model pane binds its filter box to `q`.
 | `source` | string | always | `question`\|`artifact`\|`artifact-element`\|`code`\|`agent-output`\|`manual`\|`capture` (`capture` = committed by a mind thread, schema v33). Stays a STRING: the capture's source pointer rides `capture_source` below, because retyping this key would break every shipped build that decodes it as `String` |
 | `slug` | string | always | the job's DISPLAY slug at mark time, or `""` for the two sources that belong to no job (`code`, `manual`). Display only — the job may since have been renamed, archived or deleted |
 | `source_ref` | string | always | what was marked, per source: a `Q<n>` for a question, the artifact name for an artifact or element, `<repo>/<path>:<start>-<end>` for code, the first 16 hex of the text's sha256 for an agent detail, `""` for a note |
-| `content` | string | always | served WHOLE, never cut — it is what carl read, and the invalidated view exists to show it back in full. For an artifact mark it is the source ref: an artifact's content is its snapshot, which rides its own route |
-| `context` | string | always | the question's context, the note carl attached to a code mark, or `""` |
+| `content` | string | always | served WHOLE, never cut — it is what the operator read, and the invalidated view exists to show it back in full. For an artifact mark it is the source ref: an artifact's content is its snapshot, which rides its own route |
+| `context` | string | always | the question's context, the note the operator attached to a code mark, or `""` |
 | `created_at` | number | always | unix millis |
 | `episode_id` | number | always | legacy: the knowledge-graph episode once minted with the item. Still always emitted, and `0` for every row created since the graph was removed (older rows keep their old value). Shipped iOS builds decode it non-optional, which is why the key stays; current builds decode it as `Int64?` and read nothing from it |
 | `invalidated_at` | number | omitempty | unix millis. **The absence of these three keys is the wire's only spelling of "live"** |
-| `invalid_reason` | string | omitempty | `removed` (carl unmarked it), `content-changed`, `artifact-deleted`, `file-deleted` |
+| `invalid_reason` | string | omitempty | `removed` (the operator unmarked it), `content-changed`, `artifact-deleted`, `file-deleted` |
 | `invalid_detail` | string | omitempty | free text |
 | `anchor` | object | omitempty | present on `source: "code"` only — the table below |
 | `title` | string | always | schema v33: the one-line claim the rules files carry; `""` on every legacy row (clients fall back to the first line of `content`) |
 | `scope` | string | always | `universal` \| `repo` (legacy rows read `repo`) |
 | `repo` | string | always | the repo a `repo`-scoped item belongs to; `""` for universal and legacy rows |
 | `dir` | string | always | repo-relative directory, `""` = the repo root |
-| `quote` | string | always | the verbatim text carl highlighted when capturing; `""` on legacy rows |
+| `quote` | string | always | the verbatim text the operator highlighted when capturing; `""` on legacy rows |
 | `thread_session` | string | always | the mind thread's claude session that committed the item; `""` on legacy rows |
 | `revised_at` | number | always | unix millis of the last `POST /api/mm/revise`; `0` = never revised |
 | `capture_source` | object \| null | always | the parsed source pointer (`CaptureSource`, table below), or `null` when the row has none — every legacy row. Decode as optional |
@@ -1351,9 +1352,9 @@ never echoing the offending key), and an empty required field refused by name.
 | `POST /api/mm/artifact` | `{slug, home, name}` | kind `reading`, source `artifact`. Freezes the artifact's current bytes as the snapshot. Same bytes as a live mark → `already`; DIFFERENT bytes → the earlier item is superseded and a new one inserted, so the list never shows two live "I read this" rows for one file |
 | `POST /api/mm/element` | `{slug, home, name, text}` | kind `reading`, source `artifact-element`. `text` ≤ 32K runes, `\r\n`-normalized. The element's own text is the anchor, so a rewrite AROUND it leaves the mark alone |
 | `POST /api/mm/code` | `{worktree, file, start_row, text, note}` | kind `reading`, source `code`, plus an `anchor`. `worktree` absolute, `file` relative to it, `start_row` ≥ 1. An EMPTY `text` means the single line at `start_row`, read from disk. The end row is derived from the selection's newline count. The anchor ladder then finds the text in the most durable commit that holds it — origin/main, else merge-base(HEAD, origin/main), else HEAD, else `dirty` — and on a commit rung the STORED text and coordinates are the BLOB's, never the editor buffer's |
-| `POST /api/mm/note` | `{text, context}` | kind `note`, source `manual`. `text` ≤ 8K runes. Belongs to no job and anchors to nothing, and has no `already` probe: two identical notes are two things carl thought |
+| `POST /api/mm/note` | `{text, context}` | kind `note`, source `manual`. `text` ≤ 8K runes. Belongs to no job and anchors to nothing, and has no `already` probe: two identical notes are two things the operator thought |
 | `POST /api/mm/detail` | `{slug, text}` | kind `reading`, source `agent-output`. `text` ≤ 8K runes. The steer modal's rendered detail line, whose text exists nowhere else on disk — which is why the item's content IS the record |
-| `POST /api/mm/remove` | `{id}` | carl unmarking: an invalidation with reason `removed`, never a delete |
+| `POST /api/mm/remove` | `{id}` | the operator unmarking: an invalidation with reason `removed`, never a delete |
 
 Every successful create answers `{"id": number}`. It no longer carries an
 `episode` key: nothing is minted since the knowledge graph was removed, and
@@ -1373,7 +1374,7 @@ reason is left in place: the caller asked for it to be gone and it is gone.
 ### The mind layer (schema v33) — all additive, `apiContract` stays 6
 
 Capture routes highlighted text to the job's **mind thread** — a side thread
-(`role: "mind"`) forked from zeus — which drafts an item with carl and
+(`role: "mind"`) forked from zeus — which drafts an item with the operator and
 finalizes it through `kraken mm commit`. The writes share the seven writes'
 decode discipline (1 MB cap → 413, `DisallowUnknownFields` → 400, nested
 objects included), are POST-only (405 otherwise) and are gated under
@@ -1432,7 +1433,7 @@ notification and puts the flag in the board's Flags section.
 #### `POST /api/mm/flag/resolve` → `{"ok": true}`
 
 Request `{id, resolution}` with `resolution` `drop` \| `keep` (400 otherwise)
-— carl's answer to a raised flag: `drop` also invalidates the flagged item
+— the operator's answer to a raised flag: `drop` also invalidates the flagged item
 (reason `contradicted`), `keep` only closes the flag. Either way the flag's
 `state` becomes `resolved`. 404 unknown flag; 409 a flag that is not `raised`.
 This is the Flags section's `drop item` / `keep` buttons.
@@ -1441,7 +1442,7 @@ This is the Flags section's `drop item` / `keep` buttons.
 
 Newest first; always an array. 400 for a `state` outside the four. The Flags
 section reads `?state=raised` — a resolved flag has left that state, so every
-row it gets is still awaiting carl.
+row it gets is still awaiting the operator.
 
 | key | type | optionality | notes |
 |---|---|---|---|
@@ -1451,11 +1452,11 @@ row it gets is still awaiting carl.
 | `slug` | string | always | the job's slug at flag time (`open job` opens its steer modal) |
 | `session` | string | always | the session that recorded the flag |
 | `note` | string | always | what contradicts what |
-| `state` | string | always | `pending` (recorded, awaiting the lead) \| `raised` (awaiting carl) \| `dismissed` (the lead rejected it) \| `resolved` (carl answered — see `resolution`) |
+| `state` | string | always | `pending` (recorded, awaiting the lead) \| `raised` (awaiting the operator) \| `dismissed` (the lead rejected it) \| `resolved` (the operator answered — see `resolution`) |
 | `raised_by` | string | always | the session that raised/dismissed it, `verify` for one raised by the artifact verify pass, `""` while pending |
 | `raise_note` | string | always | the lead's note on raising/dismissing |
 | `raised_at` / `resolved_at` / `created_at` | number | always | unix millis, `0` = not yet |
-| `resolution` | string | always | `""` \| `drop` \| `keep` — carl's |
+| `resolution` | string | always | `""` \| `drop` \| `keep` — the operator's |
 
 #### `GET /api/mm/show?id=N` → `MMItem` + `source_hint`
 
@@ -1482,7 +1483,7 @@ unknown item.
 
 The tail of zeus' own conversation for the steer modal's transcript panel.
 `turns`, when a positive integer, selects the last that many TURNS — each of
-carl's prompts and everything zeus did after it, clamped to 1…50, at most 400
+the operator's prompts and everything zeus did after it, clamped to 1…50, at most 400
 blocks with the oldest whole turns dropped to fit (never a turn's head) — and
 is what the board's panel sends (`turns=5`). Otherwise `n` selects the last
 that many blocks, defaulting to 50 and clamped to 1…200. Each block is `{kind,
@@ -1500,7 +1501,7 @@ parameter), so `apiContract` stays 6.
 
 Mid-conversation context for a cell (api/recall.go, jobs/recall.go). It replaced `POST /api/graph/recall` when the knowledge graph was removed; the request body is the same. Its only caller is `kraken recall-hook`, wired by every cell worktree as a `UserPromptSubmit` hook, which POSTs its payload here and emits the response as `hookSpecificOutput.additionalContext`.
 
-The response is up to two blocks concatenated, each `""` when it has nothing to say: carl's **unread notes** for the job (every feedback row and answered question not yet delivered, once per job and note-as-written, addressed to the job's stamped lead session only), then carl's **goals** (re-delivered whenever the rendered state differs from what the session last saw). A non-lead session gets the goals block or `""`. Any event other than `UserPromptSubmit` gets `""`. Nothing leaves the machine: no embedder is called.
+The response is up to two blocks concatenated, each `""` when it has nothing to say: the operator's **unread notes** for the job (every feedback row and answered question not yet delivered, once per job and note-as-written, addressed to the job's stamped lead session only), then the operator's **goals** (re-delivered whenever the rendered state differs from what the session last saw). A non-lead session gets the goals block or `""`. Any event other than `UserPromptSubmit` gets `""`. Nothing leaves the machine: no embedder is called.
 
 Request:
 
@@ -1559,7 +1560,7 @@ Errors: 404 (no such job), 409 (not editable, mtime mismatch, or a changed `job:
 other than the job's own is refused with a 409 whose message points at
 `POST /api/job/rename`; an unchanged or empty `job:` line saves exactly as
 before. A slug is identity — the cell dir, the tmux session, the branch family,
-the pluto artifact prefix and every peer job's prereq reference derive from it —
+and every peer job's prereq reference derive from it —
 so moving it through a field map moved the column and nothing else. It is
 refused rather than silently ignored: a save that keeps the old name while the
 editor shows the new one is the same divergence in the other direction.
@@ -1583,25 +1584,21 @@ Both lists are omitted when empty, and both describe a rename that SUCCEEDED —
 neither is an error, and neither should be rendered as one. They are two keys
 because they ask two different things of the reader.
 
-`skipped` names preserved pluto artifact copies that kept the old prefix because
-a file already occupied the new name. Every entry is the **source** path — the
-file still sitting under the old name, the one to move or delete by hand — never
-the blocker at the destination.
+`skipped` is always absent now: it named preserved `~/Documents/pluto` artifact
+copies that kept the old prefix, and that integration is retired (artifacts live
+only in the store, keyed by job id, so a rename moves no file). The key is kept
+for shipped clients that decode it.
 
-`notes` carries best-effort steps that FAILED, each with its cause. Three kinds
-reach it, and only the first is about files: a preserved copy whose rename
-errored outright (permissions, a name over the filesystem's limit, a full disk)
-— not a conflict, nothing sits at its destination, so it is deliberately not in
-`skipped`, and it is still stranded under the old prefix where the card cannot
-show it; a `tmux` convergence step on a LIVE cell that did not land, leaving the
+`notes` carries best-effort steps that FAILED, each with its cause, and never a
+filesystem path. Two kinds reach it: a `tmux` convergence step on a LIVE cell that did not land, leaving the
 session under its old name until the daemon reconverges it; and the one-line
 notice typed at zeus failing to deliver. Kraken retries the tmux ones on its own
 — except a convergence refused because the session carries another job's marker,
 which the retry will refuse the same way forever and needs a look — and the
 notice costs only a missing pane message, so a note is worth showing but never
 worth blocking on. Every note is also written to the event log, which is
-the durable record — the response is simply the only surface carl is looking at
-when he renames.
+the durable record — the response is simply the only surface the operator is
+looking at when they rename.
 
 Errors: 400 (bad json; an unrecognized field; an empty `slug` or `to`), 404 (no
 such job — resolved by CURRENT slug only, since renaming *by* a stale name means
@@ -1611,7 +1608,7 @@ an archived job, a target taken by another active job or by an archived one, or
 a target that is another active job's former name — the refusal text rides back
 verbatim and is meant to be rendered inline), 413 (body over 1 MiB). Gated under
 `--mirror` with the standard plain-text 403: this route renames a real tmux
-session and moves real files under `~/Documents/pluto`. **Additive, no contract
+session. **Additive, no contract
 bump** — no key on any existing shape changes, and `webJob` gains nothing (a
 job's former names are deliberately not on the wire).
 
@@ -1639,7 +1636,7 @@ for a doc/spec/explanation in words) — never a stored flag on the job.
 `ready` and `prereqs` are gone (v6, breaking) — from this GET and from the
 `saveform` POST alike. Submitting a job is what starts its cell, so there is
 no flag to set; prereqs went with the feature (a job waits for nothing but
-carl). Both keys are still ACCEPTED in a job's raw frontmatter text
+the operator). Both keys are still ACCEPTED in a job's raw frontmatter text
 (`/api/job/raw`, `/api/job/save`) and silently discarded, because every job
 file written before the cutover carries them — but `POST /api/job/draft`
 refuses either LOUDLY, since an agent writing one would otherwise be told
@@ -1793,7 +1790,7 @@ Errors: 405 (non-GET), 500 (no store wired). A GET is a read, so it stays reacha
 
 ### `POST /api/job/draft`
 
-The Slack intake bot's only write on a job — it creates a draft, or amends an existing one that has not started. Not called by the iOS app or the web UI (carl uses `/api/job/saveform` and `/api/job/save`); its client is the `kraken job draft` cell verb.
+The Slack intake bot's only write on a job — it creates a draft, or amends an existing one that has not started. Not called by the iOS app or the web UI (the operator uses `/api/job/saveform` and `/api/job/save`); its client is the `kraken job draft` cell verb.
 
 This route is the **safety surface** of the whole Slack feature, so its refusals are the specification rather than validation niceties: iris is a claude turning arbitrary Slack text into kraken jobs, and the property that makes that safe is that it can only ever produce a DRAFT. **Nothing is written on any refusal.**
 
@@ -1900,7 +1897,7 @@ Errors: 405 (non-GET), 500 (no store wired, or the counts query failed). A GET i
 
 ## Agent-side board and cell verbs
 
-`kraken board get [slug]` and `kraken cell steer|submit|answer <slug>` are agent-side CLI verbs with no routes of their own: `board get` reads `GET /api/board`, and the cell verbs post to the board's existing `/api/steer`, `/api/queue`, `/api/question` and `/api/doc-question`, so every guard carl's own clicks go through applies to an agent unchanged and there is no second, weaker door onto a live cell. Each cell verb logs an audit line through `/api/logevent` with `src: "cell"` on success. (They were introduced as the kronos orchestrator's control surface; kronos and its five routes under `/api/orch/*`, `/api/graph/recall-rearm` and `/api/kronos` were removed in job 549, and the verbs were kept as general agent-side verbs.)
+`kraken board get [slug]` and `kraken cell steer|submit|answer <slug>` are agent-side CLI verbs with no routes of their own: `board get` reads `GET /api/board`, and the cell verbs post to the board's existing `/api/steer`, `/api/queue`, `/api/question` and `/api/doc-question`, so every guard the operator's own clicks go through applies to an agent unchanged and there is no second, weaker door onto a live cell. Each cell verb logs an audit line through `/api/logevent` with `src: "cell"` on success. (They were introduced as the kronos orchestrator's control surface; kronos and its five routes under `/api/orch/*`, `/api/graph/recall-rearm` and `/api/kronos` were removed in job 549, and the verbs were kept as general agent-side verbs.)
 
 ### `POST /api/cell/context` — localhost-only, agent-side (not called by the iOS app or web UI; not modeled in Models.swift/APIClient.swift)
 
@@ -2331,7 +2328,7 @@ bump. Modeled in the iOS app (`ShipIOSStartResponse` in Models.swift,
 Request: an empty body (`{}` or nothing at all). There are deliberately no
 options — the credentials are environment (`ASC_KEY_ID`/`ASC_ISSUER_ID`,
 never on the wire), and the script's `--allow-provisioning-updates`, which
-MUTATES carl's Apple developer account, is reachable only from a terminal.
+MUTATES the operator's Apple developer account, is reachable only from a terminal.
 A malformed (non-empty, non-JSON) body is still a 400.
 
 Response (202 Accepted — the run has been *started*, and it is a long way
@@ -2396,6 +2393,15 @@ Not JSON — serves the raw artifact file with a `Content-Type` picked by
 extension (`artifactContentType`: html/svg/pdf/png/jpg/gif/webp get their
 real type, everything else is `text/plain; charset=utf-8`). 404 on any
 path-traversal attempt, hidden segment, unresolvable job, or missing file.
+`cell` reads the live cell's `artifacts/` dir; `pluto` (an active job's
+torn-down artifacts — the home keeps its historical name on the wire) and
+`archive` (an archived job's) are served from the store's artifact rows
+alone, and a name with no row there is a 404.
+Every path segment of a served artifact URL (the `url` on a `webArtifact`) is
+percent-encoded on its own, `/` separators kept, so a name with `#`, `%` or a
+space round-trips: use the URL exactly as given, never re-encode or decode it.
+A torn-down job's uncommitted root-level notes (`*.md` files at the worktree
+root, captured at teardown) list among its artifacts under `root/<name>`.
 
 ### `GET /iso.html?src=<artifact path>` (web/_ui/iso.html) — not an API route (embedded SPA page; no JSON, no Models.swift type)
 

@@ -100,7 +100,7 @@ func parseShipIOSArgs(args []string) (shipIOSOpts, error) {
 
 const shipIOSUsageText = `usage: k ship-ios [--dry-run] [--detached]
   build the iOS app and upload it to TestFlight by running
-  ios/ship-testflight.sh in the ~/Developer/kraken checkout: xcodegen ->
+  ios/ship-testflight.sh in kraken's own checkout (` + "`kraken`" + ` under the repos dir): xcodegen ->
   xcodebuild archive -> export -> xcrun altool --upload-app. The same sequence
   the board's SHIP iOS button fires (it just spawns this verb detached).
 

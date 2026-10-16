@@ -31,7 +31,7 @@ func TestEdgeMergeBumpMessageBoundaryURLs(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			got := mergeBumpMessage(c.url)
-			if !strings.HasPrefix(got, prWatchPrefix+" ") {
+			if !strings.HasPrefix(got, prWatchPrefix()+" ") {
 				t.Errorf("mergeBumpMessage(%q) does not begin with prWatchPrefix+\" \": %q", c.url, got)
 			}
 			if !strings.Contains(got, c.url) {
@@ -84,8 +84,8 @@ func TestEdgeMergeBumpMessageDistinctURLs(t *testing.T) {
 // prefix is not doubled: the notice starts with the prefix exactly once.
 func TestEdgeMergeBumpMessageNamesThePrefixOnceAtStart(t *testing.T) {
 	got := mergeBumpMessage("https://github.com/o/r/pull/4")
-	rest := strings.TrimPrefix(got, prWatchPrefix+" ")
-	if strings.HasPrefix(rest, prWatchPrefix) {
+	rest := strings.TrimPrefix(got, prWatchPrefix()+" ")
+	if strings.HasPrefix(rest, prWatchPrefix()) {
 		t.Errorf("mergeBumpMessage doubles the prefix: %q", got)
 	}
 }

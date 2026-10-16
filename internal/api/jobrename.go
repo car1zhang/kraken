@@ -25,8 +25,8 @@ import (
 // through the raw save's field map meant a rename could ride in as a side
 // effect of an unrelated edit, with none of jobs.RenameJob's gates (reserved
 // prefixes, archived-name collisions, another job's former name) and none of
-// its follow-through (peer prereq references, the pluto artifact prefix, the
-// live cell's tmux session). That path is now closed rather than merely
+// its follow-through (the live cell's tmux session and the notice to its
+// zeus). That path is now closed rather than merely
 // unused: jobFieldsFromParsed no longer carries "slug", and a raw save whose
 // job: line moved is refused with a 409 naming this route (jobedit.go).
 type webJobRenameReq struct {
@@ -44,8 +44,8 @@ func webJobRename(w http.ResponseWriter, r *http.Request) {
 	}
 	// The mirror gate is INLINE rather than a mirrorGated registration, so
 	// that a caller reaching the handler directly still hits it: this verb
-	// renames a real tmux session and moves real files under ~/Documents/pluto,
-	// both of which belong to the live deployment no matter which DB is wired
+	// renames a real tmux session and types a notice into a live pane, both
+	// of which belong to the live deployment no matter which DB is wired
 	// (mirror.go). Same plain-text body every gated route uses, and this route
 	// is in mirror_test.go's mirrorGatedRoutes table with the rest of them: an
 	// inline gate sits ahead of the body decode, so the table's mirror-ON sweep

@@ -40,13 +40,12 @@ func logicAPIGitRepo(t *testing.T, name, origin string) {
 	}
 }
 
-// logicFileJob sets up a file-mode world: fresh HOME and pluto dir, and a
-// writeTestJob job (repo: monolith).
+// logicFileJob sets up a world: fresh HOME and a writeTestJob job
+// (repo: monolith) in a temp store.
 func logicFileJob(t *testing.T, slug string) {
 	t.Helper()
 	t.Setenv("KRAKEN_LOGS_DIR", t.TempDir()) // the event log follows this, not HOME
 	t.Setenv("HOME", t.TempDir())
-	t.Setenv("KRAKEN_PLUTO_DIR", t.TempDir())
 	writeTestJob(t, slug, "")
 }
 
@@ -231,11 +230,8 @@ func TestPrAttach_FailOpenWhenOriginUnreadable(t *testing.T) {
 func TestPrAttach_FailOpenWhenRepoBlank(t *testing.T) {
 	t.Setenv("KRAKEN_LOGS_DIR", t.TempDir())
 	t.Setenv("HOME", t.TempDir())
-	t.Setenv("KRAKEN_PLUTO_DIR", t.TempDir())
 	src := "---\njob: logic-blank\n---\n\n# Spec\n"
-	if err := os.WriteFile(filepath.Join(jobs.PlutoDir(), "logic-blank"+jobs.JobSuffix), []byte(src), 0o644); err != nil {
-		t.Fatal(err)
-	}
+	seedJobText(t, "logic-blank", src)
 	// a checkout that WOULD refuse, were the blank repo wrongly resolved to it
 	logicAPIGitRepo(t, "monolith", "https://github.com/carl/kraken.git")
 

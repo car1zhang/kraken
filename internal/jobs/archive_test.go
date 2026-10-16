@@ -1,7 +1,6 @@
 package jobs
 
 import (
-	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -14,10 +13,9 @@ import (
 )
 
 // archive_test.go — ArchiveJob/UnarchiveJob/DeleteArchivedJob are
-// store-backed (job rows), but preserved pluto artifacts stay real files
-// under PlutoDir()/ArchiveDir() even so (Q12) — every test here wires a
-// store (useTestStore) for the job rows and still exercises the artifact
-// file moves directly.
+// store-backed: a job's artifacts are rows keyed on its id, so they follow
+// the job row through archive and unarchive with no file moved, and go with
+// it on delete (the artifacts table cascades).
 
 func TestArchiveRefusesInFlight(t *testing.T) {
 	st := useTestStore(t)
@@ -39,14 +37,16 @@ func TestArchiveRefusesInFlight(t *testing.T) {
 
 func TestArchiveUnarchiveRoundTrip(t *testing.T) {
 	st := useTestStore(t)
-	if err := os.MkdirAll(PlutoDir(), 0o755); err != nil {
+	r1 := mustCreateJob(t, st, store.Job{Slug: "foo", Repo: "x", State: "done", Outcome: "PR merged"})
+	if err := st.SyncArtifacts(r1.ID, []store.ArtifactFile{{Path: "report.md", Bytes: []byte("hi"), Mtime: 1}}, nil); err != nil {
 		t.Fatal(err)
 	}
-	r1 := mustCreateJob(t, st, store.Job{Slug: "foo", Repo: "x", State: "done", Outcome: "PR merged"})
-	// artifact copies are prefixed <slug>-<id>., the same name they carried
-	// while the job was live — archiving moves them without renaming
-	if err := os.WriteFile(filepath.Join(PlutoDir(), fmt.Sprintf("foo-%d.report.md", r1.ID)), []byte("hi"), 0o644); err != nil {
-		t.Fatal(err)
+	wantReport := func(when string) {
+		t.Helper()
+		arts, err := st.ListArtifacts(r1.ID)
+		if err != nil || len(arts) != 1 || arts[0].Path != "report.md" || string(arts[0].Bytes) != "hi" {
+			t.Fatalf("%s: artifact rows = %+v (%v), want the one report.md row", when, arts, err)
+		}
 	}
 	j := LoadJobBySlug("foo")
 	name, err := ArchiveJob(j, map[string]bool{})
@@ -59,9 +59,7 @@ func TestArchiveUnarchiveRoundTrip(t *testing.T) {
 	if LoadJobBySlug("foo") != nil {
 		t.Fatal("job still active after archive")
 	}
-	if _, err := os.Stat(filepath.Join(ArchiveDir(), fmt.Sprintf("foo-%d.report.md", r1.ID))); err != nil {
-		t.Fatal("artifact didn't move to archive")
-	}
+	wantReport("after archive")
 
 	// the slug is free: a new active foo can exist, and archiving it numbers
 	// the archive copy
@@ -92,9 +90,7 @@ func TestArchiveUnarchiveRoundTrip(t *testing.T) {
 	if restored == nil || restored.State != "done" || restored.Outcome != "PR merged" {
 		t.Fatalf("unarchive didn't preserve state/outcome: %+v", restored)
 	}
-	if _, err := os.Stat(filepath.Join(PlutoDir(), fmt.Sprintf("foo-%d.report.md", r1.ID))); err != nil {
-		t.Fatal("artifact didn't move back")
-	}
+	wantReport("after unarchive")
 
 	// now the slug is taken: unarchiving foo-2 must refuse
 	a2 := ArchivedJobByName(LoadArchivedJobs(), "foo-2")
@@ -105,23 +101,18 @@ func TestArchiveUnarchiveRoundTrip(t *testing.T) {
 
 func TestDeleteArchivedJob(t *testing.T) {
 	st := useTestStore(t)
-	if err := os.MkdirAll(PlutoDir(), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	// Two generations of the slug "foo". Their artifact files are kept apart
-	// by the job ID in the prefix, not by the archive's -2 numbering — which
-	// is why deleting one can no longer touch the other's files.
+	// Two generations of the slug "foo". Their artifact rows are kept apart
+	// by the job id they hang off, not by the archive's -2 numbering — which
+	// is why deleting one can never touch the other's.
 	r1 := mustCreateJob(t, st, store.Job{Slug: "foo", Repo: "x"})
-	f1 := fmt.Sprintf("foo-%d.report.md", r1.ID)
-	if err := os.WriteFile(filepath.Join(PlutoDir(), f1), []byte("x"), 0o644); err != nil {
+	if err := st.SyncArtifacts(r1.ID, []store.ArtifactFile{{Path: "report.md", Bytes: []byte("x"), Mtime: 1}}, nil); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := ArchiveJob(LoadJobBySlug("foo"), map[string]bool{}); err != nil {
 		t.Fatal(err)
 	}
 	r2 := mustCreateJob(t, st, store.Job{Slug: "foo", Repo: "x"})
-	f2 := fmt.Sprintf("foo-%d.doc.html", r2.ID)
-	if err := os.WriteFile(filepath.Join(PlutoDir(), f2), []byte("x"), 0o644); err != nil {
+	if err := st.SyncArtifacts(r2.ID, []store.ArtifactFile{{Path: "doc.html", Bytes: []byte("x"), Mtime: 1}}, nil); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := ArchiveJob(LoadJobBySlug("foo"), map[string]bool{}); err != nil {
@@ -135,15 +126,15 @@ func TestDeleteArchivedJob(t *testing.T) {
 	if ArchivedJobByName(LoadArchivedJobs(), "foo") != nil {
 		t.Fatal("job row survived delete")
 	}
-	if _, err := os.Stat(filepath.Join(ArchiveDir(), f1)); !os.IsNotExist(err) {
-		t.Fatal("artifact survived delete")
+	if arts, err := st.ListArtifacts(r1.ID); err != nil || len(arts) != 0 {
+		t.Fatalf("artifact rows survived delete: %+v (%v)", arts, err)
 	}
 	// foo-2 (a different archived job that shares the slug) must be untouched
 	if ArchivedJobByName(LoadArchivedJobs(), "foo-2") == nil {
 		t.Fatal("delete of foo took foo-2 with it")
 	}
-	if _, err := os.Stat(filepath.Join(ArchiveDir(), f2)); err != nil {
-		t.Fatal("delete of foo took foo-2's artifact with it")
+	if arts, err := st.ListArtifacts(r2.ID); err != nil || len(arts) != 1 {
+		t.Fatalf("delete of foo took foo-2's artifact with it: %+v (%v)", arts, err)
 	}
 }
 
@@ -186,15 +177,20 @@ func TestParseSessionAndRun(t *testing.T) {
 
 func TestBranchForRun(t *testing.T) {
 	cases := []struct {
-		run  int
-		want string
+		prefix string
+		run    int
+		want   string
 	}{
-		{0, "carl/my-job-3"},
-		{1, "carl/my-job-3"},
-		{2, "carl/my-job-3-r2"},
-		{7, "carl/my-job-3-r7"},
+		{"", 0, "kraken/my-job-3"},
+		{"", 1, "kraken/my-job-3"},
+		{"", 2, "kraken/my-job-3-r2"},
+		{"", 7, "kraken/my-job-3-r7"},
+		{"carl/", 1, "carl/my-job-3"},
+		{"carl/", 2, "carl/my-job-3-r2"},
+		{"team", 1, "team/my-job-3"},
 	}
 	for _, c := range cases {
+		t.Setenv("KRAKEN_BRANCH_PREFIX", c.prefix)
 		if got := branchForRun(&Job{Slug: "My Job", ID: 3}, c.run); got != c.want {
 			t.Errorf("run %d: got %q, want %q", c.run, got, c.want)
 		}

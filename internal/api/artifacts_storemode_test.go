@@ -62,114 +62,67 @@ func TestJobArtifactsStoreModeLiveSkipsDB(t *testing.T) {
 	}
 }
 
-// TestJobArtifactsStoreModeUnionsStoreAndPluto covers L4+E6: store mode
-// must union the artifacts-table listing WITH the pluto flat-copy listing
-// (not just the table alone), deduped by name with cell > store > pluto
-// precedence. A name present in BOTH the store and a pluto flat copy
-// ("dup.md") must appear exactly once, as the store's URL (higher
-// precedence than pluto); a name present in pluto ONLY ("pluto-only.md")
-// must still show up.
-func TestJobArtifactsStoreModeUnionsStoreAndPluto(t *testing.T) {
+// TestJobArtifactsNonLiveIgnoresDisk pins that a job whose cell is not live
+// lists the artifacts table and nothing else: a file still sitting in its
+// cell dir (a dead cell, a teardown that died mid-flight) is not added, so
+// the card shows exactly what the store can serve.
+func TestJobArtifactsNonLiveIgnoresDisk(t *testing.T) {
 	useTestStore(t)
 	st := jobs.ActiveStore()
-	j := mustCreateStoreJob(t, st, store.Job{Slug: "art-union", Repo: "monolith", State: "done"})
-
-	if err := st.SyncArtifacts(j.ID, []store.ArtifactFile{
-		{Path: "report.html", Bytes: []byte("<html></html>"), Mtime: 1},
-		{Path: "dup.md", Bytes: []byte("store version"), Mtime: 1},
-	}, nil); err != nil {
+	j := mustCreateStoreJob(t, st, store.Job{Slug: "art-disk", Repo: "monolith", State: "done"})
+	if err := st.SyncArtifacts(j.ID, []store.ArtifactFile{{Path: "kept.md", Bytes: []byte("row"), Mtime: 1}}, nil); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.MkdirAll(jobs.PlutoDir(), 0o755); err != nil {
+	root := jobs.CellArtifacts(j)
+	if err := os.MkdirAll(root, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	// dup.md: also exists as a pluto flat copy — store must win the dedup.
-	if err := os.WriteFile(filepath.Join(jobs.PlutoDir(), jobs.PlutoArtifactPrefix(j)+"dup.md"), []byte("pluto version"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(root, "disk-only.md"), []byte("file"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	// pluto-only.md: exists ONLY as a pluto flat copy (e.g. a job's
-	// root-level doc, preserved straight from the worktree root by
-	// preserveArtifacts — never synced into the artifacts table at all
-	// since syncCellArtifacts only mirrors the artifacts/ subdir).
-	if err := os.WriteFile(filepath.Join(jobs.PlutoDir(), jobs.PlutoArtifactPrefix(j)+"pluto-only.md"), []byte("pluto only"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-
 	arts := jobArtifacts(j, false)
-	byName := map[string]webArtifact{}
-	for _, a := range arts {
-		byName[a.Name] = a
-	}
-	if len(arts) != 3 {
-		t.Fatalf("want 3 artifacts (report.html, dup.md once, pluto-only.md), got %d: %+v", len(arts), byName)
-	}
-	if _, ok := byName["report.html"]; !ok {
-		t.Fatalf("report.html missing: %+v", byName)
-	}
-	if a, ok := byName["dup.md"]; !ok || a.URL != "/api/artifact/art-union/pluto/dup.md" {
-		t.Fatalf("dup.md must resolve to the store-mode url (precedence over the pluto flat copy): %+v", byName)
-	}
-	if a, ok := byName["pluto-only.md"]; !ok || a.URL != "/api/artifact/art-union/pluto/pluto-only.md" {
-		t.Fatalf("pluto-only.md (info-job doc with no store row) missing: %+v", byName)
+	if len(arts) != 1 || arts[0].Name != "kept.md" || arts[0].URL != "/api/artifact/art-disk/pluto/kept.md" {
+		t.Fatalf("want exactly the store row kept.md under home pluto, got %+v", arts)
 	}
 }
 
-// TestJobArtifactsStoreModeInfoJobPlutoOnly is L4+E6's named "info-job
-// pluto-only case": a store-backed job with NO artifacts-table rows
-// at all (the common case for a job whose only deliverable is a root-level
-// doc preserveArtifacts copied straight into pluto) must still list that
-// doc — before L4/E6, store mode's union of cell ∪ store ONLY made this
-// artifact vanish entirely once the cell was torn down.
-func TestJobArtifactsStoreModeInfoJobPlutoOnly(t *testing.T) {
+// TestJobArtifactsNonLiveArchivedHome pins the archived branch: an archived
+// job's rows are listed under its archived name and the "archive" home.
+func TestJobArtifactsNonLiveArchivedHome(t *testing.T) {
 	useTestStore(t)
 	st := jobs.ActiveStore()
-	j := mustCreateStoreJob(t, st, store.Job{Slug: "info-only", Repo: "monolith", State: "done"})
-	// deliberately NO st.SyncArtifacts call — nothing in the artifacts table.
-
-	if err := os.MkdirAll(jobs.PlutoDir(), 0o755); err != nil {
+	j := mustCreateStoreJob(t, st, store.Job{Slug: "art-arch-home", Repo: "monolith", State: "done"})
+	if err := st.SyncArtifacts(j.ID, []store.ArtifactFile{{Path: "a.md", Bytes: []byte("a"), Mtime: 1}}, nil); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(jobs.PlutoDir(), jobs.PlutoArtifactPrefix(j)+"explain.md"), []byte("the doc"), 0o644); err != nil {
+	name, err := st.ArchiveJob(j.ID)
+	if err != nil {
 		t.Fatal(err)
 	}
-
-	arts := jobArtifacts(j, false)
-	if len(arts) != 1 || arts[0].Name != "explain.md" {
-		t.Fatalf("want exactly [explain.md], got %+v", arts)
+	a := jobs.ArchivedJobByName(jobs.LoadArchivedJobs(), name)
+	if a == nil {
+		t.Fatal("archived job not found")
 	}
-	if want := "/api/artifact/info-only/pluto/explain.md"; arts[0].URL != want {
-		t.Fatalf("url = %q, want %q", arts[0].URL, want)
+	arts := jobArtifacts(a, false)
+	if want := "/api/artifact/" + name + "/archive/a.md"; len(arts) != 1 || arts[0].URL != want {
+		t.Fatalf("want [%s], got %+v", want, arts)
 	}
 }
 
-// TestJobArtifactsStoreModeUnionIsGloballySorted pins the ORDER of the union, not just
-// its membership. Each source arrives sorted within itself, but jobArtifacts
-// appends three of them, so before the sort a job like this one served
-// 00-overview.md (a pluto flat copy, added last) AFTER 90-build-report.md (a
-// store row, added first) — the exact inversion this fixture reproduces. The
-// clients page through this array with next/prev now, so the wire order is
-// the reading order: an unsorted union puts the overview four steps from the
-// front of its own set.
-func TestJobArtifactsStoreModeUnionIsGloballySorted(t *testing.T) {
+// TestJobArtifactsStoreModeIsSorted pins the ORDER of a non-live listing,
+// not just its membership: the clients page through this array with
+// next/prev, so the wire order is the reading order.
+func TestJobArtifactsStoreModeIsSorted(t *testing.T) {
 	useTestStore(t)
 	st := jobs.ActiveStore()
 	j := mustCreateStoreJob(t, st, store.Job{Slug: "art-order", Repo: "monolith", State: "done"})
 
-	// The store holds the mirrored artifacts/ subdir; note 90- sorts LAST
-	// within the store but is added to the union FIRST.
 	if err := st.SyncArtifacts(j.ID, []store.ArtifactFile{
-		{Path: "10-architecture.html", Bytes: []byte("a"), Mtime: 1},
-		{Path: "50-components.md", Bytes: []byte("b"), Mtime: 1},
 		{Path: "90-build-report.md", Bytes: []byte("c"), Mtime: 1},
+		{Path: "10-architecture.html", Bytes: []byte("a"), Mtime: 1},
+		{Path: "00-overview.md", Bytes: []byte("d"), Mtime: 1},
+		{Path: "50-components.md", Bytes: []byte("b"), Mtime: 1},
 	}, nil); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.MkdirAll(jobs.PlutoDir(), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	// 00-overview.md reaches the board ONLY as a pluto flat copy, which is
-	// the lowest-precedence source and therefore appended last.
-	if err := os.WriteFile(filepath.Join(jobs.PlutoDir(), jobs.PlutoArtifactPrefix(j)+"00-overview.md"), []byte("d"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -179,13 +132,13 @@ func TestJobArtifactsStoreModeUnionIsGloballySorted(t *testing.T) {
 	}
 	want := []string{"00-overview.md", "10-architecture.html", "50-components.md", "90-build-report.md"}
 	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("union order:\n got %v\nwant %v", got, want)
+		t.Fatalf("order:\n got %v\nwant %v", got, want)
 	}
 }
 
 // TestJobArtifactsLiveCellIsSorted pins the ordering guarantee on the OTHER
-// branch — the live cell, which returns before the union is ever built and so
-// is not covered by the sibling above. ios/API.md promises the `artifacts`
+// branch — the live cell, whose source is the cell dir rather than the
+// table, and so is not covered by the sibling above. ios/API.md promises the `artifacts`
 // array is sorted unconditionally, and a live cell is exactly where the
 // clients' next/prev matters most (it is the job you are reading while it is
 // being written), so the branch that reaches the wire without passing through

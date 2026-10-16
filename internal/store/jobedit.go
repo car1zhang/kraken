@@ -20,9 +20,9 @@ import "fmt"
 // UpdateJobFields' exact contract (rev-gated optimistic lock, ErrStaleRev
 // on mismatch, ErrSlugTaken on a slug collision). prs is synced (every URL
 // upserted, any existing PR row not named removed) only when syncPRs is true
-// — false for an unparseable raw save (mirrors file mode's contract: only
-// body/err change, PRs are left exactly as they were, since a garbled parse's
-// own PRs field is equally untrustworthy) and for a form save (which can't
+// — false for an unparseable raw save (only body/err change, PRs are left
+// exactly as they were, since a garbled parse's own PRs field is
+// untrustworthy) and for a form save (which can't
 // touch PRs by construction); true for a clean-parsing raw save.
 func (s *Store) SaveJobEdit(id, rev int64, fields map[string]any, prs []PR, syncPRs bool) (newRev int64, err error) {
 	tx, err := s.db.Begin()

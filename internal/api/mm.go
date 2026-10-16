@@ -748,7 +748,7 @@ func mmDecisionHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	if strings.TrimSpace(q.Answer) == "" {
 		webJSON(w, http.StatusBadRequest, map[string]string{
-			"error": qid + " has no answer yet — there is no decision to mark until carl has answered it",
+			"error": qid + " has no answer yet — there is no decision to mark until the operator has answered it",
 		})
 		return
 	}

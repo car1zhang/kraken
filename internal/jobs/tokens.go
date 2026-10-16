@@ -358,7 +358,7 @@ func sameOffsets(a, b map[string]int64) bool {
 func (d *daemonState) tokensPass(jobs []*Job, live map[string]bool, now time.Time) {
 	st := ActiveStore()
 	if st == nil {
-		return // file-mode entrypoints have nowhere to put the number
+		return // no store wired (a storeless test or CLI process): nowhere to put the number
 	}
 	all, err := st.AllJobTokenOffsets()
 	if err != nil {
@@ -382,11 +382,11 @@ func (d *daemonState) tokensPass(jobs []*Job, live map[string]bool, now time.Tim
 		}
 		// A job with no store id cannot own a row: job_tokens is keyed on the
 		// id since v11, and BumpJobTokens refuses a zero one rather than
-		// letting every unpersisted job accumulate into a shared row 0. Only
-		// file-backed jobs (ParseJob never sets ID) reach this, and only in
-		// entrypoints that have no store — which the ActiveStore check above
-		// has already returned for. Skipped silently: it is the same "this job
-		// has no transcripts to measure" state as a job that never started.
+		// letting every unpersisted job accumulate into a shared row 0. Only a
+		// Job built by ParseJob alone (which never sets ID) reaches this, and
+		// loaded jobs always come from the store. Skipped silently: it is the
+		// same "this job has no transcripts to measure" state as a job that
+		// never started.
 		if j.ID == 0 {
 			continue
 		}

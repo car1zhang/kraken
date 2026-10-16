@@ -5,6 +5,12 @@ import SwiftUI
 // broken." A plain ScrollView + VStack of ThemedCards gives full control
 // over spacing/surfaces with none of that baggage.
 struct SettingsView: View {
+    /// The server field's placeholder: the SHAPE of a Tailscale MagicDNS
+    /// address, never a literal one (a real address here read as a working
+    /// default on every install that was not the author's). The board's
+    /// first-run state quotes it too.
+    static let serverURLPlaceholder = "http://<your-mac>.<tailnet>.ts.net:7777"
+
     @AppStorage("serverURL") private var serverURL = KrakenDefaults.serverURL
     @Environment(\.scenePhase) private var scenePhase
     @Environment(AppRouter.self) private var router
@@ -62,7 +68,7 @@ struct SettingsView: View {
                         VStack(alignment: .leading, spacing: 10) {
                             Text("Server").kLabelStyle()
 
-                            TextField("http://100.90.94.3:7777", text: $serverURL)
+                            TextField(Self.serverURLPlaceholder, text: $serverURL)
                                 .keyboardType(.URL)
                                 .textInputAutocapitalization(.never)
                                 .autocorrectionDisabled()

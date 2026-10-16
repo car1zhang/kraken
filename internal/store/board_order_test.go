@@ -72,7 +72,7 @@ func TestSetBoardColumnDedupesAndRemovesFromOtherColumns(t *testing.T) {
 
 // TestSetBoardColumnSkipsZeroIDs covers L9's successor: a zero id in the
 // input must be skipped entirely, exactly as an empty slug was before v11.
-// Zero is not a job — it is what an unpersisted, file-backed *Job carries.
+// Zero is not a job — it is what an unpersisted *Job (ParseJob alone) carries.
 func TestSetBoardColumnSkipsZeroIDs(t *testing.T) {
 	s := openTest(t)
 	if err := s.SetBoardColumn("queued", []int64{1, 0, 2, 0, 0}); err != nil {

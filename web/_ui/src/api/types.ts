@@ -557,6 +557,13 @@ export interface WebBoard {
    * as the image URL's cache-buster (see backgroundURL in client.ts).
    */
   background?: WebBackground;
+  /**
+   * The name kraken's agents use for the person running it (`jobs.Operator()`:
+   * KRAKEN_OPERATOR, else $USER, else "the operator"). Optional because a
+   * server predating the key sends none; read it through `operatorLabel`,
+   * which falls back to "you".
+   */
+  operator?: string;
 }
 
 /** The `background` key on /api/board: the upload stamp, never the bytes. */

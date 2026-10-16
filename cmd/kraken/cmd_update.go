@@ -287,8 +287,22 @@ func runUpdate(opts updateOpts, out io.Writer) error {
 	// later runs know the app is current (see UpdateStatus.MacAppSHA); either
 	// failure names the retry, which the MacAppSHA catch-up makes truthful —
 	// a plain UPDATE click really does retry just this step.
+	//
+	// A machine with no Kraken.app installed never opted into the mac app,
+	// so the phase is skipped rather than run: building one there would put
+	// an app in /Applications nobody asked for, and failing on its missing
+	// xcodegen would mark every update failed. The sha is still stamped so
+	// the catch-up path below does not re-enter the phase on every click.
+	// macSkipped records the skip for the run's closing sentence.
+	macSkipped := false
 	installMacApp := func(atSHA, prefix string) error {
 		setPhase(jobs.UpdateMacApp)
+		if !macAppInstalled(macAppPath) {
+			util.LogEvent("update", "info", "update-mac-skipped", macAppPath+" is not installed — mac app build skipped")
+			st.MacAppSHA = atSHA
+			macSkipped = true
+			return nil
+		}
 		if pf.XcodegenPath == "" {
 			return fail(fmt.Errorf("%sthe mac app was NOT rebuilt: xcodegen not found (brew install xcodegen, then click UPDATE again — it retries just the app build)", prefix))
 		}
@@ -310,8 +324,9 @@ func runUpdate(opts updateOpts, out io.Writer) error {
 			fmt.Fprintln(out, "dry run: would fast-forward, build, install, restart, and reinstall Kraken.app (nothing changed)")
 		}
 		// The dry run is the one place a missing xcodegen can surface before
-		// a real run half-completes on it.
-		if pf.XcodegenPath == "" {
+		// a real run half-completes on it — and only matters when the app is
+		// installed, since otherwise a real run skips the mac-app phase.
+		if pf.XcodegenPath == "" && macAppInstalled(macAppPath) {
 			fmt.Fprintln(out, "dry run: xcodegen not found — the mac-app step of a real run would fail (brew install xcodegen)")
 		}
 		return nil
@@ -336,6 +351,11 @@ func runUpdate(opts updateOpts, out io.Writer) error {
 			return err
 		}
 		setPhase(jobs.UpdateDone)
+		if macSkipped {
+			util.LogEvent("update", "info", "update-done", "already up to date at "+pf.HeadSHA+"; mac app not installed, skipped")
+			fmt.Fprintf(out, "already up to date (main @ %s); Kraken.app is not installed, so the mac app was skipped\n", pf.HeadSHA)
+			return nil
+		}
 		util.LogEvent("update", "info", "update-done", "mac app caught up at "+pf.HeadSHA)
 		fmt.Fprintf(out, "Kraken.app reinstalled at %s (runtime was already current)\n", pf.HeadSHA)
 		return nil
@@ -464,8 +484,23 @@ func runUpdate(opts updateOpts, out io.Writer) error {
 
 	setPhase(jobs.UpdateDone)
 	util.LogEvent("update", "info", "update-done", fmt.Sprintf("updated %s → %s", pf.HeadSHA, st.ToSHA))
-	fmt.Fprintf(out, "updated %s → %s (%d commit(s)); launchd job restarted on the new binary; Kraken.app reinstalled\n", pf.HeadSHA, st.ToSHA, behind)
+	macNote := "Kraken.app reinstalled"
+	if macSkipped {
+		macNote = "Kraken.app not installed, mac app skipped"
+	}
+	fmt.Fprintf(out, "updated %s → %s (%d commit(s)); launchd job restarted on the new binary; %s\n", pf.HeadSHA, st.ToSHA, behind, macNote)
 	return nil
+}
+
+// macAppPath is where `make install-mac` installs the board app (the
+// Makefile's install-mac recipe swaps the bundle into exactly this path).
+const macAppPath = "/Applications/Kraken.app"
+
+// macAppInstalled reports whether path stats as a directory — an app bundle
+// is one. The update's mac-app phase runs only when it does.
+func macAppInstalled(path string) bool {
+	fi, err := os.Stat(path)
+	return err == nil && fi.IsDir()
 }
 
 // updateRestartSettle is how long the updater waits after `make install`

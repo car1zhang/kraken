@@ -17,7 +17,7 @@ import (
 // no-invented-remedy rule.
 var contractIrisStateRequired = []string{
 	"## What you know about a job, and what you never add",
-	"`blocked` means the cell is waiting for carl at a gate",
+	"`blocked` means the cell is waiting for Ada at a gate",
 	"kraken board get <slug>",
 	"You report; you never diagnose.",
 	"never name a knob, a threshold or a remedy you have not read in the code",
@@ -34,6 +34,7 @@ const contractIrisStateAfter = "## Credentials in messages"
 // EXACTLY once — absent fails, and a duplicate (e.g. the heading pasted
 // twice) fails too.
 func TestContractIrisStateEachSubstringExactlyOnce(t *testing.T) {
+	t.Setenv("KRAKEN_OPERATOR", "Ada")
 	brief := irisBrief()
 	for _, want := range contractIrisStateRequired {
 		if n := strings.Count(brief, want); n != 1 {
@@ -45,6 +46,7 @@ func TestContractIrisStateEachSubstringExactlyOnce(t *testing.T) {
 // TestContractIrisStateOrdering: (a) before (b) before (c) before (d)
 // before (e).
 func TestContractIrisStateOrdering(t *testing.T) {
+	t.Setenv("KRAKEN_OPERATOR", "Ada")
 	brief := irisBrief()
 	prev := -1
 	prevWant := ""
@@ -64,6 +66,7 @@ func TestContractIrisStateOrdering(t *testing.T) {
 // through the last required substring — sits after the memory section's
 // closing sentence and before the credentials heading.
 func TestContractIrisStateBlockBetweenAnchors(t *testing.T) {
+	t.Setenv("KRAKEN_OPERATOR", "Ada")
 	brief := irisBrief()
 	for _, anchor := range []string{contractIrisStateBefore, contractIrisStateAfter} {
 		if n := strings.Count(brief, anchor); n != 1 {
@@ -92,8 +95,9 @@ func TestContractIrisStateBlockBetweenAnchors(t *testing.T) {
 
 // TestContractIrisStatePreexistingObligationsHold: the slice changes nothing
 // else — the three rules (never start, ack, Source provenance), the resolved
-// IrisModel, the name carl, the 16000-byte ceiling, and no `queued`.
+// IrisModel, the operator's name, the 16000-byte ceiling, and no `queued`.
 func TestContractIrisStatePreexistingObligationsHold(t *testing.T) {
+	t.Setenv("KRAKEN_OPERATOR", "Ada")
 	brief := irisBrief()
 	for _, want := range []string{
 		"you never start",
@@ -105,8 +109,8 @@ func TestContractIrisStatePreexistingObligationsHold(t *testing.T) {
 			t.Errorf("irisBrief() no longer contains %q", want)
 		}
 	}
-	if !strings.Contains(strings.ToLower(brief), "carl") {
-		t.Error("irisBrief() never names carl")
+	if !strings.Contains(brief, "Ada") {
+		t.Error("irisBrief() never names the operator (KRAKEN_OPERATOR=Ada)")
 	}
 	if n := len(brief); n > 16000 {
 		t.Errorf("len(irisBrief()) = %d, want <= 16000", n)

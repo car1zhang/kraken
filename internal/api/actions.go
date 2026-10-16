@@ -51,11 +51,10 @@ const docAnswerMaxLen = 4000
 //     makes it just as real a mutation as kill.
 //   - archive (webArchive → ArchiveJob), unarchive (webUnarchive →
 //     UnarchiveJob), and delete (webDelete → DeleteArchivedJob) are
-//     conditionally gated (mirrorPlutoActions below): all three call
-//     movePrefixed/removeArchivedArtifactFiles against PlutoDir (and its
-//     archive/ subdir) — preserved artifact flat-copies live as plain
-//     files on disk regardless of storage mode (see jobs/archive.go) — so
-//     they run in mirror mode only when PlutoDir is a sandbox copy.
+//     conditionally gated (mirrorUploadsActions below): their rows live in
+//     the mirror's own database, but ArchiveJob also removes the job's
+//     uploads dir and releases its git worktree registration — real
+//     filesystem effects outside that database.
 //   - doc-question (webAnswerDocQuestion → store.AnswerQuestion) is now a
 //     pure DB row UPDATE with no tmux/pane/file involved at all — gated
 //     anyway, same "mirror board is read-only, full stop" policy the whole
@@ -81,13 +80,15 @@ var mirrorGatedActions = map[string]bool{
 	"doc-question": true,
 }
 
-// mirrorPlutoActions are DB-local moves whose only real-world side effect
-// is preserved-artifact file moves under PlutoDir (see the archive bullet
-// above). They're allowed in mirror mode when — and only when — PlutoDir is
-// sandboxed (KRAKEN_PLUTO_DIR set away from the real ~/Documents/pluto,
-// mandatory in the mirror runbook): the file moves then land in the sandbox
-// copy, which is exactly the parity behavior worth testing.
-var mirrorPlutoActions = map[string]bool{
+// mirrorUploadsActions run in mirror mode only while KRAKEN_UPLOADS_DIR
+// points away from the default uploads dir (jobs.UploadsSandboxed): archive
+// removes the job's uploads dir, so on an unsandboxed mirror it would delete
+// the live deployment's images. The mirror runbook sets the variable, so a
+// correctly sandboxed mirror keeps these actions for parity testing. (The
+// worktree release ArchiveJob also performs refuses on a dirty tree and
+// touches nothing for a job whose worktree is gone; it is not gated
+// separately.)
+var mirrorUploadsActions = map[string]bool{
 	"archive":   true,
 	"unarchive": true,
 	"delete":    true,
@@ -105,8 +106,8 @@ func webAction(name string, f func(webReq) error) http.HandlerFunc {
 			http.Error(w, "disabled in mirror mode", http.StatusForbidden)
 			return
 		}
-		if mirrorPlutoActions[name] && mirrorModeOn() && !jobs.PlutoSandboxed() {
-			http.Error(w, "disabled in mirror mode (KRAKEN_PLUTO_DIR not sandboxed)", http.StatusForbidden)
+		if mirrorUploadsActions[name] && mirrorModeOn() && !jobs.UploadsSandboxed() {
+			http.Error(w, "disabled in mirror mode (KRAKEN_UPLOADS_DIR not sandboxed)", http.StatusForbidden)
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")

@@ -308,7 +308,6 @@ func TestSubmitContractJobFormSpecDropsTheRetiredKeys(t *testing.T) {
 
 func TestSubmitContractJobFormGETCarriesNeitherRetiredKey(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
-	t.Setenv("KRAKEN_PLUTO_DIR", t.TempDir())
 	writeTestJob(t, "submit-form", "")
 
 	req := httptest.NewRequest(http.MethodGet, "/api/job/form?slug=submit-form", nil)

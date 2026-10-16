@@ -119,6 +119,15 @@ const codexBindNoticeKey = bindNoticeKey + ":codex"
 // never differ from the one a cell is pointed at.
 func slotDir(slug string) string { return filepath.Join(core.PoolDir(), slug) }
 
+// poolRootExists reports whether an account pool's root stats as a
+// directory. The bind arms' no-target notice is for a pool that ran dry; a
+// machine without the root never set one up, and nagging it hourly about an
+// optional feature is noise.
+func poolRootExists(root string) bool {
+	fi, err := os.Stat(root)
+	return err == nil && fi.IsDir()
+}
+
 // slotDirFor is slotDir with the agent made explicit: the same slug names a
 // different directory in each pool, so every caller that can be handed either
 // kind of job resolves through here rather than through slotDir. The claude
@@ -534,12 +543,13 @@ func bindAccount(j *Job, trigger string) {
 	// count.
 	slug, email, reason := decideBind(snap, counts, mode, resolvedMainEmail(snap), j.AccountSlug, slotItemExists, now)
 	if slug == "" {
-		if mode != "manual" {
+		if mode != "manual" && poolRootExists(core.PoolDir()) {
 			// The manual pin is carl's own standing choice and needs no
 			// notice; a pool that has nothing to give is a condition he can
 			// act on, so it gets one — deduped on a single key for an hour,
 			// the same machinery and window rotation's own no-target notice
-			// used.
+			// used. A machine with no pool root at all has opted out of
+			// pooling rather than run dry, so it gets only the event below.
 			notifyDeduped(bindNoticeKey, "kraken ⚠ account binding", fmt.Sprintf("%s: no account to bind (%s)", trigger, reason))
 		}
 		dlogEvent("info", "bind-skipped", "bind (%s): %s", trigger, reason)
@@ -574,8 +584,12 @@ func bindCodexAccount(j *Job, trigger string, now time.Time) {
 	if slug == "" {
 		// The job's existing stamp is left exactly as it is. Clearing it would
 		// make a transiently empty snapshot (a poll that has not run yet after
-		// a restart) forget a binding that is still perfectly good.
-		notifyDeduped(codexBindNoticeKey, "kraken ⚠ account binding", fmt.Sprintf("%s: no codex account to bind (%s)", trigger, reason))
+		// a restart) forget a binding that is still perfectly good. No pool
+		// root at all means no codex pool was ever set up, not a dry one, so
+		// it gets the event without the notice.
+		if poolRootExists(core.CodexPoolDir()) {
+			notifyDeduped(codexBindNoticeKey, "kraken ⚠ account binding", fmt.Sprintf("%s: no codex account to bind (%s)", trigger, reason))
+		}
 		dlogEvent("info", "bind-skipped", "bind (%s): %s", trigger, reason)
 		return
 	}

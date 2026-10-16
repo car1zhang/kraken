@@ -70,10 +70,6 @@ const (
 	// defaults to it and tests point that field at an httptest server.
 	linearAPIURL = "https://api.linear.app/graphql"
 
-	// defaultLinearRepo is the repo a Linear-born job targets when
-	// LINEAR_DEFAULT_REPO says nothing (Q2).
-	defaultLinearRepo = "monolith"
-
 	// defaultLinearState is the workflow STATE NAME that qualifies an issue
 	// for a job when LINEAR_STATES says nothing (Q3). A name rather than a
 	// state type because carl's ruling was explicit: names are user-renamable,
@@ -120,7 +116,10 @@ const (
 type LinearConfig struct {
 	// APIKey empty means the feature is OFF. There is no error value for it.
 	APIKey string
-	// DefaultRepo is the `repo:` every Linear-born job gets (Q2).
+	// DefaultRepo is the `repo:` every Linear-born job gets (Q2), exactly as
+	// LINEAR_DEFAULT_REPO says; "" when that key is absent, in which case the
+	// job composer falls back to the machine's own default repo (core cannot
+	// derive it: the repos dir is a jobs-layer concern).
 	DefaultRepo string
 	// States are the workflow state NAMES that qualify an issue for a job
 	// (Q3). Matching is the caller's job and is case-insensitive.
@@ -177,9 +176,6 @@ func LoadLinearConfig() LinearConfig {
 	cfg := LinearConfig{
 		APIKey:      linearSetting(file, "LINEAR_API_KEY"),
 		DefaultRepo: linearSetting(file, "LINEAR_DEFAULT_REPO"),
-	}
-	if cfg.DefaultRepo == "" {
-		cfg.DefaultRepo = defaultLinearRepo
 	}
 	raw := linearSetting(file, "LINEAR_STATES")
 	if raw == "" {

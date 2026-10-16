@@ -881,7 +881,7 @@ so they still clear the viewBox by 16px.
   <path d="M X,Y+12 L X+12,Y H X+W L X+W-12,Y+12 Z"/>
   <path d="M X+W-12,Y+12 L X+W,Y V Y+H-12 L X+W-12,Y+H"/>
   <text x="X+(W-12)/2" y="Y+12+(H-12)/2">
-    <tspan x="X+(W-12)/2" dy="-0.6em">carl's Mac</tspan>
+    <tspan x="X+(W-12)/2" dy="-0.6em">your Mac</tspan>
     <tspan x="X+(W-12)/2" dy="1.2em">machine</tspan>
   </text>
 </g>

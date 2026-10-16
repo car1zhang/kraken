@@ -35,7 +35,9 @@ const THREAD_BLOCK_KINDS: Record<
   string,
   { cls: string; icon: string; who: string }
 > = {
-  user: { cls: "user", icon: "❯", who: "carl" },
+  // the operator's turns: labelled with board.operator at render time (see
+  // operatorLabel), so the table carries no name of its own
+  user: { cls: "user", icon: "❯", who: "" },
   text: { cls: "asst", icon: "↯", who: "" },
   thinking: { cls: "think", icon: "✳", who: "thinking" },
   tool: { cls: "tool", icon: "→", who: "" },
@@ -50,11 +52,22 @@ const THREAD_BLOCK_KINDS: Record<
  * "constructor" or "toString" would otherwise resolve to an Object.prototype
  * member and `spec.cls` would be garbage (or a throw).
  */
+/**
+ * The label on the operator's own turns: the board's `operator` name, trimmed,
+ * or "you" when the board carries none (a server predating the key) or a
+ * blank one.
+ */
+export function operatorLabel(operator?: string): string {
+  const name = typeof operator === "string" ? operator.trim() : "";
+  return name || "you";
+}
+
 export function threadBlockHTML(
   b: ThreadBlock,
   inherited: boolean,
   tid: string,
   mind?: BlockMindAttrs,
+  operator?: string,
 ): string {
   const known = Object.prototype.hasOwnProperty.call(
     THREAD_BLOCK_KINDS,
@@ -76,6 +89,7 @@ export function threadBlockHTML(
   const from = typeof b.from === "string" ? b.from : "";
   const who =
     from ||
+    (kind === "user" ? operatorLabel(operator) : "") ||
     spec.who ||
     (kind === "text" ? (mind?.speaker ?? "thread " + tid) : kind);
   // renderMD escapes before transforming, so agent-authored text is inert
@@ -127,6 +141,7 @@ export function threadConvoRender(
   data: ThreadRead,
   tid: string,
   mind?: BlockMindAttrs,
+  operator?: string,
 ): string {
   const blocks = data.blocks || [];
   if (!blocks.length) return '<div class="thread-empty">no messages yet</div>';
@@ -139,7 +154,7 @@ export function threadConvoRender(
         `<div class="thread-divider">⑂ branched here${esc(forkLabel)}</div>`,
       );
     }
-    out.push(threadBlockHTML(b, i < split, tid, mind));
+    out.push(threadBlockHTML(b, i < split, tid, mind, operator));
   });
   // a thread whose every block is inherited (branched, nothing asked yet)
   // still gets its divider — at the very end, which is exactly where it is
@@ -181,6 +196,8 @@ export interface ThreadOverlayProps {
    */
   onBranched: (tid: string, title: string) => void;
   mutate: Mutate;
+  /** `board.operator` — labels the operator's turns ("you" when absent). */
+  operator?: string;
 }
 
 export function ThreadOverlay(props: ThreadOverlayProps) {
@@ -203,6 +220,7 @@ function ThreadBody({
   onClose,
   onBranched,
   mutate,
+  operator,
 }: ThreadOverlayProps) {
   const jobSlug = slug as string;
   const [note, setNote] = useState("");
@@ -334,17 +352,19 @@ function ThreadBody({
     // THREAD's own transcript, which carries the inherited records too — the
     // read's top-level `session`, contract amendment 3) and its record uuid,
     // plus this thread's tid.
-    const html = threadConvoRender(read.data, tid, {
-      session: read.data.session,
+    const html = threadConvoRender(
+      read.data,
       tid,
-    });
+      { session: read.data.session, tid },
+      operator,
+    );
     if (html === lastHTML.current) return;
     const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 24;
     const prevTop = el.scrollTop;
     lastHTML.current = html;
     el.innerHTML = html;
     el.scrollTop = atBottom ? el.scrollHeight : prevTop;
-  }, [read.data, tid]);
+  }, [read.data, tid, operator]);
 
   // ---- the pane mirror ----------------------------------------------------
   // A second tmux round-trip on every tick, so it runs ONLY while the mirror

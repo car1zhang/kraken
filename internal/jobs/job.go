@@ -1,6 +1,7 @@
 package jobs
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -17,8 +18,9 @@ import (
 
 // --- jobs ---
 
-// A Job is one <slug>.job.md file in the pluto dir: the durable record of a
-// unit of work. The frontmatter is a deliberately tiny YAML subset (scalars,
+// A Job is one row in kraken.db's jobs table, whose text is a <slug>.job.md
+// document (frontmatter + spec body): the durable record of a unit of work.
+// The frontmatter is a deliberately tiny YAML subset (scalars,
 // one block scalar, a list of PR maps) parsed by hand — and parsed STRICTLY:
 // any construct the parser doesn't fully understand (unknown or duplicate
 // keys, bad booleans, stray lines, malformed prs entries) marks the job Err.
@@ -26,7 +28,6 @@ import (
 // never crashes — strict means loud, not fragile.
 type Job struct {
 	Slug string `json:"slug"`
-	File string `json:"file"`
 	Repo string `json:"repo"`
 	// Base is the ref the cell's worktree branches from; empty means the
 	// default (origin/main, falling back to main).
@@ -62,7 +63,7 @@ type Job struct {
 	// conversation after its cell is long gone.
 	Session string `json:"session,omitempty"`
 	// Teardown is the kraken-managed teardown-intent marker: written by
-	// DoneJob/KillJob after artifact preservation but BEFORE the first
+	// DoneJob/KillJob after the self-teardown guard but BEFORE the first
 	// destructive step ("done:<outcome>" or "kill"), and cleared by the same
 	// call's final state write. A surviving marker means a teardown was
 	// interrupted mid-flight (crash, ^C, the process dying with the session);
@@ -92,9 +93,9 @@ type Job struct {
 	// Load is zeus' triage estimate for a blocked job: how much effort
 	// unblocking it costs carl against how much claude work that reply buys
 	// (store.JobLoad — the store's own type rather than a second copy, since
-	// this package already imports store). Store-backed ONLY: it has no
-	// frontmatter spelling, so a file-backed Job always reads as the zero
-	// value ("never estimated"), and jobs.SetJobLoad refuses rather than
+	// this package already imports store). It has no frontmatter spelling,
+	// so a Job built by ParseJob alone reads as the zero value ("never
+	// estimated"), and jobs.SetJobLoad refuses without a store rather than
 	// pretending otherwise.
 	//
 	// No omitempty: Go's omitempty has no effect on a struct value, so
@@ -103,8 +104,8 @@ type Job struct {
 	// and nothing marshals jobs.Job itself.
 	Load store.JobLoad `json:"load"`
 	// FormerSlugs is every name this job has been renamed away from
-	// (store.Job.FormerSlugs, schema v20), empty for a never-renamed job and
-	// for every file-backed one. It is what keeps a renamed job's old names
+	// (store.Job.FormerSlugs, schema v20), empty for a never-renamed job.
+	// It is what keeps a renamed job's old names
 	// resolving: the cell-dir and worktree probes, the branch family, the
 	// transcript project dirs and the tmux session lookup all derive one
 	// candidate per entry, because a rename deliberately moves almost none of
@@ -116,9 +117,8 @@ type Job struct {
 	FormerSlugs []string `json:"-"`
 	// GoalIDs is every goal this job serves (store.Job.GoalIDs, schema v27's
 	// job_goals rows), in link position order and empty for none — which is
-	// every job until carl labels one, and every file-backed Job
-	// unconditionally: like Load and FormerSlugs it has no frontmatter
-	// spelling, and its only writers are store's three link verbs
+	// every job until carl labels one: like Load and FormerSlugs it has no
+	// frontmatter spelling, and its only writers are store's three link verbs
 	// (AddJobGoal/RemoveJobGoal/ClearJobGoals).
 	//
 	// The head of the slice is the PRIMARY link, which is what lets every
@@ -137,8 +137,8 @@ type Job struct {
 	// CLAUDE_SECURESTORAGE_CONFIG_DIR in its spawn command, which is how
 	// every cell ran before per-cell binding existed.
 	//
-	// Store-backed only, like Load and GoalIDs: there is no frontmatter
-	// spelling, so a file-backed Job always reads as unbound. Written by
+	// Like Load and GoalIDs there is no frontmatter spelling, so a Job built
+	// by ParseJob alone reads as unbound. Written by
 	// bindAccount at spawn and by the limit rescue's rebind, both through
 	// store.SetJobAccount.
 	//
@@ -151,9 +151,9 @@ type Job struct {
 	// ID and Rev are storage-internal, populated only when this Job was
 	// loaded from the store (jobFromStoreRow in jobs/store.go): ID is the
 	// store row id, Rev the optimistic-concurrency counter WriteJobFields/
-	// WriteJobState pass to store.UpdateJobFields. Both are zero for a
-	// file-backed Job (LoadJobsFromFiles etc.) — never wire fields, never
-	// meaningful to a client.
+	// WriteJobState pass to store.UpdateJobFields. Both are zero for a Job
+	// built by ParseJob alone — never wire fields, never meaningful to a
+	// client.
 	ID  int64 `json:"-"`
 	Rev int64 `json:"-"`
 }
@@ -180,22 +180,6 @@ type JobPR struct {
 }
 
 const JobSuffix = ".job.md"
-
-func PlutoDir() string {
-	if d := os.Getenv("KRAKEN_PLUTO_DIR"); d != "" {
-		return d // tests point at a temp dir; daily use never sets this
-	}
-	return filepath.Join(util.Home(), "Documents", "pluto")
-}
-
-// PlutoSandboxed reports whether PlutoDir resolves away from the real
-// ~/Documents/pluto — i.e. KRAKEN_PLUTO_DIR points at a sandbox copy. The
-// mirror-mode API gate uses this to decide whether archive/unarchive/delete
-// (which move preserved-artifact files under PlutoDir even in store mode)
-// are safe to allow.
-func PlutoSandboxed() bool {
-	return PlutoDir() != filepath.Join(util.Home(), "Documents", "pluto")
-}
 
 // started reports whether the job has ever entered a cell: "" means never
 // started; "working", "blocked", and "done" all count as started.
@@ -334,9 +318,9 @@ func ParseJob(name string, data []byte) *Job {
 			// legacy field: removed from the schema (Q14 — job type is gone;
 			// the pipeline distinction now lives in /aim vs /info skill
 			// choice plus carl's /do steering, never a job field), but
-			// existing pluto job files still carry type: keys (build, info,
+			// older jobs' text still carries type: keys (build, info,
 			// and the older explore/question aliases). Keep consuming the
-			// line so those files still parse with Err == "" — just discard
+			// line so those jobs still parse with Err == "" — just discard
 			// the value, exactly like auto-approve/success below.
 		case "repo":
 			j.Repo = val
@@ -345,13 +329,12 @@ func ParseJob(name string, data []byte) *Job {
 		case "ready":
 			// retired field: the queued status is gone, and with it the flag
 			// that used to hand a draft to the daemon's queue pass — submit
-			// starts the cell in the same request now. Existing pluto job
-			// files (and every store row's composed frontmatter written before
-			// the cutover) still carry a ready: line, so the key keeps being
-			// CONSUMED here and its value discarded, exactly like
-			// type/skip-doc/auto-approve below. Deleting the case would send
-			// the default: arm every one of those files into Err and pin the
-			// whole corpus to draft.
+			// starts the cell in the same request now. Every store row's
+			// composed frontmatter written before the cutover still carries
+			// a ready: line, so the key keeps being CONSUMED here and its
+			// value discarded, exactly like type/skip-doc/auto-approve below.
+			// Deleting the case would send the default: arm every one of
+			// those rows into Err and pin the whole corpus to draft.
 		case "solo":
 			j.Solo = j.boolField(k, val)
 		case "model":
@@ -383,15 +366,15 @@ func ParseJob(name string, data []byte) *Job {
 				j.Agent = a
 			}
 		case "skip-doc":
-			// tolerated legacy key: pluto job files predating the
+			// tolerated legacy key: jobs predating the
 			// doc-iff-/aim-or-/info rule (Q14) may still carry a skip-doc:
 			// line. Keep consuming it, like type/auto-approve/success below,
-			// so those files still parse with Err == "" — just discard the
+			// so those jobs still parse with Err == "" — just discard the
 			// value, never validate or error on it.
 		case "auto-approve":
-			// legacy field: removed from the schema, but existing pluto job
-			// files still carry auto-approve: keys (always a scalar). Keep
-			// consuming the line so those files still parse with Err == "" —
+			// legacy field: removed from the schema, but older jobs' text
+			// still carries auto-approve: keys (always a scalar). Keep
+			// consuming the line so those jobs still parse with Err == "" —
 			// just discard the value.
 		case "state":
 			if val != "" && !validStates[val] {
@@ -416,9 +399,9 @@ func ParseJob(name string, data []byte) *Job {
 				j.Run = n
 			}
 		case "success":
-			// legacy field: removed from the schema, but existing pluto job
-			// files still carry success: keys (scalar or "success: |" block
-			// scalar). Keep consuming the same lines so those files still
+			// legacy field: removed from the schema, but older jobs' text
+			// still carries success: keys (scalar or "success: |" block
+			// scalar). Keep consuming the same lines so those jobs still
 			// parse with Err == "" — just discard the value.
 			if val == "|" || val == "" {
 				for i+1 < len(fm) && (strings.HasPrefix(fm[i+1], "  ") || strings.TrimSpace(fm[i+1]) == "") {
@@ -532,13 +515,22 @@ func parsePRs(j *Job, fm []string, i *int) []JobPR {
 	return out
 }
 
-// JobTemplate is the fill-in skeleton for a new job — kept in lockstep with
-// the {{name}} expansion in ~/.config/nvim/lua/config/pluto.lua (the nvim
-// authoring path) and the spec doc.
+// JobTemplate is the fill-in skeleton for a new job: the board's
+// /api/job/create (webJobCreate) both builds the new row from it, parsed,
+// and hands it back verbatim as the editor's starting content. The repo:
+// value is DefaultRepo(), which is empty unless exactly one checkout sits
+// under the repos dir — an empty repo: still parses, and submit refuses it
+// with "job has no repo".
 func JobTemplate(slug string) string {
+	repoLine := "repo: " + DefaultRepo()
+	if pad := 26 - len(repoLine); pad > 0 {
+		repoLine += strings.Repeat(" ", pad)
+	} else {
+		repoLine += " "
+	}
 	return "---\n" +
-		"job: " + slug + " # slug; this file is " + slug + ".job.md\n" +
-		"repo: monolith            # substring-matched against existing repos (alphabetic tiebreak);\n" +
+		"job: " + slug + " # slug\n" +
+		repoLine + "# substring-matched against existing repos (alphabetic tiebreak);\n" +
 		"                          # no match → job errors, surfaced in the viewer\n" +
 		"# base: origin/main       # optional: ref the worktree branches from (default origin/main, else main)\n" +
 		"solo: false               # true → zeus works alone: no teammate crew at all, prose-only doc (no diagram agents)\n" +
@@ -550,55 +542,22 @@ func JobTemplate(slug string) string {
 		"---\n"
 }
 
-// LoadJobs returns every active job, sorted by slug: store-backed when a
-// store is wired (UseStore, from kraken serve), else the original
-// file-based LoadJobsFromFiles. The legacy importer keeps reading files
-// directly via LoadJobsFromFiles regardless of UseStore.
+// LoadJobs returns every active job, sorted by slug, from the store kraken
+// serve wires (UseStore). With no store wired — a bare CLI process — it
+// returns nil: kraken.db is the only place jobs live.
 func LoadJobs() []*Job {
-	if st := ActiveStore(); st != nil {
-		jobs, err := loadJobsFromStore(st)
-		if err != nil {
-			// A DB error must not render as a silently-empty
-			// board — file-mode's equivalent ("no pluto dir yet") is a
-			// legitimately empty state, but a store query failure is a real
-			// fault that deserves a loud event, not just a quiet board wipe.
-			dlogErr("load jobs from store failed: %v", err)
-			return nil // still degrade to empty, same contract as a missing pluto dir
-		}
-		return jobs
-	}
-	return LoadJobsFromFiles()
-}
-
-// LoadJobsFromFiles reads every *.job.md in the pluto dir, sorted by slug.
-// Missing dir or unreadable files degrade to an empty/partial list, never
-// an error.
-func LoadJobsFromFiles() []*Job {
-	entries, err := os.ReadDir(PlutoDir())
-	if err != nil {
+	st := ActiveStore()
+	if st == nil {
 		return nil
 	}
-	var jobs []*Job
-	for _, e := range entries {
-		if e.IsDir() || !strings.HasSuffix(e.Name(), JobSuffix) {
-			continue
-		}
-		path := filepath.Join(PlutoDir(), e.Name())
-		data, err := os.ReadFile(path)
-		if err != nil {
-			continue
-		}
-		j := ParseJob(e.Name(), data)
-		j.File = path
-		if info, err := e.Info(); err == nil {
-			j.ModTime = info.ModTime()
-		}
-		jobs = append(jobs, j)
+	jobs, err := loadJobsFromStore(st)
+	if err != nil {
+		// A DB error must not render as a silently-empty board without a
+		// trace: a store query failure is a real fault that deserves a loud
+		// event, not just a quiet board wipe.
+		dlogErr("load jobs from store failed: %v", err)
+		return nil // still degrade to empty
 	}
-	// stable: for duplicate slugs the ReadDir filename order decides which
-	// file JobBySlug resolves — surfaced as an Err either way, but stable
-	sort.SliceStable(jobs, func(a, b int) bool { return jobs[a].Slug < jobs[b].Slug })
-	markSlugIssues(jobs)
 	return jobs
 }
 
@@ -651,15 +610,13 @@ func JobBySlug(jobs []*Job, slug string) *Job {
 	return nil
 }
 
-// LoadJobBySlug parses exactly one job file, for a caller (the pr-hook verb)
-// that only knows its own slug and runs once per zeus tool call — the full
-// LoadJobs() sweep (every file in the dir, plus slug-collision bookkeeping
-// across the whole board) is wasted work at that call rate. Fast path reads
-// "<slug>.job.md" directly; a mismatch (the
-// file's own `job:` frontmatter overrides the filename) falls back to a full
-// LoadJobs()+JobBySlug scan.
+// LoadJobBySlug loads exactly one job row, for a caller that only knows its
+// own slug and runs at a high call rate — the full LoadJobs() sweep (every
+// row, plus slug-collision bookkeeping across the whole board) is wasted
+// work there. With no store wired it returns nil: kraken.db is the only
+// place jobs live.
 //
-// Store path only: a slug that matches no active job falls back to former-slug
+// A slug that matches no active job falls back to former-slug
 // resolution, which is what makes a renamed job's OLD name keep working from
 // inside its own cell. Everything a live cell knows about itself was written
 // at spawn — the brief, the hooks' baked-in slug, zeus' own habit of typing
@@ -669,32 +626,22 @@ func JobBySlug(jobs []*Job, slug string) *Job {
 // to that job, never to whoever used to hold it.
 func LoadJobBySlug(slug string) *Job {
 	slug = strings.TrimSuffix(slug, JobSuffix)
-	if st := ActiveStore(); st != nil {
-		sr, err := st.GetJobBySlug(slug)
-		if err != nil {
-			sr, err = st.GetJobByFormerSlug(slug)
-		}
-		if err != nil {
-			return nil
-		}
-		j, err := loadJobFull(st, sr)
-		if err != nil {
-			return nil
-		}
-		return j
+	st := ActiveStore()
+	if st == nil {
+		return nil
 	}
-	path := filepath.Join(PlutoDir(), slug+JobSuffix)
-	if data, err := os.ReadFile(path); err == nil {
-		j := ParseJob(slug+JobSuffix, data)
-		j.File = path
-		if info, err := os.Stat(path); err == nil {
-			j.ModTime = info.ModTime()
-		}
-		if j.Slug == slug {
-			return j
-		}
+	sr, err := st.GetJobBySlug(slug)
+	if err != nil {
+		sr, err = st.GetJobByFormerSlug(slug)
 	}
-	return JobBySlug(LoadJobs(), slug)
+	if err != nil {
+		return nil
+	}
+	j, err := loadJobFull(st, sr)
+	if err != nil {
+		return nil
+	}
+	return j
 }
 
 // DisplayState derives the job-board's four-state model: a terminal "done"
@@ -724,299 +671,64 @@ func DisplayState(j *Job) string {
 
 // --- state write-back ---
 
-// patchField rewrites one kraken-owned scalar frontmatter line (inserting it
-// before the closing --- if absent), leaving every other byte of the file
-// untouched. An accidentally indented line for the key is healed to the
-// canonical unindented form — the parser rejects indented keys, so leaving it
-// would keep the job erred. An empty val REMOVES the key's line instead of
-// leaving a dangling "key:" (a missing key already parses as empty, so the
-// two forms are equivalent — this just keeps hand-read files clean).
-func patchField(content, key, val string) (string, error) {
-	lines := strings.Split(content, "\n")
-	if len(lines) == 0 || !isFence(lines[0]) {
-		return "", fmt.Errorf("no frontmatter")
-	}
-	for i := 1; i < len(lines); i++ {
-		if isFence(lines[i]) {
-			if val == "" {
-				return content, nil // clearing an absent key: nothing to do
-			}
-			lines[i] = key + ": " + val + "\n---"
-			return strings.Join(lines, "\n"), nil
-		}
-		if strings.HasPrefix(strings.TrimSpace(lines[i]), key+":") {
-			if val == "" {
-				lines = append(lines[:i], lines[i+1:]...)
-			} else {
-				lines[i] = key + ": " + val
-			}
-			return strings.Join(lines, "\n"), nil
-		}
-	}
-	return "", fmt.Errorf("unterminated frontmatter")
-}
+// errNoJobStore is what every job write returns when no store is wired:
+// kraken.db is the only place a job lives, so there is nothing to write to.
+var errNoJobStore = errors.New("no job store wired — jobs live only in kraken.db, written through kraken serve")
 
-// patchState is patchField for the state key (the common case).
-func patchState(content, state string) (string, error) {
-	return patchField(content, "state", state)
-}
-
-// patchPRs rewrites the frontmatter prs: block wholesale (inserting it before
-// the closing fence if absent), leaving every other byte untouched — the
-// list-valued sibling of patchField. The old block (key line plus its
-// indented/dash continuation lines) is replaced in place so hand-placed key
-// ordering elsewhere survives.
-func patchPRs(content string, prs []JobPR) (string, error) {
-	var block []string
-	if len(prs) > 0 {
-		block = append(block, "prs:")
-		for _, p := range prs {
-			block = append(block, "  - url: "+OneLine(p.URL), "    state: "+OneLine(p.State))
-			// watermarks are omitted (not even blank) when unset — old records
-			// and freshly-fetched ones that watchPRs hasn't touched yet stay
-			// byte-identical to the pre-watermark format, so this round-trips
-			// through the strict parser whether or not it wrote them.
-			if p.LastCommentAt != "" {
-				block = append(block, "    last-comment-at: "+OneLine(p.LastCommentAt))
-			}
-			if p.BumpedSHA != "" {
-				block = append(block, "    bumped-sha: "+OneLine(p.BumpedSHA))
-			}
-			if p.ConflictState != "" {
-				block = append(block, "    conflict-state: "+OneLine(p.ConflictState))
-			}
-		}
-	}
-	lines := strings.Split(content, "\n")
-	if len(lines) == 0 || !isFence(lines[0]) {
-		return "", fmt.Errorf("no frontmatter")
-	}
-	for i := 1; i < len(lines); i++ {
-		if isFence(lines[i]) {
-			if len(block) == 0 {
-				return content, nil // nothing recorded and nothing to record
-			}
-			out := append(append([]string{}, lines[:i]...), block...)
-			return strings.Join(append(out, lines[i:]...), "\n"), nil
-		}
-		// column-0 match only: an indented "prs:"-prefixed line can be a
-		// legacy success: | block scalar's CONTENT, and healing it like
-		// patchField heals indented keys would silently eat that line every
-		// tracker tick
-		if strings.HasPrefix(lines[i], "prs:") {
-			end := i + 1
-			for end < len(lines) && !isFence(lines[end]) {
-				t := strings.TrimSpace(lines[end])
-				if t != "" && lines[end][0] != ' ' && lines[end][0] != '\t' && !strings.HasPrefix(lines[end], "-") {
-					break // next top-level key
-				}
-				end++
-			}
-			out := append(append([]string{}, lines[:i]...), block...)
-			return strings.Join(append(out, lines[end:]...), "\n"), nil
-		}
-	}
-	return "", fmt.Errorf("unterminated frontmatter")
-}
-
-// writeJobPRs persists the tracker's PR record atomically, mirroring
-// WriteJobFields' re-read-then-patch pattern so a concurrent editor save
-// isn't clobbered with stale bytes. Invariant: this write may add or update
-// records, but must never DROP a URL already present in the file. The
-// caller's `prs` is built from j.PRs loaded at the start of a daemon tick;
-// the pr-hook verb's real-time appendJobPR path may have appended a fresh
-// record straight to the file in the meantime. Re-parsing the freshly-read
-// bytes and unioning in any file-only URL (state as last recorded there)
-// before patching closes that race — without it, a PR attached mid-tick
-// would be silently overwritten out of existence by the tracker's own write.
+// writeJobPRs persists the tracker's PR record (writeJobPRsToStore, which
+// never drops a URL already recorded — a PR attached mid-tick survives a
+// tracker write built from a stale j.PRs).
 func writeJobPRs(j *Job, prs []JobPR) error {
-	if st := ActiveStore(); st != nil {
-		return writeJobPRsToStore(st, j, prs)
+	st := ActiveStore()
+	if st == nil {
+		return errNoJobStore
 	}
-	data, err := os.ReadFile(j.File)
-	if err != nil {
-		return err
-	}
-	fresh := ParseJob(filepath.Base(j.File), data)
-	have := make(map[string]bool, len(prs))
-	for _, p := range prs {
-		have[p.URL] = true
-	}
-	merged := prs
-	for _, p := range fresh.PRs {
-		if !have[p.URL] {
-			merged = append(merged, p)
-		}
-	}
-	content, err := patchPRs(string(data), merged)
-	if err != nil {
-		return fmt.Errorf("%s: %v", filepath.Base(j.File), err)
-	}
-	if err := util.AtomicWrite(j.File, content); err != nil {
-		return err
-	}
-	j.PRs = merged
-	return nil
+	return writeJobPRsToStore(st, j, prs)
 }
 
 // appendJobPR is the shared attach path for recording one shipped PR against
 // a job: the pr-hook verb's real-time path and the transcript-scanning
-// backstop both fold through here. Re-reads the file fresh and parses its
-// current prs — not j.PRs, which may be stale — so a concurrent daemon tick
-// or nvim save between load and write can't be clobbered, mirroring
-// writeJobPRs' re-read-then-patch semantics. No-ops (attached=false) if the
-// URL is already recorded; a hook re-run on the same gh pr create output
-// must never duplicate an entry.
+// backstop both fold through here. No-ops (attached=false) if the URL is
+// already recorded; a hook re-run on the same gh pr create output must never
+// duplicate an entry.
 func appendJobPR(j *Job, pr JobPR) (attached bool, err error) {
-	if st := ActiveStore(); st != nil {
-		return appendJobPRToStore(st, j, pr)
+	st := ActiveStore()
+	if st == nil {
+		return false, errNoJobStore
 	}
-	data, err := os.ReadFile(j.File)
-	if err != nil {
-		return false, err
-	}
-	fresh := ParseJob(filepath.Base(j.File), data)
-	for _, existing := range fresh.PRs {
-		if existing.URL == pr.URL {
-			return false, nil
-		}
-	}
-	prs := append(fresh.PRs, pr)
-	content, err := patchPRs(string(data), prs)
-	if err != nil {
-		return false, fmt.Errorf("%s: %v", filepath.Base(j.File), err)
-	}
-	if err := util.AtomicWrite(j.File, content); err != nil {
-		return false, err
-	}
-	j.PRs = prs
-	return true, nil
+	return appendJobPRToStore(st, j, pr)
 }
 
 // removeJobPRs drops recorded PRs by URL — the repair pass's write path.
-// Deliberately NOT writeJobPRs: that helper re-reads the file and unions in
-// any file-only URL missing from the caller's list, which exists so a
-// concurrent appendJobPR attach survives a tracker write built from a stale
-// j.PRs snapshot — but that same union would silently resurrect exactly the
-// records this call means to delete. Instead this re-reads the file fresh
-// and filters ITS current list by the drop set (mirroring appendJobPR's
-// read-fresh-then-patch shape), so a PR attached concurrently between load
-// and write still survives — it's simply absent from drop and passes through.
+// Deliberately NOT writeJobPRs: that one unions in already-recorded URLs,
+// which would resurrect exactly the records this call means to delete.
 func removeJobPRs(j *Job, drop map[string]bool) (removed []string, err error) {
-	if st := ActiveStore(); st != nil {
-		return removeJobPRsFromStore(st, j, drop)
+	st := ActiveStore()
+	if st == nil {
+		return nil, errNoJobStore
 	}
-	data, err := os.ReadFile(j.File)
-	if err != nil {
-		return nil, err
-	}
-	fresh := ParseJob(filepath.Base(j.File), data)
-	var kept []JobPR
-	for _, p := range fresh.PRs {
-		if drop[p.URL] {
-			removed = append(removed, p.URL)
-			continue
-		}
-		kept = append(kept, p)
-	}
-	if len(removed) == 0 {
-		return nil, nil
-	}
-	content, err := patchPRs(string(data), kept)
-	if err != nil {
-		return nil, fmt.Errorf("%s: %v", filepath.Base(j.File), err)
-	}
-	if err := util.AtomicWrite(j.File, content); err != nil {
-		return nil, err
-	}
-	j.PRs = kept
-	return removed, nil
+	return removeJobPRsFromStore(st, j, drop)
 }
 
 // updatePRWatermark persists watchPRs' per-URL comment/CI/conflict
-// watermarks for one recorded PR. Store-backed via store.SetPRWatermark when
-// a store is wired; else the file path re-reads fresh first (mirroring
-// writeJobPRs/appendJobPR/removeJobPRs' read-fresh-then-patch pattern) so a
-// concurrent tracker write or hand edit isn't clobbered with stale bytes. A
-// no-op if the URL isn't present — it must have been dropped (repair pass,
-// hand edit) between load and write, and there is nothing left to stamp a
-// watermark onto; the caller's own copy of j.PRs is left alone in that case
-// too.
+// watermarks for one recorded PR via store.SetPRWatermark.
 func updatePRWatermark(j *Job, url, lastCommentAt, bumpedSHA, conflictState string) error {
-	if st := ActiveStore(); st != nil {
-		return updatePRWatermarkToStore(st, j, url, lastCommentAt, bumpedSHA, conflictState)
+	st := ActiveStore()
+	if st == nil {
+		return errNoJobStore
 	}
-	data, err := os.ReadFile(j.File)
-	if err != nil {
-		return err
-	}
-	fresh := ParseJob(filepath.Base(j.File), data)
-	found := false
-	for i := range fresh.PRs {
-		if fresh.PRs[i].URL == url {
-			fresh.PRs[i].LastCommentAt = lastCommentAt
-			fresh.PRs[i].BumpedSHA = bumpedSHA
-			fresh.PRs[i].ConflictState = conflictState
-			found = true
-			break
-		}
-	}
-	if !found {
-		return nil
-	}
-	content, err := patchPRs(string(data), fresh.PRs)
-	if err != nil {
-		return fmt.Errorf("%s: %v", filepath.Base(j.File), err)
-	}
-	if err := util.AtomicWrite(j.File, content); err != nil {
-		return err
-	}
-	j.PRs = fresh.PRs
-	return nil
+	return updatePRWatermarkToStore(st, j, url, lastCommentAt, bumpedSHA, conflictState)
 }
 
-// WriteJobFields patches kraken-owned fields atomically: store-backed via
-// store.UpdateJobFields (gated on j.ID/j.Rev, refreshing j.Rev on success)
-// when a store is wired, else the original file patch (temp file + rename
-// in the same dir, re-reading the file first so a concurrent nvim save
-// isn't clobbered with stale bytes). keyvals alternates key, value.
+// WriteJobFields patches kraken-owned fields through store.UpdateJobFields
+// (gated on j.ID/j.Rev, refreshing j.Rev on success). keyvals alternates
+// key, value.
 func WriteJobFields(j *Job, keyvals ...string) error {
-	if st := ActiveStore(); st != nil {
-		return writeJobFieldsToStore(st, j, keyvals...)
+	st := ActiveStore()
+	if st == nil {
+		return errNoJobStore
 	}
-	data, err := os.ReadFile(j.File)
-	if err != nil {
-		return err
-	}
-	content := string(data)
-	for i := 0; i+1 < len(keyvals); i += 2 {
-		content, err = patchField(content, keyvals[i], keyvals[i+1])
-		if err != nil {
-			return fmt.Errorf("%s: %v", filepath.Base(j.File), err)
-		}
-	}
-	if err := util.AtomicWrite(j.File, content); err != nil {
-		return err
-	}
-	for i := 0; i+1 < len(keyvals); i += 2 {
-		switch keyvals[i] {
-		case "state":
-			j.State = keyvals[i+1]
-		case "outcome":
-			j.Outcome = keyvals[i+1]
-		case "session":
-			j.Session = keyvals[i+1]
-		case "teardown":
-			j.Teardown = keyvals[i+1]
-		case "color":
-			j.Color = keyvals[i+1]
-		case "run":
-			if n, err := strconv.Atoi(keyvals[i+1]); err == nil {
-				j.Run = n
-			}
-		}
-	}
-	return nil
+	return writeJobFieldsToStore(st, j, keyvals...)
 }
 
 func WriteJobState(j *Job, state string) error {
@@ -1025,8 +737,29 @@ func WriteJobState(j *Job, state string) error {
 
 // --- repo resolution ---
 
+// repoRoot is the directory whose git children are the repos a job may
+// target: KRAKEN_REPOS_DIR when it holds an absolute path (cleaned, contents
+// not validated here), else ~/Developer. An empty or relative value falls
+// back to the default rather than resolving against whatever directory the
+// process happens to run in. Read on every call, never cached, so every
+// reader (ResolveRepo, RepoCandidates and through it the job editor's picker
+// and DefaultRepo, the mm render pass) lists the same root.
 func repoRoot() string {
+	if v := strings.TrimSpace(os.Getenv("KRAKEN_REPOS_DIR")); v != "" && filepath.IsAbs(v) {
+		return filepath.Clean(v)
+	}
 	return filepath.Join(util.Home(), "Developer")
+}
+
+// DefaultRepo is the repo a job gets when nobody named one: the sole git
+// checkout under repoRoot() when there is exactly one, else "" (zero or
+// several candidates have no honest default, and an alphabetic pick would
+// silently aim jobs at the wrong checkout).
+func DefaultRepo() string {
+	if c := RepoCandidates(); len(c) == 1 {
+		return c[0]
+	}
+	return ""
 }
 
 // isGitRepo reports whether dir is a git checkout (.git dir or worktree file).
@@ -1058,30 +791,32 @@ func PickRepo(name string, candidates []string) string {
 	return hits[0]
 }
 
-// ResolveRepo maps a job's repo field to a git checkout under ~/Developer:
-// substring match on the dir name, alphabetic tiebreak, error when nothing
-// matches (the job errors — kraken never creates repos).
+// ResolveRepo maps a job's repo field to a git checkout under repoRoot()
+// (~/Developer unless KRAKEN_REPOS_DIR says otherwise): substring match on
+// the dir name, alphabetic tiebreak, error when nothing matches (the job
+// errors — kraken never creates repos).
 func ResolveRepo(name string) (string, error) {
 	if strings.TrimSpace(name) == "" {
 		return "", fmt.Errorf("job has no repo")
 	}
-	entries, err := os.ReadDir(repoRoot())
+	root := repoRoot()
+	entries, err := os.ReadDir(root)
 	if err != nil {
-		return "", fmt.Errorf("read %s: %v", repoRoot(), err)
+		return "", fmt.Errorf("read %s: %v", root, err)
 	}
 	var candidates []string
 	for _, e := range entries {
 		if !e.IsDir() {
 			continue
 		}
-		dir := filepath.Join(repoRoot(), e.Name())
+		dir := filepath.Join(root, e.Name())
 		if isGitRepo(dir) {
 			candidates = append(candidates, e.Name())
 		}
 	}
 	hit := PickRepo(name, candidates)
 	if hit == "" {
-		return "", fmt.Errorf("no repo under %s matches %q", repoRoot(), name)
+		return "", fmt.Errorf("no repo under %s matches %q", root, name)
 	}
-	return filepath.Join(repoRoot(), hit), nil
+	return filepath.Join(root, hit), nil
 }

@@ -196,6 +196,10 @@ var webBoardSpec = map[string]fieldSpec{
 	// stamp alone, pointer + omitempty, so ABSENT is the wire's only spelling
 	// of "no background set". Additive — never bumps apiContract.
 	"background": {kind: wireObject, required: false},
+	// The operator's name (jobs.Operator), for clients to label that person's
+	// turns. A plain string with no omitempty, so it always rides. Additive —
+	// never bumps apiContract.
+	"operator": {kind: wireString, required: true},
 }
 
 // webBackgroundSpec covers background.go's webBackground — webBoard's
@@ -2010,7 +2014,6 @@ var jobSaveFormSpec = map[string]fieldSpec{
 }
 
 func TestJobRawWireShape(t *testing.T) {
-	t.Setenv("KRAKEN_PLUTO_DIR", t.TempDir())
 	writeTestJob(t, "contract-raw", "")
 
 	req := httptest.NewRequest(http.MethodGet, "/api/job/raw?slug=contract-raw", nil)
@@ -2023,7 +2026,6 @@ func TestJobRawWireShape(t *testing.T) {
 }
 
 func TestJobFormWireShape(t *testing.T) {
-	t.Setenv("KRAKEN_PLUTO_DIR", t.TempDir())
 	writeTestJob(t, "contract-form", "")
 
 	req := httptest.NewRequest(http.MethodGet, "/api/job/form?slug=contract-form", nil)
@@ -2036,7 +2038,6 @@ func TestJobFormWireShape(t *testing.T) {
 }
 
 func TestJobColorWireShape(t *testing.T) {
-	t.Setenv("KRAKEN_PLUTO_DIR", t.TempDir())
 	writeTestJob(t, "contract-color", "")
 
 	body := mustJSON(t, map[string]any{"slug": "contract-color", "color": "purple"})
@@ -2060,7 +2061,6 @@ func TestJobColorWireShape(t *testing.T) {
 }
 
 func TestJobSaveFormWireShape(t *testing.T) {
-	t.Setenv("KRAKEN_PLUTO_DIR", t.TempDir())
 	writeTestJob(t, "contract-saveform", "")
 
 	body := mustJSON(t, map[string]any{"slug": "contract-saveform", "repo": "monolith"})
@@ -2353,7 +2353,6 @@ var webDraftSpec = map[string]fieldSpec{
 }
 
 func TestDraftGetWireShape(t *testing.T) {
-	t.Setenv("KRAKEN_PLUTO_DIR", t.TempDir())
 	writeTestJob(t, "contract-draft", "")
 
 	req := httptest.NewRequest(http.MethodGet, "/api/draft?slug=contract-draft", nil)
@@ -2370,7 +2369,6 @@ var draftPostOKSpec = map[string]fieldSpec{
 }
 
 func TestDraftPostWireShape(t *testing.T) {
-	t.Setenv("KRAKEN_PLUTO_DIR", t.TempDir())
 	writeTestJob(t, "contract-draft-post", "")
 
 	body := mustJSON(t, webReq{Slug: "contract-draft-post", Text: "hello"})
@@ -2448,7 +2446,6 @@ func TestUploadRoundTrip(t *testing.T) {
 }
 
 func TestUploadUnknownSlug404(t *testing.T) {
-	t.Setenv("KRAKEN_PLUTO_DIR", t.TempDir())
 	t.Setenv("KRAKEN_UPLOADS_DIR", t.TempDir())
 	req := multipartUploadRequest(t, "no-such-job", "a.png", smallPNG(t))
 	rec := httptest.NewRecorder()
@@ -2459,7 +2456,6 @@ func TestUploadUnknownSlug404(t *testing.T) {
 }
 
 func TestUploadOversize413(t *testing.T) {
-	t.Setenv("KRAKEN_PLUTO_DIR", t.TempDir())
 	t.Setenv("KRAKEN_UPLOADS_DIR", t.TempDir())
 	writeTestJob(t, "contract-upload-big", "")
 	big := bytes.Repeat([]byte{0}, 10<<20+1024) // just over the 10MB file cap, still under the 11MB body ceiling
@@ -2495,7 +2491,6 @@ func TestUploadSniffOverridesFilename(t *testing.T) {
 }
 
 func TestUploadUnsupportedType415(t *testing.T) {
-	t.Setenv("KRAKEN_PLUTO_DIR", t.TempDir())
 	t.Setenv("KRAKEN_UPLOADS_DIR", t.TempDir())
 	writeTestJob(t, "contract-upload-text", "")
 	req := multipartUploadRequest(t, "contract-upload-text", "notes.txt", []byte("just plain text, not an image"))
@@ -2523,14 +2518,12 @@ func TestUploadBadMethod405(t *testing.T) {
 }
 
 func TestJobSaveFormConflictWireShape(t *testing.T) {
-	t.Setenv("KRAKEN_PLUTO_DIR", t.TempDir())
 	writeTestJob(t, "contract-saveform-conflict", "")
 
-	// a deliberately wrong, non-zero mtime (real mtimes are unix millis,
-	// nowhere near 1) reliably mismatches the file's actual mtime without
-	// needing to fetch it first.
+	// a deliberately wrong, non-zero token (the token is the row's rev, which
+	// a fresh row has at 1) reliably mismatches without fetching it first.
 	body := mustJSON(t, map[string]any{
-		"slug": "contract-saveform-conflict", "repo": "monolith", "mtime": 1,
+		"slug": "contract-saveform-conflict", "repo": "monolith", "mtime": 999999,
 	})
 	req := httptest.NewRequest(http.MethodPost, "/api/job/saveform", bytes.NewReader(body))
 	rec := httptest.NewRecorder()

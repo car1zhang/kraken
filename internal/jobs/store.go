@@ -15,25 +15,15 @@ import (
 	"kraken/internal/util"
 )
 
-// store.go — the jobs package's storage substrate switch. Every accessor
-// below (LoadJobs, WriteJobFields, ArchiveJob, ...) checks ActiveStore()
-// first and falls back to file-based behavior when no store is wired; the
-// file-based code paths are kept under a "FromFiles" name where a
-// store-backed sibling now shadows the original unqualified name (LoadJobs,
-// LoadArchivedJobs), and the legacy importer keeps using ParseJob and the
-// FromFiles loaders directly. UseStore is called exactly once, at kraken
-// serve's startup, so every other entrypoint (the bubbletea viewer,
-// existing api/jobs tests) keeps running unmodified against files.
-//
-// This shim is deliberate, not incidental: the OLD deployment (`kraken
-// daemon` + `k web`, no store wired) must keep working on files alone
-// until cutover to `kraken serve` — the FromFiles paths and this
-// ActiveStore branch are scheduled for deletion in a post-cutover cleanup
-// PR.
+// store.go — the jobs package's storage substrate. kraken.db is the only
+// place jobs live: every accessor (LoadJobs, WriteJobFields, ArchiveJob, ...)
+// reads and writes through ActiveStore(), which kraken serve wires exactly
+// once at startup (UseStore). A process with no store wired — a bare CLI
+// verb, the bubbletea viewer, a test that never wires one — sees no jobs,
+// and every job write refuses with errNoJobStore.
 var activeStore atomic.Pointer[store.Store]
 
-// UseStore wires the package onto a store: every accessor below switches
-// from file-backed to store-backed behavior. Also wires util.LogEvent to
+// UseStore wires the package onto a store. Also wires util.LogEvent to
 // additionally append into the store's events table (on top of, not
 // instead of, its existing JSONL file write — see the doc comment on
 // util.SetEventSink for why this stays additive) and clears any in-process
@@ -41,7 +31,7 @@ var activeStore atomic.Pointer[store.Store]
 // hasn't ticked yet).
 //
 // UseStore(nil) unwires it — the shape every store-backed test uses on
-// cleanup so it never leaks into a later, unrelated file-mode test. Passing
+// cleanup so it never leaks into a later, unrelated storeless test. Passing
 // nil here must NOT install a sink closure that captures a nil *store.Store:
 // util.LogEvent firing after that (a background goroutine mid-test-teardown,
 // or simply a later test that forgot its own wiring) would call a method on
@@ -96,9 +86,9 @@ func jobFromStoreRow(sr *store.Job, prs []store.PR) *Job {
 		Run:      int(sr.Run),
 		Rev:      sr.Rev,
 		ModTime:  time.UnixMilli(sr.UpdatedAt),
-		// L6: mirrors file mode's ParseJob-derived Err — a store-backed job
-		// whose last save didn't parse pins to "draft" in deriveState the
-		// same way an unparseable file does.
+		// L6: the editor's save stores ParseJob's Err — a job whose last save
+		// didn't parse pins to "draft" in deriveState until a later save
+		// parses clean.
 		Err: sr.Err,
 		// Load carries across whole (schema v13's four load_* columns). It has
 		// no frontmatter spelling to parse, so this conversion is the only
@@ -108,19 +98,16 @@ func jobFromStoreRow(sr *store.Job, prs []store.PR) *Job {
 		// reload.
 		Load: sr.Load,
 		// FormerSlugs carries across whole, like Load: it has no frontmatter
-		// spelling either, so a file-backed job always reads as never renamed
-		// — which is true, since renaming is a store-only verb.
+		// spelling either; renaming is its only writer.
 		FormerSlugs: sr.FormerSlugs,
 		// GoalIDs carries across whole for the same reason (schema v27's
-		// job_goals rows): no frontmatter spelling, so a file-backed job always
-		// reads as linked to nothing — which is true, since the only writers are
+		// job_goals rows): no frontmatter spelling; the only writers are
 		// store's three link verbs.
 		GoalIDs: sr.GoalIDs,
 		// The account binding carries across whole (schema v28's three
 		// account_* columns), for the same reason Load does: no frontmatter
-		// spelling, so a file-backed job always reads as unbound — which is
-		// true, since the only writers are bindAccount and the limit
-		// rescue's rebind, both store-only.
+		// spelling; the only writers are bindAccount and the limit rescue's
+		// rebind.
 		AccountSlug:  sr.AccountSlug,
 		AccountEmail: sr.AccountEmail,
 		AccountAt:    sr.AccountAt,
@@ -147,15 +134,12 @@ func loadJobFull(st *store.Store, sr *store.Job) (*Job, error) {
 	return jobFromStoreRow(sr, prs), nil
 }
 
-// loadJobsFromStore fetches every active job row (sorted by slug, matching
-// LoadJobsFromFiles' ordering contract) plus its PRs — via
-// LoadJobsWithChildren (L12), ONE transaction covering the jobs query and
-// every row's PRs, instead of the 1+N separate queries this used
+// loadJobsFromStore fetches every active job row (sorted by slug) plus its
+// PRs — via LoadJobsWithChildren (L12), ONE transaction covering the jobs
+// query and every row's PRs, instead of the 1+N separate queries this used
 // to issue (a write landing between any two of them could otherwise mix
 // state from two different moments into the loaded board). Converts each
-// row and re-runs the same post-load bookkeeping LoadJobsFromFiles
-// performs (slug-collision marking) so store-backed and
-// file-backed boards agree on Err annotations.
+// row and runs the post-load slug-collision marking (markSlugIssues).
 func loadJobsFromStore(st *store.Store) ([]*Job, error) {
 	rows, prsByID, err := st.LoadJobsWithChildren()
 	if err != nil {
@@ -172,8 +156,7 @@ func loadJobsFromStore(st *store.Store) ([]*Job, error) {
 
 // loadArchivedJobsFromStore mirrors loadJobsFromStore for the archive:
 // LoadArchivedJobsWithChildren's single-transaction snapshot (L12),
-// already ordered by archived_name, same ordering LoadArchivedJobsFromFiles
-// uses.
+// already ordered by archived_name.
 func loadArchivedJobsFromStore(st *store.Store) ([]*Job, error) {
 	rows, prsByID, err := st.LoadArchivedJobsWithChildren()
 	if err != nil {
@@ -356,8 +339,7 @@ func removeJobPRsFromStore(st *store.Store, j *Job, drop map[string]bool) (remov
 // whose bytes were never written to disk (api.UploadPath's file-based
 // lookup — still consulted alongside the DB by some callers — would find
 // nothing there). Failing before the insert means a bad slug leaves zero
-// trace in the store, matching the file-mode SaveUpload's own
-// check-before-write ordering (uploads.go).
+// trace in the store.
 func saveUploadToStore(st *store.Store, slug, ext string, data []byte) (name, path string, err error) {
 	// E13's slug check stays FIRST and keeps its own error: a slug that
 	// slugifies to nothing can never name an uploads dir, and saying so is

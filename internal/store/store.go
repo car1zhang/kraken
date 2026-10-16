@@ -44,8 +44,7 @@ type execer interface {
 }
 
 // DBPath is where kraken.db lives: ~/.kraken/kraken.db, overridable with
-// KRAKEN_DB_PATH for tests — same pattern as jobs.PlutoDir's
-// KRAKEN_PLUTO_DIR.
+// KRAKEN_DB_PATH for tests.
 func DBPath() string {
 	if p := os.Getenv("KRAKEN_DB_PATH"); p != "" {
 		return p // tests point at a temp file

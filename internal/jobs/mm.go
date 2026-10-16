@@ -174,7 +174,7 @@ func mmGit(dir string, args ...string) (string, error) {
 // must never sit behind a network call.
 func MMVerifyPass(st *store.Store, now time.Time) {
 	if st == nil {
-		return // file-mode entrypoints have no mental model to verify
+		return // no store wired (a storeless test or CLI process): no mental model to verify
 	}
 	if last := mmLastPass.Load(); last != 0 && now.UnixMilli()-last < mmVerifyInterval.Milliseconds() {
 		return

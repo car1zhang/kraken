@@ -269,16 +269,11 @@ func TestEdgeJobRepoOriginPrefixReadsTheJobsRepoNotAnother(t *testing.T) {
 	}
 }
 
-// prEdgeHook drives PrHook for a job file against a stub serve that answers
+// prEdgeHook drives PrHook for a slug against a stub serve that answers
 // every request with status + body, returning everything PrHook wrote to
 // stderr.
 func prEdgeHook(t *testing.T, slug, url string, status int, body string) string {
 	t.Helper()
-	t.Setenv("KRAKEN_PLUTO_DIR", t.TempDir())
-	src := "---\njob: " + slug + "\ntype: build\nrepo: kraken-test-nonexistent-repo-xyz\n---\n\nbody\n"
-	if err := os.WriteFile(filepath.Join(PlutoDir(), slug+".job.md"), []byte(src), 0o644); err != nil {
-		t.Fatal(err)
-	}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(status)
 		_, _ = w.Write([]byte(body))
@@ -358,17 +353,5 @@ func TestEdgePrHook200StillPrintsAttachedLine(t *testing.T) {
 	want := "pr-hook edge-200: attached " + url + " (via kraken serve)"
 	if !strings.Contains(stderr, want) {
 		t.Fatalf("stderr = %q, want it to carry %q", stderr, want)
-	}
-}
-
-func TestEdgePrHook409NeverWritesTheJobFile(t *testing.T) {
-	url := "https://github.com/carl/other/pull/13"
-	_ = prEdgeHook(t, "edge-409file", url, http.StatusConflict, `{"error":"outside"}`)
-	data, err := os.ReadFile(filepath.Join(PlutoDir(), "edge-409file.job.md"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if reparsed := ParseJob("edge-409file.job.md", data); len(reparsed.PRs) != 0 {
-		t.Fatalf("hook wrote the job file after a 409: %+v", reparsed.PRs)
 	}
 }

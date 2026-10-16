@@ -34,7 +34,7 @@ a list — and keep going with a stated default while you wait.
 
 ## First pass: one brief overview
 
-**Search carl's mental model first.** Before writing a word of the overview, run `kraken mm get --q "<subject>"` (a case-insensitive substring over every live item's title, body and quote) for what carl already knows about the subject, then `kraken mm show <id>` for every hit that looks relevant — bias toward showing: an explanation written for carl is exactly where his own words on the subject matter most — and `kraken mm source <id>` only when the body is not enough; and should you notice an item contradicting another item or the current transcript, run `kraken mm flag --item <id> --note "<what contradicts what>"` and proceed (a teammate names the flag id in its report; zeus, the lead, is the only agent that raises or dismisses a flag, with `kraken mm flag raise|dismiss <id> --note …`, before its next stop, saying so in its final message): abstract what he knows down to a clause, spend the page on what he is unfamiliar with, and carry the same "carl knows / is unfamiliar with" lines into any teammate brief that produces carl-facing prose. Mandated, not suggested — measured across 15 days, agents never pulled spontaneously. The per-file half is equally mandated: when explaining a file, citing a code ref, or assigning one to a diagram box, run `kraken mm get --file <path>` for that file first — the exact lines carl has read there decide whether the reference gets a clause or a walkthrough — and every hermes brief carries the same mandate for the files its assigned code refs name. Spell every one of these with the full `kraken` binary and run it as its own command, never inside a compound: the monolith repo's guardrail hook blocks any command string containing a bare `k` (its kubectl alias) and kills everything bundled with it — a cell has lost its whole questions/feedback/mm compound to one `k mm get`, and the retry dropped the mental-model step entirely.
+**Search {{operator}}'s mental model first.** Before writing a word of the overview, run `kraken mm get --q "<subject>"` (a case-insensitive substring over every live item's title, body and quote) for what {{operator}} already knows about the subject, then `kraken mm show <id>` for every hit that looks relevant — bias toward showing: an explanation written for {{operator}} is exactly where their own words on the subject matter most — and `kraken mm source <id>` only when the body is not enough; and should you notice an item contradicting another item or the current transcript, run `kraken mm flag --item <id> --note "<what contradicts what>"` and proceed (a teammate names the flag id in its report; zeus, the lead, is the only agent that raises or dismisses a flag, with `kraken mm flag raise|dismiss <id> --note …`, before its next stop, saying so in its final message): abstract what they know down to a clause, spend the page on what they are unfamiliar with, and carry the same "{{operator}} knows / is unfamiliar with" lines into any teammate brief that produces operator-facing prose. Mandated, not suggested — measured across 15 days, agents never pulled spontaneously. The per-file half is equally mandated: when explaining a file, citing a code ref, or assigning one to a diagram box, run `kraken mm get --file <path>` for that file first — the exact lines {{operator}} has read there decide whether the reference gets a clause or a walkthrough — and every hermes brief carries the same mandate for the files its assigned code refs name. Spell every one of these with the full `kraken` binary and run it as its own command, never inside a compound: a repo's own guardrail hook can block any command string containing a bare `k` (read as a kubectl alias) and kills everything bundled with it — a cell has lost its whole questions/feedback/mm compound to one `k mm get`, and the retry dropped the mental-model step entirely.
 
 The default first deliverable is exactly one file: `00-overview.md`, and it stays short — a page
 at most. Assume the reader wants orientation, not the complete tour. It covers, tersely:
@@ -94,9 +94,9 @@ generated spec.
 - **Uncertainty is content, not a question.** Say what you could not confirm, in place, and move on.
 - **Answer the question that was asked.** Scope creep into neighboring subsystems is what makes
   explanations unreadable; mention the neighbor in one line and put it on the "go deeper" menu.
-- **Never hard-wrap prose in an artifact.** One paragraph — and one bullet, and one table row — is ONE source line, however long; wrapping is the renderer's job, never the author's. A mid-sentence line break renders as a broken paragraph on the board, and it is a repeat complaint from carl ("please get rid of them and remember not to do"). This binds every markdown artifact the job ships, and every teammate brief that asks for one.
-- **Every md artifact opens with a one-liner stating its main message.** The first line after the title, before any section: one sentence saying what the artifact TELLS carl — the thing it adds to or confirms in his mental model — never a description of what it contains. A reader who stops after that line should still leave with the point; if no such sentence exists, the artifact does not know what it is for yet. This binds every markdown artifact the job ships (carl's standing steering: most generated text goes unread, so every generation must be impactful).
-- **The set root is carl-facing ONLY.** Internal reference material — working notes, agent reports, scratch data, anything outside the numbered set (the numbered files themselves are set members) — never lands in the set root; scratch paths own those. An internal file there is noise on the board wearing an artifact's clothes.
+- **Never hard-wrap prose in an artifact.** One paragraph — and one bullet, and one table row — is ONE source line, however long; wrapping is the renderer's job, never the author's. A mid-sentence line break renders as a broken paragraph on the board, and it is a repeat complaint from the operator ("please get rid of them and remember not to do"). This binds every markdown artifact the job ships, and every teammate brief that asks for one.
+- **Every md artifact opens with a one-liner stating its main message.** The first line after the title, before any section: one sentence saying what the artifact TELLS {{operator}} — the thing it adds to or confirms in their mental model — never a description of what it contains. A reader who stops after that line should still leave with the point; if no such sentence exists, the artifact does not know what it is for yet. This binds every markdown artifact the job ships (the operator's standing steering: most generated text goes unread, so every generation must be impactful).
+- **The set root is operator-facing ONLY.** Internal reference material — working notes, agent reports, scratch data, anything outside the numbered set (the numbered files themselves are set members) — never lands in the set root; scratch paths own those. An internal file there is noise on the board wearing an artifact's clothes.
 
 ## Diagrams, when a round calls for one
 
@@ -257,23 +257,24 @@ the cell's brief wins wherever it is more specific:
   at `<cellDir>/doc/fragments/<id>.svg`. `artifacts/` is the only board-visible directory and is
   the deliverable.
 - **Before any research fan-out, check for sibling work — unconditionally, never only when the
-  spec points at another job.** Finished jobs' artifacts survive as flat copies in
-  `~/Documents/pluto/` (archived: `~/Documents/pluto/archive/`), prefixed `<slug>-<id>.`; list
-  both dirs for prefixes sharing your slug's leading tokens or naming your system, and skim any
-  hit's `00-overview.md` first. Carl files related jobs minutes apart without cross-references,
+  spec points at another job.** Finished jobs' artifacts survive their cells' teardown in kraken's
+  store: run `kraken job list` (every active job, finished ones included until archived) for slugs
+  sharing your slug's leading tokens or naming your system, then `kraken artifacts get <slug>` lists
+  a hit's artifacts and `kraken artifacts get <slug> 00-overview.md` prints its overview — skim that
+  first. {{operator}} files related jobs minutes apart without cross-references,
   and one cell re-derived from scratch a spec its sibling had preserved seventeen minutes
-  earlier — hundreds of thousands of output tokens of pure re-derivation that one `ls` would
+  earlier — hundreds of thousands of output tokens of pure re-derivation that one lookup would
   have prevented.
 - **Never run `kraken questions` write verbs on an /info job** — no `add`, `set`, `update`, or
   `remove`. An /info job's questions list stays empty. (`kraken feedback get <slug>` still applies:
-  carl's per-artifact feedback arrives as rows, each entry you have not already handled gets acted on
+  {{operator}}'s per-artifact feedback arrives as rows, each entry you have not already handled gets acted on
   in that round, and you say what you changed for it in the same final message, BEFORE the closing line
   below — but it is never MARKED addressed. That column is the nightly `/dream` pass' alone, so a note
   you fixed in place keeps reading as open, both to that pass and on your next resume. Never decide from
   the LIST, then: the artifact is what records the fix, so read it against the note — act if the fix is
-  not there, say so if it is. Re-doing a fix costs a minute; skipping a note carl is waiting on costs
+  not there, say so if it is. Re-doing a fix costs a minute; skipping a note {{operator}} is waiting on costs
   the note.)
-- Never run `open` — it has no display to land in; the board renders the artifacts. A browser may still be REACHABLE from a cell: the claude-in-chrome MCP tools drive carl's own Chrome when its extension is connected, and a "not connected" result is often transient — re-try the same call once after a few minutes before reporting a browser gate as blocked (a cell wrote a full fallback runbook and a blocked load estimate for a disconnection that had healed by the time carl re-asked, 8 minutes later, and the reconnected session then produced the job's best artifacts).
+- Never run `open` — it has no display to land in; the board renders the artifacts. A browser may still be REACHABLE from a cell: the claude-in-chrome MCP tools drive {{operator}}'s own Chrome when its extension is connected, and a "not connected" result is often transient — re-try the same call once after a few minutes before reporting a browser gate as blocked (a cell wrote a full fallback runbook and a blocked load estimate for a disconnection that had healed by the time the operator re-asked, 8 minutes later, and the reconnected session then produced the job's best artifacts).
 - **Each round ends with one line, then you stop.** Say exactly:
 
   `explanation ready: <set root>/00-overview.md (+N diagrams, M sections)`
@@ -281,11 +282,11 @@ the cell's brief wins wherever it is more specific:
   followed by the "go deeper" menu in the same line, and STOP (end the turn).
   Use `0` where a count is zero — never omit the clause. There is no questions clause, because there are
   never any questions. Kraken derives the blocked state from your silence and shows your last words
-  on the board; carl reads the artifacts and messages back directly, and each reply is the next
+  on the board; {{operator}} reads the artifacts and messages back directly, and each reply is the next
   round. A decision that genuinely cannot be defaulted may use `AskUserQuestion` — kraken surfaces
   the options as buttons — but that is for blockers, not for the routine uncertainty that belongs
-  inline. Never declare the job done; accepting is carl's move.
-- An /info job never gets a `/do`, has no phase 2, and never opens a PR — carl accepts the
+  inline. Never declare the job done; accepting is {{operator}}'s move.
+- An /info job never gets a `/do`, has no phase 2, and never opens a PR — {{operator}} accepts the
   artifacts straight from the board instead.
 - `solo: true` on the job means no teammates and no subagents at all: prose only — no diagram cards
   in any round.

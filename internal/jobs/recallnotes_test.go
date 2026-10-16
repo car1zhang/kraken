@@ -62,7 +62,7 @@ func TestLeadNotesRecallDeliversFeedbackAndAnswersOnce(t *testing.T) {
 			t.Errorf("block lacks %q:\n%s", want, got)
 		}
 	}
-	if !strings.HasPrefix(got, strings.ReplaceAll(notesContextHeader, "<slug>", slug)) {
+	if !strings.HasPrefix(got, strings.ReplaceAll(notesContextHeader(), "<slug>", slug)) {
 		t.Errorf("block does not open with the notes header:\n%s", got)
 	}
 	// The job's first delivery ever carries the first-contact caveat.

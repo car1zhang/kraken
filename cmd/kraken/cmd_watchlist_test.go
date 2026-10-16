@@ -223,7 +223,7 @@ func TestRunWatchlistRemoveBadArgs(t *testing.T) {
 // TestWatchlist400SurfacesServerMessage: a refusal must reach the agent as
 // the server's own sentence — the whole point of the carl-owned-key 400.
 func TestWatchlist400SurfacesServerMessage(t *testing.T) {
-	const msg = "verdict is carl's, not yours — drop it"
+	const msg = "verdict is the operator's, not yours — drop it"
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusBadRequest)

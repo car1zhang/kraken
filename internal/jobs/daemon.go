@@ -3,6 +3,7 @@ package jobs
 import (
 	"encoding/json"
 	"fmt"
+	"hash/fnv"
 	"net"
 	"os"
 	"os/exec"
@@ -188,25 +189,8 @@ func daemonConflictErr(pid int) error {
 // second `kraken serve` already running makes this one refuse cleanly and
 // exit non-zero instead of silently double-running the scheduler underneath
 // a web server that came up anyway.
-//
-// L7 (reverse direction of runImport's own GuardServeStart check): also
-// refuses while a `kraken import` is mid-sweep, signaled by the
-// import_in_progress kv marker ImportAll sets for the duration of every
-// non-dry-run. Only checkable when a store is already wired (ActiveStore()
-// != nil) — true for cmd_serve's call site (serveSetup wires the store
-// before this guard runs) and harmlessly a no-op for runImport's own call
-// site (which calls this BEFORE opening any store, by design: an import
-// checking itself would be meaningless).
 func GuardServeStart() error {
-	if err := daemonGuardErr(); err != nil {
-		return err
-	}
-	if st := ActiveStore(); st != nil {
-		if v, err := st.GetKV(importInProgressKVKey); err == nil && v != "" {
-			return fmt.Errorf("kraken import is in progress (started at unix-millis %s) — wait for it to finish before starting serve", v)
-		}
-	}
-	return nil
+	return daemonGuardErr()
 }
 
 // writeDaemonStatusFile persists st to ~/.kraken/daemon.json, creating the
@@ -502,13 +486,10 @@ func RunServeTicks(opts ServeOpts) {
 	if !opts.Mirror {
 		// L7: daemon.json is written BEFORE the first tick runs, not only
 		// afterward — d.tick() is not guaranteed fast (live-cell roll call,
-		// throttled PR/usage polling, ...), and a concurrent `kraken import`
+		// throttled PR/usage polling, ...), and a second `kraken serve`
 		// starting in that window would read no daemon.json yet and (wrongly)
-		// conclude no daemon/serve is running, racing this process to write the
-		// same kraken.db. Publishing the heartbeat file first closes that
-		// window; ImportAll's own import_in_progress kv marker (checked by
-		// GuardServeStart, see below) closes the reverse direction — a
-		// `kraken serve` starting while an import is already mid-sweep.
+		// conclude no serve is running, racing this process to write the same
+		// kraken.db. Publishing the heartbeat file first closes that window.
 		writeDaemonStatusFile(st)
 	}
 	dlogEvent("info", "daemon-start", "serve ticks up (pid %d, tick %s, mirror %v)", st.PID, DaemonInterval, opts.Mirror)
@@ -682,8 +663,9 @@ func (d *daemonState) tick(mirror bool) (int, error) {
 				// resume racing the board's own Done.
 				marker := j.Teardown
 				if err := ResumeTeardown(j); err != nil {
-					dlogErr("%s: finish interrupted teardown failed: %v", j.Slug, err)
+					d.noteTeardownFailure(j, err)
 				} else {
+					d.clearTeardownFailure(j)
 					dlog("%s: finished interrupted teardown (%s)", j.Slug, marker)
 				}
 				continue
@@ -1156,8 +1138,9 @@ func (d *daemonState) tick(mirror bool) (int, error) {
 	// the archive, so the board doesn't accumulate accepted work forever.
 	// !live is the same safety net ArchiveJob itself re-checks — a job
 	// stamped done but whose cell somehow lingers is left alone here.
-	// Skipped entirely under mirror: ArchiveJob moves real pluto/archive
-	// files, which mirror must never touch on its own initiative.
+	// Skipped entirely under mirror: ArchiveJob writes the store, deletes
+	// uploads dirs and deregisters worktrees, none of which a mirror may do
+	// on its own initiative.
 	if !mirror {
 		archivedSlugs := autoArchivePass(jobs, live, now)
 		switch n := len(archivedSlugs); {
@@ -1255,6 +1238,51 @@ func (d *daemonState) gateRetry(now time.Time, rkey string, checkOnline func() b
 		return pokeDue, title, msg
 	}
 	return pokeDue, "", ""
+}
+
+// teardownFailPrefix keys the resume-teardown failure dedup in d.Notified:
+// "teardownfail:<job id>:<hash of the error text>". A teardown that keeps
+// failing on resume (an artifact the serve user cannot read, say) would
+// otherwise log one identical error row every 15s tick, forever.
+func teardownFailPrefix(j *Job) string {
+	return "teardownfail:" + strconv.FormatInt(j.ID, 10) + ":"
+}
+
+// noteTeardownFailure logs a failed resume of an interrupted teardown once
+// per job and error text — a CHANGED cause logs again — and sends one
+// notification the first time the job's teardown fails on resume, since
+// the board shows nothing but a working card with no zeus behind it.
+func (d *daemonState) noteTeardownFailure(j *Job, err error) {
+	prefix := teardownFailPrefix(j)
+	h := fnv.New64a()
+	_, _ = h.Write([]byte(err.Error()))
+	key := prefix + strconv.FormatUint(h.Sum64(), 16)
+	if d.Notified[key] != 0 {
+		return
+	}
+	first := true
+	for k := range d.Notified {
+		if strings.HasPrefix(k, prefix) {
+			first = false
+			delete(d.Notified, k)
+		}
+	}
+	d.Notified[key] = time.Now().Unix()
+	dlogErr("%s: finish interrupted teardown failed: %v", j.Slug, err)
+	if first {
+		notifyFn("kraken ⚠ "+j.Slug, "teardown failed and is being retried: "+err.Error())
+	}
+}
+
+// clearTeardownFailure drops the job's resume-teardown failure dedup, so a
+// later failure is logged and notified afresh.
+func (d *daemonState) clearTeardownFailure(j *Job) {
+	prefix := teardownFailPrefix(j)
+	for k := range d.Notified {
+		if strings.HasPrefix(k, prefix) {
+			delete(d.Notified, k)
+		}
+	}
 }
 
 // clearOffline resets the offline dedup bookkeeping (the flag itself, the
@@ -1497,16 +1525,20 @@ func mergeBumpWanted(j *Job, live map[string]bool) bool {
 // stopped at a gate for a LATER PR must not read "continue" as that gate
 // opening.
 func mergeBumpMessage(url string) string {
-	return prWatchPrefix + " " + url + " has MERGED into its base branch. That branch is finished: do not push to it, re-run its checks, or report it as awaiting checks or review. Any further change starts on a fresh branch recycled off origin/main (the pr skill's recycle step). If this PR completed the job's work, say so in your closing message and stop; if not, continue and open the follow-up from the recycled branch. Any gate you are stopped at still holds — this notice does not answer it."
+	return prWatchPrefix() + " " + url + " has MERGED into its base branch. That branch is finished: do not push to it, re-run its checks, or report it as awaiting checks or review. Any further change starts on a fresh branch recycled off origin/main (the pr skill's recycle step). If this PR completed the job's work, say so in your closing message and stop; if not, continue and open the follow-up from the recycled branch. Any gate you are stopped at still holds — this notice does not answer it."
 }
 
 // prWatchPrefix opens EVERY message the PR watcher types into a pane. It is
 // one symbol on purpose: the four bump variants below each inline it into
 // their format string, and a reword that reached three of four would leave
-// one machine notice reading as carl again — the hazard the prefix exists
-// to close. The tests pin the wire text per-variant, independently of this
-// constant, so a drift there still fails.
-const prWatchPrefix = "[kraken pr-watch — automated notice, not a reply from carl]"
+// one machine notice reading as the operator again — the hazard the prefix
+// exists to close. The tests pin the wire text per-variant, independently of
+// this function, so a drift there still fails. The name is Operator(), and
+// every variant concatenates the prefix OUTSIDE its format string, so a name
+// carrying a '%' is printed literally rather than read as a verb.
+func prWatchPrefix() string {
+	return "[kraken pr-watch — automated notice, not a reply from " + Operator() + "]"
+}
 
 // watchDecision is watchPRs' pure core: given one open PR's freshly fetched
 // state and its currently recorded watermarks, decides whether to bump zeus'
@@ -1558,8 +1590,8 @@ func watchDecision(url string, f prWatchFetch, lastCommentAt, bumpedSHA, conflic
 			// one finding only a bot notice where carl's review sat inline.
 			// The PR number is substituted from the url ({owner}/{repo} gh
 			// expands itself; a bare N it does not).
-			parts = append(parts, fmt.Sprintf(
-				prWatchPrefix+" %s got a new comment or review — read it with `gh pr view %s --comments`, and if nothing is there check the INLINE review comments (`gh api repos/{owner}/{repo}/pulls/%s/comments`, which `--comments` does not show); address it (reply or fix), and continue",
+			parts = append(parts, prWatchPrefix()+" "+fmt.Sprintf(
+				"%s got a new comment or review — read it with `gh pr view %s --comments`, and if nothing is there check the INLINE review comments (`gh api repos/{owner}/{repo}/pulls/%s/comments`, which `--comments` does not show); address it (reply or fix), and continue",
 				url, url, url[strings.LastIndex(url, "/")+1:]))
 			newLastCommentAt = f.LastCommentAt
 		}
@@ -1581,8 +1613,8 @@ func watchDecision(url string, f prWatchFetch, lastCommentAt, bumpedSHA, conflic
 		// "fix it" left no branch for a red inherited from origin/main: two
 		// sibling cells each adopted the same cross-team breakage as their
 		// own work the same evening, duplicating a fix hours apart.
-		parts = append(parts, fmt.Sprintf(
-			prWatchPrefix+" %s has failing CI on %s (at least %s) — run `gh pr checks %s` to see the full current rollup and fix it. If the failure reproduces on pristine origin/main it is inherited, not yours: note that on the PR and report it in your pane instead of adopting the cross-team fix",
+		parts = append(parts, prWatchPrefix()+" "+fmt.Sprintf(
+			"%s has failing CI on %s (at least %s) — run `gh pr checks %s` to see the full current rollup and fix it. If the failure reproduces on pristine origin/main it is inherited, not yours: note that on the PR and report it in your pane instead of adopting the cross-team fix",
 			url, f.HeadSHA, strings.Join(f.FailingChecks, ", "), url))
 		newBumpedSHA = f.HeadSHA
 	case firstSight && f.HeadSHA != "":
@@ -1605,12 +1637,12 @@ func watchDecision(url string, f prWatchFetch, lastCommentAt, bumpedSHA, conflic
 		// force needed, every time) — a canned bump the recipient must
 		// overrule on every occurrence is a hazard, not advice.
 		if f.BaseRef != "" {
-			parts = append(parts, fmt.Sprintf(
-				prWatchPrefix+" %s has merge conflicts with %s — get the branch mergeable: git fetch origin, then merge origin/%s into your branch (a merge commit is fine and needs no force-push; only rebase if the branch has no pushed history worth keeping), resolve the conflicts, verify the build still passes, push, and continue",
+			parts = append(parts, prWatchPrefix()+" "+fmt.Sprintf(
+				"%s has merge conflicts with %s — get the branch mergeable: git fetch origin, then merge origin/%s into your branch (a merge commit is fine and needs no force-push; only rebase if the branch has no pushed history worth keeping), resolve the conflicts, verify the build still passes, push, and continue",
 				url, f.BaseRef, f.BaseRef))
 		} else {
-			parts = append(parts, fmt.Sprintf(
-				prWatchPrefix+" %s has merge conflicts with its base branch — get the branch mergeable: fetch, merge the base branch in (a merge commit is fine and needs no force-push; only rebase if the branch has no pushed history worth keeping), resolve the conflicts, verify the build still passes, push, and continue",
+			parts = append(parts, prWatchPrefix()+" "+fmt.Sprintf(
+				"%s has merge conflicts with its base branch — get the branch mergeable: fetch, merge the base branch in (a merge commit is fine and needs no force-push; only rebase if the branch has no pushed history worth keeping), resolve the conflicts, verify the build still passes, push, and continue",
 				url))
 		}
 		newConflictState = "conflicting"
@@ -1626,17 +1658,14 @@ func watchDecision(url string, f prWatchFetch, lastCommentAt, bumpedSHA, conflic
 // for new comments/reviews, failing CI, and merge conflicts, bumping zeus'
 // pane once per new comment-or-review timestamp, once per newly-failing head
 // SHA, and once per fresh clean→conflicting mergeability transition
-// (combined into a single message when several land in the same pass). Job-file
-// watermark writes only happen after a successful SendToPeer — a failed send
+// (combined into a single message when several land in the same pass).
+// Watermark writes only happen after a successful SendToPeer — a failed send
 // leaves the watermark untouched so the next pass retries the same bump,
-// matching trackPRs' "state on disk only advances on a confirmed write"
+// matching trackPRs' "stored state only advances on a confirmed write"
 // discipline. Skipped entirely (no gh calls) for jobs that aren't
-// prTrackable (same Err eligibility as the tracker's own gate): an
-// unparseable job must never have its prs: block rewritten, since
-// updatePRWatermark's patchPRs pass rewrites the WHOLE block from a fresh
-// re-parse and would silently and permanently drop any record a hand-edit
-// typo currently makes unparseable, clearing the error in the process), jobs
-// with no live cell, no working/blocked state, or no recorded open PR —
+// prTrackable (same Err eligibility as the tracker's own gate: an
+// unparseable job's PR list is whatever a strict parse salvaged, not the
+// job's record), jobs with no live cell, no working/blocked state, or no recorded open PR —
 // with the tracker running every 15s tick, this gate is what bounds gh
 // traffic to jobs that could plausibly need a bump right now.
 func (d *daemonState) watchPRs(j *Job, all []*core.Peer, live map[string]bool) {

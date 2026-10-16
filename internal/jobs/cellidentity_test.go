@@ -1,7 +1,6 @@
 package jobs
 
 import (
-	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -24,6 +23,7 @@ func helperCatalog(id int64) *Job {
 
 func TestCellNamesSeparateTwoGenerationsOfOneSlug(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
+	t.Setenv("KRAKEN_BRANCH_PREFIX", "")
 	old, cur := helperCatalog(36), helperCatalog(111)
 
 	pairs := []struct {
@@ -35,8 +35,7 @@ func TestCellNamesSeparateTwoGenerationsOfOneSlug(t *testing.T) {
 		{"CellWorktree", CellWorktree(old, "/x/monolith"), CellWorktree(cur, "/x/monolith"), "helper-catalog-36"},
 		{"CellArtifacts", CellArtifacts(old), CellArtifacts(cur), "helper-catalog-36"},
 		{"CellSession", CellSession(old), CellSession(cur), "cell-helper-catalog-36"},
-		{"CellBranch", CellBranch(old), CellBranch(cur), "carl/helper-catalog-36"},
-		{"PlutoArtifactPrefix", PlutoArtifactPrefix(old), PlutoArtifactPrefix(cur), "helper-catalog-36."},
+		{"CellBranch", CellBranch(old), CellBranch(cur), "kraken/helper-catalog-36"},
 		{"UploadsDir", UploadsDir(old.Slug, old.ID), UploadsDir(cur.Slug, cur.ID), "helper-catalog-36"},
 	}
 	for _, p := range pairs {
@@ -59,10 +58,9 @@ func TestCellNameLeadsWithTheSlug(t *testing.T) {
 	}
 }
 
-// A *Job parsed from a .job.md file carries ID == 0 — the id is minted by the
-// store and never appears in the file — and LoadJobs falls back to
-// LoadJobsFromFiles whenever no store is wired. Creating or destroying a cell
-// from such a job must fail loudly rather than silently operating on
+// A *Job built by ParseJob carries ID == 0 — the id is minted by the store
+// and never appears in job text. Creating or destroying a cell from such a
+// job must fail loudly rather than silently operating on
 // ~/.kraken/cells/<slug>-0.
 func TestCheckCellIdentityRefusesUnusableJobs(t *testing.T) {
 	cases := []struct {
@@ -114,6 +112,7 @@ func TestUploadsDirRefusesToNameTheRoot(t *testing.T) {
 // dropping the legacy names makes it silently detach them from their cards.
 func TestBranchFamilyKeepsLegacyBareSlugBranches(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
+	t.Setenv("KRAKEN_BRANCH_PREFIX", "")
 	j := &Job{Slug: "helper-catalog", ID: 111, Run: 3}
 	fam := branchFamily(j)
 
@@ -126,7 +125,7 @@ func TestBranchFamilyKeepsLegacyBareSlugBranches(t *testing.T) {
 		}
 	}
 	// Only branchForRun writes, and it always emits the id form.
-	if got := CellBranch(j); got != "carl/helper-catalog-111-r3" {
+	if got := CellBranch(j); got != "kraken/helper-catalog-111-r3" {
 		t.Errorf("CellBranch = %q, want the id form", got)
 	}
 }
@@ -146,93 +145,6 @@ func TestLegacyCellPathsAreTheBareSlug(t *testing.T) {
 	}
 	if legacyCellDir(j) == cellDir(j) {
 		t.Error("legacy and current cell dirs are identical — the legacy base is pointless")
-	}
-}
-
-// --- cutover ---
-
-func TestPlanCutoverPrefersTheLongestPrefix(t *testing.T) {
-	// Prefixes are not self-delimiting: with jobs "foo" and "foo-2" both
-	// present, "foo-2.plan.md" matches BOTH "foo." (name "2.plan.md") and
-	// "foo-2.". Picking the shorter one files one job's artifact under
-	// another job's id — the exact class of bug this change ends.
-	byPrefix := map[string]*Job{
-		"foo.":   {Slug: "foo", ID: 7},
-		"foo-2.": {Slug: "foo-2", ID: 9},
-	}
-	j, prefix := longestPrefixMatch("foo-2.plan.md", byPrefix)
-	if j == nil || j.ID != 9 {
-		t.Fatalf("matched %+v via %q, want the foo-2 job (id 9)", j, prefix)
-	}
-	if prefix != "foo-2." {
-		t.Errorf("prefix = %q, want %q", prefix, "foo-2.")
-	}
-}
-
-func TestIsPlutoDayNote(t *testing.T) {
-	// pluto's daily notes share the directory with flat artifact copies and
-	// must never be renamed.
-	for _, name := range []string{"7151.md", "0.md", "99999.md"} {
-		if !isPlutoDayNote(name) {
-			t.Errorf("%q should be recognised as a pluto day note", name)
-		}
-	}
-	for _, name := range []string{
-		"helper-catalog.plan.md", "asr-latency.90-build-report.md", ".md", "12a.md", "7151.txt", "7151",
-	} {
-		if isPlutoDayNote(name) {
-			t.Errorf("%q must NOT be treated as a pluto day note", name)
-		}
-	}
-}
-
-func TestRunCutoverRefusesToOverwrite(t *testing.T) {
-	dir := t.TempDir()
-	write := func(name string) {
-		if err := os.WriteFile(filepath.Join(dir, name), []byte(name), 0o644); err != nil {
-			t.Fatal(err)
-		}
-	}
-	write("helper-catalog.plan.md")
-	write("helper-catalog-36.plan.md") // target already taken
-
-	plan := &CutoverPlan{Renames: []CutoverRename{
-		{Dir: dir, From: "helper-catalog.plan.md", To: "helper-catalog-36.plan.md", Job: "helper-catalog"},
-	}}
-	done, problems := RunCutover(plan)
-	if done != 0 {
-		t.Errorf("done = %d, want 0 — an existing target means two files claim one name", done)
-	}
-	if len(problems) != 1 || !strings.Contains(problems[0], "already exists") {
-		t.Errorf("problems = %v, want one 'already exists' report", problems)
-	}
-	// The source must still be there: refusing means leaving both alone.
-	if _, err := os.Stat(filepath.Join(dir, "helper-catalog.plan.md")); err != nil {
-		t.Errorf("the source was lost on a refused rename: %v", err)
-	}
-}
-
-func TestRunCutoverRenamesAndIsRerunnable(t *testing.T) {
-	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, "helper-catalog.plan.md"), []byte("x"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	plan := &CutoverPlan{Renames: []CutoverRename{
-		{Dir: dir, From: "helper-catalog.plan.md", To: "helper-catalog-36.plan.md", Job: "helper-catalog"},
-	}}
-	done, problems := RunCutover(plan)
-	if done != 1 || len(problems) != 0 {
-		t.Fatalf("done=%d problems=%v, want 1 and none", done, problems)
-	}
-	if _, err := os.Stat(filepath.Join(dir, "helper-catalog-36.plan.md")); err != nil {
-		t.Errorf("renamed file missing: %v", err)
-	}
-	// Re-running the same plan finds the source gone; it must report that
-	// rather than claiming success, since a partial migration must never be
-	// mistaken for a finished one.
-	done2, problems2 := RunCutover(plan)
-	if done2 != 0 || len(problems2) != 1 {
-		t.Errorf("second run: done=%d problems=%v, want 0 and one problem", done2, problems2)
 	}
 }
 

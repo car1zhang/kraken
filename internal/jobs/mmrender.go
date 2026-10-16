@@ -96,13 +96,16 @@ type MMRender struct {
 }
 
 // mmIndexHeader opens index.md and the universal file: what the lines are, and
-// the two verbs that drill down from one.
-const mmIndexHeader = "Carl's mental model — one line per item he has committed, each title a claim he holds.\n" +
-	"Open an item with `kraken mm show <id>`; see where it came from with `kraken mm source <id>`.\n"
+// the two verbs that drill down from one. Whose model it is comes from
+// Operator().
+func mmIndexHeader() string {
+	return operatorPossessive() + " mental model — one line per item they have committed, each title a claim they hold.\n" +
+		"Open an item with `kraken mm show <id>`; see where it came from with `kraken mm source <id>`.\n"
+}
 
-// RenderMMFiles renders items into rules files. PURE and deterministic: items
-// are ordered by id, maps are emitted in sorted order, so identical input is
-// byte-identical output.
+// RenderMMFiles renders items into rules files. Deterministic: items are
+// ordered by id, maps are emitted in sorted order, so identical input (and
+// the same Operator(), which the index header names) is byte-identical output.
 //
 // Only live items render, and only items that say where they apply: a
 // universal item, or a repo item naming its repo. The pre-capture items
@@ -159,11 +162,11 @@ func RenderMMFiles(items []store.MMItem) MMRender {
 		for name, f := range files {
 			rendered[mmRulesDir+"/"+name] = mmFrontmatter(f.dirs) + f.lines.String()
 		}
-		rendered[mmRulesDir+"/index.md"] = mmIndexHeader + index[repo].String()
+		rendered[mmRulesDir+"/index.md"] = mmIndexHeader() + index[repo].String()
 		out.Repos[repo] = rendered
 	}
 	if universal.Len() > 0 {
-		out.Universal = mmIndexHeader + universal.String()
+		out.Universal = mmIndexHeader() + universal.String()
 	}
 	return out
 }
