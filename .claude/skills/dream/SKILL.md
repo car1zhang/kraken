@@ -28,10 +28,11 @@ Three outputs, three destinations. Getting this wrong is the only mistake here t
 **Findings never enter git.** Not in a commit, not in a PR body, not in a file. The repo gets the
 change; the machine keeps the reasoning. This is structural rather than a redaction rule, which is
 why it is reliable: a commit contains a diff, and that is all it ever contains. The rule has a
-TIMING half: a commit message and a PR body are composed AFTER the last CLEAR, from the reviewed
-text — a ship script that carries message strings written before the review round ships whatever
-claim that round then ruled false, in the one line a reader of `git log` meets first, and the PR
-title being corrected later does not reach the commit.
+TIMING half: a commit message and a PR body are composed after the last review verdict reads
+CLEAR (the /do review round the cell brief specifies), from the reviewed text — a ship script that
+carries message strings written before that round ships whatever claim the round then ruled false,
+in the one line a reader of `git log` meets first, and correcting the PR title later does not
+rewrite the branch's commit messages.
 
 The leak this rule keeps failing at is **evidence used as illustration**: you hold all the
 evidence, you write the diff, and when a change needs an example string the most natural example
