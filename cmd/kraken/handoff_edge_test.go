@@ -142,28 +142,38 @@ func TestEdgeHandoffHookAbsentSourceIsCompact(t *testing.T) {
 	}
 }
 
-func TestEdgeHandoffHookSilentOnMissingDir(t *testing.T) {
-	dir := filepath.Join(t.TempDir(), "does-not-exist")
-	if out := edgeRunHandoff(t, edgeCompactPayload, dir); out != "" {
-		t.Fatalf("missing dir wrote %q, want nothing", out)
+// edgeRulesOnly asserts a compaction with no doc to list still injects the
+// standing rules — and ONLY them: no listing header, no doc path, no closing
+// sentence (the closing belongs to the listing). The pre-rules contract was
+// "no docs → nothing"; the rules exist for exactly the no-doc compaction (an
+// idle auto-compaction has no handoff doc), so silence is no longer right.
+func edgeRulesOnly(t *testing.T, out, what string) {
+	t.Helper()
+	if out == "" {
+		t.Fatalf("%s wrote nothing, want the standing rules", what)
+	}
+	ctx := edgeHandoffContext(t, out)
+	if ctx != handoffStandingRules {
+		t.Fatalf("%s context = %q, want exactly the standing rules", what, ctx)
 	}
 }
 
-func TestEdgeHandoffHookSilentOnEmptyDirArg(t *testing.T) {
+func TestEdgeHandoffHookRulesOnlyOnMissingDir(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "does-not-exist")
+	edgeRulesOnly(t, edgeRunHandoff(t, edgeCompactPayload, dir), "missing dir")
+}
+
+func TestEdgeHandoffHookRulesOnlyOnEmptyDirArg(t *testing.T) {
 	// cmdHandoffHook resolves the dir from --artifacts; an absent flag leaves
 	// it "", which names no existing directory.
-	if out := edgeRunHandoff(t, edgeCompactPayload, ""); out != "" {
-		t.Fatalf("empty artifactsDir wrote %q, want nothing", out)
-	}
+	edgeRulesOnly(t, edgeRunHandoff(t, edgeCompactPayload, ""), "empty artifactsDir")
 }
 
-func TestEdgeHandoffHookSilentOnEmptyDir(t *testing.T) {
-	if out := edgeRunHandoff(t, edgeCompactPayload, t.TempDir()); out != "" {
-		t.Fatalf("empty dir wrote %q, want nothing", out)
-	}
+func TestEdgeHandoffHookRulesOnlyOnEmptyDir(t *testing.T) {
+	edgeRulesOnly(t, edgeRunHandoff(t, edgeCompactPayload, t.TempDir()), "empty dir")
 }
 
-func TestEdgeHandoffHookSilentOnUnrelatedFiles(t *testing.T) {
+func TestEdgeHandoffHookRulesOnlyOnUnrelatedFiles(t *testing.T) {
 	dir := t.TempDir()
 	for _, name := range []string{
 		"00-overview.md",
@@ -176,17 +186,13 @@ func TestEdgeHandoffHookSilentOnUnrelatedFiles(t *testing.T) {
 	} {
 		edgeWriteAged(t, dir, name, time.Minute)
 	}
-	if out := edgeRunHandoff(t, edgeCompactPayload, dir); out != "" {
-		t.Fatalf("dir with no 80-handoff*.md wrote %q, want nothing", out)
-	}
+	edgeRulesOnly(t, edgeRunHandoff(t, edgeCompactPayload, dir), "dir with no 80-handoff*.md")
 }
 
 // A dir argument that is a regular FILE is a dir that does not exist.
-func TestEdgeHandoffHookSilentWhenDirIsAFile(t *testing.T) {
+func TestEdgeHandoffHookRulesOnlyWhenDirIsAFile(t *testing.T) {
 	f := edgeWriteAged(t, t.TempDir(), "80-handoff.md", 0)
-	if out := edgeRunHandoff(t, edgeCompactPayload, f); out != "" {
-		t.Fatalf("a file passed as artifactsDir wrote %q, want nothing", out)
-	}
+	edgeRulesOnly(t, edgeRunHandoff(t, edgeCompactPayload, f), "a file passed as artifactsDir")
 }
 
 // --- runHandoffHook: two docs ----------------------------------------------
