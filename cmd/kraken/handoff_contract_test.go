@@ -116,6 +116,50 @@ func TestLogicHandoffHookOneDoc(t *testing.T) {
 	}
 }
 
+// The standing rules open the context on every compaction and the doc listing
+// follows them, so the rules are read first and the listing still ends in its
+// frozen closing sentence.
+func TestLogicHandoffHookRulesPrecedeTheListing(t *testing.T) {
+	dir := t.TempDir()
+	doc := logicWriteDoc(t, dir, "80-handoff.md", 3*time.Minute)
+
+	out := logicDecodeHandoff(t, logicRunHandoff(t, `{"session_id":"sess-1","source":"compact"}`, dir))
+	text := out.HookSpecificOutput.AdditionalContext
+	if !strings.HasPrefix(text, handoffStandingRules) {
+		t.Errorf("additionalContext %q does not open with the standing rules", text)
+	}
+	if strings.Index(text, handoffStandingRules) > strings.Index(text, doc) {
+		t.Errorf("additionalContext %q lists the doc before the rules", text)
+	}
+	if !strings.HasSuffix(text, logicHandoffSentence) {
+		t.Errorf("additionalContext %q does not end with the frozen sentence", text)
+	}
+}
+
+// A compaction with no handoff doc — an idle auto-compaction's shape — still
+// injects the rules, and nothing else: no listing header and no closing
+// sentence, since neither has a doc to be about. The two rules are named
+// because they are the ones a compaction summary drops: the Edit-tool route
+// for repo files, and spawning teammates from the worktree root.
+func TestLogicHandoffHookNoDocStillRestatesTheRules(t *testing.T) {
+	out := logicDecodeHandoff(t, logicRunHandoff(t, `{"session_id":"sess-1","source":"compact"}`, t.TempDir()))
+	if got := out.HookSpecificOutput.HookEventName; got != "SessionStart" {
+		t.Errorf("hookEventName = %q, want SessionStart", got)
+	}
+	text := out.HookSpecificOutput.AdditionalContext
+	if text != handoffStandingRules {
+		t.Errorf("additionalContext = %q, want exactly the standing rules", text)
+	}
+	for _, want := range []string{"Edit or Write tool", "never through a Bash heredoc", "worktree root"} {
+		if !strings.Contains(text, want) {
+			t.Errorf("standing rules %q do not name %q", text, want)
+		}
+	}
+	if strings.Contains(text, logicHandoffSentence) {
+		t.Errorf("no-doc context %q carries the listing's closing sentence", text)
+	}
+}
+
 // A doc written at `now` is `written 0m ago` (the contract's own example).
 func TestLogicHandoffHookZeroMinuteAge(t *testing.T) {
 	dir := t.TempDir()
