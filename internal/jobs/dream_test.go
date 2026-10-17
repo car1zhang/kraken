@@ -486,6 +486,42 @@ func TestDreamJobContentParsesClean(t *testing.T) {
 	}
 }
 
+// The generated job text states only what the skill cannot know — the
+// window's edges, the ceiling being the reader's to apply — and points at the
+// skill for everything else. It must not paraphrase the skill's own material
+// back into the body: TestZeusBriefDoesNotRestateSkills pins the same line
+// for the crew brief, and the body drifted the same way with nothing pinning
+// it. Each banned token sits on a single line of the old restated paragraph,
+// so a plain Contains catches its return despite the template's hard-wrapped
+// lines; the kept tokens are the body-only half — material no skill states —
+// which the restatement ban would otherwise wave a whole-paragraph delete
+// past, the gap TestSkillsOwnTheCellContract closes for the brief.
+func TestDreamJobContentDoesNotRestateSkills(t *testing.T) {
+	now := dreamNoon()
+	for _, clamped := range []bool{false, true} {
+		content := dreamJobContent("dream-"+today(now), now.Add(-24*time.Hour).UnixMilli(), now.UnixMilli(), clamped)
+		for _, restated := range []string{
+			"The skill names the two seams", // the pointer-then-paraphrase opener
+			"read exactly once",             // the skill's once-is-the-rule property
+			"drops the oldest evidence",     // seam 1, the clamp
+			"between this job's creation",   // seam 2, the creation-vs-sweep note
+			"had to rediscover",             // the dated history parenthetical
+		} {
+			if strings.Contains(content, restated) {
+				t.Errorf("generated dream job text (clamped=%v) restates skill material %q:\n%s", clamped, restated, content)
+			}
+		}
+		for _, kept := range []string{
+			"apply the ceiling yourself", // the mine verbs take --since alone
+			"Do not widen the window",    // the sweep's one standing prohibition
+		} {
+			if !strings.Contains(content, kept) {
+				t.Errorf("generated dream job text (clamped=%v) dropped the body-only rule %q:\n%s", clamped, kept, content)
+			}
+		}
+	}
+}
+
 // --- the session side of the gate ---
 
 // anyTranscriptSince is the cheap "was there a session?" check: it stats
