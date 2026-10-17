@@ -437,6 +437,17 @@ agent was instructed, and a sentence is cheaper to get wrong than a function. La
 allowed and sometimes right — a subagent definition, a brief, orchestration, real Go — and they
 carry the same obligations any other change would: tests, and the review the cell's brief specifies.
 
+That review closes by the do skill's rules, and the one a dream lead keeps breaking is its
+post-verdict rule: an edit you make AFTER a reviewer's CLEAR reopens every dimension it
+touches when it touches behaviour — a skill sentence, a brief, and a prompt string in Go are all
+behaviour — and that includes the fix that very reviewer offered as optional, so the re-review
+goes to every reviewer whose dimension the edit touches, the one that cleared included, not only
+to the one still blocking. Applying a cleared reviewer's own suggestion and then re-dispatching
+only the still-blocking variant is the shape this paragraph exists to stop. A fix round that
+re-reviews only the flagging variant is for fixes to that variant's findings alone — a change
+that also takes another reviewer's suggestion is that reviewer's re-review too — and a report
+that says the tree held still inside every round has to be true of the round that closed last.
+
 Two hard fences: never `.claude/settings.json` (per-cell, gitignored, kraken-written — never a
 durable improvement), and never anything outside the kraken repo.
 
