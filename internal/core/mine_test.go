@@ -1142,6 +1142,11 @@ func TestRedactSecrets(t *testing.T) {
 		{"use sk-learn and deriveState()", "use sk-learn and deriveState()"},
 		{"branch sk-abcdefghijklmno stays", "branch sk-abcdefghijklmno stays"},
 		{"key sk-abcdefghijklmnop goes", "key sk-ab…[redacted] goes"},
+		{"stripe sk_live_Qz7mNv3xTp9RkL2wHb5cYd end", "stripe sk_li…[redacted] end"},
+		{"voice sk_car_AbCdEfGhIjKlMnOpQrStUv end", "voice sk_ca…[redacted] end"},
+		{"import sk_learn and sk_value_x stay", "import sk_learn and sk_value_x stay"},
+		{"short sk_test_abcdefghijklmno stays", "short sk_test_abcdefghijklmno stays"},
+		{"floor sk_test_abcdefghijklmnop goes", "floor sk_te…[redacted] goes"},
 	}
 	for _, c := range cases {
 		if got := redactSecrets(c.in); got != c.want {

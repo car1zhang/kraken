@@ -1049,10 +1049,27 @@ func writeUserish(out *bytes.Buffer, text string) {
 const mineTextCap = 64 * 1024
 
 // secretRE matches the token shapes that are unambiguous at a glance —
-// vendor-prefixed credentials (Slack xox*, OpenAI/Anthropic sk-*, GitHub
-// gh?_/github_pat_, AWS AKIA) plus JWTs (two or more dot-separated base64url
-// parts; the header arm's floor is 10 so a compact `{"alg":"HS256"}` header
-// still matches). Deliberately prefix-keyed and nothing looser: a generic
+// vendor-prefixed credentials (Slack xox*, OpenAI/Anthropic sk-*, the
+// underscore-spelled `sk_<vendor>_` family — Stripe's sk_live_/sk_test_,
+// Cartesia's sk_car_ — GitHub gh?_/github_pat_, AWS AKIA) plus JWTs (two or
+// more dot-separated base64url parts; the header arm's floor is 10 so a
+// compact `{"alg":"HS256"}` header still matches). The underscore arm
+// demands a vendor segment between two underscores and then a single
+// unbroken ≥16-char alphanumeric body, so `sk_learn` (no second underscore)
+// and `sk_value_x` (a one-char body) never match — while a snake_case name
+// whose LAST segment is that long (`sk_conn_maxidleconnectionsallowed`)
+// does, an accepted cost: such names are rare in prose and the alternative
+// is a key of exactly that shape surviving. The body is alphanumeric ONLY,
+// narrower than the `sk-` arm's, and the vendor segment lowercase: every
+// key of this family measured so far (Stripe's published shape, the one
+// Cartesia key that prompted the arm — 22 alphanumeric runes) is exactly
+// that, and admitting `_` into the body would make every snake_case
+// `sk_<a>_<b>_<c>` identifier over 16 characters a match, which is the
+// prose-redacting looseness the next sentence refuses. A vendor that mints
+// a `-` or `_` inside its body gets the tail after the separator emitted —
+// or, with the separator inside the first 16 body characters, never matches
+// at all — until this arm is widened for it. Deliberately prefix-keyed and
+// nothing looser: a generic
 // `key=<long value>` rule would redact code and prose that merely talk about
 // tokens, and a reader of the reduced view needs those discussions intact.
 // The Slack charset carries the full base64 alphabet plus `%`: a `d` cookie
@@ -1061,13 +1078,13 @@ const mineTextCap = 64 * 1024
 // one and the cookie's high-entropy tail was emitted verbatim (or, with one
 // inside the first 8 chars, the cookie never matched at all). None of the
 // three can START a match, so admitting them only extends redaction.
-var secretRE = regexp.MustCompile(`\b(?:xox[a-z]-[A-Za-z0-9%+/=.\-]{8,}|sk-[A-Za-z0-9_\-]{16,}|gh[pousr]_[A-Za-z0-9]{16,}|github_pat_[A-Za-z0-9_]{16,}|AKIA[0-9A-Z]{16}|eyJ[A-Za-z0-9_\-]{10,}\.[A-Za-z0-9_\-.]{20,})`)
+var secretRE = regexp.MustCompile(`\b(?:xox[a-z]-[A-Za-z0-9%+/=.\-]{8,}|sk-[A-Za-z0-9_\-]{16,}|sk_[a-z0-9]+_[A-Za-z0-9]{16,}|gh[pousr]_[A-Za-z0-9]{16,}|github_pat_[A-Za-z0-9_]{16,}|AKIA[0-9A-Z]{16}|eyJ[A-Za-z0-9_\-]{10,}\.[A-Za-z0-9_\-.]{20,})`)
 
 // mineRedactKeep is how many runes of a matched credential the marker keeps:
 // long enough to show the vendor prefix (`xoxc-`, `AKIAI`), short enough
 // that no shape's value bytes survive — every arm's minimum match is 13+
 // runes, so the slice is always in bounds. (For the longer prefixes —
-// `github_pat_`, `sk-ant-` — five runes keeps less than the full kind; the
+// `github_pat_`, `sk-ant-`, `sk_live_` — five runes keeps less than the full kind; the
 // marker identifies that a credential was here, not which kind.)
 const mineRedactKeep = 5
 
