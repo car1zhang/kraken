@@ -1050,18 +1050,20 @@ const mineTextCap = 64 * 1024
 
 // secretRE matches the token shapes that are unambiguous at a glance —
 // vendor-prefixed credentials (Slack xox*, OpenAI/Anthropic sk-*, GitHub
-// gh?_/github_pat_, AWS AKIA) plus JWTs (two or more dot-separated base64url
-// parts; the header arm's floor is 10 so a compact `{"alg":"HS256"}` header
-// still matches). Deliberately prefix-keyed and nothing looser: a generic
-// `key=<long value>` rule would redact code and prose that merely talk about
-// tokens, and a reader of the reduced view needs those discussions intact.
-// The Slack charset carries the full base64 alphabet plus `%`: a `d` cookie
-// pasted from DevTools arrives DECODED, so `+`, `/` and `=` appear literally
-// in the body — with them outside the class, the match stopped at the first
-// one and the cookie's high-entropy tail was emitted verbatim (or, with one
-// inside the first 8 chars, the cookie never matched at all). None of the
-// three can START a match, so admitting them only extends redaction.
-var secretRE = regexp.MustCompile(`\b(?:xox[a-z]-[A-Za-z0-9%+/=.\-]{8,}|sk-[A-Za-z0-9_\-]{16,}|gh[pousr]_[A-Za-z0-9]{16,}|github_pat_[A-Za-z0-9_]{16,}|AKIA[0-9A-Z]{16}|eyJ[A-Za-z0-9_\-]{10,}\.[A-Za-z0-9_\-.]{20,})`)
+// gh?_/github_pat_, AWS AKIA, Supabase sb_secret_) plus JWTs (two or more
+// dot-separated base64url parts; the header arm's floor is 10 so a compact
+// `{"alg":"HS256"}` header still matches). Deliberately prefix-keyed and
+// nothing looser: a generic `key=<long value>` rule would redact code and
+// prose that merely talk about tokens, and a reader of the reduced view
+// needs those discussions intact.
+// The Slack and Supabase charsets carry the full base64 alphabet plus `%`: a
+// `d` cookie pasted from DevTools arrives DECODED, so `+`, `/` and `=` appear
+// literally in the body — with them outside the class, the match stopped at
+// the first one and the cookie's high-entropy tail was emitted verbatim (or,
+// with one inside the first 8 chars, the cookie never matched at all), and a
+// base64 secret key ends the same way early. None of the three can START a
+// match, so admitting them only extends redaction.
+var secretRE = regexp.MustCompile(`\b(?:xox[a-z]-[A-Za-z0-9%+/=.\-]{8,}|sk-[A-Za-z0-9_\-]{16,}|gh[pousr]_[A-Za-z0-9]{16,}|github_pat_[A-Za-z0-9_]{16,}|AKIA[0-9A-Z]{16}|sb_secret_[A-Za-z0-9%+/=_\-]{10,}|eyJ[A-Za-z0-9_\-]{10,}\.[A-Za-z0-9_\-.]{20,})`)
 
 // mineRedactKeep is how many runes of a matched credential the marker keeps:
 // long enough to show the vendor prefix (`xoxc-`, `AKIAI`), short enough
