@@ -74,6 +74,11 @@ struct JobFormView: View {
     @State private var base = ""
     @State private var solo = false
     @State private var model = ""
+    // Which coding agent the cell's zeus runs — "codex", or "" for the claude
+    // default (the wire's own spelling, so the save payload never invents a
+    // "claude" value the server would have to normalize). Form-writable,
+    // unlike color: it rides saveform and autosaves like model does.
+    @State private var agent = ""
     // The job's color as last known from the server — "" means none. Only
     // ever seeds JobColorStrip (which owns the picking, the POST and its own
     // error row); the form's own save payload never carries it.
@@ -239,15 +244,37 @@ struct JobFormView: View {
                     .kField()
                     .listRowBackground(Color.clear)
             }
+            kSection("Agent") {
+                // The empty tag IS claude — see the `agent` state above. A
+                // segmented control rather than a toggle so a third agent is
+                // one more segment, not a redesign.
+                Picker("Agent", selection: $agent) {
+                    Text("claude").tag("")
+                    Text("codex").tag("codex")
+                }
+                .pickerStyle(.segmented)
+                .listRowBackground(Color.clear)
+            }
             kSection("Model") {
-                TextField("model for zeus (optional, default = claude-fable-5-1; codex cells: gpt-6-astra)", text: $model)
+                TextField(
+                    agent == "codex"
+                        ? "model for zeus (optional, default = gpt-6-astra)"
+                        : "model for zeus (optional, default = claude-fable-5-1)",
+                    text: $model
+                )
                     .autocorrectionDisabled()
                     .textInputAutocapitalization(.never)
                     .font(.data(13))
                     .kField()
                     .listRowBackground(Color.clear)
                 // suggestion chips, same pattern as the repo suggestions above
-                suggestionChips(["fable", "opus", "sonnet", "haiku"]) { model = $0 }
+                // The chips follow the agent, as the web editor's datalist
+                // does; the typed value stays free-form wire text either way.
+                if agent == "codex" {
+                    suggestionChips(["gpt-6-astra", "gpt-5.6-sol", "gpt-5.6-luna", "gpt-5.6-terra", "gpt-5.5"]) { model = $0 }
+                } else {
+                    suggestionChips(["fable", "opus", "sonnet", "haiku"]) { model = $0 }
+                }
             }
             kSection("Color") {
                 // Deliberately NOT gated on `editable` and deliberately not
@@ -598,7 +625,7 @@ struct JobFormView: View {
     // saveform's full-replace payload at all, it posts to its own endpoint on
     // tap, so including it would fire a pointless (and cell-gated) form save.
     private var autosaveSnapshotKey: String {
-        "\(repo)|\(base)|\(model)|\(solo)|\(spec)"
+        "\(repo)|\(base)|\(model)|\(agent)|\(solo)|\(spec)"
     }
 
     private func load() async {
@@ -610,6 +637,11 @@ struct JobFormView: View {
             base = f.base
             solo = f.solo
             model = f.model ?? ""
+            // ParseJob keeps a hand-authored `agent: claude` as the literal
+            // word, so the GET can say "claude" where the picker's tag is "".
+            // Folded here so the control shows the claude segment selected;
+            // the next save then writes "", which the server reads as claude.
+            agent = (f.agent ?? "") == "claude" ? "" : (f.agent ?? "")
             color = f.color ?? ""
             spec = f.spec
             mtime = f.mtime
@@ -690,6 +722,7 @@ struct JobFormView: View {
         let req = JobFormSaveRequest(
             slug: currentSlug, repo: repo, base: base, solo: solo,
             model: model.trimmingCharacters(in: .whitespaces),
+            agent: agent,
             spec: spec, mtime: 0
         )
         do {
