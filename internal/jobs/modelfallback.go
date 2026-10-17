@@ -231,6 +231,17 @@ func fableFallbackDecide(hit LimitHit, agentModel string, acct *core.AccountUsag
 	return fallbackSwitch
 }
 
+// holdsInRetryGap is whether a tick inside the retry gap after a refused send
+// keeps the hit (true) or hands it to the ordinary chain (false). A refused
+// /model hands it on. Every verdict about a process kraken has already
+// switched holds it, because that process is on Opus and rotation would kill
+// it: an owed continue prompt, an expired prompt window, and a re-delivery to
+// absorb. Each is acted on at the first tick past the gap. A refused prompt
+// re-stamps the gap on every attempt, so an expiry can land inside it.
+func holdsInRetryGap(v fallbackVerdict) bool {
+	return v == fallbackPrompt || v == fallbackExpire || v == fallbackAbsorb
+}
+
 // modelPercent is the account's usage of one model window, the highest when
 // the snapshot carries more than one row of that name, 0 when it carries none.
 // A row whose window has already reset is ignored: a stale poll can keep
@@ -364,12 +375,9 @@ func (d *daemonState) tryFableFallback(hitKey, label, agentModel string, email f
 	}
 	last := readLastFallback(hitKey)
 	verdict := fableFallbackDecide(hit, agentModel, fallbackAccount(email()), last, p.PID, p.SessionID, now)
-	// Inside the retry gap a refused /model hands the tick to the ordinary
-	// chain as before, while a refused continue prompt HOLDS it: that process
-	// is already on Opus, and rotating would kill it.
 	retryKey := "fable-retry:" + hitKey
 	if at := d.Poked[retryKey]; at != 0 && now.Sub(time.Unix(at, 0)) < fableFallbackRetryGap {
-		return verdict == fallbackPrompt
+		return holdsInRetryGap(verdict)
 	}
 	resolve := func(outcome string) {
 		hit.HandledAt = now.Unix()
