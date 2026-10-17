@@ -91,7 +91,16 @@ generated spec.
   is jumpable into source. `file.go:120` style is ideal.
 - **Verification over assertion.** For a key behavior, say how to SEE it: the test that covers it,
   the log line, the command to run, the fixture that encodes it. One pointer beats a paragraph.
-- **Uncertainty is content, not a question.** Say what you could not confirm, in place, and move on.
+- **Assert a negative from the layer that decides it, not the layer you searched.** "The request
+  never arrived", "no code references this key", "these numbers have the feature on" are claims
+  about a specific deciding layer — the edge that rejects before your application logs (an absence
+  in app logs is evidence about your handler, not about the network), the per-entity override that
+  outranks the routing list you read, the cwd your grep actually ran in. Before an answer asserts
+  one, query that layer and say so; an unverified causal ordering stated in a parenthesis reads as
+  established fact and becomes the reader's next wrong question. Two cells in one night shipped
+  confident wrong negatives — a vendor-blame diagnosis from application-log absence, and "dialable"
+  numbers from a routing list whose per-number override was never read — each costing hours to
+  unwind, one costing a live call into a customer tenant.
 - **Answer the question that was asked.** Scope creep into neighboring subsystems is what makes
   explanations unreadable; mention the neighbor in one line and put it on the "go deeper" menu.
 - **Never hard-wrap prose in an artifact.** One paragraph — and one bullet, and one table row — is ONE source line, however long; wrapping is the renderer's job, never the author's. A mid-sentence line break renders as a broken paragraph on the board, and it is a repeat complaint from the operator ("please get rid of them and remember not to do"). This binds every markdown artifact the job ships, and every teammate brief that asks for one.
