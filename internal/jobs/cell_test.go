@@ -227,7 +227,17 @@ func TestMergeHookSettings(t *testing.T) {
 			// and the PreToolUse bash-lint group, folded in for the same
 			// reason — TestMergeHookSettingsInstallsBashLint owns its
 			// semantics; this table is about pr-hook merging
-			wantHooks["PreToolUse"] = []any{entry("kraken bash-lint")}
+			// and the spawn-guard group beside it (matcher Agent), whose
+			// semantics the slice's own tests own
+			wantHooks["PreToolUse"] = []any{
+				entry("kraken bash-lint"),
+				map[string]any{
+					"matcher": "Agent",
+					"hooks": []any{
+						map[string]any{"type": "command", "command": "kraken spawn-guard"},
+					},
+				},
+			}
 			c.want["hooks"] = wantHooks
 			var gotParsed map[string]any
 			if err := json.Unmarshal(got, &gotParsed); err != nil {
