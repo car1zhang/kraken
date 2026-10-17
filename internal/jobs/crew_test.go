@@ -77,8 +77,13 @@ func TestZeusBrief(t *testing.T) {
 		".claude/skills/info/SKILL.md", ".claude/skills/aim/SKILL.md",
 		"LIGHTER than /aim", "zero questions rows",
 		// the gates themselves are cell policy: /do opens phase 2, and an
-		// explanation job never gets one
-		"'/do'", "never gets a '/do'", "never opens a PR",
+		// explanation job usually ends at its explanation — but a /do or a
+		// plain-language change request after it opens the same gate, while a
+		// question about the explanation is answered, not built
+		"'/do'", "usually ends at its explanation", "opens no PR",
+		"plain-language instruction to change", "is that gate opening all the same",
+		"run Phase 2 from the overview plus that message",
+		"A question about the explanation is answered, never built",
 		// phase 2 delegates to the do skill, then the pr skill — the latter
 		// read by path, since /pr is a same-named-shadow risk
 		"Phase 2", ".claude/skills/do/SKILL.md", ".claude/skills/pr/SKILL.md",

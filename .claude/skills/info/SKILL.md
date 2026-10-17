@@ -26,7 +26,9 @@ real path you read. Never pad the overview to look thorough; the research is wha
 trustworthy, not the word count.
 
 **2. No open questions. Ever.** /info never writes an open-questions record — not `kraken
-questions add/set/update` in a cell, not `questions.yaml` standalone. Questions belong to /aim.
+questions add/set/update` in a cell, not `questions.yaml` standalone. Questions belong to /aim
+(and, in a kraken cell, to a phase 2 {{operator}} opens after the explanation, which is `/do`'s and
+follows its rules).
 Uncertainty that survives research is one honest line inside the artifact it belongs to ("X is
 not confirmed: <what you'd need to check>"), never a row and never a batch of prompts. If one
 thing genuinely blocks the whole explanation, ask it directly in chat — a single question, not
@@ -265,8 +267,10 @@ the cell's brief wins wherever it is more specific:
   and one cell re-derived from scratch a spec its sibling had preserved seventeen minutes
   earlier — hundreds of thousands of output tokens of pure re-derivation that one lookup would
   have prevented.
-- **Never run `kraken questions` write verbs on an /info job** — no `add`, `set`, `update`, or
-  `remove`. An /info job's questions list stays empty. (`kraken feedback get <slug>` still applies:
+- **Never run `kraken questions` write verbs during the explanation rounds** — no `add`, `set`,
+  `update`, or `remove`; the list stays empty while the job is explaining. Once a `/do` or a change
+  instruction opens phase 2 (below), `.claude/skills/do/SKILL.md` governs, its question rows
+  included. (`kraken feedback get <slug>` still applies:
   {{operator}}'s per-artifact feedback arrives as rows, each entry you have not already handled gets acted on
   in that round, and you say what you changed for it in the same final message, BEFORE the closing line
   below — but it is never MARKED addressed. That column is the nightly `/dream` pass' alone, so a note
@@ -286,7 +290,12 @@ the cell's brief wins wherever it is more specific:
   round. A decision that genuinely cannot be defaulted may use `AskUserQuestion` — kraken surfaces
   the options as buttons — but that is for blockers, not for the routine uncertainty that belongs
   inline. Never declare the job done; accepting is {{operator}}'s move.
-- An /info job never gets a `/do`, has no phase 2, and never opens a PR — {{operator}} accepts the
-  artifacts straight from the board instead.
+- An /info job usually ends at its explanation and opens no PR — {{operator}} accepts the
+  artifacts straight from the board instead. A `/do`, or a plain-language instruction to change
+  what the explanation described, sent in your pane, is the same gate opening: read
+  `.claude/skills/do/SKILL.md` by path and run phase 2 from the overview plus that message, contract
+  and crew included. A question about the explanation ("can we…?", "do we…?") is
+  answered with an offer, never built — while a direct ask to make the change ("change X to Y",
+  "can you make it Y") is the instruction.
 - `solo: true` on the job means no teammates and no subagents at all: prose only — no diagram cards
   in any round.
