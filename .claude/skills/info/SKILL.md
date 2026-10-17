@@ -5,6 +5,8 @@ description: "KRAKEN-LEVEL copy (repo-owned, materialized into cell worktrees). 
 
 # Info — Explain An Existing System
 
+> Read this file WHOLE — with the Read tool, or a plain `cat` with no `head`. Its cell contract, `## Inside A Kraken Cell`, sits in the file's back half, and a `head -N` read drops exactly that: a lead that read the first 200 lines of a 291-line skill broke every rule in the section it never saw.
+
 > **Kraken-level copy** — loaded from `.claude/skills/info/` in this worktree. If the harness
 > header above says `Base directory ... ~/.claude/skills/info`, the personal copy shadowed
 > this one (personal beats project on a name collision).

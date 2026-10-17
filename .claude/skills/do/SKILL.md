@@ -5,6 +5,8 @@ description: "Implement the system described by an /aim artifact set produced ea
 
 # Do — Implement An Artifact Set
 
+> Read this file WHOLE — with the Read tool, or a plain `cat` with no `head`. Its cell contract, `## Inside A Kraken Cell`, sits in the file's back half, and a `head -N` read drops exactly that: a lead that read the first 200 lines of a 291-line skill broke every rule in the section it never saw.
+
 Take the artifact set produced by [[aim]] earlier in this conversation — `00-overview.md`, its diagram cards, and its section docs — and implement it. The set is the source of truth for scope, components, constraints, and testing. Before writing code, resolve any `P0` entries in the set's open-questions record with the user; after the code is verified, write `90-build-report.md` — the brief record of what shipped and where reality diverged from the plan.
 
 ## Preconditions
