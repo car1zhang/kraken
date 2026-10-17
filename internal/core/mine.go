@@ -289,8 +289,11 @@ type mineRecord struct {
 
 // mineBlock covers both content-block shapes a message's content array can
 // hold — a tool_use ({type,id,name,input}) or a tool_result
-// ({type,tool_use_id,is_error}) — plus the plain text part both roles use.
-// Fields absent from whichever shape a block actually is decode to zero.
+// ({type,tool_use_id,is_error,content}) — plus the plain text part both
+// roles use. Fields absent from whichever shape a block actually is decode
+// to zero. Content is raw because a tool_result's payload is either a bare
+// string or its own array of text blocks, and the one reader (cwdResetPath)
+// wants only a trailer line out of it.
 type mineBlock struct {
 	Type      string          `json:"type"`
 	ID        string          `json:"id"`
@@ -299,6 +302,7 @@ type mineBlock struct {
 	ToolUseID string          `json:"tool_use_id"`
 	IsError   bool            `json:"is_error"`
 	Text      string          `json:"text"`
+	Content   json.RawMessage `json:"content"`
 }
 
 // interruptPrefix is the harness artifact a user turn opens with when the
@@ -789,6 +793,14 @@ type reducer struct {
 	// midTurnSeen on purpose — see queuedAlready for the measured
 	// over-suppression a shared set caused.
 	delivered map[string]struct{}
+	// lastCwd is the cwd-reset marker's emit-on-change state: the path the
+	// last emitted marker carried. Unconditional emission repeated one
+	// identical line up to 161 times in a session (measured pre-anchor:
+	// 96.8% of marker-bearing sessions carry exactly ONE distinct path —
+	// 100% under the shipped final-line anchor — and the repeats cost up to
+	// half a session's reduced bytes); the first occurrence and every
+	// transition carry all the information.
+	lastCwd string
 }
 
 func (r *reducer) line(out *bytes.Buffer, line []byte, since int64) {
@@ -858,7 +870,22 @@ func (r *reducer) line(out *bytes.Buffer, line []byte, since int64) {
 				writeUserish(out, b.Text)
 			}
 			// tool_result blocks are the dropped mass — the call above
-			// already named what was attempted.
+			// already named what was attempted — except the harness's own
+			// cwd-reset trailer, without which whether a `cd` took effect
+			// is unanswerable from the reduced view (scouts have built, and
+			// briefs have shipped, a false "cwd persists" premise from the
+			// gap). Emit-on-change via lastCwd, and worded as what it IS —
+			// the shell's state AFTER the command — because
+			// shellBoilerplateRE strips the leading `cd <target> &&` off
+			// 95% of the paired [tool] lines, so a marker reading as "the
+			// command's cwd" would name the one nearby path the command did
+			// NOT run in.
+			if b.Type == "tool_result" {
+				if p := cwdResetPath(b.Content); p != "" && p != r.lastCwd {
+					r.lastCwd = p
+					out.WriteString("[cd did not persist; shell reset to " + TruncateOneLine(redactSecrets(p), 200) + "]\n\n")
+				}
+			}
 		}
 		return
 	}
@@ -939,6 +966,64 @@ func (r *reducer) midTurn(out *bytes.Buffer, text string) {
 		return
 	}
 	writeReduced(out, "[user mid-turn]", t)
+}
+
+// cwdResetMarker is the trailer the harness appends to a Bash tool_result
+// whose command changed the working directory: the shell was reset
+// afterwards, so the cd did NOT carry into the next call. It is the one
+// line in the dropped tool-result mass that answers "did that cd take
+// effect", which is why the reducer surfaces it while still dropping the
+// rest of the result.
+const cwdResetMarker = "Shell cwd was reset to "
+
+// cwdModifiedNotice is the harness's own follow-on notice ("[This command
+// modified N file(s) …]"), the one thing it appends AFTER a cwd-reset
+// trailer — skipped when anchoring, so those trailers still count.
+const cwdModifiedNotice = "[This command modified "
+
+// cwdResetPath returns the reset-target path when a tool_result payload
+// ENDS with the harness's cwd-reset trailer, else "". The payload is either
+// a bare JSON string or an array of text blocks; both are read. Final-line
+// only, deliberately: the harness appends the trailer at the end of the
+// result, and a body that merely QUOTES the phrase mid-stream — a Read of
+// this very file, a grep over transcripts, a dream report — must not mint a
+// marker. Measured corpus-wide: 8,744 of 8,875 phrase-bearing payloads
+// anchor — 9 of them only via the notice skip below, real trailers the
+// harness followed with its modified-files notice. Of the 131 declines,
+// 115 are genuine quotes and 16 are real trailers CONCATENATED onto a
+// final output line that ended without a newline — indistinguishable in
+// shape from a quote, declined by design, and silence is just the
+// pre-feature state.
+func cwdResetPath(content json.RawMessage) string {
+	var text string
+	var s string
+	if err := json.Unmarshal(content, &s); err == nil {
+		text = s
+	} else {
+		var b strings.Builder
+		for _, blk := range mineBlocks(content) {
+			if blk.Type == "text" {
+				b.WriteString(blk.Text)
+				b.WriteByte('\n')
+			}
+		}
+		text = b.String()
+	}
+	for {
+		text = strings.TrimRight(text, " \t\n")
+		last := text
+		if i := strings.LastIndexByte(text, '\n'); i >= 0 {
+			last = text[i+1:]
+		}
+		if strings.HasPrefix(last, cwdModifiedNotice) {
+			text = text[:len(text)-len(last)]
+			continue
+		}
+		if !strings.HasPrefix(last, cwdResetMarker) {
+			return ""
+		}
+		return strings.TrimSpace(last[len(cwdResetMarker):])
+	}
 }
 
 // ReduceJSONLBytes reduces a JSONL span already in memory, per reducer.line's
@@ -1072,10 +1157,11 @@ var secretRE = regexp.MustCompile(`\b(?:xox[a-z]-[A-Za-z0-9%+/=.\-]{8,}|sk-[A-Za
 const mineRedactKeep = 5
 
 // redactSecrets replaces each credential-shaped token with its leading
-// mineRedactKeep runes plus a redaction marker. It runs at both readers'
-// emission points — writeReduced and callSignature (via mineInputSummaryN)
-// for the reduced view, and callIdentity (same path) for the digest's
-// RepeatedCalls keys. Those are the digest's only transcript-derived free
+// mineRedactKeep runes plus a redaction marker. It runs at every emission
+// point — writeReduced and callSignature (via mineInputSummaryN) for the
+// reduced view, callIdentity (same path) for the digest's RepeatedCalls
+// keys, and the reduced view's cwd-reset marker, whose path line is built
+// outside writeReduced. Those are the digest's only transcript-derived free
 // text apart from AgentName, which is deliberately NOT routed through here:
 // an agentName is a name kraken or Claude Code mints (`zeus-<slug>`,
 // `athena-logic`), never user-pasted text, so it carries no credential

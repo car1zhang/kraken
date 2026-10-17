@@ -824,6 +824,87 @@ func TestReduceTranscript(t *testing.T) {
 	t.Logf("reduction: %d -> %d bytes (%.1f%%)", len(raw), len(out), 100*float64(len(out))/float64(len(raw)))
 }
 
+// TestReduceTranscriptEmitsCwdResetMarker: tool results are the dropped
+// mass, except the harness's own "Shell cwd was reset to …" trailer — the
+// one result line that says whether a `cd` took effect. Dropping it left
+// write-location and cwd-persistence unanswerable from the reduced view,
+// and scouts built a false "cwd persists" premise from the gap. Three rules
+// pinned here beyond bare emission, each answering a measured defect: the
+// trailer counts only on the payload's FINAL line (a body that merely
+// quotes the phrase mid-stream — a Read of mine.go, a grep over transcripts
+// — minted 36 bogus markers corpus-wide); an unchanged path is emitted once
+// (one identical line repeated up to 161 times in real sessions, up to half
+// a session's reduced bytes); and the wording says what the path IS — the
+// shell's post-command state — since the paired [tool] line usually has its
+// `cd <target> &&` stripped by shellBoilerplateRE, and a marker reading as
+// "the command's cwd" would name the one path the command did not run in.
+// Both payload shapes (bare string and text-block array) are covered.
+func TestReduceTranscriptEmitsCwdResetMarker(t *testing.T) {
+	projects := mineHome(t)
+	now := time.Now().UnixMilli()
+	since := now - int64(time.Hour/time.Millisecond)
+
+	path := mineWrite(t, projects, "-Users-carl-Developer-monolith", "sess.jsonl",
+		mineUser(t, now-5000, "run it"),
+		mineAssistant(t, now-4000, "claude-opus-5",
+			mineToolUse("t1", "Bash", map[string]any{"command": "cd /tmp/probe && ls"}),
+		),
+		mineUser(t, now-3900, []any{mineToolResult("t1", false, "RESULT-BODY-NOISE\nShell cwd was reset to /Users/carl/work/wt-demo")}),
+		// Same path again: emit-on-change suppresses the repeat.
+		mineAssistant(t, now-3850, "claude-opus-5",
+			mineToolUse("t1b", "Bash", map[string]any{"command": "cd /tmp/probe && pwd"}),
+		),
+		mineUser(t, now-3840, []any{mineToolResult("t1b", false, "REPEAT-NOISE\nShell cwd was reset to /Users/carl/work/wt-demo")}),
+		mineAssistant(t, now-3800, "claude-opus-5",
+			mineToolUse("t2", "Bash", map[string]any{"command": "ls"}),
+		),
+		mineUser(t, now-3700, []any{mineToolResult("t2", false, "PLAIN-RESULT-NOISE with no trailer")}),
+		// The phrase QUOTED mid-body, not a trailer: no marker.
+		mineAssistant(t, now-3650, "claude-opus-5",
+			mineToolUse("t2b", "Bash", map[string]any{"command": "grep -r 'Shell cwd' notes"}),
+		),
+		mineUser(t, now-3640, []any{mineToolResult("t2b", false, "notes:Shell cwd was reset to /QUOTED-NOT-A-TRAILER\ntrailing output line")}),
+		// A path CHANGE, in the text-block payload shape: emits again.
+		mineAssistant(t, now-3600, "claude-opus-5",
+			mineToolUse("t3", "Bash", map[string]any{"command": "cd /tmp/other && pwd"}),
+		),
+		mineUser(t, now-3500, []any{map[string]any{"type": "tool_result", "tool_use_id": "t3", "is_error": false,
+			"content": []any{mineText("BLOCK-RESULT-NOISE\nShell cwd was reset to /Users/carl/work/wt-blocks")}}}),
+		// A real trailer followed by the harness's own modified-files notice
+		// (the one thing it appends after a trailer): still anchors.
+		mineAssistant(t, now-3400, "claude-opus-5",
+			mineToolUse("t4", "Bash", map[string]any{"command": "cd /tmp/third && ruff format x.py"}),
+		),
+		mineUser(t, now-3300, []any{mineToolResult("t4", false, "NOTICE-NOISE reformatted\nShell cwd was reset to /Users/carl/work/wt-notice\n[This command modified 1 file you've previously read: x.py. Call Read before editing.]")}),
+	)
+
+	out, err := ReduceTranscript(path, since)
+	if err != nil {
+		t.Fatalf("ReduceTranscript: %v", err)
+	}
+	got := string(out)
+	for _, want := range []string{
+		"[cd did not persist; shell reset to /Users/carl/work/wt-demo]",
+		"[cd did not persist; shell reset to /Users/carl/work/wt-blocks]",
+		"[cd did not persist; shell reset to /Users/carl/work/wt-notice]",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("reduced output missing %q:\n%s", want, got)
+		}
+	}
+	if n := strings.Count(got, "/Users/carl/work/wt-demo"); n != 1 {
+		t.Errorf("unchanged path emitted %d times, want 1:\n%s", n, got)
+	}
+	if strings.Contains(got, "QUOTED-NOT-A-TRAILER") {
+		t.Errorf("mid-body quote of the trailer phrase minted a marker:\n%s", got)
+	}
+	for _, unwanted := range []string{"RESULT-BODY-NOISE", "REPEAT-NOISE", "PLAIN-RESULT-NOISE", "BLOCK-RESULT-NOISE", "NOTICE-NOISE"} {
+		if strings.Contains(got, unwanted) {
+			t.Errorf("reduced output leaked result body %q", unwanted)
+		}
+	}
+}
+
 // TestReduceTranscriptEmitsMidTurnSteers: a message typed while a turn runs
 // never becomes a `user` record — it is stored as a `queue-operation`
 // (enqueue) or an `attachment` carrying a `queued_command` — and the reducer
