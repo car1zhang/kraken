@@ -143,7 +143,7 @@ func TestLogicMergeHookSettingsAddsSessionStart(t *testing.T) {
 	}
 	want := map[string]any{
 		"PostToolUse":  []any{logicGroup("Bash", "kraken pr-hook foo")},
-		"PreToolUse":   []any{logicGroup("Bash", "kraken bash-lint")},
+		"PreToolUse":   []any{logicGroup("Bash", "kraken bash-lint"), logicGroup("Agent", "kraken spawn-guard")},
 		"StopFailure":  []any{logicGroup("rate_limit", "kraken limit-hook foo")},
 		"SessionStart": []any{logicGroup("compact", "kraken handoff-hook foo --artifacts "+logicArtifacts)},
 	}

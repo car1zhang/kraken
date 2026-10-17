@@ -226,6 +226,21 @@ func cmdBashLint() {
 	}
 }
 
+// --- spawn-guard ---
+
+// cmdSpawnGuard is bash-lint's sibling for the Agent tool: a PreToolUse hook
+// (jobs.SpawnGuardStdin does the work) that refuses a teammate spawn made
+// while the shell sits outside the worktree root, which Claude Code hands the
+// hook as CLAUDE_PROJECT_DIR. Same protocol — exit 2 with the reason on
+// stderr blocks; everything else exits 0 silently — and kept out of usage()
+// with the rest of the hook family.
+func cmdSpawnGuard() {
+	if msg, block := jobs.SpawnGuardStdin(os.Stdin, os.Getenv("CLAUDE_PROJECT_DIR")); block {
+		fmt.Fprintln(os.Stderr, msg)
+		os.Exit(2)
+	}
+}
+
 // --- k logevent ---
 
 // cmdLogEvent appends one entry to the unified event log — plumbing for
