@@ -26,7 +26,8 @@ import (
 // NEVER open kraken.db directly: only kraken serve writes it (single-writer
 // rule), so every op here is exactly one HTTP round trip.
 
-// qfHTTPTimeout bounds every questions/feedback proxy call: these run
+// qfHTTPTimeout is the default deadline for every proxy call (`cell submit`
+// overrides it — cmd_cell.go's cellSubmitHTTPTimeout): these run
 // synchronously inside a zeus tool turn, so a dead kraken serve must fail
 // fast rather than hang the agent waiting on a dead connection — same
 // reasoning as prhook.go's prAttachHTTPTimeout, just a little more generous
@@ -91,7 +92,16 @@ func qfUnreachableError(err error) error {
 // and inviting the reader to start a second `kraken serve` (a second DB
 // writer) to "fix" it, which is never safe.
 func qfTimeoutError(err error) error {
-	return fmt.Errorf("kraken serve did not respond within %s at %s — the request may have completed server-side; re-read with `get` before retrying rather than assuming it failed: %w", qfHTTPTimeout, jobs.ServeBaseURL(), err)
+	return qfTimeoutErrorAfter(qfHTTPTimeout, err)
+}
+
+// qfTimeoutErrorAfter is qfTimeoutError for a call that ran under its own
+// deadline rather than qfHTTPTimeout — the message names the deadline that
+// actually expired, so a reader never sees "within 5s" on a call that was
+// given 90. It wraps err exactly once: runCellSubmit unwraps one level to
+// replace this sentence with its own, and its test pins that depth.
+func qfTimeoutErrorAfter(timeout time.Duration, err error) error {
+	return fmt.Errorf("kraken serve did not respond within %s at %s — the request may have completed server-side; re-read with `get` before retrying rather than assuming it failed: %w", timeout, jobs.ServeBaseURL(), err)
 }
 
 // qfIsTimeout reports whether err is a client-side deadline expiry
@@ -134,6 +144,17 @@ func qfGet(path string) ([]byte, error) {
 // serve's base URL plus path — same success/failure contract as qfGet, plus
 // a local qfMaxBodyBytes check before the request is ever sent.
 func qfPost(path string, reqBody any) ([]byte, error) {
+	return qfPostWithTimeout(path, reqBody, qfHTTPTimeout)
+}
+
+// qfPostWithTimeout is qfPost under a caller-chosen deadline. qfHTTPTimeout
+// is sized for a row write behind serve's sqlite writer; a route that does
+// real work inside the request — `cell submit`, whose POST /api/queue runs
+// the whole cell start synchronously (cmd_cell.go's cellSubmitHTTPTimeout)
+// — needs its own, and a timeout that fires on a request still succeeding
+// server-side reports a failure for a success. The expiry message names the
+// deadline that actually applied.
+func qfPostWithTimeout(path string, reqBody any, timeout time.Duration) ([]byte, error) {
 	buf, err := json.Marshal(reqBody)
 	if err != nil {
 		return nil, fmt.Errorf("encode request: %w", err)
@@ -141,11 +162,11 @@ func qfPost(path string, reqBody any) ([]byte, error) {
 	if len(buf) > qfMaxBodyBytes {
 		return nil, fmt.Errorf("request body is %d bytes, over kraken serve's %d-byte limit — split it into smaller ops (e.g. multiple `add` calls instead of one big `set`) rather than resending the same body", len(buf), qfMaxBodyBytes)
 	}
-	client := http.Client{Timeout: qfHTTPTimeout}
+	client := http.Client{Timeout: timeout}
 	resp, err := client.Post(jobs.ServeBaseURL()+path, "application/json", bytes.NewReader(buf))
 	if err != nil {
 		if qfIsTimeout(err) {
-			return nil, qfTimeoutError(err)
+			return nil, qfTimeoutErrorAfter(timeout, err)
 		}
 		return nil, qfUnreachableError(err)
 	}
