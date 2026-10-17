@@ -1061,12 +1061,33 @@ const mineTextCap = 64 * 1024
 // one and the cookie's high-entropy tail was emitted verbatim (or, with one
 // inside the first 8 chars, the cookie never matched at all). None of the
 // three can START a match, so admitting them only extends redaction.
-var secretRE = regexp.MustCompile(`\b(?:xox[a-z]-[A-Za-z0-9%+/=.\-]{8,}|sk-[A-Za-z0-9_\-]{16,}|gh[pousr]_[A-Za-z0-9]{16,}|github_pat_[A-Za-z0-9_]{16,}|AKIA[0-9A-Z]{16}|eyJ[A-Za-z0-9_\-]{10,}\.[A-Za-z0-9_\-.]{20,})`)
+// The dotted-pair arm is the one structural (non-prefix) shape admitted: an
+// 8-rune alnum key id, a dot, then a 32-44-rune alnum secret — the
+// `<id>.<secret>` form Baseten-family API keys take, measured leaking
+// through this scrubber verbatim (2026-09-01: a live key rode 11 transcript
+// records and 10 command lines unredacted, because every arm here was
+// prefix-keyed). RE2 has no lookahead to demand mixed case or non-hex, so
+// the lengths are banded tight and both ends anchored on \b — and shapes
+// INSIDE the band are over-redacted on purpose: an `<8-hex>.<full-sha>`
+// pair, an 8-rune segment before a 32-40-rune contenthash or CamelCase
+// namespace member all match, because excluding them (all-hex, say) would
+// also excuse an all-hex secret, and a scrubber's cheap direction is over-
+// redaction — one masked token in a reduced view, not lost meaning
+// (measured corpus-wide: exactly one such false positive in emission-
+// reachable records, a TypeScript namespace chain). The band's own cliffs
+// are deliberate too, and silent: a `_` anywhere in the secret half — or a
+// `-` inside its first 32 runes — misses entirely (a later `-` merely
+// shortens the match), and a suffix one rune outside the 32-44 band misses
+// the same way. The price of the tight shape; both directions are pinned
+// in TestRedactSecrets.
+var secretRE = regexp.MustCompile(`\b(?:xox[a-z]-[A-Za-z0-9%+/=.\-]{8,}|sk-[A-Za-z0-9_\-]{16,}|gh[pousr]_[A-Za-z0-9]{16,}|github_pat_[A-Za-z0-9_]{16,}|AKIA[0-9A-Z]{16}|eyJ[A-Za-z0-9_\-]{10,}\.[A-Za-z0-9_\-.]{20,}|[A-Za-z0-9]{8}\.[A-Za-z0-9]{32,44}\b)`)
 
 // mineRedactKeep is how many runes of a matched credential the marker keeps:
 // long enough to show the vendor prefix (`xoxc-`, `AKIAI`), short enough
 // that no shape's value bytes survive — every arm's minimum match is 13+
-// runes, so the slice is always in bounds. (For the longer prefixes —
+// runes (the prefix-less dotted arm's is 41, and its kept 5 runes are key-id
+// bytes, never the secret half past the dot), so the slice is always in
+// bounds. (For the longer prefixes —
 // `github_pat_`, `sk-ant-` — five runes keeps less than the full kind; the
 // marker identifies that a credential was here, not which kind.)
 const mineRedactKeep = 5
