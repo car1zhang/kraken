@@ -39,6 +39,16 @@ paragraph while writing the rule against it, and was again saved only by its sty
 Every example string in a diff is INVENTED — a made-up name, a made-up ask — and if a real
 detail from tonight's evidence would make the example clearer, that is precisely the sign it
 must not be there: the real thing belongs in `00-dream-report.md`, the side that never travels.
+A test fixture is an example string too, and it is where the rule now fails: a fix for an incident
+is tested with the incident — a timestamp precise to the second, a job id from the live range, the
+thread id the hook delivered — because those are the values on the screen when the test is written.
+One pass did exactly that, its style reviewer graded it should-fix against a brief that said
+BLOCKING, the fix round swapped two of the three literals, and the third merged. Fixtures take the
+repo's existing test values, zero values, or an invented value of the right shape on reserved
+ground (`time.Date(2026, 1, 2, 3, 4, 5, …)`, the id the package's other tests already use,
+`user@example.com`), never a value that identifies tonight's evidence, and the style reviewer's
+brief gives the evidence gate one grade: BLOCKING, with no borderline category — a lead cannot be
+asked to tell "close enough to the incident" from "the incident" in the middle of a night pass.
 
 The corollary is freeing — because the local side never travels, the report and a watched fact can
 hold the real thing: actual quotes, real session ids, the prompt text as written. That is what makes
