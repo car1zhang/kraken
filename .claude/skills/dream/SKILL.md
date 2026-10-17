@@ -233,10 +233,15 @@ files, not the report; the one-shot rule binds the report alone. And the shell-d
 scout brief — framed only as brief material, it was broken by the pass's own lead (a bare `===`
 echo aborting its second analysis command) minutes before the lead wrote it into five briefs, and
 by the next night's lead again; scouts hit the same aborts on their first command. Spawn them in
-waves rather than all at once; a few at a time, with the remainder running as slots free. Every
-transcript gets read; the pass simply takes as long as it takes. **A scout dead on a TRANSPORT
-error is resumed, not replaced**: a connection-closed or ENOTFOUND death leaves the subagent
-resumable, and `SendMessage` to its agent id (from the Agent call's spawn result, or `ListAgents`)
+waves rather than all at once; a few at a time, with the remainder running as slots free — and the
+"ONE watch" rule below is one watch PER WAVE, not one per scout and not one for the whole night: a
+loop cannot wait on a report whose scout has not been dispatched yet, so each wave gets its own
+conjunctive until-loop over exactly its paths when it goes out, and a wave's watch may still be
+live when the next wave's is armed (a lead ran two such watches at once and read that as breaking
+the rule; it was following it). Every transcript gets read; the pass simply takes as long as it
+takes. **A scout dead on a TRANSPORT error is resumed, not replaced**: a connection-closed or
+ENOTFOUND death leaves the subagent resumable, and `SendMessage` to its agent id (from the Agent
+call's spawn result, or `ListAgents`)
 continues it with its context intact and nothing re-paid — so fetch the messaging tools at the TOP
 of the fan-out, not mid-crisis, because a lead that has not loaded `SendMessage` has only
 "replace" available and cannot discover the cheaper move while stalled itself: one lead respawned
@@ -254,10 +259,10 @@ killed mid-write leaves a non-empty, truncated report, the same on-disk shape as
 so non-empty is not the test. For how
 to WAIT on that many report files, follow `.claude/skills/do/SKILL.md` step 4's "How to wait" bullet
 and the sub-bullets under it; it is the one specification of the protocol and it applies here
-unchanged. (Outside a cell that file may not exist. The protocol in one line: fetch `Monitor` and
-`SendMessage` in one `ToolSearch`, arm ONE background until-loop over every report path using `-s`
-not `-f`, end the turn, and treat an expiry as "one of them is missing" rather than as a reason to
-re-arm.)
+per wave. (Outside a cell that file may not exist. The protocol in one line: fetch `Monitor` and
+`SendMessage` in one `ToolSearch`, arm ONE background until-loop over every report path of the wave
+just dispatched using `-s` not `-f`, end the turn, and treat an expiry as "one of them is missing"
+rather than as a reason to re-arm.)
 
 **A scout needs an agent type that can write, and it must not be able to write the repo.** Spawn it
 `general-purpose` — or any type whose roster includes `Write`; never `Explore`, which has no `Write`
