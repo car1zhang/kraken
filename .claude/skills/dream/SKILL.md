@@ -237,12 +237,21 @@ waves rather than all at once; a few at a time, with the remainder running as sl
 transcript gets read; the pass simply takes as long as it takes. **A scout dead on a TRANSPORT
 error is resumed, not replaced**: a connection-closed or ENOTFOUND death leaves the subagent
 resumable, and `SendMessage` to its agent id (from the Agent call's spawn result, or `ListAgents`)
-continues it with its context intact and nothing re-paid — so fetch the messaging tools at the TOP
-of the fan-out, not mid-crisis, because a lead that has not loaded `SendMessage` has only
-"replace" available and cannot discover the cheaper move while stalled itself: one lead respawned
-two just-started scouts at full brief re-payment (~123K cache-write) before its first
-`ToolSearch`, then resumed every one of six later deaths at no loss. Any OTHER death — an output
-ceiling, a resume that does not take — is a respawn under the rule that follows (a hook-blocked
+continues it with its context intact — no work lost, nothing re-read — so fetch the messaging
+tools at the TOP of the fan-out, not mid-crisis, because a lead that has not loaded `SendMessage`
+has only "replace" available and cannot discover the cheaper move while stalled itself: one lead
+respawned two just-started scouts at full brief re-payment (~123K cache-write) before its first
+`ToolSearch`, then resumed every one of six later deaths at no loss of work. Cheaper than a
+replace is not FREE: after a multi-hour gap the prompt cache is cold, so each resume re-writes the
+whole accumulated context as cache-creation — one sleep-broken night's ~16 resumes re-paid ~2.79M
+cache-write tokens, 58.5% of that night's total cache writes and its single largest cost, while
+its report claimed "nothing re-paid" (measured 2026-09-02). The resume stays the right move: a
+replace pays a cold write too (the brief's — and a just-spawned scout's context IS about the
+brief, so at that boundary the two writes cost the same) and throws the finished work away; the
+resume's premium is the accumulated context it preserves, which grows exactly when the preserved
+work justifies it. Either way, count the cache-write in the night's own numbers rather than
+reporting zero. Any OTHER death — an output ceiling, a
+resume that does not take — is a respawn under the rule that follows (a hook-blocked
 report write is not a death: that case is specified below — report the refusal and stop). **A
 respawn — however the scout died — gets a FRESH report path** (`<name>-B.md`, then `-C` and so
 on), and you check
