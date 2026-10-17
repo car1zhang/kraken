@@ -430,6 +430,39 @@ var nonTransientAPIErrors = []string{"credit balance", "prompt is too long", "in
 // itself.
 var usageLimitMarkers = []string{"usage limit", "hit your session limit", "hit your weekly limit", "hit your opus limit", "/usage-credits", "usage credits are required"}
 
+// deadCredentialMarkers flag the synthetic banners that mean the account's
+// CREDENTIAL is dead rather than its window exhausted: "Login expired ·
+// Please run /login" and "Not logged in · Please run /login". They classify
+// as Kind "usage-limit" — deliberately, not by confusion. The remedy is the
+// usage-limit remedy exactly: this account cannot serve this session until
+// something external changes, and a rebind to a different pool slot plus a
+// fresh process fixes it with no human, where the alternative — no
+// classification at all — leaves the cell reading healthy forever (measured
+// corpus-wide on this machine: every synthetic record matching either
+// marker is one of the two banner shapes verbatim, none carries the "api
+// error" prefix and none trips a limit marker, so all of them fell through
+// every arm of classifyStall). The recorded hit's details carry the banner
+// verbatim, so the notification still says what actually happened. Note the
+// Kind also reaches the STANDING arm (standingStallReason), where the
+// remedy is rescueSwap — a dead MAIN credential moves the machine's main
+// login to a pool slot, kronos and iris being main's own tenants; a wider
+// blast radius than a cell's rebind, and the deliberate one for those two.
+// Like usageLimitMarkers these match only <synthetic> records, so a real
+// model merely discussing logins can never trip them.
+var deadCredentialMarkers = []string{"login expired", "not logged in"}
+
+// containsAny reports whether lower contains any of the markers — the one
+// containment rule both marker lists above route through, so the returned
+// Stall is built in exactly one place per Kind.
+func containsAny(lower string, markers []string) bool {
+	for _, s := range markers {
+		if strings.Contains(lower, s) {
+			return true
+		}
+	}
+	return false
+}
+
 // LastStall reads the final message entry of a transcript JSONL file and
 // classifies it. It reads only a fixed 256 KiB tail window (huge
 // transcripts stay cheap; a stall, if any, is always in the last entry),
@@ -654,10 +687,13 @@ func classifyStall(entryType string, msg map[string]any, text string) Stall {
 		// can fix it unattended, rather than to carl. Transient is stated
 		// rather than left to the zero value: an exhausted window does pass
 		// on its own, but not on the timescale a nudge assumes.
-		for _, s := range usageLimitMarkers {
-			if strings.Contains(lower, s) {
-				return Stall{Kind: "usage-limit", Text: TruncateOneLine(text, 120), Transient: false}
-			}
+		// Dead-credential banners take the same route as the limit banners
+		// for the same reason — see deadCredentialMarkers. Both are checked
+		// here, before the "api error" prefix gate, because neither banner
+		// family carries that prefix and a check behind the gate is
+		// unreachable on every real one.
+		if containsAny(lower, usageLimitMarkers) || containsAny(lower, deadCredentialMarkers) {
+			return Stall{Kind: "usage-limit", Text: TruncateOneLine(text, 120), Transient: false}
 		}
 		if !strings.HasPrefix(lower, "api error") {
 			return Stall{}

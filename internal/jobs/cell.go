@@ -2140,7 +2140,10 @@ func stallReason(st core.Stall) string {
 // usageLimitReasonPrefix is the one spelling of a usage-limit CellHealth
 // reason: stallReason writes it, IsUsageLimitReason recognizes it, and the
 // daemon's health pass routes on that recognizer rather than rebuilding the
-// string at the call site.
+// string at the call site. It also carries dead-credential banners — a
+// "Login expired" cell reads "hit a usage limit" here, deliberately, since
+// both want the same rescue and the banner rides in the reason verbatim;
+// see core's deadCredentialMarkers for the argument.
 const usageLimitReasonPrefix = "zeus hit a usage limit: "
 
 // IsUsageLimitReason reports whether a CellHealth reason is the one
