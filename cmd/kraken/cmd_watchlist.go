@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 
+	"kraken/internal/api"
 	"kraken/internal/util"
 )
 
@@ -190,7 +191,7 @@ func indentJSON(body []byte, err error) ([]byte, error) {
 // server-side "bad json" 400 for plainly malformed stdin.
 func runWatchlistUpsert(op string, args []string, stdin io.Reader) ([]byte, error) {
 	if len(args) != 0 {
-		return nil, fmt.Errorf("usage: k watchlist %s (JSON watch-item object on stdin — add: observation, class, optional src/dst/predicate; update: id plus the workflow fields; no slug — the watchlist is global)", op)
+		return nil, fmt.Errorf("usage: k watchlist %s (JSON watch-item object on stdin — add: observation, class (one of %s), optional src/dst/predicate; update: id plus the workflow fields; no slug — the watchlist is global)", op, strings.Join(api.WatchClasses, "|"))
 	}
 	if stdinIsInteractiveTTY(stdin) {
 		return nil, fmt.Errorf("usage: k watchlist %s (JSON watch-item object on stdin) — refusing to wait on an interactive terminal; pipe the JSON in instead", op)

@@ -56,11 +56,11 @@ import (
 // on any of these requests. An observation outlives whichever job first
 // surfaced it.
 
-// watchClasses / watchStates are the value sets store/watch.go documents for
+// WatchClasses / watchStates are the value sets store/watch.go documents for
 // the class and state columns. Validated here rather than left to SQL (the
 // column is a plain TEXT with no CHECK), so a typo'd class from an LLM caller
 // is a loud 400 instead of a row that silently never matches a filter.
-var watchClasses = []string{"feedback", "correction", "repetition", "waste", "prompting"}
+var WatchClasses = []string{"feedback", "correction", "repetition", "waste", "prompting"}
 
 var watchStates = []string{"watching", "shipped", "declined"}
 
@@ -520,8 +520,8 @@ func watchItemAdd(w http.ResponseWriter, st *store.Store, it watchItemWire) {
 		webJSON(w, http.StatusBadRequest, map[string]string{"error": "observation is empty"})
 		return
 	}
-	if !oneOf(it.Class, watchClasses) {
-		webJSON(w, http.StatusBadRequest, map[string]string{"error": "bad class " + strconv.Quote(it.Class) + " — want one of " + strings.Join(watchClasses, "|")})
+	if !oneOf(it.Class, WatchClasses) {
+		webJSON(w, http.StatusBadRequest, map[string]string{"error": "bad class " + strconv.Quote(it.Class) + " — want one of " + strings.Join(WatchClasses, "|")})
 		return
 	}
 	if it.State != "" && !oneOf(it.State, watchStates) {
@@ -571,8 +571,8 @@ func watchItemUpdate(w http.ResponseWriter, st *store.Store, it watchItemWire, i
 		webJSON(w, http.StatusBadRequest, map[string]string{"error": "missing item id"})
 		return
 	}
-	if it.Class != "" && !oneOf(it.Class, watchClasses) {
-		webJSON(w, http.StatusBadRequest, map[string]string{"error": "bad class " + strconv.Quote(it.Class) + " — want one of " + strings.Join(watchClasses, "|")})
+	if it.Class != "" && !oneOf(it.Class, WatchClasses) {
+		webJSON(w, http.StatusBadRequest, map[string]string{"error": "bad class " + strconv.Quote(it.Class) + " — want one of " + strings.Join(WatchClasses, "|")})
 		return
 	}
 	if it.State != "" && !oneOf(it.State, watchStates) {
