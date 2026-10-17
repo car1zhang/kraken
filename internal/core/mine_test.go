@@ -293,8 +293,11 @@ func TestMineInputSummaryStripsShellBoilerplate(t *testing.T) {
 	if !strings.Contains(a, "python3") || !strings.Contains(b, "sed -n") {
 		t.Errorf("signatures did not reach the command: %q / %q", a, b)
 	}
-	if got := sig("cd /Users/carl/dev/wt-monolith && go test ./..."); !strings.Contains(got, "go test") {
-		t.Errorf("cd prefix not stripped: %q", got)
+	// The display form keeps the cd, compacted, in front of the command —
+	// see TestMineInputSummaryKeepsCDOnDisplay for why the prefix survives
+	// here and not in callIdentity.
+	if got := sig("cd /Users/carl/dev/wt-monolith && go test ./..."); got != "Bash(cd /Users/…/wt-monolith && go test ./...)" {
+		t.Errorf("cd prefix not compacted in front of the command: %q", got)
 	}
 	if got := sig("FOO=1; cd /tmp; BAR=2; rg pattern"); !strings.Contains(got, "rg pattern") {
 		t.Errorf("mixed assignment/cd run not stripped: %q", got)
@@ -322,6 +325,59 @@ func TestMineInputSummaryStripsShellBoilerplate(t *testing.T) {
 	// The empty-after-strip fallback needs an input the regex fully consumes.
 	if got := sig("cd /tmp;"); got != "Bash(cd /tmp;)" {
 		t.Errorf("fully-stripped command lost its signature: %q", got)
+	}
+}
+
+// TestMineInputSummaryKeepsCDOnDisplay: a Bash write's directory is the one
+// token that says whether it landed in scratch or in the repo, and the
+// reduced view used to drop it with the rest of the boilerplate — so
+// `cd /tmp/probe && sed -i … main.go` rendered as a bare in-place edit of a
+// repo file, and dream scouts on two nights filed that against reviewers
+// whose every write was under /tmp. The DISPLAY form keeps the cd (long
+// paths compacted to first/…/last); the IDENTITY form still drops it, since
+// a command re-run from another directory is the same command for
+// RepeatedCalls' purposes.
+func TestMineInputSummaryKeepsCDOnDisplay(t *testing.T) {
+	sig := func(cmd string) string {
+		return callSignature("Bash", json.RawMessage(mineJSON(t, map[string]any{"command": cmd})))
+	}
+	id := func(cmd string) string {
+		return callIdentity("Bash", json.RawMessage(mineJSON(t, map[string]any{"command": cmd})))
+	}
+	short := "cd /tmp/d831/probe && sed -i '' 's|a|b|' main.go"
+	if got := sig(short); got != "Bash(cd /tmp/d831/probe && sed -i '' 's|a|b|' main.go)" {
+		t.Errorf("short cd path not kept whole on display: %q", got)
+	}
+	long := "cd /Users/carl/.kraken/cells/some-cell-142/wt-monolith\npython3 script.py"
+	if got := sig(long); got != "Bash(cd /Users/…/wt-monolith && python3 script.py)" {
+		t.Errorf("long cd path not compacted on display: %q", got)
+	}
+	// A mixed prefix keeps the cd and still drops the assignment.
+	if got := sig("FOO=1; cd /tmp; BAR=2; rg pattern"); got != "Bash(cd /tmp && rg pattern)" {
+		t.Errorf("mixed prefix: %q", got)
+	}
+	// Identity is unchanged: the cd is dropped, so the same command from two
+	// directories folds — the strip working as intended for grouping.
+	if a, b := id(short), id("cd /Users/carl/repo && sed -i '' 's|a|b|' main.go"); a != b || strings.Contains(a, "cd ") {
+		t.Errorf("identity should drop the cd: %q vs %q", a, b)
+	}
+	// compactPath's bound: three components stay whole, four compact — and a
+	// trailing slash is trimmed first, or the kept "last component" would be
+	// the empty string (measured: 501 of 19,301 cd-prefixed commands in this
+	// machine's corpus end in a slash, every one long enough to compact).
+	for in, want := range map[string]string{
+		"/tmp/d831/probe":        "/tmp/d831/probe",
+		"/Users/carl/dev/wt-x":   "/Users/…/wt-x",
+		"api-service":            "api-service",
+		"a/b/c/d/e":              "a/b/…/e",
+		"/private/tmp/x/y/z/scr": "/private/…/scr",
+		"/Users/carl/dev/wt-x/.claude/skills/aim/assets/": "/Users/…/assets",
+		"/tmp/d831/probe/": "/tmp/d831/probe",
+		"/":                "/",
+	} {
+		if got := compactPath(in); got != want {
+			t.Errorf("compactPath(%q) = %q, want %q", in, got, want)
+		}
 	}
 }
 
