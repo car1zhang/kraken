@@ -501,21 +501,111 @@ func IsLeadAgentName(name string) bool {
 // truncated line, fails, finds no signal, and books a teammate's whole spend to
 // the lead — which is exactly what an 8 KB window did to 6 hermes transcripts
 // (8.5M tokens) in one cell dir. So the bound must cover the whole RECORD:
-// 256 KB is 4.6x the largest ever seen.
+// 256 KB is 4.6x the largest brief line ever seen.
 //
-// That ceiling is not what is normally read, and agentMarkerInit is what makes
-// that true rather than merely hoped for. bufio.Scanner.Buffer ALLOCATES its
-// initial buffer immediately — `s.buf = buf[0:cap(buf)]`, before the first
-// Scan — and only ever doubles from there, so the initial capacity is a real
-// per-probe cost while the maximum is only a ceiling. Seeding it with
-// mineScanBufInit (64 KB, sized for the main transcript scan) spent 64 KB on
-// every probe of every grown file to read a median 4 KB of head; 4 KB seeds it
-// at the median instead and doubles the handful of times a fat brief needs.
+// THE BYTE BOUND IS PER LINE, AND AN OVER-CAP LINE IS SKIPPED, NOT FATAL. The
+// first version of this probe read the head through one bufio.Scanner over a
+// 256 KB SectionReader, so a single line longer than the ceiling ended the
+// whole scan with no answer. That line exists: Claude Code can flush the
+// worktree's CLAUDE.md stack as one `attachment` record larger than the
+// ceiling, and whether it lands before or after the record carrying
+// `agentName` varies per spawn — so a fatal over-cap line renders a teammate
+// as an UNNAMED root in the digest while the records right behind the fat one
+// carry the name, and misfiles it as the lead whenever no `agent-setting`
+// precedes it. So headScan consumes an over-cap line through its newline,
+// decodes nothing from it, counts it as one of the agentMarkerLines records,
+// and reads on. The whole-window bound moves to agentMarkerWindow, a separate
+// and much larger number: it exists to keep one probe's pread bounded on a
+// pathological head (the main scan has met an 8.3 MB line), not to size the
+// records it decodes.
+//
+// The per-line ceiling is not what is normally read, and agentMarkerInit is
+// what makes that true rather than merely hoped for: the reader is seeded at
+// 4 KB — the median head line — and the line buffer grows only when a fat
+// brief demands it, so neither ceiling is allocated up front. (Seeding with
+// mineScanBufInit, 64 KB, spent 64 KB on every probe of every grown file to
+// read a median 4 KB of head.)
 const (
-	agentMarkerLines = 16
-	agentMarkerBytes = 256 << 10
-	agentMarkerInit  = 4 << 10
+	agentMarkerLines  = 16
+	agentMarkerBytes  = 256 << 10
+	agentMarkerWindow = 4 << 20
+	agentMarkerInit   = 4 << 10
 )
+
+// headScan is the ONE scan both head probes run on — isAgentTranscript and
+// headAgentName differ only in what they do with a record, so the skip, record
+// and window rules live here once and cannot drift between them.
+//
+// It reads lines from byte 0 of f, in order, and calls visit once per record
+// that is within the per-line ceiling (agentMarkerBytes, newline excluded) and
+// ends inside the window (agentMarkerWindow). A longer line is consumed
+// through its newline, never decoded, and still counted against
+// agentMarkerLines; a line that does not end inside the window is not decoded
+// and ends the scan. A final line with no trailing newline is decoded when EOF
+// arrived with fewer than agentMarkerWindow bytes consumed — that is the
+// file's real end, while EOF at exactly the window is read as the window
+// cutting it (a file whose real size is exactly the window and ends
+// unterminated is treated as cut too, the conservative default for a shape
+// no transcript has produced). Deciding that from the bytes read rather than
+// from a Stat keeps the answer exact on a transcript that is being appended
+// to between two reads, and costs one syscall fewer. A record that fails to
+// decode is still a visited record — headMarkers hands back a zero
+// headMarker for it — because the caller's
+// question is "does this record answer", and a line that decodes to nothing
+// answers no. The scan stops at the first visit returning true, after
+// agentMarkerLines records (skipped included), or at the window's end, and a
+// read error ends it silently: a head that cannot be read is a head with no
+// signal in it, and both callers degrade that to the lead.
+//
+// Reads go through a SectionReader (ReadAt) so the caller's offset survives:
+// every probe here is a pread, and the main scan that follows relies on the
+// file still standing at its own resume offset.
+func headScan(f *os.File, visit func(rec headMarker) bool) {
+	sec := io.NewSectionReader(f, 0, agentMarkerWindow)
+	r := bufio.NewReaderSize(sec, agentMarkerInit)
+	// consumed counts every byte ReadSlice handed back. EOF with consumed
+	// short of the window is the file's own end; EOF at exactly the window
+	// is the window's cut, and an unterminated tail there is not a record.
+	consumed := 0
+	var line []byte
+	for n := 0; n < agentMarkerLines; n++ {
+		line = line[:0]
+		over := false
+		for {
+			chunk, err := r.ReadSlice('\n')
+			consumed += len(chunk)
+			if !over {
+				line = append(line, chunk...)
+				if len(line) > agentMarkerBytes+1 { // body + newline
+					over = true
+					line = line[:0]
+				}
+			}
+			if err == nil {
+				break // the newline arrived; the record is complete
+			}
+			if err == bufio.ErrBufferFull {
+				continue // more of the same line
+			}
+			// EOF or a read error. An unterminated tail is a record only
+			// when it is the file's own end; the window's cut is not.
+			if err == io.EOF && consumed < agentMarkerWindow && !over && len(line) > 0 {
+				break
+			}
+			return
+		}
+		body := bytes.TrimSuffix(line, []byte("\n"))
+		if over || len(body) > agentMarkerBytes {
+			continue // skipped: counted, never decoded, never visited
+		}
+		if visit(headMarkers(body)) {
+			return
+		}
+		if len(body) == len(line) {
+			return // the unterminated final line: nothing follows it
+		}
+	}
+}
 
 // isAgentTranscript reports whether a transcript is a DELEGATED agent's — the
 // subagent half of the split — as opposed to the cell lead's own.
@@ -575,12 +665,12 @@ const (
 // WHOLE line, and the line carrying `agentName` is usually a whole brief.
 //
 // The scan stops at the first record that answers. Reading on would cost the
-// rest of a head window whose fattest records sit right there, and it can
+// rest of the head, whose fattest records sit right there, and it can
 // change nothing: measured across the 1,245 transcripts carrying both signals,
 // `agent-setting` precedes the first `agentName` in every single one, so no
 // early return can hide it.
 //
-// A probe that cannot READ, and a head window with no signal in it, both
+// A probe that cannot READ, and a head with no signal in it, both
 // degrade to NOT-agent, i.e. to the lead. The lead is the conservative bucket
 // in the only sense that matters here: the job's total is identical either way
 // (the split is a partition of a number already summed), so the failure mode
@@ -589,46 +679,39 @@ func isAgentTranscript(f *os.File, path string) bool {
 	if filepath.Base(filepath.Dir(path)) == "subagents" {
 		return true
 	}
-	// A SectionReader rather than a Seek + Read, so this stays a pread like
-	// every other probe here and cannot disturb the caller's file offset.
-	// The scanner's buffer GROWS from agentMarkerInit only as a line demands
-	// it, so the agentMarkerBytes ceiling is a bound and not an allocation.
-	// The seed is this probe's OWN constant rather than mineScanBufInit — see
-	// agentMarkerInit: Buffer allocates its initial capacity up front, so
-	// borrowing the main scan's 64 KB seed spent 64 KB to read a median 4 KB.
-	sc := bufio.NewScanner(io.NewSectionReader(f, 0, agentMarkerBytes))
-	sc.Buffer(make([]byte, 0, agentMarkerInit), agentMarkerBytes)
-	for i := 0; i < agentMarkerLines && sc.Scan(); i++ {
-		rec := headMarkers(sc.Bytes())
+	agent := false
+	headScan(f, func(rec headMarker) bool {
 		if rec.Type == "agent-setting" {
-			return true // arm 2: never lies, so it answers immediately
+			agent = true // arm 2: never lies, so it answers immediately
+			return true
 		}
 		if rec.AgentName != "" {
-			return !IsLeadAgentName(rec.AgentName) // arm 3
+			agent = !IsLeadAgentName(rec.AgentName) // arm 3
+			return true
 		}
-	}
-	// No signal in the window. That is the lead ANSWER without being a lead
-	// NAME: a manual claude in a cell worktree carries no agentName, and so
-	// does a transcript whose head could not be read — a scan error, or a line
-	// past the ceiling, both of which end the loop here rather than guessing.
-	return false
+		return false
+	})
+	// No signal in the head is the lead ANSWER without being a lead NAME: a
+	// manual claude in a cell worktree carries no agentName, and so does a
+	// transcript whose head could not be read — a scan error, or a window
+	// with no marker in it, both of which end headScan rather than guessing.
+	return agent
 }
 
 // headAgentName returns the transcript head's `agentName`, or "" when the
-// head window carries none (a sidecar, a manual claude, an unreadable head).
-// Same window, bounds and decode rule as isAgentTranscript — it exists so the
-// digest can NAME the agent where the splitter only classifies it, and it is
-// a separate scan rather than a second return value because isAgentTranscript
-// early-returns on `agent-setting` before any name appears.
+// head carries none within headScan's bounds (a sidecar, a manual claude, an
+// unreadable head). Same scan, bounds and decode rule as isAgentTranscript —
+// it exists so the digest can NAME the agent where the splitter only
+// classifies it, and it is a separate call rather than a second return value
+// because isAgentTranscript early-returns on `agent-setting` before any name
+// appears, while this one reads past that record to the name behind it.
 func headAgentName(f *os.File) string {
-	sc := bufio.NewScanner(io.NewSectionReader(f, 0, agentMarkerBytes))
-	sc.Buffer(make([]byte, 0, agentMarkerInit), agentMarkerBytes)
-	for i := 0; i < agentMarkerLines && sc.Scan(); i++ {
-		if rec := headMarkers(sc.Bytes()); rec.AgentName != "" {
-			return rec.AgentName
-		}
-	}
-	return ""
+	name := ""
+	headScan(f, func(rec headMarker) bool {
+		name = rec.AgentName
+		return name != ""
+	})
+	return name
 }
 
 // headMarker is the two fields isAgentTranscript reads out of a head record.
