@@ -204,7 +204,16 @@ one can blow the Read tool's token ceiling on page two: say to page large views 
 the brief carries a short **already-established list** — the known cross-cutting costs and facts
 from the watch store and {{operator}}'s mental model (`kraken mm get --q "<subject>"`, then `kraken mm show <id>`) that touch this scout's assignment — marked "measure, don't
 re-derive": six scouts in one night each independently re-derived from raw a cost kraken's memory
-already held, because nothing in any brief said what was already known.
+already held, because nothing in any brief said what was already known. The brief also names, by
+path, the ONE staged copy of the watch overlay, and says that a scout needing a row beyond its list
+queries that file rather than fetching or reading it whole (indented JSON under a top-level
+`watchlist` key; state the shape in the brief, copied from the file rather than recalled). Stage it
+yourself before the fan-out: the opening unfiltered `kraken watchlist get` (no state argument),
+redirected once to a file under the short `/tmp/<handle>` root the next paragraph has you create
+(check it is non-empty before naming it). A brief that offers the verb and never the path had every
+scout of one night re-fetch a megabyte-scale copy of its own, and the next night one scout fetch
+four times while guessing the JSON's shape, with the staged copy sitting unnamed beside them both
+nights.
 
 **The scouts** are one subagent per transcript, each reading that session's reduced view plus its
 digest. They are read-only exploration — they change nothing in the repo and judge nothing — so they are
