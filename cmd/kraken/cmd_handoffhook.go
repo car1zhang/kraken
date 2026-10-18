@@ -14,7 +14,7 @@ import (
 
 // cmd_handoffhook.go — `kraken handoff-hook`: the SessionStart hook a cell's
 // settings.json installs under the "compact" matcher (jobs' handoffHookEntry).
-// After a compaction it restates the two standing rules a compaction summary
+// After a compaction it restates the three standing rules a compaction summary
 // drops (handoffStandingRules), then tells the resumed agent
 // which 80-handoff*.md docs sit in the cell's artifacts dir, newest first, so
 // the agent reads its own handoff before doing anything else.
@@ -34,11 +34,13 @@ const handoffClosing = "Read the one that is yours before anything else; a doc o
 
 // handoffStandingRules opens the injected context after EVERY compaction,
 // handoff doc or none: a compaction summary carries the agent's state, not
-// its rules, and the two below are the ones that drop out of it — the
-// resumed agent then follows the harness's own bash-first reminder instead.
+// its rules, and the three below are the ones that drop out of it — the
+// resumed agent then follows the harness's own bash-first reminder instead,
+// and the briefs it writes afterwards shrink the shell-dialect clause to
+// the bare word "zsh", which every teammate then relearns by abort.
 // Stated here rather than only in the skills because this hook is the one
 // path that reaches an idle auto-compaction the agent never asked for.
-const handoffStandingRules = "Compaction kept your state, not your rules; two hold whatever the summary or the harness's file-editing reminder says: repo files are edited with the Edit or Write tool, never through a Bash heredoc, `sed -i` or a python rewrite — and a teammate is spawned from the worktree root, never from a subdirectory your shell is still in."
+const handoffStandingRules = "Compaction kept your state, not your rules; three hold whatever the summary or the harness's file-editing reminder says: repo files are edited with the Edit or Write tool, never through a Bash heredoc, `sed -i` or a python rewrite — a teammate is spawned from the worktree root, never from a subdirectory your shell is still in — and every brief you write carries the shell-dialect line verbatim, because the Bash tool is zsh and a brief written after a compaction keeps only the word \"zsh\": copy the italic *Shell is zsh on macOS: …* sentence from .claude/skills/do/SKILL.md whole, never a summary of it — its clauses quote any word starting with `=`, quote every glob (any argument containing `*` `?` `[` `(`), say `timeout N` does not exist, never name a variable `path` or `fpath`, use absolute paths, and close a `;`-compound ending in a grep with `; true`."
 
 // cmdHandoffHook is the dispatch entry for
 // `kraken handoff-hook <slug> [--artifacts <dir>] [--serve-addr A] [--db-path P]`.
