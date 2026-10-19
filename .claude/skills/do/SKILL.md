@@ -183,6 +183,7 @@ When a kraken job brief sends you here, these deltas apply — the brief wins wh
   and STOP (end the turn). Do not proceed to a PR on your own — {{operator}}'s reply is what passes the gate.
 - **When their reply passes it**, shut any test services down and follow `.claude/skills/pr/SKILL.md` in your worktree for branch and PR conventions — read it BY PATH; do NOT invoke `/pr` by name, since a personal skill of that name would shadow it.
 - Never declare the job done — accepting or merging is {{operator}}'s move, never yours.
+- **`/direct` runs this skill minus its crew.** A spec that opens with `/direct`, a direct Phase 1 before this one, or `/direct do` typed into your pane, means `.claude/skills/direct/SKILL.md` applies on top of this one: no hephaestus, no blind authorship, you implement and test alone on the un-delegated path of step 5, the review round runs only when {{operator}} asked for it, and everything else here is unchanged. Read direct first, then follow this skill with its deltas.
 
 ## Boundaries
 

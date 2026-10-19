@@ -10,10 +10,12 @@ import (
 )
 
 // SkillsFS holds kraken's kraken-owned skill bundle — the five pipeline skills
-// (info, aim, do, pr, dream), each governing a phase, plus two that
-// govern none: load, a reference consulted mid-phase, and handoff, typed into
+// (info, aim, do, pr, dream), each governing a phase, plus three that
+// govern none: load, a reference consulted mid-phase; handoff, typed into
 // a pane by the operator or by the daemon's auto-handoff pass to compact an agent
-// behind a written record — embedded into the binary at build time. Root's
+// behind a written record; and direct, the one-agent override a quick job's
+// spec opens with (or the operator types) that makes zeus run aim/info/do
+// itself with no crew — embedded into the binary at build time. Root's
 // skills_embed.go assigns this during init(), sub-FS'd to the .claude/skills
 // root so each top-level entry here is one skill's own directory. Left nil
 // when the jobs package is exercised without root's init running (e.g. unit

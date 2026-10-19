@@ -220,6 +220,15 @@ func TestZeusBriefDoesNotRestateSkills(t *testing.T) {
 			// through. (threadBrief does contain this substring, correctly and
 			// as a prohibition — this test reads zeusBrief only.)
 			{"feedback addressed", "dream"},
+			// the one-agent override's rules — direct/SKILL.md. The brief
+			// names the skill, when to read it and its scope; what it
+			// deletes from each phase skill (the no-crew rule, the delta
+			// tables, the review default and its opt-in word) is procedure
+			// and lives there.
+			{"No crew, no subagents", "direct"},
+			{"Under Direct", "direct"},
+			{"Review is off by default", "direct"},
+			{"review skipped", "direct"},
 		} {
 			if strings.Contains(brief, owned.token) {
 				t.Errorf("%s brief restates %q, which .claude/skills/%s/SKILL.md owns — "+
@@ -998,6 +1007,37 @@ func TestZeusBriefNeverDeclaresDone(t *testing.T) {
 	}
 }
 
+// TestZeusBriefNamesDirect pins the brief's one sentence about the one-agent
+// override: that it exists, where it lives, and that it is read FIRST. The
+// brief is in context every turn while direct/SKILL.md is read once, so the
+// ordering clause has to be here — a cell that reads the phase skill first
+// has already spent the tokens the override exists to save. The override's
+// SCOPE is pinned too: the brief's own crew paragraph says the athena review
+// runs every time, and a direct sentence that overrode only the phase skills
+// left that standing instruction in force, so a careful zeus would have run
+// the three reviewers on every direct do — round 1 of this change's own
+// review caught that, before any direct job had run. Every
+// variant carries the sentence, solo included: a solo job can still open with
+// `/direct`, and the skill is where solo's interaction with it is stated.
+func TestZeusBriefNamesDirect(t *testing.T) {
+	for _, j := range []*Job{
+		{Slug: "direct-plain"},
+		{Slug: "direct-solo", Solo: true},
+	} {
+		brief := zeusBrief(j)
+		for _, want := range []string{
+			"`/direct`", ".claude/skills/direct/SKILL.md", "BY PATH FIRST",
+			"before the phase skill it modifies",
+			"this brief's own crew and review paragraphs",
+		} {
+			if !strings.Contains(brief, want) {
+				t.Errorf("%s (solo=%v) brief missing %q — a `/direct` spec would then be run with the "+
+					"full crew, which is the spend the skill exists to avoid", j.Slug, j.Solo, want)
+			}
+		}
+	}
+}
+
 // TestZeusBriefSkillsPrecedence asserts the worktree .claude/skills/
 // precedence sentence rides in every brief variant — it's not gated by
 // solo, since kraken materializes its own skills into every cell worktree
@@ -1146,7 +1186,7 @@ func TestSkillsCarryColourRule(t *testing.T) {
 // final message = the whole TLDR) is pinned in TestZeusBrief; this test owns
 // the artifact half.
 func TestSkillsCarryTldrRule(t *testing.T) {
-	for _, skill := range []string{"aim", "info", "do", "dream"} {
+	for _, skill := range []string{"aim", "info", "do", "dream", "direct"} {
 		src := strings.Join(strings.Fields(readRepoSkill(t, skill)), " ")
 		if !strings.Contains(src, "opens with a one-liner stating its main message") {
 			t.Errorf(".claude/skills/%s/SKILL.md dropped the artifact TLDR rule — every md artifact "+

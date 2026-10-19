@@ -290,3 +290,4 @@ the cell's brief wins wherever it is more specific:
   artifacts straight from the board instead.
 - `solo: true` on the job means no teammates and no subagents at all: prose only — no diagram cards
   in any round.
+- **`/direct` runs this skill minus its subagents.** A spec that opens with `/direct`, or `/direct info` typed into your pane, means `.claude/skills/direct/SKILL.md` applies on top of this one: you research and write alone, with no researcher fan-out and no diagram card, and everything else here unchanged. Read direct first, then follow this skill with its deltas.
