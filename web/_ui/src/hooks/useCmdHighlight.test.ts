@@ -44,6 +44,17 @@ describe("cmdHighlightHTML", () => {
     expect(cmdHighlightHTML("/handoffs")).not.toContain("cmd-hl-handoff");
   });
 
+  it("highlights /direct and the phase it modifies as two chips", () => {
+    // /direct is a modifier typed ahead of a phase; both spellings of the
+    // phase word light up the modifier, and the slashed one lights up both
+    const spaced = cmdHighlightHTML("/direct do it");
+    expect(spaced).toContain('<span class="cmd-hl cmd-hl-direct">/direct</span> do it');
+    const slashed = cmdHighlightHTML("/direct /do it");
+    expect(slashed).toContain('<span class="cmd-hl cmd-hl-direct">/direct</span> ');
+    expect(slashed).toContain('<span class="cmd-hl cmd-hl-do">/do</span> it');
+    expect(cmdHighlightHTML("/directory listing")).not.toContain("cmd-hl-direct");
+  });
+
   it("highlights /handoff as a chip of its own, argument left plain", () => {
     // the one chip that names no phase — it still gets its own hue
     const html = cmdHighlightHTML("/handoff resume");
@@ -54,7 +65,7 @@ describe("cmdHighlightHTML", () => {
     const html = cmdHighlightHTML("<b>/do</b>");
     expect(html).not.toContain("<b>");
     expect(html).toContain("&lt;b&gt;");
-    // Escape-then-match is safe because none of the five commands contain an
+    // Escape-then-match is safe because none of the six commands contain an
     // HTML-special character. It does mean the ESCAPED text is what the anchor
     // sees: `/do` here follows the ";" of "&gt;", not whitespace, so it does
     // not light up. Carried over verbatim — a command glued to a tag is not a

@@ -404,6 +404,22 @@ enum KTheme {
     static let skillHandoff = Color(uiColor: skillHandoffUI)
     static let skillHandoffSoftUI = dyn(light: 0xFDE8D8, dark: 0x3B1F0A)
     static let skillHandoffSoft = Color(uiColor: skillHandoffSoftUI)
+    // /direct is the seventh skill hue and the other chip that names no
+    // phase: a modifier typed ahead of the phase it modifies (`/direct do`)
+    // that runs that phase skill minus its subagents and review rounds, so
+    // it gets a chip and a colour but never a stage badge. Teal is the widest
+    // gap left on the wheel once the six above are placed — 32° from
+    // pr-green and 39° from info-blue, the chip it sits beside in
+    // CmdChipsRow. Its nearest neighbour is `polling` cyan, a status dot and
+    // never a text chip, so the two are told apart by shape and position,
+    // the handoff/jobOrange argument above. Chosen to match --skill-direct in
+    // web/_ui/src/styles/style.css (no test pins the skill palette across the
+    // two files); the light value is tailwind teal-700, which clears WCAG AA
+    // (5.3 against white).
+    static let skillDirectUI = dyn(light: 0x0F766E, dark: 0x2DD4BF)
+    static let skillDirect = Color(uiColor: skillDirectUI)
+    static let skillDirectSoftUI = dyn(light: 0xD3F4EE, dark: 0x0B2E2A)
+    static let skillDirectSoft = Color(uiColor: skillDirectSoftUI)
 
     // Per-job colors: the eight names Claude Code's own `/color` command
     // accepts, in `/color`'s order. The DARK values are Claude Code's exact

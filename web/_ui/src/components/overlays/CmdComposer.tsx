@@ -7,7 +7,7 @@ import {
 } from "../../hooks/useCmdHighlight.ts";
 
 // The composer shared by the steer modal and the job editor: the one-tap
-// /info /aim /do /pr /handoff chip row above a text-transparent <textarea>
+// /direct /info /aim /do /pr /handoff chip row above a text-transparent <textarea>
 // layered over its mirrored highlight backdrop.
 //
 // One component rather than two copies because style.css unions the two id

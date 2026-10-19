@@ -122,6 +122,17 @@
      near the amber/crimson accents' --ac2, the relationship --skill-do
      already has with them. */
   --skill-handoff: #FB923C; --skill-handoff-soft: #3B1F0A;
+  /* /direct is the seventh skill hue and the other command that names no
+     phase: a modifier typed ahead of the phase it modifies (`/direct do`),
+     running that phase skill minus its subagents and review rounds, so it
+     gets a chip and a colour but never a stage badge. Teal (174°) is the
+     widest gap left on the wheel once the six above and the memory lime
+     (95°) are placed: 32° from pr-green and 39° from info-blue, the chip it
+     sits beside. Its nearest neighbour is --polling cyan (186°), which is a
+     status DOT on the board and never a text chip, so the two are told
+     apart by shape and position — the same argument --skill-handoff makes
+     for job-orange above. */
+  --skill-direct: #2DD4BF; --skill-direct-soft: #0B2E2A;
   /* the MEMORY view's accent — named for the retired /graph chip and GRAPH
      view it was first picked for, and kept because the Library and Model
      panes still wear it. Lime because cyan is --polling's exact value; 95° is
@@ -142,6 +153,8 @@
   --text-glow-skill-dream: 0 0 1px var(--skill-dream), 0 0 9px var(--skill-dream);
   --glow-skill-handoff: 0 0 12px rgba(251, 146, 60, 0.30), 0 0 2px rgba(251, 146, 60, 0.7);
   --text-glow-skill-handoff: 0 0 1px var(--skill-handoff), 0 0 9px var(--skill-handoff);
+  --glow-skill-direct: 0 0 12px rgba(45, 212, 191, 0.30), 0 0 2px rgba(45, 212, 191, 0.7);
+  --text-glow-skill-direct: 0 0 1px var(--skill-direct), 0 0 9px var(--skill-direct);
   --text-glow-skill-graph: 0 0 1px var(--skill-graph), 0 0 9px var(--skill-graph);
   /* job palette: the eight names Claude Code's own /color command accepts,
      in /color's order, at Claude Code's exact RGB — so a board swatch is the
@@ -212,6 +225,9 @@
      (#C2410C, 4.24 against --raised) to clear AA: #B4400E measures 4.67
      against --raised and 4.81 against its own -soft. */
   --skill-handoff: #B4400E; --skill-handoff-soft: #FDE8D8;
+  /* direct's light teal is tailwind teal-700 (#0F766E), which already clears
+     AA: 5.3 against white and a little under that against --raised. */
+  --skill-direct: #0F766E; --skill-direct-soft: #D3F4EE;
   /* the memory accent's light sibling is darkened past its naive lime for the
      same reason info/do/pr are: a 95° hue is at its brightest where white is,
      so the dark hex is unreadable here. #456F0B measures 4.87 against
@@ -229,6 +245,8 @@
   --text-glow-skill-dream: none;
   --glow-skill-handoff: 0 1px 6px rgba(180, 64, 14, 0.25);
   --text-glow-skill-handoff: none;
+  --glow-skill-direct: 0 1px 6px rgba(15, 118, 110, 0.25);
+  --text-glow-skill-direct: none;
   --text-glow-skill-graph: none;
   /* job palette, light siblings — darkened per the same rule as the skill
      block above: each clears WCAG AA 4.5:1 against both --raised (#E3E9F1)
@@ -2114,12 +2132,14 @@ input[type="text"], input:not([type]), input[type="search"], input[type="number"
 .cmd-hl-backdrop .cmd-hl-pr   { --skill: var(--skill-pr);   --skill-glow: var(--text-glow-skill-pr); }
 .cmd-hl-backdrop .cmd-hl-dream { --skill: var(--skill-dream); --skill-glow: var(--text-glow-skill-dream); }
 .cmd-hl-backdrop .cmd-hl-handoff { --skill: var(--skill-handoff); --skill-glow: var(--text-glow-skill-handoff); }
+.cmd-hl-backdrop .cmd-hl-direct { --skill: var(--skill-direct); --skill-glow: var(--text-glow-skill-direct); }
 .cmd-hl-backdrop .cmd-hl-info,
 .cmd-hl-backdrop .cmd-hl-aim,
 .cmd-hl-backdrop .cmd-hl-do,
 .cmd-hl-backdrop .cmd-hl-pr,
 .cmd-hl-backdrop .cmd-hl-dream,
-.cmd-hl-backdrop .cmd-hl-handoff {
+.cmd-hl-backdrop .cmd-hl-handoff,
+.cmd-hl-backdrop .cmd-hl-direct {
   color: var(--skill); text-shadow: var(--skill-glow);
 }
 #steer-text-wrap { background: color-mix(in srgb, var(--ac) 3%, var(--b1)); }
@@ -2313,8 +2333,8 @@ input[type="text"], input:not([type]), input[type="search"], input[type="number"
 .answer-note { font: 10px var(--mono); color: var(--ac2); min-height: 1em; }
 
 /* command chips: one-tap /info /aim /do /pr /handoff insertion above a
-   composer textarea, colored per skill (info blue, aim red, do yellow,
-   pr green, handoff orange; dream violet has a rule but no web chip) —
+   composer textarea, colored per skill (direct teal, info blue, aim red, do
+   yellow, pr green, handoff orange; dream violet has a rule but no web chip) —
    inactive rests in its -soft border, hover/active (command present in the
    textarea, see attachCmdChips) fills with the -soft tint and glows. The
    base rule's own color/border-color is the generic accent fallback for a
@@ -2342,7 +2362,8 @@ input[type="text"], input:not([type]), input[type="search"], input[type="number"
 .cmd-chip-pr   { --skill: var(--skill-pr);   --skill-soft: var(--skill-pr-soft);   --skill-glow: var(--glow-skill-pr); }
 .cmd-chip-dream { --skill: var(--skill-dream); --skill-soft: var(--skill-dream-soft); --skill-glow: var(--glow-skill-dream); }
 .cmd-chip-handoff { --skill: var(--skill-handoff); --skill-soft: var(--skill-handoff-soft); --skill-glow: var(--glow-skill-handoff); }
-.cmd-chip-info, .cmd-chip-aim, .cmd-chip-do, .cmd-chip-pr, .cmd-chip-dream, .cmd-chip-handoff {
+.cmd-chip-direct { --skill: var(--skill-direct); --skill-soft: var(--skill-direct-soft); --skill-glow: var(--glow-skill-direct); }
+.cmd-chip-info, .cmd-chip-aim, .cmd-chip-do, .cmd-chip-pr, .cmd-chip-dream, .cmd-chip-handoff, .cmd-chip-direct {
   color: var(--skill); border-color: var(--skill-soft);
 }
 .cmd-chip-info:hover, .cmd-chip-info.active,
@@ -2350,7 +2371,8 @@ input[type="text"], input:not([type]), input[type="search"], input[type="number"
 .cmd-chip-do:hover, .cmd-chip-do.active,
 .cmd-chip-pr:hover, .cmd-chip-pr.active,
 .cmd-chip-dream:hover, .cmd-chip-dream.active,
-.cmd-chip-handoff:hover, .cmd-chip-handoff.active {
+.cmd-chip-handoff:hover, .cmd-chip-handoff.active,
+.cmd-chip-direct:hover, .cmd-chip-direct.active {
   background: var(--skill-soft); border-color: var(--skill); box-shadow: var(--skill-glow);
 }
 

@@ -8,7 +8,7 @@ import {
 } from "react";
 import { esc } from "../lib/markdown.ts";
 
-// The mirrored-backdrop composer: /info /aim /do /pr /handoff rendered in
+// The mirrored-backdrop composer: /direct /info /aim /do /pr /handoff rendered in
 // their own skill colors behind a text-transparent <textarea>. Ported from
 // app.js: 1741-1913, and the ONE mechanism this port does not get to simplify — a
 // <textarea> cannot style substrings of its own value, so the real glyphs live
@@ -40,17 +40,20 @@ import { esc } from "../lib/markdown.ts";
 //     succeeded (see `active` below), which is the same promise the vanilla
 //     `wrap.classList.add` made by sitting after the risky work.
 
-// /handoff is the fifth chip (dream has a hue in style.css but no web chip)
-// and the one that is NOT a phase: it writes 80-handoff.md and compacts (or
-// spawns continuation teammates) and returns the cell to the phase it was
-// in, so it has a chip and a hue but never a stage badge
-// (jobs.pipelineStageSet keeps it out on purpose). It sits last because it
-// is the one carl reaches for on a cell already mid-phase.
-export const CMD_CHIPS = ["/info", "/aim", "/do", "/pr", "/handoff"] as const;
+// Two chips are NOT phases (dream has a hue in style.css but no web chip).
+// /direct sits FIRST because it is a modifier typed ahead of the phase it
+// modifies (`/direct do`, or `/direct /do` when both come from chips): it
+// runs that phase skill minus its subagents and review rounds, so it has a
+// chip and a hue but never a stage badge (jobs.pipelineStageSet keeps it
+// out on purpose). /handoff sits LAST for the mirror reason: it writes
+// 80-handoff.md and compacts (or spawns continuation teammates) and returns
+// the cell to the phase it was in, and it is the one carl reaches for on a
+// cell already mid-phase.
+export const CMD_CHIPS = ["/direct", "/info", "/aim", "/do", "/pr", "/handoff"] as const;
 export type CmdChip = (typeof CMD_CHIPS)[number];
 
 /**
- * Boundary-anchored match for any of the five commands.
+ * Boundary-anchored match for any of the six commands.
  *
  * The leading `(^|\s)` group matters as much as the trailing `\b`: `\b` only
  * guards the END of the match, so without the anchor a mid-word slash run like
@@ -70,7 +73,7 @@ export const CMD_ACTIVE_RE = Object.fromEntries(
 ) as Record<CmdChip, RegExp>;
 
 /**
- * app.js:1771 — escape first, then wrap. None of the five commands contain an
+ * app.js:1771 — escape first, then wrap. None of the six commands contain an
  * HTML-special character, so matching against already-escaped text is safe.
  * The trailing newline is the sentinel described in (1) above.
  */
