@@ -20,15 +20,19 @@ import (
 // way a session file's "busy" outlives the turn.
 
 // pipelineStageSet names the five phase-governing skills — the only skill
-// names that count as a stage. `load` and `handoff` are deliberately absent:
-// `load` is a reference skill (no phase, no cell section — see skills.go's
-// SkillsFS comment) consulted mid-phase, so a `load` hit would overwrite the
-// real phase with a lookup; `handoff` is a compaction-with-a-record that
-// returns the agent to the phase it was in, and the daemon types it into a
-// pane on its own, so a `handoff` hit would overwrite the badge with a word
-// that names no phase. Every other skill a cell might touch (personal
-// skills, a target repo's own project skills) is ignored by virtue of not
-// being in this set. Kept as a literal rather than derived from SkillsFS,
+// names that count as a stage. `load`, `handoff` and `direct` are
+// deliberately absent: `load` is a reference skill (no phase, no cell
+// section — see skills.go's SkillsFS comment) consulted mid-phase, so a
+// `load` hit would overwrite the real phase with a lookup; `handoff` is a
+// compaction-with-a-record that returns the agent to the phase it was in,
+// and the daemon types it into a pane on its own, so a `handoff` hit would
+// overwrite the badge with a word that names no phase; `direct` is a
+// modifier over aim/info/do (one agent, no crew) that a job reads FIRST and
+// then follows into the phase skill's own sections, so the phase skill's
+// read is the real signal and a `direct` stage would badge every quick job
+// with a word that is not a phase. Every other skill a cell might touch
+// (personal skills, a target repo's own project skills) is ignored by virtue
+// of not being in this set. Kept as a literal rather than derived from SkillsFS,
 // which is nil whenever root's init hasn't run (unit tests of this package);
 // the root skills-embed test pins the two lists against each other in both
 // directions, so a new pipeline skill can't be added to the bundle without

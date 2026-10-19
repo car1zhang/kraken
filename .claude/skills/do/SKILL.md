@@ -23,7 +23,7 @@ Take the artifact set produced by [[aim]] earlier in this conversation — `00-o
 - Read `00-overview.md` in full, then every `.md` file in the set root other than `00-overview.md` in full (covers `5N-*.md` and any `6N+` section docs), then the open-questions record in full (standalone: `questions.yaml` if it exists; in a cell: `kraken questions get <slug>`). The set is the source of truth — do not rely on chat memory of what it said. (Diagram cards are supporting detail; skim captions/titles rather than reading every SVG body.)
 - If working from a legacy single-file doc instead, read it in full the same way.
 - The open-questions record is OPTIONAL: a missing `questions.yaml` (or an empty `kraken questions get`) means zero open questions for this set — skip straight to implementation (do not refuse or treat it as an error).
-- If any section doc this workflow names (`50-components.md`, `51-code-map.md`, `52-testing-plan.md`) — or one referenced elsewhere in the set (e.g. by `51-code-map.md`'s review guide) — is absent, say so explicitly and fall back to `00-overview.md` plus whatever section docs do exist — never invent content to fill the gap. A solo set legitimately has none of the three named docs; that is not an error.
+- If any section doc this workflow names (`50-components.md`, `51-code-map.md`, `52-testing-plan.md`) — or one referenced elsewhere in the set (e.g. by `51-code-map.md`'s review guide) — is absent, say so explicitly and fall back to `00-overview.md` plus whatever section docs do exist — never invent content to fill the gap. A solo set legitimately has none of the three named docs, and a `/direct` set carries them as one `50-plan.md`; neither is an error.
 
 ### 2. Resolve P0 Open Questions
 
@@ -183,6 +183,7 @@ When a kraken job brief sends you here, these deltas apply — the brief wins wh
   and STOP (end the turn). Do not proceed to a PR on your own — {{operator}}'s reply is what passes the gate.
 - **When their reply passes it**, shut any test services down and follow `.claude/skills/pr/SKILL.md` in your worktree for branch and PR conventions — read it BY PATH; do NOT invoke `/pr` by name, since a personal skill of that name would shadow it.
 - Never declare the job done — accepting or merging is {{operator}}'s move, never yours.
+- **`/direct` overrides this skill.** A spec that opens with `/direct`, a direct Phase 1 before this one, or `/direct do` typed into your pane, means `.claude/skills/direct/SKILL.md` governs the phase: no crew, no blind authorship, you implement and test alone, the review round runs only when {{operator}} asked for it, and you read this file by section rather than whole. Read direct first.
 
 ## Boundaries
 

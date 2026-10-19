@@ -101,6 +101,11 @@ func TestScanStageSignalShapes(t *testing.T) {
 		// the command shape; it compacts the agent and returns it to the phase
 		// it was in, so the badge must stay on that phase.
 		{"handoff is not a stage", []string{commandLine(t, "/do"), commandLine(t, "/handoff"), readToolLine(t, "/wt/.claude/skills/handoff/SKILL.md")}, "do"},
+		// A typed /direct (with or without a phase word after it) is a
+		// modifier: the job reads direct/SKILL.md first and then the phase
+		// skill's own sections, and only that second read moves the badge.
+		{"direct is not a stage", []string{commandLine(t, "/aim"), commandLine(t, "/direct"), readToolLine(t, "/wt/.claude/skills/direct/SKILL.md")}, "aim"},
+		{"direct then phase skill badges the phase", []string{commandLine(t, "/direct"), readToolLine(t, "/wt/.claude/skills/direct/SKILL.md"), readToolLine(t, "/wt/.claude/skills/do/SKILL.md")}, "do"},
 		{"non-pipeline command ignored", []string{commandLine(t, "/login")}, ""},
 		{"read of non-SKILL file ignored", []string{readToolLine(t, "/wt/.claude/skills/aim/assets/hermes-contract.md")}, ""},
 		{"skills path without .claude ignored", []string{readToolLine(t, "/wt/docs/skills/aim/SKILL.md")}, ""},

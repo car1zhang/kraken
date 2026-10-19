@@ -200,6 +200,7 @@ When a kraken job brief sends you here, these deltas apply — the brief wins wh
 - **`/do` is {{operator}}'s move, not yours.** Phase 2 begins only when they send `/do` in your pane. Never declare the job done — accepting or merging is their call.
 - Never run `open` — it has no display to land in; the board renders the artifacts. A browser may still be REACHABLE from a cell (the claude-in-chrome MCP tools drive {{operator}}'s own Chrome when its extension is connected), and a "not connected" result is often transient: re-try once after a few minutes before reporting a browser gate as blocked.
 - `solo: true` on the job means no teammates and no subagents at all — see the solo rule in Core Rules.
+- **`/direct` overrides this skill.** A spec that opens with `/direct`, or `/direct aim` typed into your pane, means `.claude/skills/direct/SKILL.md` governs the round: you research and write alone, ship prose-only (`00-overview.md` + `50-plan.md`), and read this file by section rather than whole. Read direct first.
 
 ## Mode Guidance
 
