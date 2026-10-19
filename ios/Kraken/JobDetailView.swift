@@ -3,7 +3,7 @@ import PhotosUI
 
 // MARK: - command chips
 
-/// Row of six tappable command chips — /info /aim /do /pr /dream /handoff —
+/// Row of seven tappable command chips — /direct /info /aim /do /pr /dream /handoff —
 /// for one-tap insertion into a composer's bound text, mirroring the web
 /// SPA's command chips (app.js's attachCmdChips). This still appends rather
 /// than inserting
@@ -23,21 +23,24 @@ import PhotosUI
 struct CmdChipsRow: View {
     @Binding var text: String
 
-    // /handoff sits last: it is the one chip that names no phase (it hands
+    // Two chips name no phase, and they bracket the row. /direct sits first:
+    // it is a modifier typed ahead of the phase it modifies (`/direct do`,
+    // or `/direct /do` when both come from chips) and runs that phase skill
+    // minus its subagents and review rounds. /handoff sits last: it hands
     // the cell over behind a written record and returns it to the phase it
-    // was in), and the one carl reaches for on a cell already mid-phase.
-    static let commands = ["/info", "/aim", "/do", "/pr", "/dream", "/handoff"]
+    // was in, and is the one carl reaches for on a cell already mid-phase.
+    static let commands = ["/direct", "/info", "/aim", "/do", "/pr", "/dream", "/handoff"]
 
     var body: some View {
-        // A horizontal ScrollView rather than a bare HStack: six chips come
-        // to roughly 360pt of capsules at this font, against the ~315-330pt
+        // A horizontal ScrollView rather than a bare HStack: seven chips come
+        // to roughly 420pt of capsules at this font, against the ~315-330pt
         // a Form row offers on a 393pt phone, and a bare HStack answers that
         // by squeezing the Text inside its capsules (web's row wraps instead,
         // via flex-wrap). `.fixedSize()` on each label keeps every chip at
         // its natural width so the row scrolls rather than truncates. The
         // scroll view would otherwise clip the active chip's glow and the
         // outer half of its stroke (a bare HStack never clipped), and would
-        // rubber-band on a Pro Max where all six already fit.
+        // rubber-band on a Pro Max where all seven already fit.
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 6) {
                 ForEach(Self.commands, id: \.self) { cmd in
@@ -76,6 +79,7 @@ struct CmdChipsRow: View {
     // rendering. Not private — HighlightingTextEditor.swift calls this too.
     static func styleUI(for cmd: String) -> (color: UIColor, soft: UIColor)? {
         switch cmd {
+        case "/direct": return (KTheme.skillDirectUI, KTheme.skillDirectSoftUI)
         case "/info": return (KTheme.skillInfoUI, KTheme.skillInfoSoftUI)
         case "/aim": return (KTheme.skillAimUI, KTheme.skillAimSoftUI)
         case "/do": return (KTheme.skillDoUI, KTheme.skillDoSoftUI)

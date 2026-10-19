@@ -272,8 +272,8 @@ struct HighlightingTextEditor: UIViewRepresentable {
         let command: String
     }
 
-    /// Finds every `CmdChipsRow.commands` token (`/info /aim /do /pr /dream
-    /// /handoff`) in `text`, anchored the same way as `CmdChipsRow.isPresent`
+    /// Finds every `CmdChipsRow.commands` token (`/direct /info /aim /do /pr
+    /// /dream /handoff`) in `text`, anchored the same way as `CmdChipsRow.isPresent`
     /// / web's `CMD_HL_RE`: a
     /// leading `(^|\s)` boundary (consumed by the match but NOT part of the
     /// returned range) and a trailing `\b` (so "/doc" doesn't match "/do",

@@ -20,18 +20,28 @@ final class HighlightingTextEditorTests: XCTestCase {
         Token(range: NSRange(location: location, length: length), command: command)
     }
 
-    // MARK: - all six commands
+    // MARK: - all seven commands
 
-    func testAllSixCommandsMatch() {
-        let text = "/info /aim /do /pr /dream /handoff"
+    func testAllSevenCommandsMatch() {
+        let text = "/direct /info /aim /do /pr /dream /handoff"
         XCTAssertEqual(matches(text), [
-            token(0, 5, "/info"),
-            token(6, 4, "/aim"),
-            token(11, 3, "/do"),
-            token(15, 3, "/pr"),
-            token(19, 6, "/dream"),
-            token(26, 8, "/handoff"),
+            token(0, 7, "/direct"),
+            token(8, 5, "/info"),
+            token(14, 4, "/aim"),
+            token(19, 3, "/do"),
+            token(23, 3, "/pr"),
+            token(27, 6, "/dream"),
+            token(34, 8, "/handoff"),
         ])
+    }
+
+    func testDirectModifierAndItsPhaseAreTwoTokens() {
+        // `/direct do` is the skill's spelling; `/direct /do` is what two
+        // chip taps produce. The modifier is a token either way, the phase
+        // only when it keeps its slash — and "/directory" is not "/direct".
+        XCTAssertEqual(matches("/direct do"), [token(0, 7, "/direct")])
+        XCTAssertEqual(matches("/direct /do"), [token(0, 7, "/direct"), token(8, 3, "/do")])
+        XCTAssertEqual(matches("/directory listing"), [])
     }
 
     func testEveryChipCommandIsRecognized() {
