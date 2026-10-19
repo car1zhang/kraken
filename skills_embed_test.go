@@ -37,10 +37,11 @@ func TestSkillsFSContainsExpectedSkills(t *testing.T) {
 		// or by the daemon's auto-handoff pass) and returns the agent to the
 		// phase it was in. nonStageSkills below is where that is pinned.
 		"handoff": "handoff",
-		// `direct` governs no phase of its own either: it is a modifier over
-		// the three phase skills (no crew, prose-only, review opt-in), read
-		// FIRST and then followed by the phase skill's own sections — so the
-		// phase skill's read is the stage signal, and direct must not be one.
+		// `direct` governs no phase of its own either: it is a modifier used
+		// in tandem with the three phase skills (no crew, no diagram cards,
+		// review opt-in), read FIRST and then followed by the phase skill
+		// itself — so the phase skill's read is the stage signal, and direct
+		// must not be one.
 		"direct": "direct",
 	}
 	for dir, wantName := range want {
@@ -67,8 +68,8 @@ func TestSkillsFSContainsExpectedSkills(t *testing.T) {
 // `/handoff` read as a stage would overwrite the board's badge with a word
 // that names no phase, on every auto-handoff the daemon types. `direct` is a
 // modifier typed WITH a phase (`/direct do`) or ahead of one, and the phase
-// skill it then sends the reader into is the real stage: a `direct` stage
-// would badge every quick job with a word that is not a phase.
+// skill it is then followed in tandem with is the real stage: a `direct`
+// stage would badge every quick job with a word that is not a phase.
 var nonStageSkills = map[string]bool{"load": true, "handoff": true, "direct": true}
 
 // TestPipelineStageSetMatchesEmbeddedSkills holds jobs.PipelineStages'
@@ -349,26 +350,37 @@ func TestSkillsOwnTheCellContract(t *testing.T) {
 			// dream's alone — TestOnlyDreamNamesTheFeedbackWriteVerb)
 			"Never run `kraken feedback` write verbs",
 		}},
-		// direct owns the one-agent override: it is read INSTEAD of the bulk
-		// of aim/info/do (by section, never whole), so every rule it must
-		// carry is one the quick path would otherwise lose — the no-crew
-		// rule, the section-read rule, the prose-only rule, the review
-		// default and its opt-in, the single-file plan that replaces aim's
-		// three section docs, and the pointers at each phase's own closing
-		// line. Zeus' brief names the skill and its scope (no crew, review
-		// only on request); the rules themselves live here.
+		// direct owns the one-agent override, and it is a DELTA over
+		// aim/info/do rather than a replacement: the phase skill still runs
+		// as written and direct is the complete list of what it deletes —
+		// the researcher fan-outs, hermes and the diagram cards, the crew
+		// dispatch/join/arbitration, and the review rounds unless asked. So
+		// what must be pinned here is the no-crew rule, each phase's delta
+		// table, the review default and its opt-in shape, and the statement
+		// that everything unnamed is the phase skill's. Zeus' brief names the
+		// skill and its scope (no crew, review only on request); the rules
+		// themselves live here.
 		{"direct", []string{
 			"Inside A Kraken Cell", "<cellDir>/artifacts/", "Never declare the job done",
-			"No crew, no subagents", "Read a phase skill by SECTION", "Prose-only artifacts",
-			"Review is off by default and on by request", "review skipped (direct)",
-			"nothing delegated (direct)", "50-plan.md",
-			// the one agent set direct may spawn, and only on request
+			"No crew, no subagents", "Review is off by default and on by request",
+			// the three delta tables, one per phase skill, and the clause
+			// that bounds them — a step not named runs as the phase skill says
+			"## `/aim` Under Direct", "## `/info` Under Direct", "## `/do` Under Direct",
+			"A step of a phase skill that is not named here runs exactly as that skill says",
+			// the doc-phase deletions: no researchers, no hermes, no cards
+			"No diagram cards at all", "No diagram card.", "You research it yourself",
+			// the build-phase deletions and what replaces them
+			"Skipped whole", "review skipped (direct)", "nothing delegated (direct)",
+			// the one agent set direct may spawn, and only on request — and
+			// the round is bounded to one re-review, which is the "long
+			// review rounds" the operator asked direct to eliminate
 			"athena-logic", "athena-edge", "athena-style", "model: opus",
 			"BLOCKING means you would not ship the tree as it stands",
+			"re-review ONCE with only the flagging variant(s)",
 			// the explanation path's defining constraint survives the override
-			"No open questions. Ever.",
-			// the phase skills still own their closing lines; direct points
-			"The phase's closing line is the phase skill's",
+			"no open questions ever",
+			// the closing lines stay the phase skills'
+			"the closing line is the phase skill's",
 			"`.claude/skills/pr/SKILL.md`", "90-build-report.md",
 			// solo outranks the review word: a solo job has no agents at all
 			"solo means no teammates and no subagents at all",
@@ -376,9 +388,6 @@ func TestSkillsOwnTheCellContract(t *testing.T) {
 			// review-every-time rule in particular, which is the one the
 			// skill's whole point contradicts
 			"its rule that the athena review runs every time",
-			// a direct do after a CREW phase 1 reads the crew's set, not a
-			// plan file that was never written
-			"EVERY other `.md` in the set root",
 			// the never-hard-wrap and TLDR rules; see the same tokens on aim
 			"ONE source line", "opens with a one-liner stating its main message",
 			// the feedback prohibition, as a prohibition (dream's verb)
@@ -477,55 +486,41 @@ func TestWaitProtocolPointersResolve(t *testing.T) {
 }
 
 // TestDirectPointersResolve is the same skill-vs-skill guard as
-// TestWaitProtocolPointersResolve, for the skill built almost entirely out of
-// pointers. `direct` tells a one-agent job to read aim, info and do BY SECTION
-// — grep a heading, Read from that line — instead of whole, which is the
-// token saving the skill exists for. That makes each heading it names
-// load-bearing text in a file whose author has no reason to know it is quoted:
-// retitle do's build-report step and a direct job greps for a heading that is
-// gone, finds nothing, and either reads the whole file (the spend the skill
-// was meant to avoid) or improvises the build report (the artifact no review
-// covers). Both sides are asserted: direct still names the heading, and the
-// owning skill still has it at a line start.
+// TestWaitProtocolPointersResolve, for a skill that is nothing BUT deltas
+// over three others. `direct` is read in tandem with aim, info and do — the
+// phase skill runs as written and direct names the steps it deletes — so the
+// coupling runs both ways and both halves are asserted. Forward: direct must
+// keep naming all three phase skills by path, and the do steps its delta
+// table deletes or re-routes must still exist under the headings direct's
+// reader will be following (renumber do's steps and the "step 5 un-delegated
+// path" direct sends a job to is a different step). Inverse: each phase
+// skill's cell section must point back at direct, so a cell that reads the
+// phase skill before noticing `/direct` in its spec still learns the override
+// exists, rather than running the crew on a job the operator marked quick.
 func TestDirectPointersResolve(t *testing.T) {
 	direct := readEmbedded(t, "direct/SKILL.md")
-	for _, p := range []struct{ skill, heading string }{
-		{"aim", "## Artifact Set Shape"},
-		{"aim", "## Inside A Kraken Cell"},
-		{"info", "## First pass: one brief overview"},
-		{"info", "## Inside A Kraken Cell"},
-		{"do", "## Inside A Kraken Cell"},
-		{"do", "### 7. Write The Build Report"},
-		{"do", "### 4. Plan The Implementation"},
-		{"do", "**How to wait:"},
-		{"do", "**Wait for the whole fan-out in one watch"},
-		{"do", "**A review round closes on verdicts"},
-	} {
-		if !strings.Contains(direct, p.heading) {
-			t.Errorf(".claude/skills/direct/SKILL.md no longer points at %s's %q — the section read "+
-				"is how a direct job avoids reading the phase skill whole; a dropped pointer sends it "+
-				"back to the full file or to improvising", p.skill, p.heading)
-		}
-		// A `#` heading must sit at a line start, since that is what the grep
-		// direct prescribes anchors on; the `**`-titled entries are bullets,
-		// so they are matched wherever they are.
-		src := readEmbedded(t, p.skill+"/SKILL.md")
-		want := p.heading
-		if strings.HasPrefix(want, "#") {
-			want = "\n" + want
-		}
-		if !strings.Contains(src, want) {
-			t.Errorf(".claude/skills/%s/SKILL.md no longer has %q (at a line start, for a heading) — "+
-				"direct/SKILL.md sends a one-agent job to grep for exactly that, and a heading that "+
-				"moved fails silently", p.skill, p.heading)
-		}
-	}
-	// the inverse pointer: each phase skill's cell section names direct, so a
-	// job that read the phase skill first still learns the override exists
 	for _, skill := range []string{"aim", "info", "do"} {
+		path := ".claude/skills/" + skill + "/SKILL.md"
+		if !strings.Contains(direct, path) {
+			t.Errorf("direct/SKILL.md no longer names %s — direct is a delta over that skill and "+
+				"has to say so, or a direct job does not know which skill it is still following", path)
+		}
 		if !strings.Contains(readEmbedded(t, skill+"/SKILL.md"), ".claude/skills/direct/SKILL.md") {
 			t.Errorf(".claude/skills/%s/SKILL.md no longer points at direct/SKILL.md — a cell that "+
 				"reads this phase skill before noticing `/direct` in its spec has no way back", skill)
+		}
+	}
+	do := readEmbedded(t, "do/SKILL.md")
+	for _, heading := range []string{
+		"### 4. Plan The Implementation", // the delegation bullets direct skips whole
+		"### 5. Implement",               // the un-delegated path direct routes every job onto
+		"### 7. Write The Build Report",  // the join row direct rewrites
+		"### 9. Clean Up Agents",         // the step direct says has nothing to stop
+	} {
+		if !strings.Contains(do, "\n"+heading) {
+			t.Errorf(".claude/skills/do/SKILL.md no longer has %q at a line start — direct/SKILL.md's "+
+				"delta table names that step by number, and a renumbered step sends a direct job to "+
+				"the wrong one silently", heading)
 		}
 	}
 }

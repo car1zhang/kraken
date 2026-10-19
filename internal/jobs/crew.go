@@ -318,14 +318,14 @@ func zeusBrief(j *Job) string {
 	// TestSkillsOwnTheCellContract and banned from this brief by
 	// TestZeusBriefDoesNotRestateSkills. The brief's job is to make sure a
 	// `/direct` in the spec or the pane is read FIRST — before the phase
-	// skill it modifies, which it then tells zeus to read by section rather
-	// than whole — and to state the override's SCOPE: the crew paragraph
+	// skill it modifies, which then runs as written minus the steps direct
+	// deletes — and to state the override's SCOPE: the crew paragraph
 	// above says the athena review runs every time, and that is a standing
 	// system-prompt instruction, which outranks a skill read once; a direct
 	// sentence that overrode only the phase skills left it in force, so the
 	// scope clause is the one summary of direct's effect the brief has to
 	// carry itself (TestZeusBriefNamesDirect pins it).
-	b.WriteString("`/direct` — when the job spec OPENS with `/direct`, or " + op + " types `/direct` (optionally naming a phase, e.g. `/direct do`) into your pane, read `.claude/skills/direct/SKILL.md` BY PATH FIRST, before the phase skill it modifies: for the rest of the job it overrides the three phase skills above AND this brief's own crew and review paragraphs (there is then no crew, and the review runs only when asked), says which of the phase skills' sections still bind, and is how a quick job runs with you alone.\n")
+	b.WriteString("`/direct` — when the job spec OPENS with `/direct`, or " + op + " types `/direct` (optionally naming a phase, e.g. `/direct do`) into your pane, read `.claude/skills/direct/SKILL.md` BY PATH FIRST, before the phase skill it modifies: it is used IN TANDEM with the three phase skills above — each still runs as written, and direct lists the steps it deletes (every one that needs a subagent, and the review rounds) — and for the rest of the job it overrides this brief's own crew and review paragraphs too (there is then no crew, and the review runs only when asked).\n")
 	return b.String()
 }
 

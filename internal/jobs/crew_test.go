@@ -221,14 +221,14 @@ func TestZeusBriefDoesNotRestateSkills(t *testing.T) {
 			// as a prohibition — this test reads zeusBrief only.)
 			{"feedback addressed", "dream"},
 			// the one-agent override's rules — direct/SKILL.md. The brief
-			// names the skill and when to read it; what it changes (the
-			// no-crew rule, the by-section read, the review default and its
-			// opt-in word, the single plan file) is procedure and lives there.
+			// names the skill, when to read it and its scope; what it
+			// deletes from each phase skill (the no-crew rule, the delta
+			// tables, the review default and its opt-in word) is procedure
+			// and lives there.
 			{"No crew, no subagents", "direct"},
-			{"by SECTION", "direct"},
+			{"Under Direct", "direct"},
 			{"Review is off by default", "direct"},
 			{"review skipped", "direct"},
-			{"50-plan.md", "direct"},
 		} {
 			if strings.Contains(brief, owned.token) {
 				t.Errorf("%s brief restates %q, which .claude/skills/%s/SKILL.md owns — "+

@@ -28,9 +28,9 @@ import (
 // and the daemon types it into a pane on its own, so a `handoff` hit would
 // overwrite the badge with a word that names no phase; `direct` is a
 // modifier over aim/info/do (one agent, no crew) that a job reads FIRST and
-// then follows into the phase skill's own sections, so the phase skill's
-// read is the real signal and a `direct` stage would badge every quick job
-// with a word that is not a phase. Every other skill a cell might touch
+// then follows in tandem with the phase skill it modifies, so the phase
+// skill's read is the real signal and a `direct` stage would badge every
+// quick job with a word that is not a phase. Every other skill a cell might touch
 // (personal skills, a target repo's own project skills) is ignored by virtue
 // of not being in this set. Kept as a literal rather than derived from SkillsFS,
 // which is nil whenever root's init hasn't run (unit tests of this package);
