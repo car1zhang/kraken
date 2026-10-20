@@ -15,12 +15,23 @@ import (
 // A CrewAgent is one live subagent in a cell: a tmux-backed teammate pane or
 // an in-process team member.
 type CrewAgent struct {
-	Name    string // agent name (AgentName, falling back to Name)
-	Role    string // "hephaestus" | "athena" | "hermes" | "other"
+	Name    string // agent name (AgentName, falling back to Name); a task's description
+	Role    string // "hephaestus" | "athena" | "hermes" | "other"; a subagent task's agent type, a shell/monitor task's kind
 	Model   string
 	Status  string // refined status: "running" | "waiting" | "question" | "in-process" | anything discovery reports
-	Working bool   // tmux-backed: Status == "running"; in-process: isActive explicitly true
+	Working bool   // tmux-backed: Status == "running"; in-process: isActive explicitly true; a task: always
+	// Kind separates the crew proper from zeus' background tasks:
+	// "teammate" for a pane or in-process team member, else the task's
+	// core.Task kind ("subagent" | "monitor" | "shell"). StartedAt orders
+	// tasks among themselves (unix millis; 0 for a teammate).
+	Kind      string
+	StartedAt int64
 }
+
+// CrewKindTeammate is the Kind of every roster entry that is a team member
+// rather than a background task; the task kinds are core's TaskSubagent,
+// TaskMonitor and TaskShell.
+const CrewKindTeammate = "teammate"
 
 // A CrewSummary is a cell's live crew: zeus' own refined status plus one
 // entry per teammate.
@@ -134,11 +145,47 @@ func CellCrew(sess string, zeus *core.Peer, peers []*core.Peer, members []core.T
 			Model:   model,
 			Status:  p.Status,
 			Working: working,
+			Kind:    CrewKindTeammate,
 		})
 	}
 
-	sort.Slice(summary.Agents, func(i, j int) bool {
+	// Zeus' own background tasks (core.Peer.Tasks: in-process subagents,
+	// monitors, background shells) ride the same roster after the crew
+	// proper, so the one surface the card and the steer modal already
+	// render shows them too. A task is always working — discovery has
+	// already pruned the dead ones — and a subagent's Role is its agent
+	// type, which is what the /tasks list in the TUI calls it.
+	if zeus != nil {
+		for _, t := range zeus.Tasks {
+			name := t.Description
+			if name == "" {
+				name = t.ID
+			}
+			role := t.Kind
+			if t.Kind == core.TaskSubagent && t.AgentType != "" {
+				role = t.AgentType
+			}
+			summary.Agents = append(summary.Agents, CrewAgent{
+				Name:      name,
+				Role:      role,
+				Model:     t.Model,
+				Status:    "running",
+				Working:   true,
+				Kind:      t.Kind,
+				StartedAt: t.StartedAt,
+			})
+		}
+	}
+
+	sort.SliceStable(summary.Agents, func(i, j int) bool {
 		a, b := summary.Agents[i], summary.Agents[j]
+		if ka, kb := crewKindRank(a.Kind), crewKindRank(b.Kind); ka != kb {
+			return ka < kb
+		}
+		if a.Kind != CrewKindTeammate {
+			// tasks keep launch order within their kind
+			return a.StartedAt < b.StartedAt
+		}
 		if ra, rb := crewRoleRank(a.Role), crewRoleRank(b.Role); ra != rb {
 			return ra < rb
 		}
@@ -146,4 +193,19 @@ func CellCrew(sess string, zeus *core.Peer, peers []*core.Peer, members []core.T
 	})
 
 	return summary
+}
+
+// crewKindRank orders the roster: the crew proper first, then zeus' tasks
+// in the order TaskSummary prints them (subagents, monitors, shells).
+func crewKindRank(kind string) int {
+	switch kind {
+	case CrewKindTeammate:
+		return 0
+	case core.TaskSubagent:
+		return 1
+	case core.TaskMonitor:
+		return 2
+	default:
+		return 3
+	}
 }

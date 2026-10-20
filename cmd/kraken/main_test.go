@@ -175,3 +175,18 @@ func TestSelfMarkRendering(t *testing.T) {
 		t.Errorf("self agent row must carry the me mark")
 	}
 }
+
+// A claude with live background tasks says so beside its status (job 612);
+// without any, the cell is byte-identical to before the field existed.
+func TestPeerCellsTaskSuffix(t *testing.T) {
+	now := time.Now()
+	p := &core.Peer{Name: "zeus-x", Pane: "%1", PID: 1, Index: 1, Status: "waiting"}
+	plain := peerCells(p, nil, false, now)[1]
+	if plain != "● waiting" {
+		t.Fatalf("status cell = %q", plain)
+	}
+	p.Tasks = []core.Task{{Kind: core.TaskSubagent}, {Kind: core.TaskSubagent}, {Kind: core.TaskMonitor}}
+	if got := peerCells(p, nil, false, now)[1]; got != "● waiting · 2 subagents · 1 monitor" {
+		t.Fatalf("status cell = %q", got)
+	}
+}

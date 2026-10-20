@@ -474,6 +474,10 @@ export function App() {
         // server, daemon down) simply draws none.
         usage={usage.data}
         operator={board.board?.operator}
+        // view mode's ↺: re-point the SAME overlay at the same job in
+        // reactivate mode. The body is keyed on slug+mode, so this is a fresh
+        // mount of the composer, exactly as the card's own ↺ button gives.
+        onReactivate={(slug) => openSteer(slug, "reactivate")}
         // Both REQUIRED, deliberately: these replaced optional `artifactChips`
         // / `threadChips` slots that App never filled, which left the modal's
         // artifact list and its branch button rendering nothing at all. An

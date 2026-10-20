@@ -34,6 +34,15 @@ type Peer struct {
 	// of a false "waiting" read. See discover.go's DiscoverAll and
 	// FindPendingWakeup.
 	Wakeup *Wakeup `json:"wakeup,omitempty"`
+	// StartedAt is the claude process' start (the session file's startedAt,
+	// unix millis; 0 when no session file was read). Tasks is the claude's
+	// live background tasks — in-process subagents, monitors and background
+	// shells — read off its own transcript and pruned against this start,
+	// the subagent sidecars and the process table (tasks.go). Neither
+	// changes Status: a zeus at its prompt with three subagents is still
+	// "waiting", and the roll call (jobs.cellActive) is what reads Tasks.
+	StartedAt int64  `json:"started_at,omitempty"`
+	Tasks     []Task `json:"tasks,omitempty"`
 	// SessionIDGuessed marks ids inferred from cwd+newest-transcript (no
 	// session file): fine for display, unsafe for fork/read targeting.
 	SessionIDGuessed bool   `json:"session_id_guessed,omitempty"`
@@ -99,7 +108,11 @@ type sessionFile struct {
 	Name            string `json:"name"`
 	Status          string `json:"status"`
 	StatusUpdatedAt int64  `json:"statusUpdatedAt"`
-	Kind            string `json:"kind"`
+	// StartedAt is the process' start, unix millis: the boundary a task
+	// launched by an earlier process (a resume, a fork, a crash) falls
+	// behind — see LiveTasks.
+	StartedAt int64  `json:"startedAt"`
+	Kind      string `json:"kind"`
 }
 
 type teamConfig struct {

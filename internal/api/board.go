@@ -106,6 +106,12 @@ type webAgent struct {
 	Role    string `json:"role"`
 	Status  string `json:"status"`
 	Working bool   `json:"working"`
+	// Kind is additive (job 612): "teammate" for the crew proper, else the
+	// background-task kind riding the roster — "subagent", "monitor",
+	// "shell". Old clients ignore it and render a task as an "other" crew
+	// entry; omitempty only so a pre-field payload shape is still a legal
+	// one, since every entry a current server emits carries it.
+	Kind string `json:"kind,omitempty"`
 }
 
 // webWakeup mirrors core.Wakeup for the wire, minus DelaySeconds — the
@@ -496,9 +502,12 @@ type webJob struct {
 	Cell      string        `json:"cell,omitempty"`
 	Live      bool          `json:"live"`
 	Artifacts []webArtifact `json:"artifacts,omitempty"`
-	// Detail is the cell's last words: for a live started cell, the full
-	// text of the last assistant text block of zeus' transcript, capped at
-	// 4000 chars.
+	// Detail is the cell's last words: the full text of the last assistant
+	// text block of zeus' transcript, capped at 4000 chars. Set wherever
+	// that transcript resolves — a live started cell, a cell-gone one, and a
+	// DONE job (located by its stamped session, since the cell is torn
+	// down) — so a done card reads like a blocked one: the job's final
+	// report stays on the board until the job is archived.
 	Detail string `json:"detail,omitempty"`
 	// LastSent is the last real user message from zeus' own transcript,
 	// regardless of send channel (board steer, k s, direct tmux typing),
@@ -512,8 +521,8 @@ type webJob struct {
 	// Stage is the pipeline skill zeus most recently used — one of the five
 	// phase-governing skill names (info, aim, do, pr, dream) — read
 	// off zeus' transcript (jobs.FindStage), never declared by any agent.
-	// Set only where a transcript already resolves (live started cells and
-	// the cell-gone branch, exactly the two branches that read Detail).
+	// Set only where a transcript already resolves (live started cells, the
+	// cell-gone branch and done jobs — exactly the branches that read Detail).
 	// Absence covers three states the wire deliberately does not separate —
 	// no resolvable transcript, any failed or truncated scan (FindStage
 	// fails closed), and no pipeline skill used yet — because a client
@@ -1023,6 +1032,21 @@ func cellZeusTranscript(j *jobs.Job, all []*core.Peer) (zeus *core.Peer, transcr
 // tail-reading via lastBlocks the same way k r does so huge transcripts stay
 // fast. "" when the file is unreadable or has no assistant text within the
 // lookback window.
+// fillLastWords stamps the three transcript-derived card lines — the last
+// assistant text (Detail), the last real user message (LastSent) and the
+// pipeline stage — from a transcript located WITHOUT a live peer: the
+// cell-gone and done branches of the board build, which share this because
+// they share the situation (a stamped session, no process). An empty path
+// is a job with no resolvable transcript and leaves all three unset.
+func fillLastWords(wj *webJob, transcript string) {
+	if transcript == "" {
+		return
+	}
+	wj.Detail = lastAssistantText(transcript)
+	wj.LastSent = lastUserSent(transcript)
+	wj.Stage = jobs.FindStage(transcript)
+}
+
 func lastAssistantText(path string) string {
 	blocks, _, err := core.LastBlocks(path, 20)
 	if err != nil {
@@ -1216,7 +1240,7 @@ func buildWebBoard() webBoard {
 				crew := jobs.CellCrew(jobs.CellSession(j), zeus, all, members)
 				wj.ZeusStatus = crew.ZeusStatus
 				for _, a := range crew.Agents {
-					wj.Roster = append(wj.Roster, webAgent{Name: a.Name, Model: a.Model, Role: a.Role, Status: a.Status, Working: a.Working})
+					wj.Roster = append(wj.Roster, webAgent{Name: a.Name, Model: a.Model, Role: a.Role, Status: a.Status, Working: a.Working, Kind: a.Kind})
 				}
 			}
 		} else if j.Started() && j.State != "done" {
@@ -1227,11 +1251,17 @@ func buildWebBoard() webBoard {
 			// located by the stamped session id since no live peer exists.
 			wj.CellGone = true
 			wj.Health = "cell session is gone — reactivate to resume; done/kill discard the worktree"
-			if transcript := core.TranscriptPathForSession(j.Session); transcript != "" {
-				wj.Detail = lastAssistantText(transcript)
-				wj.LastSent = lastUserSent(transcript)
-				wj.Stage = jobs.FindStage(transcript)
-			}
+			fillLastWords(&wj, core.TranscriptPathForSession(j.Session))
+		} else if j.State == "done" {
+			// done: the cell is torn down but zeus' transcript outlives it,
+			// and the board shows a done job the way it shows a blocked one —
+			// what zeus last said, what was last said to it, which skill it
+			// ended in. Read the same way the cell-gone branch reads them,
+			// since no live peer exists for either. The live arm above
+			// deliberately skips a done job whose session is still up (the
+			// window between accept and teardown), so this is the one place
+			// a done job's words come from.
+			fillLastWords(&wj, core.TranscriptPathForSession(j.Session))
 		}
 		wj.Reactivatable = (j.State == "done" || wj.CellGone) && j.Session != ""
 		byState[wj.State] = append(byState[wj.State], wj)

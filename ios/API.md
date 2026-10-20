@@ -173,19 +173,19 @@ payload, so a client sees exactly what it has always seen.
 | `cell` | string | omitempty | tmux session name |
 | `live` | bool | always | |
 | `artifacts` | array (`webArtifact`) | omitempty | |
-| `detail` | string | omitempty | zeus' last assistant text, full multi-line text capped at 4000 runes (not bytes) |
+| `detail` | string | omitempty | zeus' last assistant text, full multi-line text capped at 4000 runes (not bytes). Set wherever zeus' transcript resolves: live started cells, `cell_gone` jobs, and DONE jobs (by stamped session — the cell is torn down but the transcript outlives it), so a done card carries its final report until archived. Additive, no contract bump |
 | `question` | object (`webQuestion`) | omitempty (null-able) | |
 | `zeus_status` | string | omitempty | zeus' own refined status (running/polling/waiting/question); live started, non-done cells only, omitted when zeus isn't resolvable |
-| `stage` | string | omitempty | the pipeline skill zeus most recently used — one of the five phase-governing skill names (`info`/`aim`/`do`/`pr`/`dream`; `graph` was retired with the knowledge graph, and a client renders an unknown stage with its generic fallback), read off zeus' transcript (`jobs.FindStage`: last Skill invocation, `/name` command message, or Read of a `.claude/skills/<name>/SKILL.md` wins; the reference skill `load` never counts). Started non-done jobs with a resolvable transcript only (live or `cell_gone`). Absence covers three states the wire does not separate — no resolvable transcript, any failed or truncated scan, and no pipeline skill used yet — all rendered the same way (no badge). Rendered as one card chip on both clients. Additive, no contract bump |
+| `stage` | string | omitempty | the pipeline skill zeus most recently used — one of the five phase-governing skill names (`info`/`aim`/`do`/`pr`/`dream`; `graph` was retired with the knowledge graph, and a client renders an unknown stage with its generic fallback), read off zeus' transcript (`jobs.FindStage`: last Skill invocation, `/name` command message, or Read of a `.claude/skills/<name>/SKILL.md` wins; the reference skill `load` never counts). Started jobs with a resolvable transcript only (live, `cell_gone`, or done by stamped session). Absence covers three states the wire does not separate — no resolvable transcript, any failed or truncated scan, and no pipeline skill used yet — all rendered the same way (no badge). Rendered as one card chip on both clients. Additive, no contract bump |
 | `wakeup` | object (`webWakeup`) | omitempty (null-able) | pending `ScheduleWakeup` from zeus' transcript — cell is on a poll timer, still counts as `working`; render a countdown chip. Additive, no contract bump |
-| `roster` | array (`webAgent`) | omitempty | live crew (nested subagents), live started non-done cells only |
+| `roster` | array (`webAgent`) | omitempty | live crew (teammates) PLUS zeus' live background tasks (in-process subagents, monitors, background shells — each entry's `kind` says which; job 612), live started non-done cells only |
 | `health` | string | omitempty | "" (absent) = healthy |
 | `mtime` | number | always | unix millis |
 | `archived` | bool | omitempty | |
 | `display_slug` | string | omitempty | original slug, archived jobs only |
 | `cell_gone` | bool | omitempty | started + non-done + tmux session vanished; worktree (incl. uncommitted WIP) still on disk — reactivate preserves it, done/kill discard it |
 | `reactivatable` | bool | omitempty | has a recorded zeus session, and either done or `cell_gone` |
-| `last_sent` | string | omitempty | last real user message from zeus' session transcript, any send channel (board steer, `k s`, direct tmux typing); omitted when no transcript is resolvable or it has no user turn yet; one-line, capped 4000 runes (not bytes). Question-answer digit keypresses never appear (they're tool_results, not user text); started + non-done jobs (live or cell_gone) only |
+| `last_sent` | string | omitempty | last real user message from zeus' session transcript, any send channel (board steer, `k s`, direct tmux typing); omitted when no transcript is resolvable or it has no user turn yet; one-line, capped 4000 runes (not bytes). Question-answer digit keypresses never appear (they're tool_results, not user text); started jobs with a resolvable transcript — live, `cell_gone`, or done (by stamped session) |
 | `prs` | array (`jobPR`) | omitempty | every PR shipped from the cell branch (daemon-tracked history, never cleared); render as linked state chips |
 | `doc_questions` | array (`webDocQuestion`) | omitempty | zeus' open doc questions (answered or not), served straight from `questions` rows in `kraken.db` — no file, no parse step, so there is no more cell-gone-read-only or malformed-file case; never set for archived jobs. Additive, no contract bump |
 | `feedback` | array (`webFeedback`) | omitempty | per-job feedback entries (open + addressed), served straight from `feedback` rows in `kraken.db`; unlike `doc_questions`, IS populated for archived jobs (rows outlive the cell). Additive, no contract bump |
@@ -229,7 +229,13 @@ part of the wire *shape*, so this is no contract bump.
 `question`/`in-process`), `working` (bool, always — no `omitempty`, so
 `false` still rides the wire; tmux-backed entries are working iff their pane
 reports `running`, in-process entries iff their team-config `isActive` flag
-is true).
+is true), `kind` (string, omitempty, additive — job 612: `teammate` for the
+crew proper, else the background task riding the roster: `subagent` (an
+in-process Agent-tool spawn; `name` is its description, `role` its agent
+type, `model` its alias), `monitor` or `shell` (`name` is the command's
+description, `role` repeats the kind, `model` is empty); a task is always
+`working`, since the server has already pruned the dead ones; absent on a
+pre-612 server, in which case every entry is a teammate).
 
 `webQuestion`: `tool_use_id` (string, always), `questions` (array of `webQuestionItem`, always).
 

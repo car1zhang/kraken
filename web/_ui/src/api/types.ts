@@ -105,6 +105,13 @@ export interface WebAgent {
   role: string;
   status: string;
   working: boolean;
+  /**
+   * "teammate" for the crew proper, else the background task riding the
+   * roster: "subagent" (an in-process Agent spawn; name is its description,
+   * role its agent type), "monitor" or "shell". Absent on a pre-612 server,
+   * where every entry is a teammate.
+   */
+  kind?: string;
 }
 
 /** A pending ScheduleWakeup on the zeus peer. `fires_at` is unix millis. */

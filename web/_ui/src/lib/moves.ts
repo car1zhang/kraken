@@ -32,8 +32,12 @@ import type { Column } from "../hooks/useBoard.ts";
 export const ARCHIVED = "archived" as const;
 export type DropColumn = Column | typeof ARCHIVED;
 
-/** The three steer-modal modes. Only two are reachable from a drag. */
-export type SteerMode = "steer" | "unblock" | "reactivate";
+/**
+ * The four steer-modal modes. Only two are reachable from a drag; `view` is
+ * the DONE card's click — the same drilldown a blocked card opens, with the
+ * composer and every cell action gone, since there is no cell to act on.
+ */
+export type SteerMode = "steer" | "unblock" | "reactivate" | "view";
 
 /** A drop that writes job state through one endpoint. */
 export interface PostMove {
