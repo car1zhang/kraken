@@ -1914,21 +1914,35 @@ func teardownCell(j *Job, repo string, live map[string]bool, force bool) error {
 
 // --- cell health ---
 
-// acceptTrustPrompts answers claude's folder-trust dialog in a cell's fresh
-// (single) pane. The worktree is kraken-made from a repo carl submitted a job
-// on — that IS the trust decision — and an unanswered dialog blocks startup
-// entirely: no session file, no name, no work, and a cell that reads as
-// broken.
 // isTrustPrompt reports whether a pane's rendered text is a folder-trust
 // dialog blocking startup — claude's ("Is this a project you created or one you
-// trust") or codex's ("Do you trust the contents of this directory"). Both
-// pre-select the trust/yes option, so acceptTrustPrompts' single `send-keys
-// Enter` clears either.
+// trust") or codex's ("Do you trust the contents of this directory"). Codex
+// and older claude pre-select their yes option; claude 2.1.30x pre-selects
+// "No, exit", which trustPromptSelectsNo detects so acceptTrustPrompts can
+// move off it before pressing Enter.
 func isTrustPrompt(text string) bool {
 	return strings.Contains(text, "Is this a project you created or one you trust") ||
 		strings.Contains(text, "Do you trust the contents of this directory")
 }
 
+// trustPromptSelectsNo reports whether the trust dialog's highlighted option
+// (the line carrying claude's ❯ cursor) is the "No, exit" choice. Claude Code
+// 2.1.30x lists and pre-selects "No, exit" FIRST, so a bare Enter there quits
+// claude and the cell dies within seconds, logged only as "cell gone".
+func trustPromptSelectsNo(text string) bool {
+	for _, line := range strings.Split(text, "\n") {
+		if strings.Contains(line, "❯") {
+			return strings.Contains(line, "No, exit")
+		}
+	}
+	return false
+}
+
+// acceptTrustPrompts answers claude's folder-trust dialog in a cell's fresh
+// (single) pane. The worktree is kraken-made from a repo carl submitted a job
+// on — that IS the trust decision — and an unanswered dialog blocks startup
+// entirely: no session file, no name, no work, and a cell that reads as
+// broken.
 func acceptTrustPrompts(sess string) {
 	deadline := time.Now().Add(12 * time.Second)
 	for time.Now().Before(deadline) {
@@ -1942,9 +1956,13 @@ func acceptTrustPrompts(sess string) {
 			text := core.PaneTail(pane, 30)
 			if isTrustPrompt(text) {
 				sawDialog = true
-				// the trust/yes option is pre-selected either way: claude
-				// pre-selects "Yes, I trust this folder", codex "1. Yes,
-				// continue" — Enter accepts both.
+				// move off a pre-selected "No, exit" (claude 2.1.30x) before
+				// accepting. Down WRAPS in claude's two-option list (measured
+				// on 2.1.304), so it is only ever pressed right after
+				// re-reading the cursor line, never twice and never blind.
+				if trustPromptSelectsNo(text) {
+					_ = exec.Command("tmux", "send-keys", "-t", pane, "Down").Run()
+				}
 				_ = exec.Command("tmux", "send-keys", "-t", pane, "Enter").Run()
 			} else if strings.TrimSpace(text) != "" {
 				rendered++
