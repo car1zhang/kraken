@@ -32,3 +32,12 @@ func (s *Store) SetKV(key, value string) error {
 	}
 	return nil
 }
+
+// DeleteKV removes key. Deleting a key that is not set is not an error: the
+// caller wanted it gone, and it is.
+func (s *Store) DeleteKV(key string) error {
+	if _, err := s.db.Exec(`DELETE FROM kv WHERE key = ?`, key); err != nil {
+		return fmt.Errorf("delete kv %s: %w", key, err)
+	}
+	return nil
+}

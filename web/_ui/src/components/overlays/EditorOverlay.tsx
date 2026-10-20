@@ -36,6 +36,7 @@ import {
   useRenameControl,
   type RenameControlState,
 } from "./RenameControl.tsx";
+import { RemoteEditorBody, VisibilityControl } from "./RemoteSteer.tsx";
 // useRenameControl is called by EditorOverlay, above the keyed body — see the
 // comment on the hoist there.
 import { CmdComposer } from "./CmdComposer.tsx";
@@ -118,6 +119,12 @@ export interface EditorOverlayProps {
   onOpenArtifact: (url: string, name: string, jobKey: string) => void;
   /** See Overlay.tsx. */
   mutate: Mutate;
+  /**
+   * The OWNER node of a remote card. Present → the editor's remote mode
+   * (raw text through /api/nodes/job/raw, saved via the proxy's `save`
+   * action) instead of the local form; see RemoteEditorBody.
+   */
+  node?: string;
 }
 
 export interface ArtifactListProps {
@@ -209,13 +216,25 @@ export function EditorOverlay(props: EditorOverlayProps) {
     >
       {/* keyed on slug: reopening for another job is a fresh mount, which is
           openEditor's wholesale reset expressed once */}
-      <EditorBody
-        key={props.slug ?? "__new__"}
-        {...props}
-        fileSink={sink}
-        flushAutosave={flushAutosave}
-        rename={rename}
-      />
+      {props.node && props.slug ? (
+        // a remote PUBLIC card's job file, raw, through the fleet proxy
+        <RemoteEditorBody
+          key={props.node + "/" + props.slug}
+          node={props.node}
+          slug={props.slug}
+          job={props.job}
+          mutate={props.mutate}
+          onClose={props.onClose}
+        />
+      ) : (
+        <EditorBody
+          key={props.slug ?? "__new__"}
+          {...props}
+          fileSink={sink}
+          flushAutosave={flushAutosave}
+          rename={rename}
+        />
+      )}
     </Overlay>
   );
 }
@@ -880,6 +899,25 @@ function EditorBody({
                 active={!archived}
               />
             </div>
+            {/* visibility — the steer modal's three-way control, HERE as well
+                because a DRAFT card opens this editor and never the steer
+                modal, so without it a draft could not be made public or
+                private from the board at all. Like colour and goals it rides
+                its own ungated one-field route (setJobVisibility) and is NOT
+                disabled while read-only; it is never part of the form save,
+                which the server deliberately makes ignore `visibility`. Withheld
+                for an archived job, which no route answers for. */}
+            {slug && job && !archived ? (
+              <div className="f-field f-visibility">
+                <VisibilityControl
+                  id="f-visibility"
+                  slug={slug}
+                  visibility={job.visibility}
+                  mutate={mutate}
+                  compact
+                />
+              </div>
+            ) : null}
             <span className="f-toggles">
               <label className="check">
                 <input

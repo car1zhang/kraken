@@ -20,6 +20,13 @@ import {
 import { ThreadOverlay } from "./components/overlays/ThreadOverlay.tsx";
 import { showToast, Toast } from "./components/overlays/Toast.tsx";
 import { UsageOverlay } from "./components/overlays/UsageOverlay.tsx";
+import { DevicesOverlay } from "./components/overlays/DevicesOverlay.tsx";
+import {
+  readHiddenNodes,
+  readHideOthers,
+  writeHiddenNodes,
+  writeHideOthers,
+} from "./lib/fleet.ts";
 import { useBoard } from "./hooks/useBoard.ts";
 import { useBoardEvents } from "./hooks/useBoardEvents.ts";
 import { useHashRoute } from "./hooks/useHashRoute.ts";
@@ -70,7 +77,30 @@ const USAGE_POLL_MS = 60000;
  * board and back, which unmounting would throw away on every tab switch.
  */
 export function App() {
-  const board = useBoard();
+  // The fleet filter's two per-browser preferences. Up here because three
+  // surfaces share them — the board bar's hide-others toggle, the Devices
+  // overlay's per-node hide column, and useBoard, which applies them to the
+  // columns — and persisted in localStorage (lib/fleet.ts, try/catch-wrapped:
+  // a private window simply forgets them).
+  const [hideOthers, setHideOthersState] = useState<boolean>(readHideOthers);
+  const [hiddenNodes, setHiddenNodes] = useState<string[]>(readHiddenNodes);
+  const setHideOthers = useCallback((v: boolean) => {
+    setHideOthersState(v);
+    writeHideOthers(v);
+  }, []);
+  const toggleNode = useCallback((id: string, hide: boolean) => {
+    setHiddenNodes((prev) => {
+      const next = hide
+        ? prev.includes(id)
+          ? prev
+          : [...prev, id]
+        : prev.filter((n) => n !== id);
+      writeHiddenNodes(next);
+      return next;
+    });
+  }, []);
+  const fleet = useMemo(() => ({ hideOthers, hiddenNodes }), [hideOthers, hiddenNodes]);
+  const board = useBoard(fleet);
   const [view, navigate] = useHashRoute();
   // the sfx module's document-level capture listeners; the returned
   // uninstaller keeps strict-mode's double mount from stacking a second set
@@ -154,12 +184,17 @@ export function App() {
   // "the open overlay". They genuinely stack: the artifact viewer opens on
   // top of the steer modal (a chip in the steer context block), and the
   // thread overlay outlives the job-state change that force-closes steer.
+  // `node` is set only when a REMOTE card opened the overlay: it is half that
+  // card's identity (lib/jobKey.ts), so the overlay is looked up by owner plus
+  // slug and never lands on a local job sharing the slug.
   const [steer, setSteer] = useState<{
     slug: string;
     mode: SteerMode;
     requireText: boolean;
+    node?: string;
   } | null>(null);
-  const [editor, setEditor] = useState<{ slug: string | null } | null>(null);
+  const [editor, setEditor] = useState<{ slug: string | null; node?: string } | null>(null);
+  const [devicesOpen, setDevicesOpen] = useState(false);
   // `key` is the jobKey the artifact was opened with, NOT a bare slug: the
   // pager rebuilds the job's ordered artifact list from it, and an archived
   // job plus a live one that reused its freed slug would otherwise page
@@ -185,7 +220,8 @@ export function App() {
     editor !== null ||
     artifact !== null ||
     thread !== null ||
-    usageOpen;
+    usageOpen ||
+    devicesOpen;
 
   /**
    * The one place the board-refresh policy lives (see Overlay.tsx's Mutate).
@@ -282,8 +318,13 @@ export function App() {
   }, []);
 
   const openSteer = useCallback(
-    (slug: string, mode: SteerMode, opts?: { requireText?: boolean }) =>
-      setSteer({ slug, mode, requireText: opts?.requireText ?? false }),
+    (slug: string, mode: SteerMode, opts?: { requireText?: boolean; node?: string }) =>
+      setSteer({
+        slug,
+        mode,
+        requireText: opts?.requireText ?? false,
+        ...(opts?.node ? { node: opts.node } : {}),
+      }),
     [],
   );
 
@@ -308,8 +349,18 @@ export function App() {
     [board, openSteer],
   );
 
-  const jobFor = (slug: string | null | undefined) =>
-    slug == null ? undefined : board.byKey.get(jobKey({ slug }));
+  // A remote card resolves by owner plus slug; a local one by its bare slug.
+  // A fake owner object is enough for jobKey, which reads only `node_id`.
+  const jobFor = (slug: string | null | undefined, node?: string) =>
+    slug == null
+      ? undefined
+      : board.byKey.get(
+          jobKey(
+            node
+              ? { slug, owner: { node_id: node, label: "", operator: "", online: false } }
+              : { slug },
+          ),
+        );
 
   return (
     <>
@@ -321,6 +372,7 @@ export function App() {
         onOpenUsage={() => setUsageOpen(true)}
         onToast={showToast}
         onBeforeReload={onBeforeReload}
+        onOpenDevices={() => setDevicesOpen(true)}
       />
 
       {/*
@@ -371,6 +423,8 @@ export function App() {
           hidden={view !== "board"}
           overlayOpen={overlayOpen}
           expanded={expanded}
+          hideOthers={hideOthers}
+          onHideOthers={setHideOthers}
         />
       </DragProvider>
 
@@ -405,7 +459,14 @@ export function App() {
         slug={steer?.slug ?? null}
         mode={steer?.mode ?? "steer"}
         requireText={steer?.requireText ?? false}
-        job={jobFor(steer?.slug)}
+        job={jobFor(steer?.slug, steer?.node)}
+        // a remote card's owner — selects the modal's remote body
+        node={steer?.node}
+        // a remote public card's ✎ edit: the editor's raw remote mode
+        onOpenEditor={(slug, node) => {
+          setSteer(null);
+          setEditor({ slug, node });
+        }}
         // The same poll the chrome's usage corner and the usage drilldown read
         // — a THIRD reader of one request, never a second request. The modal's
         // account section joins it to the job's binding by slot slug and draws
@@ -444,7 +505,8 @@ export function App() {
       <EditorOverlay
         open={editor !== null}
         slug={editor?.slug ?? null}
-        job={jobFor(editor?.slug)}
+        job={jobFor(editor?.slug, editor?.node)}
+        node={editor?.node}
         onClose={() => setEditor(null)}
         onCreated={(slug) => setEditor({ slug })}
         // Byte-for-byte the create re-point: same state, same shape, and the
@@ -526,6 +588,14 @@ export function App() {
         data={usage.data}
         onClose={() => setUsageOpen(false)}
         refetch={refetchUsage}
+      />
+
+      <DevicesOverlay
+        open={devicesOpen}
+        onClose={() => setDevicesOpen(false)}
+        board={board.board}
+        hiddenNodes={hiddenNodes}
+        onToggleNode={toggleNode}
       />
 
       <Toast />

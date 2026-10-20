@@ -3,6 +3,7 @@ import { Fragment, type CSSProperties, type ReactNode } from "react";
 import type { WebJob } from "../../api/types.ts";
 import type { Column } from "../../lib/columns.ts";
 import { age, columnFor, jobColorVar, repoColorVar } from "../../lib/format.ts";
+import { ownerChipText, remoteMode } from "../../lib/fleet.ts";
 import { jobKey } from "../../lib/jobKey.ts";
 import { highlightSegments, type JobMatch } from "../../lib/jobSearch.ts";
 import { AccountChip, accountChipVisible } from "./chips/AccountChip.tsx";
@@ -156,9 +157,15 @@ const STATUS_TEXT: Partial<Record<Column, string>> = {
  */
 export function JobCard({ job, col, actions, matchReason, matchTerms }: JobCardProps) {
   const key = jobKey(job);
+  // A card another kraken polled in. It renders in the same columns as the
+  // local ones, but it is never this board's to drag, reorder or act on
+  // locally: the click opens the steer modal's REMOTE mode (inert when the
+  // owner made it readonly, proxied through /api/nodes/action when public).
+  const mode = remoteMode(job);
+  const remote = mode !== "local";
   // Keyed by jobKey, never the bare slug: an archived entry and an active job
   // that reused its freed slug would otherwise share one drag id.
-  const drag = useSortableCard(key);
+  const drag = useSortableCard(key, { inert: remote });
   // True for the seconds between a draft→working drop and the server answering
   // it. The card is being drawn in WORKING while the job's own state still
   // says draft — see useDragReorder's Submitting.
@@ -168,9 +175,11 @@ export function JobCard({ job, col, actions, matchReason, matchTerms }: JobCardP
   // itself, exactly as the vanilla one did: it matched `.card[data-editable]`,
   // attribute PRESENCE, not value. A done card still carries it although its
   // click no longer opens the editor: the attribute says what the SERVER
-  // would let an editor do, not where the click goes.
-  const editable = !job.live && ["draft", "done"].includes(col);
-  const retryable = !!job.health && !/is gone|startup prompt/.test(job.health);
+  // would let an editor do, not where the click goes. A remote card never
+  // carries it: its owner's server decides, and this board's editor is not
+  // where its click goes either.
+  const editable = !remote && !job.live && ["draft", "done"].includes(col);
+  const retryable = !remote && !!job.health && !/is gone|startup prompt/.test(job.health);
 
   // band 2 — is there anything to put in each row at all? Asked per chip
   // rather than by rendering and measuring, because a component that returns
@@ -182,8 +191,11 @@ export function JobCard({ job, col, actions, matchReason, matchTerms }: JobCardP
   // fallback is for a payload carrying only the legacy primary (`goal`
   // without `goals`): the array is the truth wherever it is present, and its
   // absence with a primary set can only be an older server.
-  const goalChips = job.goals ?? (job.goal ? [job.goal] : []);
+  // A remote card's goal ids are its OWNER's goals, which this board's goal
+  // filter and panel know nothing about — so it shows none.
+  const goalChips = remote ? [] : (job.goals ?? (job.goal ? [job.goal] : []));
   const hasChips =
+    remote ||
     loadChipVisible(job, col) ||
     !!job.question ||
     goalChips.length > 0 ||
@@ -203,8 +215,10 @@ export function JobCard({ job, col, actions, matchReason, matchTerms }: JobCardP
 
   // band 6 — assembled first rather than inline, so the row can be dropped
   // whole when a card offers nothing to press (every draft card).
-  const reactivatable = (col === "done" || job.cell_gone) && job.reactivatable;
-  const hasActions = job.live || retryable || reactivatable;
+  const reactivatable = !remote && (col === "done" || job.cell_gone) && job.reactivatable;
+  // tmux, retry and reactivate are all THIS machine's: a remote cell's pane is
+  // on its owner's Mac, and neither retry nor reactivate is a remote action
+  const hasActions = !remote && (job.live || retryable || reactivatable);
 
   // An uncoloured job emits no --job-color declaration AT ALL and its accent
   // bar falls through to the 40%-transparent accent edge (full accent on
@@ -233,6 +247,15 @@ export function JobCard({ job, col, actions, matchReason, matchTerms }: JobCardP
     // liveDisplayColumn (app.js): only a LIVE job has a steerable column, and
     // an unhealthy one reads as blocked whatever its file says.
     const liveCol = job.live ? (job.health ? "blocked" : job.state) : null;
+    if (job.owner) {
+      // EVERY remote card opens the steer modal, live or not: its remote mode
+      // is the one surface that knows how to route (or refuse) each control,
+      // and its "edit job" button is how a public draft reaches the editor
+      actions.onOpenSteer(job.slug, liveCol === "blocked" ? "unblock" : "steer", {
+        node: job.owner.node_id,
+      });
+      return;
+    }
     if (liveCol === "working" || liveCol === "blocked") {
       actions.onOpenSteer(job.slug, liveCol === "blocked" ? "unblock" : "steer");
     } else if (job.state === "done") {
@@ -254,9 +277,11 @@ export function JobCard({ job, col, actions, matchReason, matchTerms }: JobCardP
       ref={drag.setNodeRef}
       className={
         "card editable" +
+        (remote ? " remote" : "") +
         (drag.className ? " " + drag.className : "") +
         (submitting ? " submitting" : "")
       }
+      data-owner={job.owner?.node_id}
       // ONE inline custom property now: --job-color, the left accent edge,
       // which is the job's colour channel and nothing else — style.css is
       // explicit that the edge carries neither state nor alerts. It is omitted
@@ -277,7 +302,8 @@ export function JobCard({ job, col, actions, matchReason, matchTerms }: JobCardP
       // start is cancelled below: dnd-kit drives the drag from pointer events,
       // and a native drag racing it produces a ghost image and a dropped
       // gesture.
-      draggable="true"
+      // a remote card is not draggable, so it does not wear the grab cursor
+      draggable={remote ? "false" : "true"}
       onDragStart={(ev) => ev.preventDefault()}
       data-slug={job.slug}
       data-col={col}
@@ -342,6 +368,29 @@ export function JobCard({ job, col, actions, matchReason, matchTerms }: JobCardP
       ) : null}
       {hasChips ? (
         <div className="chips">
+          {/* WHOSE job this is, leading the row on a remote card: it is the
+              first thing to know about a card this board cannot act on as its
+              own. Muted when the owner node has stopped answering polls — the
+              card then shows its last-known state. The green `public` chip
+              beside it is the one statement that this board MAY drive it. */}
+          {job.owner ? (
+            <span
+              className={"ow-chip" + (job.owner.online ? "" : " offline")}
+              data-testid="owner-chip"
+              title={
+                "runs on " +
+                ownerChipText(job.owner) +
+                (job.owner.online ? "" : " — offline, last known state")
+              }
+            >
+              {ownerChipText(job.owner)}
+            </span>
+          ) : null}
+          {mode === "public" ? (
+            <span className="pub-chip" title="public — this board may steer and act on it">
+              public
+            </span>
+          ) : null}
           <LoadChip job={job} col={col} />
           {/* The pending AskUserQuestion, reduced to its flag. It leads the
               counts (behind only the triage badge) because it is the one token
@@ -356,7 +405,9 @@ export function JobCard({ job, col, actions, matchReason, matchTerms }: JobCardP
           ) : null}
           <ThreadChips
             job={job}
-            onOpenThread={actions.onOpenThread}
+            // a remote card carries no threads (its owner keeps them); the
+            // no-op handler only satisfies the prop
+            onOpenThread={remote ? () => {} : actions.onOpenThread}
             withBranch={false}
             compact
           />

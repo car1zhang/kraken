@@ -200,6 +200,9 @@ var webBoardSpec = map[string]fieldSpec{
 	// turns. A plain string with no omitempty, so it always rides. Additive —
 	// never bumps apiContract.
 	"operator": {kind: wireString, required: true},
+	// The fleet registry (board.go's webNode), present only when this node
+	// knows at least one sibling kraken. Additive.
+	"nodes": {kind: wireArray, required: false},
 }
 
 // webBackgroundSpec covers background.go's webBackground — webBoard's
@@ -359,6 +362,11 @@ var webJobSpec = map[string]fieldSpec{
 	// apiContract; listed here because assertShape rejects any key the spec
 	// doesn't document.
 	"account": {kind: wireObject, required: false},
+	// Who on the tailnet may see or drive the job (private|readonly|public),
+	// always present. Additive.
+	"visibility": {kind: wireString, required: true},
+	// A remote card's owning node; absent on every local card. Additive.
+	"owner": {kind: wireObject, required: false},
 }
 
 // webJobAccountSpec covers board.go's webJobAccount — webJob's "account"
@@ -3283,11 +3291,13 @@ func TestRecallWireShape(t *testing.T) {
 // clients ignore what they don't know. v6 is a real break and is the reason
 // the number moved: `ready` and `prereqs` left the job form's GET and POST
 // shapes, and `start_error` and `prereqs` left /api/board's job objects.
+// v7 is the request gate (gate.go): an unpaired tailnet client is refused on
+// every board route.
 // A literal here rather than a comparison against itself: a future change
 // that genuinely IS breaking has to come here and change this number
 // deliberately, in the same commit as expectedContract in APIClient.swift.
 func TestAPIContractUnchanged(t *testing.T) {
-	if apiContract != 6 {
-		t.Fatalf("apiContract = %d, want 6 — bump this ONLY alongside ios/API.md and APIClient.swift's expectedContract, and only for a breaking change", apiContract)
+	if apiContract != 7 {
+		t.Fatalf("apiContract = %d, want 7 — bump this ONLY alongside ios/API.md and APIClient.swift's expectedContract, and only for a breaking change", apiContract)
 	}
 }

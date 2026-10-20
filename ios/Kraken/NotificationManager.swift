@@ -109,16 +109,21 @@ final class NotificationManager: NSObject {
         // .blocked, so this one check covers both the blocked state and
         // unhealthy cells — exactly what the board itself shows in the
         // BLOCKED column.
-        let blockedJobs = board.jobs.filter { BoardTheme.column(for: $0) == .blocked }
+        //
+        // Remote cards (another Mac's, carrying `owner`) never notify: their
+        // slugs share these persisted slug sets with the local ones, and a
+        // ping about someone else's cell is not this phone's business.
+        let localJobs = board.jobs.filter { $0.owner == nil }
+        let blockedJobs = localJobs.filter { BoardTheme.column(for: $0) == .blocked }
         let blockedSlugs = Set(blockedJobs.map(\.slug))
         // A working job with an unhealthy cell also satisfies .blocked
         // above — excluding it here keeps that one transition to a single
         // "blocked" notification instead of also firing "started".
-        let startedJobs = board.jobs.filter { $0.state == "working" && !blockedSlugs.contains($0.slug) }
+        let startedJobs = localJobs.filter { $0.state == "working" && !blockedSlugs.contains($0.slug) }
         // A done job can carry a stale, unrelated Err (e.g. it finished
         // before picking up a parse error) — excluding done/archived here
         // keeps "never notify done" true even in that case.
-        let erroringJobs = board.jobs.filter {
+        let erroringJobs = localJobs.filter {
             !($0.err ?? "").isEmpty && $0.state != "done" && $0.state != "archived"
         }
 
@@ -215,7 +220,8 @@ final class NotificationManager: NSObject {
 
     private func performBackgroundFetch() async {
         let baseURL = KrakenDefaults.storedServerURL
-        guard KrakenDefaults.isConfigured(baseURL),
+        // Unpaired, every board call is a 401 — ask nothing.
+        guard KrakenDefaults.isConfigured(baseURL), PairingStore.load() != nil,
               let board = try? await APIClient.shared.fetchBoard(baseURL: baseURL) else { return }
         processBoard(board)
     }

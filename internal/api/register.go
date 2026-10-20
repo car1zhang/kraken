@@ -1,12 +1,49 @@
 package api
 
-import "net/http"
+import (
+	"net/http"
+
+	"kraken/internal/jobs"
+)
+
+// routeMux is the one method registerRoutes needs: *http.ServeMux in
+// production, patternRecorder for RoutePatterns.
+type routeMux interface {
+	HandleFunc(pattern string, handler func(http.ResponseWriter, *http.Request))
+}
+
+// patternRecorder collects the patterns registerRoutes registers and serves
+// nothing.
+type patternRecorder struct{ patterns []string }
+
+func (p *patternRecorder) HandleFunc(pattern string, _ func(http.ResponseWriter, *http.Request)) {
+	p.patterns = append(p.patterns, pattern)
+}
+
+// RoutePatterns is every pattern Register registers, plus the two subtrees
+// web.Serve registers beside them (/api/artifact/, /api/upload/) — the list
+// the gate's policy table is held against.
+func RoutePatterns() []string {
+	var rec patternRecorder
+	registerRoutes(&rec)
+	return append(rec.patterns, "/api/artifact/", "/api/upload/")
+}
 
 // Register wires every JSON API route onto mux — the board, its move
 // actions, the job editor, and the peers/health endpoints. Route strings are
 // wire-pinned: the iOS app and web/app.js address them by these exact
 // paths.
+//
+// It also points jobs.OnFleetChanged at the board cache, so a nodes pass that
+// changed a sibling's card list shows on the next board read rather than up
+// to a cache TTL later (jobs cannot import api, so api installs the callback
+// into jobs).
 func Register(mux *http.ServeMux) {
+	jobs.SetOnFleetChanged(webBoardCache.invalidate)
+	registerRoutes(mux)
+}
+
+func registerRoutes(mux routeMux) {
 	mux.HandleFunc("/api/health", healthHandler)
 	mux.HandleFunc("/api/peers", peersHandler(defaultPeerSource))
 	mux.HandleFunc("/api/peers/read", peersReadHandler(defaultPeerSource))
@@ -201,4 +238,33 @@ func Register(mux *http.ServeMux) {
 	// that can never be reused. Its status GET is a read and stays open.
 	mux.HandleFunc("/api/ship-ios", mirrorGated(shipIOSHandler))
 	mux.HandleFunc("/api/ship-ios/status", shipIOSStatusHandler)
+	// Visibility is a one-field route for colour's reasons (jobvisibility.go):
+	// usable on a live cell, and never cleared by a form save from a client
+	// that predates it. Not mirror-gated: it writes a row and types nothing.
+	mux.HandleFunc("/api/job/visibility", webJobVisibility)
+	// The node API (nodes.go): what a sibling kraken reads and does here. All
+	// exact patterns. The reads stay open under --mirror; announce writes the
+	// registry and action reaches real panes, so both are gated.
+	mux.HandleFunc("/api/node", nodeSelfHandler)
+	mux.HandleFunc("/api/node/jobs", nodeJobsHandler)
+	mux.HandleFunc("/api/node/job", nodeJobHandler)
+	mux.HandleFunc("/api/node/job/raw", nodeJobRawHandler)
+	mux.HandleFunc("/api/node/read", nodeReadHandler)
+	mux.HandleFunc("/api/node/announce", mirrorGated(nodeAnnounceHandler))
+	mux.HandleFunc("/api/node/action", mirrorGated(nodeActionHandler))
+	// The registry read and the proxies a paired client or this Mac drives a
+	// sibling's public cell through. The action proxy is mirror-gated: a
+	// mirror must drive nothing real, and the sibling cannot tell a mirror's
+	// request from the live deployment's. The two relayed GETs are reads.
+	mux.HandleFunc("/api/nodes", nodesHandler)
+	mux.HandleFunc("/api/nodes/action", mirrorGated(nodesActionHandler))
+	mux.HandleFunc("/api/nodes/job/raw", nodesJobRawHandler)
+	mux.HandleFunc("/api/nodes/read", nodesReadHandler)
+	// Pairing (pair.go). The password write is mirror-gated: it revokes every
+	// paired device of the deployment whose database a mirror might hold.
+	mux.HandleFunc("/api/pair/password", mirrorGated(pairPasswordHandler))
+	mux.HandleFunc("/api/pair/challenge", pairChallengeHandler)
+	mux.HandleFunc("/api/pair", pairAttemptHandler)
+	mux.HandleFunc("/api/pair/revoke", pairRevokeHandler)
+	mux.HandleFunc("/api/pair/devices", pairDevicesHandler)
 }

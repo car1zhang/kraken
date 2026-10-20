@@ -100,6 +100,8 @@ func main() {
 		cmdJob(rest)
 	case "mine":
 		cmdMine(rest)
+	case "nodes":
+		cmdNodes(rest)
 	case "_complete":
 		cmdComplete()
 	case "-h", "--help", "help":
@@ -122,8 +124,11 @@ Commands:
                       dd to kill, t to cycle grouping
   k o <sel>           jump to an agent or shell pane: focus its ghostty window + pane
   k b [sel]           branch (fork) a session into a vertical split (default: current pane)
-  k s <sel> <msg...>  send a message into an agent's prompt (stdin if no msg args)
-  k r <sel> [n]       read back the last n message blocks (user/thinking/text; default 1; sel '.' = current pane)
+  k s <sel> <msg...>  send a message into an agent's prompt (stdin if no msg args);
+                      sel <node>/<slug> steers a PUBLIC cell on another kraken
+  k r <sel> [n]       read back the last n message blocks (user/thinking/text; default 1; sel '.' = current pane);
+                      sel <node>/<slug> reads a PUBLIC cell on another kraken
+  k nodes [--json]    the other krakens on the tailnet: operator, online, card counts
   k k <sel>           kill an agent or shell pane (refuses the current pane and nested agents)
   k n [-c dir] [cmd...]
                       new shell in a new window of the current session, optionally

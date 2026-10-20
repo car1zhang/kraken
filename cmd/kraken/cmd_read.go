@@ -26,6 +26,11 @@ func cmdRead(args []string) {
 		n = v
 		sel = strings.Join(args[:len(args)-1], " ")
 	}
+	// `<node>/<slug>`: a public cell on another kraken (see cmdSend)
+	if node, slug, ok := remoteSelector(sel); ok {
+		readRemote(node, slug, n)
+		return
+	}
 	all, _ := core.OrderAll(core.DiscoverAll())
 	p := core.SelectPeer(sel, all)
 	path, err := core.ReadTranscriptPath(p)
@@ -48,20 +53,27 @@ func cmdRead(args []string) {
 		if i > 0 {
 			fmt.Println()
 		}
-		switch b.Kind {
-		case "user":
-			fmt.Println(util.Paint(color, util.Cyan, "❯ user"))
-			fmt.Println(b.Text)
-		case "thinking":
-			fmt.Println(util.Paint(color, util.Dim, "· thinking"))
-			fmt.Println(util.Paint(color, util.Dim, b.Text))
-		case "teammate":
-			fmt.Println(util.Paint(color, util.Dim, "⇄ "+b.From))
-			fmt.Println(util.Paint(color, util.Dim, b.Text))
-		case "tool":
-			fmt.Println(util.Paint(color, util.Dim, "→ "+b.Text))
-		default:
-			fmt.Println(b.Text)
-		}
+		printReadBlock(color, b.Kind, b.Text, b.From)
+	}
+}
+
+// printReadBlock prints one transcript block in k r's format — shared by the
+// local read and the cross-node one (readRemote), so a remote cell reads the
+// same as a local one.
+func printReadBlock(color bool, kind, text, from string) {
+	switch kind {
+	case "user":
+		fmt.Println(util.Paint(color, util.Cyan, "❯ user"))
+		fmt.Println(text)
+	case "thinking":
+		fmt.Println(util.Paint(color, util.Dim, "· thinking"))
+		fmt.Println(util.Paint(color, util.Dim, text))
+	case "teammate":
+		fmt.Println(util.Paint(color, util.Dim, "⇄ "+from))
+		fmt.Println(util.Paint(color, util.Dim, text))
+	case "tool":
+		fmt.Println(util.Paint(color, util.Dim, "→ "+text))
+	default:
+		fmt.Println(text)
 	}
 }

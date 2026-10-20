@@ -295,6 +295,12 @@ export function diffBoard(prev: WebBoard | undefined, next: WebBoard): BoardEven
   const before = indexJobs(prev.jobs);
   for (const job of next.jobs) {
     if (isArchived(job)) continue;
+    // A card another kraken polled in (it carries `owner`) is someone else's
+    // job: its state changes are news on ITS owner's board, and voicing them
+    // here would make every machine on the tailnet chime for every other
+    // machine's cells. Skipped on the NEXT side, which is the side every event
+    // is read from — a remote card is never looked up, so it never speaks.
+    if (job.owner) continue;
     const was = before.get(jobKey(job));
     if (was === undefined) continue;
     diffJob(was, job, jobKey(job), out);

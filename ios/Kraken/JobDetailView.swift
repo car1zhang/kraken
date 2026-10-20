@@ -890,7 +890,18 @@ struct JobDetailView: View {
             || canArchive || canReactivate || isArchived
     }
 
+    // A card another Mac served (it carries `owner`) gets its own detail:
+    // none of this view's actions may reach the paired node's LOCAL routes
+    // with a remote slug. See RemoteJobDetailView.
     var body: some View {
+        if job.isRemote {
+            RemoteJobDetailView(job: job, baseURL: baseURL, onUpdate: onUpdate)
+        } else {
+            localBody
+        }
+    }
+
+    private var localBody: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 14) {
                 headerCard
@@ -961,6 +972,14 @@ struct JobDetailView: View {
                         JobColorStrip(baseURL: baseURL, slug: job.slug, serverColor: job.color) { _ in
                             // Refresh the board so the card's swatch and this
                             // sheet's `job` snapshot pick the new color up.
+                            onUpdate()
+                        }
+                    }
+                    // Who else may see or drive this job. A one-field route
+                    // like colour, so — like colour — it sits outside every
+                    // editability gate and works on a live cell.
+                    JobSectionCard("Visibility") {
+                        JobVisibilityPicker(baseURL: baseURL, slug: job.slug, serverValue: job.visibility) {
                             onUpdate()
                         }
                     }

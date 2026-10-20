@@ -7,7 +7,7 @@ consumes. Source of truth is the Go code — the handlers and wire types in
 (`internal/jobs/{daemon,job,status}.go`, `internal/core/peer.go`); this doc
 transcribes it, it does not define it independently.
 
-**Current contract**: `apiContract = 6` (internal/api/board.go — the Go
+**Current contract**: `apiContract = 7` (internal/api/board.go — the Go
 constant + `contract_test.go` bump lands in the same commit as this doc, per
 CLAUDE.md's API-contract rule), mirrored by `APIClient.expectedContract`
 (APIClient.swift). `/api/health` and
@@ -28,10 +28,17 @@ and `prereqs` from `/api/board`'s job objects. Submitting a job now starts its
 cell inside the request (`POST /api/queue`, URL kept — see below), so there is
 no flag to set, no dependency gate to configure, and no background failure to
 report out of band. `state`'s value domain lost `queued` with them:
-draft · working · blocked · done (+ `archived`).
+draft · working · blocked · done (+ `archived`). v7 bumped for the **request
+gate** (`internal/api/gate.go`, see "Nodes and pairing" below): no key changed
+shape, but who may call did — a request from another tailnet device that
+carries no pairing token is the *node* tier and is answered `401
+{"error":"unauthorized"}` on every board route, so an unpaired shipped app
+stops working against a v7 server and must pair first. The keys v7 adds
+(`webJob.visibility`, `webJob.owner`, `webBoard.nodes`) are additive.
 
 **Bump policy**: bump `apiContract` ONLY on a breaking change — a JSON key
-retyped, renamed, or removed. Additive keys never bump it: old clients
+retyped, renamed, or removed, or a change in who may call a route a shipped
+client already calls (v7, the request gate). Additive keys never bump it: old clients
 already ignore fields they don't recognize, and `Decodable` optionals
 absorb a key's absence.
 
@@ -1831,6 +1838,105 @@ board, and nothing here reaches that. The route's remaining job is to keep
 iris out of the fields kraken owns.
 
 Other errors: 405 (non-POST), 409 (slug taken by a concurrent create), 413 (body over 1 MiB), 500 (no store wired; the write failed; or — on the create path only — the job WAS created and then its reload failed, in which case the error text says so explicitly). Gated under `--mirror` with the standard plain-text 403. **Additive, no contract bump.**
+
+### `POST /api/job/visibility` → `{"ok": true}` (api/jobvisibility.go `webJobVisibility`)
+
+Body `{"slug": string, "visibility": "private"|"readonly"|"public"}`. Sets who on the tailnet may see or drive the job: **private** never leaves this machine, **readonly** (the default, and what every job created before v7 reads) is visible to every node and drivable by none, **public** may be driven by any node. A one-field route for `/api/job/color`'s reasons: it works on a live (working/blocked) job, and the form save never writes the field. Errors: 405 non-POST, 413 body over 1 MiB, 400 `bad json`, 400 `{"error":"unknown visibility <v>"}` (anything but the three lowercase words), 404 `no such job`, 500 write failed. Not mirror-gated (it writes a row and types nothing). The same level is hand-authorable as a `visibility:` line in the job text and rides every card as `webJob.visibility`.
+
+---
+
+## Nodes and pairing
+
+Every `kraken serve` on the tailnet is a **node**. A node finds its siblings through `tailscale status`, polls their card lists into its `nodes` table, and serves them on its own board as cards carrying an `owner`. A phone binds to exactly one node by a pairing password that is proven, never sent. The **request gate** (`api.Gate`, wrapping the mux both listeners serve) classifies every request into a tier and refuses a route whose floor is above it with `401 {"error":"unauthorized"}`:
+
+| Tier | Recognised by | Reaches |
+|---|---|---|
+| owner | loopback, or one of this host's own interface addresses | everything |
+| paired | `Authorization: Bearer <token>`, or the cookie `kraken_pair=<token>` (for `<img>`/`<iframe>`/WKWebView loads), whose SHA-256 matches a paired device | everything except `/api/pair/password`, `/api/pair/devices`, `/api/editor/open` |
+| node | any other tailnet device (tailscale status, else `tailscale whois`) | `/api/health`, `/api/node*`, `GET /api/nodes`, `/api/pair/challenge`, `POST /api/pair`, the SPA shell and assets |
+| anon | anything else | `/api/health` |
+
+A route with no policy entry under `/api/` is owner-only (fail closed). The app sends the bearer on every JSON call and installs the same token as the `kraken_pair` cookie for artifact and image loads. A 401 means "not paired (any more)": clear the stored record and show the pair screen.
+
+Wire additions on existing shapes (all additive):
+- `webJob.visibility` — string, always present: `private`|`readonly`|`public` (readonly when the job never set one).
+- `webJob.owner` — object, **absent on every local card**: `{"node_id": string, "label": string, "operator": string, "online": bool}` naming the node a remote card runs on. A card's identity is owner plus slug — two nodes can each have a `dream-2026-10-20`.
+- `webBoard.nodes` — array of `webNode` (below, without `jobs`), **absent** when the registry is empty (every single-machine kraken).
+- Under `KRAKEN_NODES=off` both `nodes` and every owner-chipped card are absent, whatever the registry holds.
+
+`webNode`: `{"node_id": string, "label": string, "operator": string, "dns_name": string, "ip": string, "port": int, "build": string, "contract": int, "online": bool, "last_ok": int (unix millis, 0 = never), "last_err"?: string, "jobs"?: [webJob]}` — `jobs` only on `GET /api/nodes`, and only for a node that has been polled.
+
+`NodeEnvelope` (a node's self-description): `{"node_id": string (tailscale stable id; "" when tailscale is unreadable), "label": string, "operator": string, "dns_name": string, "ips": [string] (never null), "port": int, "build": string, "contract": int}`.
+
+### `GET /api/node` (node tier) → `NodeEnvelope`
+
+The probe target a sibling's discover pass hits. `404 {"error":"fleet off"}` when this machine set `KRAKEN_NODES=off`.
+
+### `GET /api/node/jobs` (node tier) → `{"node": NodeEnvelope, "jobs": [webJob]}`
+
+This node's non-archived **readonly** and **public** cards — a private card is absent, not blanked. Each is the board's own card object minus what never leaves the machine: `feedback`, `tokens`, `account`, `threads`, `doc_questions` and `artifacts` (artifact URLs address this node; names come from `/api/node/job`). No `owner` key. `jobs` is `[]` under `KRAKEN_NODES=off`.
+
+### `GET /api/node/job?slug=` (node tier) → `{"job": webJob, "artifacts": [string], "question"?: webQuestion}`
+
+One readonly or public card, its artifact names, and its pending AskUserQuestion when there is one. A private, archived or unknown slug all answer the identical `404 {"error":"no such job"}`.
+
+### `GET /api/node/job/raw?slug=` (node tier)
+
+`GET /api/job/raw`'s exact body (`{"slug","content","mtime","editable"}`) for a **public** job — the remote editor's load. `403 {"error":"not public"}` for a readonly job; 404 `no such job` for private/unknown. Visibility is read from the store on every request.
+
+### `GET /api/node/read?slug=&n=` (node tier)
+
+A public cell's last `n` zeus transcript blocks (default 5, clamped 1–50), `/api/peers/read`'s shape: `{"blocks": [{"kind": string, "text": string, "from"?: string}], "counted": int}`. 403/404 as above; `409` when the cell has no live zeus.
+
+### `POST /api/node/announce` (node tier) → `NodeEnvelope`
+
+Body: the sender's `NodeEnvelope`. Records (upserts) the sender under the address the request came from — the body's `ips` are not used — and replies with this node's envelope. Refusals, in order: 400 when `node_id` is empty; 200 with nothing recorded when `node_id` is this node's own; `403 {"error":"node id does not match caller"}` unless the caller's tailnet identity is exactly `node_id` (a device may announce only itself); `400 {"error":"port must be 1..65535"}`; `404 fleet off` under `KRAKEN_NODES=off`. Mirror-gated (plain-text 403).
+
+### `POST /api/node/action` (node tier)
+
+Body `{"slug": string, "action": string, "payload": object, "from": {"cell": string}}`. Drives a **public** cell from another node. Order of refusals: 404 `no such job` (unknown or private), `403 {"error":"not public"}` (visibility read from the store at request time), `400 unknown action` (anything but `steer`, `question`, `kill`, `done`, `submit`, `archive`, `color`, `save`, `stop`). Each action runs the handler the local route runs and replies exactly what it replies:
+
+| action | payload | local route |
+|---|---|---|
+| `steer` | `{"text"}` | `/api/steer`, the text prefixed `[from <label> · <login>]` — or `[from <label> · cell <slug>]` when `from.cell` is set — with the label taken from the registry row bound to the caller's tailnet identity (else its tailnet device name, else its address), never from the body or a row matched by address |
+| `question` | `{"text": "<digit>"}` | `/api/question` |
+| `kill` `done` `submit` `archive` `stop` | none | `/api/kill` `/api/done` `/api/queue` `/api/archive` `/api/stop` |
+| `color` | `{"color"}` | `/api/job/color` |
+| `save` | `{"content", "mtime"}` (a `text` key is ignored) | `/api/job/save` |
+
+Mirror-gated (plain-text 403).
+
+### `GET /api/nodes` (node tier) → `{"nodes": [webNode]}`
+
+The registry with each node's stored card list in `jobs`. Node tier so an unpaired phone can fan its pairing out from the registry its seed serves. `nodes` is `[]` when empty, and `{"nodes":[]}` under `KRAKEN_NODES=off`. Each node's `jobs` carries the same stripped cards the board shows (no `feedback`, `tokens`, `account`, `threads`, `doc_questions` or `artifacts`). Online nodes first, then by label.
+
+### `POST /api/nodes/action` (paired)
+
+Body `{"node": string (node_id), "slug": string, "action": string, "payload": object}`. Forwards to that node's `POST /api/node/action`, setting `from.cell` from the request's `X-Kraken-From-Cell` header (the CLI sets it inside a cell from `KRAKEN_JOB_SLUG`), and relays the sibling's status and JSON body, always as `application/json` with `X-Content-Type-Options: nosniff`. A sibling 401 is relayed as `502 {"error":"<label> did not recognise this node"}` (never as a 401, which a client would read as its own gate) and a non-JSON body as `502 {"error":"<label> answered non-JSON"}`, `<label>` being the node's label or else its id; a transport error is `502 {"error": "<transport error>"}`; 404 `no such node`. Timeout 5 s (60 s for `submit`). Mirror-gated (plain-text 403).
+
+### `GET /api/nodes/job/raw?node=&slug=`, `GET /api/nodes/read?node=&slug=&n=` (paired)
+
+The same relay (JSON-forced, 401/non-JSON → 502) to the sibling's `/api/node/job/raw` and `/api/node/read`.
+
+### `POST /api/pair/password` (owner) → `{"ok": true, "revoked": int}`
+
+Body `{"password": string}`. A non-empty password under 12 characters is `400 {"error":"password must be at least 12 characters"}`. A valid one replaces the stored verifier (a fresh 16-byte salt, `PBKDF2-HMAC-SHA256(password, salt, 600000, 32)`); an empty one clears it. **Either way every paired device is revoked**; `revoked` is how many. Mirror-gated (plain-text 403).
+
+### `GET /api/pair/challenge` (node tier) → `{"node_id", "label", "salt", "iters", "nonce"}`
+
+`salt` and `nonce` are base64url without padding; `nonce` is 16 random bytes, single use, valid 60 s. `409 {"error":"no pairing password set"}` when none is set; 429 when the caller already holds 20 live nonces.
+
+### `POST /api/pair` (node tier) → `{"token", "node_id", "label"}`
+
+Body `{"nonce": string, "proof": string, "device_label": string}` where `proof = base64url(HMAC-SHA256(K, nonce_bytes ‖ node_id ‖ device_label))` and `K = PBKDF2-HMAC-SHA256(password, salt, iters, 32)` from the challenge. On a match the node mints a 32-byte token (base64url), stores only its SHA-256 with the device label (≤ 120 characters) and the caller's tailnet device name, and returns it **once**. Refusals: `429 {"error":"too many attempts"}` (5 per minute per address; 10 failures lock the address out for 10 minutes), 409 no password set, `401 {"error":"no match"}` for a spent/expired/unknown nonce or a wrong proof.
+
+### `POST /api/pair/revoke` (paired) → `{"ok": true}`
+
+Body `{"id"?: int}`. A paired caller with no `id` (or its own) revokes itself — the app's Log out. The owner revokes any device by `id` (404 when none; 400 when `id` is missing). A paired caller naming another device's `id` is 401.
+
+### `GET /api/pair/devices` (owner) → `{"devices": [{"id": int, "label": string, "tailnet_name": string, "created_at": int, "last_seen_at": int, "last_ip": string}]}`
+
+Oldest first; `devices` is `[]` when none. Times are unix millis.
 
 ---
 

@@ -61,6 +61,14 @@ struct WebBoard: Decodable {
     // absent on older servers; decoded so the shape is modeled, rendered
     // nowhere in the app yet.
     let operatorName: String?
+    // The other krakens on the tailnet this node has registered (v7,
+    // multiplayer). `omitempty` server-side: absent whenever the registry is
+    // empty, which is the singleplayer board. Stored behind a tolerant box
+    // (TolerantWebNodes) so a drifted node row costs that row, never the
+    // whole board decode; read through `nodes`.
+    private let nodesBox: TolerantWebNodes?
+    /// The registry, or nil when the server sent none.
+    var nodes: [WebNode]? { nodesBox?.nodes }
 
     enum CodingKeys: String, CodingKey {
         case daemon
@@ -74,6 +82,114 @@ struct WebBoard: Decodable {
         case goals
         case background
         case operatorName = "operator"
+        case nodesBox = "nodes"
+    }
+}
+
+// MARK: - fleet (multiplayer)
+
+/// Which node a REMOTE card belongs to — present on exactly the cards another
+/// kraken served to this one (`owner` is absent on every local card).
+struct WebJobOwner: Decodable, Equatable {
+    let nodeID: String
+    let label: String
+    let `operator`: String
+    let online: Bool
+
+    enum CodingKeys: String, CodingKey {
+        case nodeID = "node_id"
+        case label
+        case `operator`
+        case online
+    }
+
+    /// The owner chip: `label · operator` (space, U+00B7, space), or the
+    /// label alone when the operator is empty.
+    var chipText: String {
+        `operator`.isEmpty ? label : "\(label) \u{00B7} \(`operator`)"
+    }
+}
+
+/// One registered node on `/api/board`'s `nodes` (webNode in
+/// internal/api/board.go). `last_err` is omitempty; `jobs` rides only on
+/// GET /api/nodes and is not modeled here.
+struct WebNode: Decodable, Equatable {
+    let nodeID: String
+    let label: String
+    let `operator`: String
+    let dnsName: String
+    let ip: String
+    let port: Int
+    let build: String
+    let contract: Int
+    let online: Bool
+    let lastOK: Int64
+    let lastErr: String?
+
+    enum CodingKeys: String, CodingKey {
+        case nodeID = "node_id"
+        case label
+        case `operator`
+        case dnsName = "dns_name"
+        case ip, port, build, contract, online
+        case lastOK = "last_ok"
+        case lastErr = "last_err"
+    }
+}
+
+/// `nodes` decoded element by element: a row that fails to decode is dropped
+/// and its neighbours kept, and a non-array value reads as no registry.
+private struct TolerantWebNodes: Decodable {
+    let nodes: [WebNode]?
+
+    private struct Skip: Decodable { init(from decoder: Decoder) throws {} }
+
+    init(from decoder: Decoder) throws {
+        guard var c = try? decoder.unkeyedContainer() else {
+            nodes = nil
+            return
+        }
+        var out: [WebNode] = []
+        while !c.isAtEnd {
+            if (try? c.decodeNil()) == true { continue }
+            if let node = try? c.decode(WebNode.self) {
+                out.append(node)
+            } else if (try? c.decode(Skip.self)) == nil {
+                break
+            }
+        }
+        nodes = out
+    }
+}
+
+/// How the phone may treat a card: its own (`local`), another kraken's that
+/// only shows (`readonly`), or another kraken's opened to the net
+/// (`publicCell` — every action travels through the paired node's proxy).
+enum RemoteMode {
+    case local, readonly, publicCell
+}
+
+extension WebJob {
+    var isRemote: Bool { owner != nil }
+
+    var remoteMode: RemoteMode {
+        guard owner != nil else { return .local }
+        return visibility == "public" ? .publicCell : .readonly
+    }
+
+    /// The card's identity on the merged board: `<node id>/<slug>` for a
+    /// remote card (two Macs can each have a `dream-<date>`), otherwise the
+    /// local identity (slug, or `archive:<slug>` for an archived job).
+    var boardKey: String {
+        if let owner { return "\(owner.nodeID)/\(slug)" }
+        return archived == true ? "archive:" + slug : slug
+    }
+}
+
+enum FleetFilter {
+    /// `hideOthers` removes exactly the remote (owned) cards, order kept.
+    static func apply(_ jobs: [WebJob], hideOthers: Bool) -> [WebJob] {
+        hideOthers ? jobs.filter { $0.owner == nil } : jobs
     }
 }
 
@@ -625,6 +741,14 @@ struct WebJob: Decodable, Identifiable {
     // its decode. Call sites see `WebJobAccount?` either way — the wrapper is
     // the decode's business and nothing else's.
     private let accountBox: TolerantWebJobAccount?
+    // The node that owns this card when another kraken served it (v7). Absent
+    // on every local card — its presence IS "remote".
+    let owner: WebJobOwner?
+    // private | readonly | public — present on every card a v7 server sends
+    // (a local card's is its effective visibility, readonly by default).
+    // Optional for absence on an older server; compare, never switch, so an
+    // unknown word from a newer one reads as "not public".
+    let visibility: String?
     // `start_error` is gone with the queued state (v6): a start is now the
     // synchronous answer to POST /api/queue, so a failure surfaces as that
     // call's own 409 rather than as a field on a job parked in a queue.
@@ -639,7 +763,11 @@ struct WebJob: Decodable, Identifiable {
     // ForEach over jobs — SwiftUI's rows then reuse and swap state between two
     // unrelated jobs. The wire keeps carrying the slug deliberately (it is the
     // human-facing name); disambiguating is the client's job, on both clients.
-    var id: String { archived == true ? "archive:" + slug : slug }
+    //
+    // A remote card widens the same argument to owners: two Macs each have a
+    // `dream-<date>`, so the identity is `boardKey` — `<node id>/<slug>` for
+    // an owned card, the (slug, archived) pairing otherwise.
+    var id: String { boardKey }
     /// What the UI shows as the job's name (archived jobs may be numbered).
     var title: String { displaySlug ?? slug }
     /// The pool account this cell is bound to, or nil — unbound, archived, or
@@ -671,6 +799,7 @@ struct WebJob: Decodable, Identifiable {
         // the wire name is `account`; the stored property is the tolerant
         // wrapper, read back through the computed `account` above
         case accountBox = "account"
+        case owner, visibility
     }
 }
 

@@ -54,6 +54,15 @@ import type { BoardModel, Column } from "./useBoard.ts";
 
 export const COLUMN_DROP_PREFIX = "col:";
 
+/**
+ * The board's LOCAL jobs — every card without an `owner`. The reorder's
+ * prediction and its settle check compare against the server's own column
+ * order, which never contains a remote card.
+ */
+function localJobs(jobs: readonly WebJob[] | undefined): WebJob[] {
+  return (jobs ?? []).filter((j) => !j.owner);
+}
+
 export const columnDropId = (column: DropColumn): string =>
   COLUMN_DROP_PREFIX + column;
 
@@ -305,7 +314,10 @@ export function useDragReorder({
   /** jobKey → the column (or the drawer) it currently lives in. */
   const columnOf = useMemo(() => {
     const m = new Map<string, DropColumn>();
-    for (const c of COLUMNS) for (const j of byColumn[c]) m.set(jobKey(j), c);
+    // Remote (owned) cards never enter the drop table: no drag starts on one
+    // (onDragStart finds no column for its key) and no drop resolves onto one.
+    for (const c of COLUMNS)
+      for (const j of byColumn[c]) if (!j.owner) m.set(jobKey(j), c);
     for (const j of archived) m.set(jobKey(j), ARCHIVED);
     return m;
   }, [byColumn, archived]);
@@ -321,7 +333,15 @@ export function useDragReorder({
   );
 
   const orderJobs = useCallback(
-    (column: Column, jobs: WebJob[]): WebJob[] => {
+    (column: Column, all: WebJob[]): WebJob[] => {
+      // Remote (owned) cards are split off FIRST and appended after the local
+      // ones, untouched by the override and the in-flight submits: both of
+      // those are about this server's column order, which holds only local
+      // slugs — and the override's slug map below would otherwise let a remote
+      // card sharing a local slug (every machine has a dream-<date>) take the
+      // local card's slot.
+      const remote = all.filter((j) => j.owner);
+      const jobs = remote.length ? all.filter((j) => !j.owner) : all;
       let out = jobs;
       if (override && override.column === column) {
         const bySlug = new Map(jobs.map((j) => [j.slug, j] as const));
@@ -361,7 +381,7 @@ export function useDragReorder({
           if (add.length > 0) out = [...add.map((s) => s.job).reverse(), ...out];
         }
       }
-      return out;
+      return remote.length ? [...out, ...remote] : out;
     },
     [override, submitting, submittingKeys],
   );
@@ -372,7 +392,7 @@ export function useDragReorder({
     if (!override || !override.settled) return;
     const incoming = board.board;
     if (incoming === override.at) return; // no payload since the POST settled
-    const order = columnSlugs(incoming?.jobs ?? [], override.column);
+    const order = columnSlugs(localJobs(incoming?.jobs), override.column);
     const agrees =
       order.length === override.slugs.length &&
       order.every((s, i) => s === override.slugs[i]);
@@ -451,7 +471,9 @@ export function useDragReorder({
 
   const commitReorder = useCallback(
     async (column: Column, key: string, overId: UniqueIdentifier | undefined) => {
-      const ordered = orderJobs(column, byColumn[column]);
+      // LOCAL cards only: the order posted below REPLACES the server's column
+      // order, which never holds a remote slug.
+      const ordered = orderJobs(column, byColumn[column]).filter((j) => !j.owner);
       const oldIdx = ordered.findIndex((j) => jobKey(j) === key);
       // Dropped on the column's own body rather than on a card: the slot is
       // the end of the list, which is where the pointer necessarily is — and
@@ -483,7 +505,7 @@ export function useDragReorder({
 
       const slugs = arrayMove(ordered, oldIdx, newIdx).map((j) => j.slug);
       const predicted = predictReorderedJobs(
-        boardRef.current?.jobs ?? [],
+        localJobs(boardRef.current?.jobs),
         column,
         slugs,
       );

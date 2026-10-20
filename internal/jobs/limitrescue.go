@@ -1259,6 +1259,7 @@ func resumeCellAgents(j *Job, all []*core.Peer, prompt string) (resumed int, err
 		dlogEvent("error", "limit-rescue-failed", "%s: building zeus' resume command failed: %v", j.Slug, cmdErr)
 		return 0, nil
 	}
+	cmd = withJobSlugEnv(j, cmd)
 	if resumeErr := respawnPeerPane(zeus, cmd); resumeErr != nil {
 		dlogEvent("error", "limit-rescue-failed", "%s: resume of zeus pane %s failed: %v", j.Slug, zeus.Pane, resumeErr)
 		return 0, nil

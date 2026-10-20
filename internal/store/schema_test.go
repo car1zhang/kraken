@@ -177,6 +177,19 @@ func undoV33(t *testing.T, s *Store) {
 
 func downgradeFreshDB(t *testing.T, s *Store, target int) {
 	t.Helper()
+	// Reverse v34: the fleet's two tables and jobs.visibility go. Shape-only,
+	// newest first.
+	if target < 34 {
+		for _, stmt := range []string{
+			`DROP TABLE nodes`,
+			`DROP TABLE pair_devices`,
+			`ALTER TABLE jobs DROP COLUMN visibility`,
+		} {
+			if _, err := s.db.Exec(stmt); err != nil {
+				t.Fatalf("downgrade to v%d (undo v34) %q: %v", target, stmt, err)
+			}
+		}
+	}
 	// Reverse v33: the mind-layer columns, threads.role and mm_flags go.
 	if target < 33 {
 		undoV33(t, s)

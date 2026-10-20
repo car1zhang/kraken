@@ -83,6 +83,13 @@ func cmdSend(args []string) {
 	if len(args) == 0 {
 		util.Die("usage: k s <sel> <message...>")
 	}
+	// `<node>/<slug>`: a public cell on another kraken, reached through this
+	// machine's serve. Only a selector with a "/" whose left half names a
+	// registry node goes this way; everything else resolves locally as before.
+	if n, slug, ok := remoteSelector(args[0]); ok {
+		sendRemote(n, slug, sendMessage(args[1:]))
+		return
+	}
 	all, _ := core.OrderAll(core.DiscoverAll())
 	p := core.SelectPeer(args[0], all)
 	if p.Role == "shell" {
@@ -90,7 +97,20 @@ func cmdSend(args []string) {
 		// never blocks on a stdin read that would otherwise follow
 		util.Die("%s is a shell pane — the text would run as a shell command", core.DisplayName(p))
 	}
-	msg := strings.Join(args[1:], " ")
+	msg := sendMessage(args[1:])
+	queued, err := core.SendToPeer(p, msg)
+	if err != nil {
+		util.Die("%v", err)
+	}
+	if queued {
+		fmt.Fprintf(os.Stderr, "kraken: %s is mid-turn — the message queued\n", core.DisplayName(p))
+	}
+	fmt.Printf("sent to %s (%s)\n", core.DisplayName(p), p.Pane)
+}
+
+// sendMessage is k s' message: the remaining args joined, else stdin.
+func sendMessage(rest []string) string {
+	msg := strings.Join(rest, " ")
 	if msg == "" {
 		if fi, err := os.Stdin.Stat(); err == nil && fi.Mode()&os.ModeCharDevice != 0 {
 			util.Die("no message given (pass it as args or pipe it on stdin)")
@@ -101,14 +121,7 @@ func cmdSend(args []string) {
 		}
 		msg = strings.TrimRight(string(data), "\n")
 	}
-	queued, err := core.SendToPeer(p, msg)
-	if err != nil {
-		util.Die("%v", err)
-	}
-	if queued {
-		fmt.Fprintf(os.Stderr, "kraken: %s is mid-turn — the message queued\n", core.DisplayName(p))
-	}
-	fmt.Printf("sent to %s (%s)\n", core.DisplayName(p), p.Pane)
+	return msg
 }
 
 // --- k k ---

@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"kraken/internal/api"
+	"kraken/internal/core"
 	"kraken/internal/jobs"
 	"kraken/internal/util"
 )
@@ -134,9 +135,14 @@ func Serve(opts Options) error {
 			os.Exit(0)
 		}()
 	}
-	srv := &http.Server{Addr: addr, Handler: mux, ReadHeaderTimeout: 5 * time.Second}
+	// Both listeners serve the GATED mux, never the bare one: the gate
+	// (api.Gate) is the one place that decides who may call what, and a
+	// listener serving the raw mux would bypass it for everyone who can reach
+	// that address.
+	gated := api.Gate(mux)
+	srv := &http.Server{Addr: addr, Handler: gated, ReadHeaderTimeout: 5 * time.Second}
 	if opts.AlsoTailnet {
-		go serveTailnetWhenUp(addr, opts.Port, mux)
+		go serveTailnetWhenUp(addr, opts.Port, gated)
 	}
 	if err := srv.Serve(ln); err != nil && err != http.ErrServerClosed {
 		util.LogEvent("web", "error", "web-error", "web server: "+err.Error())
@@ -302,52 +308,13 @@ func artifactContentType(p string) string {
 	}
 }
 
-// tailscaleIP picks the first IPv4 address in addrs that falls in
-// tailscale's CGNAT range, 100.64.0.0/10 (first octet 100, second 64-127).
-// A pure function over an address list so it's testable without touching
-// real interfaces.
+// tailscaleIP is core.TailscaleIP, which moved beside the tailscale adapter;
+// web keeps this thin alias so its tests run unchanged.
 func tailscaleIP(addrs []net.Addr) (string, bool) {
-	for _, a := range addrs {
-		var ip net.IP
-		switch v := a.(type) {
-		case *net.IPNet:
-			ip = v.IP
-		case *net.IPAddr:
-			ip = v.IP
-		default:
-			continue
-		}
-		ip4 := ip.To4()
-		if ip4 == nil {
-			continue // loopback/IPv6-only addrs never match a CGNAT v4 range
-		}
-		if ip4[0] == 100 && ip4[1] >= 64 && ip4[1] <= 127 {
-			return ip4.String(), true
-		}
-	}
-	return "", false
+	return core.TailscaleIP(addrs)
 }
 
-// detectTailscaleIP gathers every local interface address and picks the
-// tailnet one — the thin caller around tailscaleIP. A var so
-// serveTailnetWhenUp's tests can stub tailscale coming up without a real
+// detectTailscaleIP is core.DetectTailscaleIP, kept as this package's own var
+// so serveTailnetWhenUp's tests can stub tailscale coming up without a real
 // tailnet interface on the test machine.
-var detectTailscaleIP = func() (string, error) {
-	ifaces, err := net.Interfaces()
-	if err != nil {
-		return "", fmt.Errorf("enumerate network interfaces: %v", err)
-	}
-	var addrs []net.Addr
-	for _, iface := range ifaces {
-		a, err := iface.Addrs()
-		if err != nil {
-			continue // interface came and went; not fatal to the scan
-		}
-		addrs = append(addrs, a...)
-	}
-	ip, ok := tailscaleIP(addrs)
-	if !ok {
-		return "", fmt.Errorf("no tailscale interface (100.64.0.0/10) found — is tailscale up?")
-	}
-	return ip, nil
-}
+var detectTailscaleIP = core.DetectTailscaleIP

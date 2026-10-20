@@ -239,7 +239,7 @@ func TestContractWebThreadModelIsOmittedWhenEmpty(t *testing.T) {
 // so the wire-shape version stays where it is. Bumping it would tell every
 // client its shape is stale and force an update none of them needs.
 func TestContractApiContractDoesNotBump(t *testing.T) {
-	if apiContract != 6 {
-		t.Errorf("apiContract = %d, want 6 — a per-thread model is additive on both shapes", apiContract)
+	if apiContract != 7 {
+		t.Errorf("apiContract = %d, want 7 (bumped by the fleet gate) — a per-thread model is additive on both shapes", apiContract)
 	}
 }

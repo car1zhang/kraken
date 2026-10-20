@@ -129,8 +129,8 @@ func TestEdgeCxpWebUsageTags(t *testing.T) {
 // would make every shipped iOS build refuse a payload it can decode perfectly
 // well — `codex_accounts` is a key those builds simply ignore.
 func TestEdgeCxpAPIContractDidNotBump(t *testing.T) {
-	if apiContract != 6 {
-		t.Errorf("apiContract = %d, want 6 — two additive keys never bump the contract", apiContract)
+	if apiContract != 7 {
+		t.Errorf("apiContract = %d, want 7 (bumped by the fleet gate) — two additive keys never bump the contract", apiContract)
 	}
 }
 

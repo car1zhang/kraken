@@ -834,9 +834,11 @@ func TestEdgeJGMigrationV26ToV27LeavesNoRowForANullGoalID(t *testing.T) {
 	// orch_inbox, which its v24 arm then drops again for this v26 target),
 	// then to 32 with the knowledge graph's removal (v32's arm recreates the
 	// kg_* tables), then to 33 with the mental-model rework (v33's arm,
-	// undoV33, reverses the mm_items rebuild, threads.role and mm_flags).
-	if schemaVersion != 33 {
-		t.Fatalf("schemaVersion = %d, want 33 — this fixture seeds a v26 shape and walks it forward to the current version", schemaVersion)
+	// undoV33, reverses the mm_items rebuild, threads.role and mm_flags), then
+	// to 34 with the fleet (v34's arm drops nodes, pair_devices and
+	// jobs.visibility).
+	if schemaVersion != 34 {
+		t.Fatalf("schemaVersion = %d, want 34 — this fixture seeds a v26 shape and walks it forward to the current version", schemaVersion)
 	}
 	labelled := edgeJGJob(t, s, "jg-mig-labelled")
 	unlabelled := edgeJGJob(t, s, "jg-mig-unlabelled")

@@ -31,6 +31,9 @@
 // import is type-only, so nothing is pulled into the bundle by it.
 import type { Goal } from "../lib/goals.ts";
 import type { MMFlag } from "../lib/mm.ts";
+// Same type-only inversion: the contract froze `Visibility` as a lib/fleet.ts
+// export (its VISIBILITIES tuple is the one spelling of the three words).
+import type { Visibility } from "../lib/fleet.ts";
 
 export type { Goal };
 
@@ -436,6 +439,22 @@ export interface WebJob {
    * (see accountChipVisible), not a payload rule.
    */
   account?: WebJobAccount;
+  /**
+   * The node this card RUNS on, present only on a card another kraken on the
+   * tailnet polled in (`remoteCards`, internal/api/board.go). ABSENT on every
+   * local card — the absence is the wire's only spelling of "mine", which is
+   * why every client-side "is this remote" test is `owner !== undefined`
+   * (lib/fleet.ts `isRemote`) and never a comparison against this node's id.
+   */
+  owner?: WebJobOwner;
+  /**
+   * Who beyond this machine may see or drive the job: `private` never leaves
+   * it, `readonly` (the default, and what every pre-feature job reads) is
+   * visible everywhere and touchable nowhere else, `public` may be driven from
+   * any board on the net. A current server always sends it; optional only for a
+   * server predating the key. Widened with string for jobs.ValidColor's reason.
+   */
+  visibility?: Visibility | string;
   // `start_error` is GONE from the wire with the queued state. It existed
   // because a start happened on a daemon tick nobody was watching, so its
   // failure had nowhere to land but the card. A submit is now a request carl
@@ -571,6 +590,75 @@ export interface WebBoard {
    * which falls back to "you".
    */
   operator?: string;
+  /**
+   * The registry of other krakens on the tailnet (`webBoard.nodes`). ABSENT
+   * when the registry is empty — singleplayer — which is how a lone node's
+   * chrome shows no `nodes` stat at all (lib/fleet.ts `nodesStat`).
+   */
+  nodes?: WebNode[];
+}
+
+/** `webJobOwner` (internal/api/board.go): the node a remote card runs on. */
+export interface WebJobOwner {
+  /** the tailscale stable id — the card's identity half (lib/jobKey.ts) */
+  node_id: string;
+  /** the node's device label (ComputerName first) */
+  label: string;
+  /** the name that node's operator goes by; may be "" */
+  operator: string;
+  /** whether this node's last polls of it succeeded */
+  online: boolean;
+}
+
+/**
+ * `webNode` as the BOARD carries it: one registered kraken. `jobs` rides only
+ * `GET /api/nodes` (not modelled here), never the board.
+ */
+export interface WebNode {
+  node_id: string;
+  label: string;
+  operator: string;
+  dns_name: string;
+  ip: string;
+  port: number;
+  build: string;
+  contract: number;
+  online: boolean;
+  /** unix millis of the last successful poll; 0 when never */
+  last_ok: number;
+  last_err?: string;
+}
+
+/** One paired phone (`GET /api/pair/devices`). Times are unix millis. */
+export interface PairDevice {
+  id: number;
+  label: string;
+  tailnet_name: string;
+  created_at: number;
+  last_seen_at: number;
+  last_ip: string;
+}
+
+export interface PairDevicesResponse {
+  devices: PairDevice[];
+}
+
+/** `GET /api/node` — this node's own envelope (jobs.NodeEnvelope). */
+export interface NodeEnvelope {
+  node_id: string;
+  label: string;
+  operator: string;
+  dns_name: string;
+  ips: string[];
+  port: number;
+  build: string;
+  contract: number;
+}
+
+/** `GET /api/nodes/read` — a remote public cell's last transcript blocks. */
+export interface NodeRead {
+  blocks: { kind: string; text: string; from?: string }[];
+  counted?: number;
 }
 
 /** The `background` key on /api/board: the upload stamp, never the bytes. */
@@ -904,4 +992,16 @@ export interface PeersRead {
 /** Every non-2xx response body across the whole API. */
 export interface WireError {
   error: string;
+}
+
+/**
+ * `GET /api/job/raw` (and `/api/nodes/job/raw`, which relays the owner's):
+ * the job's whole frontmatter-plus-spec text. `mtime` is the optimistic-lock
+ * token the save must echo — opaque here, passed back verbatim.
+ */
+export interface RawJob {
+  slug: string;
+  content: string;
+  mtime: number | string;
+  editable: boolean;
 }
