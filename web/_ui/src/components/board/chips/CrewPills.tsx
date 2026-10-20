@@ -1,4 +1,4 @@
-import type { WebJob, ZeusStatus } from "../../../api/types.ts";
+import type { WebAgent, WebJob, ZeusStatus } from "../../../api/types.ts";
 
 /**
  * zeusPillHTML (app.js): one god icon whose COLOR is the sole status
@@ -48,6 +48,22 @@ const CREW_ICONS: Record<CrewRole, string> = {
 // remainder — see the cap's reasoning in CrewChips.
 const CREW_TITLE_MAX = 12;
 
+// Zeus' background tasks ride the roster beside the crew (job 612), told
+// apart by `kind`: an in-process subagent, a monitor, a background shell.
+// Each kind is its own chip — never folded into the "?" other bucket, which
+// is for a teammate whose NAME names no god — in the order the server sorts
+// them. A pre-612 server sends no kind, and every such entry is a teammate.
+const TASK_KINDS = ["subagent", "monitor", "shell"] as const;
+type TaskKind = (typeof TASK_KINDS)[number];
+const TASK_ICONS: Record<TaskKind, string> = {
+  subagent: "⟳",
+  monitor: "◷",
+  shell: "$",
+};
+function taskKind(r: WebAgent): TaskKind | null {
+  return (TASK_KINDS as readonly string[]).includes(r.kind ?? "") ? (r.kind as TaskKind) : null;
+}
+
 /** Whether band 2 gets any crew tokens at all — see CrewChips. */
 export function crewChipsVisible(job: WebJob): boolean {
   return !!job.zeus_status || (job.roster ?? []).length > 0;
@@ -79,7 +95,20 @@ export function CrewChips({ job }: { job: WebJob }) {
   if (!job.zeus_status && !roster.length) return null;
 
   const counts = new Map<CrewRole, RoleCount>();
+  const taskCounts = new Map<TaskKind, RoleCount>();
   for (const r of roster) {
+    const kind = taskKind(r);
+    if (kind) {
+      // a task: its name is the description and its role the agent type
+      // (or the kind again for a shell/monitor); a model is a subagent's only
+      const c = taskCounts.get(kind) ?? { working: 0, total: 0, names: [] };
+      c.total++;
+      if (r.working) c.working++;
+      const detail = kind === "subagent" ? `${r.role ?? ""}${r.model ? ", " + r.model : ""}` : "";
+      c.names.push(`${r.working ? "●" : "○"} ${r.name ?? ""}${detail ? ` (${detail})` : ""}`);
+      taskCounts.set(kind, c);
+      continue;
+    }
     const role = (CREW_ROLES as readonly string[]).includes(r.role)
       ? (r.role as CrewRole)
       : "other";
@@ -124,11 +153,29 @@ export function CrewChips({ job }: { job: WebJob }) {
     );
   });
 
-  if (!job.zeus_status && !chips.length) return null;
+  const taskChips = TASK_KINDS.map((kind) => [kind, taskCounts.get(kind)] as const)
+    .filter((pair): pair is readonly [TaskKind, RoleCount] => pair[1] !== undefined)
+    .map(([kind, c]) => {
+      const shown = c.names.slice(0, CREW_TITLE_MAX);
+      const rest = c.names.length - shown.length;
+      const body = rest > 0 ? [...shown, `…and ${rest} more`] : shown;
+      return (
+        <span
+          key={"task-" + kind}
+          className={"crew-chip crew-task" + (c.working > 0 ? " active" : "")}
+          title={`${kind} — ${c.working} of ${c.total} working\n${body.join("\n")}`}
+        >
+          <span className={`crew-ico crew-ico-${kind}`}>{TASK_ICONS[kind]}</span> {c.working}/{c.total}
+        </span>
+      );
+    });
+
+  if (!job.zeus_status && !chips.length && !taskChips.length) return null;
   return (
     <>
       {job.zeus_status ? <ZeusPill status={job.zeus_status} /> : null}
       {chips}
+      {taskChips}
     </>
   );
 }

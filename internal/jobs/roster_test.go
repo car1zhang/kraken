@@ -278,3 +278,40 @@ func TestCellCrewMultipleAthenaVariants(t *testing.T) {
 		t.Errorf("want 2 of 3 athena variants working (a2/3), got %d", working)
 	}
 }
+
+// Zeus' background tasks ride the roster after the crew proper (job 612):
+// subagents, then monitors, then shells, each in launch order, every one
+// working, a subagent's role its agent type and a shell's its kind.
+func TestCellCrewAppendsZeusTasksAfterTeammates(t *testing.T) {
+	sess := "cell-x"
+	zeus := &core.Peer{TmuxSession: sess, Agent: "claude", Status: "waiting", Pane: "%1", Tasks: []core.Task{
+		{ID: "bly8ijzgx", Kind: core.TaskShell, Description: "probe shell", StartedAt: 10},
+		{ID: "a2", Kind: core.TaskSubagent, Description: "Sizing ShipControl.tsx", AgentType: "general-purpose", Model: "opus", StartedAt: 30},
+		{ID: "a1", Kind: core.TaskSubagent, AgentType: "Explore", StartedAt: 20},
+		{ID: "bzuy1s169", Kind: core.TaskMonitor, Description: "six researcher reports", StartedAt: 40},
+	}}
+	mate := &core.Peer{TmuxSession: sess, Pane: "%2", Role: "teammate", AgentName: "hermes-x", Status: "waiting"}
+	got := CellCrew(sess, zeus, []*core.Peer{zeus, mate}, nil)
+	wantNames := []string{"hermes-x", "a1", "Sizing ShipControl.tsx", "six researcher reports", "probe shell"}
+	wantKinds := []string{CrewKindTeammate, core.TaskSubagent, core.TaskSubagent, core.TaskMonitor, core.TaskShell}
+	wantRoles := []string{"hermes", "Explore", "general-purpose", "monitor", "shell"}
+	if len(got.Agents) != len(wantNames) {
+		t.Fatalf("want %d entries, got %+v", len(wantNames), got.Agents)
+	}
+	for i, a := range got.Agents {
+		if a.Name != wantNames[i] || a.Kind != wantKinds[i] || a.Role != wantRoles[i] {
+			t.Errorf("entry %d = %+v, want name %q kind %q role %q", i, a, wantNames[i], wantKinds[i], wantRoles[i])
+		}
+		if i > 0 && (!a.Working || a.Status != "running") {
+			t.Errorf("task entry %d not working/running: %+v", i, a)
+		}
+	}
+	if got.Agents[2].Model != "opus" || got.Agents[0].Working {
+		t.Errorf("model/working wrong: %+v", got.Agents)
+	}
+	// no tasks: the roster is what it was before the field existed
+	zeus.Tasks = nil
+	if got := CellCrew(sess, zeus, []*core.Peer{zeus, mate}, nil); len(got.Agents) != 1 || got.Agents[0].Kind != CrewKindTeammate {
+		t.Fatalf("taskless roster = %+v", got.Agents)
+	}
+}
