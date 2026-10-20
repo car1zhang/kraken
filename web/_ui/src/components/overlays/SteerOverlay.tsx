@@ -96,10 +96,20 @@ import { showToast } from "./Toast.tsx";
 //   steer         "— message zeus"                    /api/steer        required
 //   unblock       "— unblock"                         /api/steer        required
 //   reactivate    "— reactivate (same zeus session)"   /api/reactivate   optional*
+//   view          "— done"                            (none)            (no composer)
 //
 // * unless `requireText`, which is set ONLY by a done→working drag. The card's
 //   and editor's ↺ buttons open reactivate without it, and their optional-text
 //   behaviour is unaffected.
+//
+// `view` is the fourth, and it is what a DONE card's click opens (carl,
+// 2026-10-20): a done job should read almost exactly like a blocked one — the
+// same drilldown, with the artifacts, tokens, PRs, threads, zeus' last words
+// and the transcript all there — minus everything that acts on a cell, since
+// the cell is torn down. So the composer, the attach zone, the send button,
+// the draft sync, the kill/tmux/mark-done buttons, the crew line, the account
+// panel and the retry/question actions are all absent, and the ONE action it
+// keeps is ↺ reactivate, which flips the modal into reactivate mode.
 
 /**
  * Re-exported, not redeclared: `lib/moves.ts` owns this union because it is the
@@ -113,9 +123,17 @@ const TITLE_SUFFIX: Record<SteerMode, string> = {
   steer: " — message zeus",
   unblock: " — unblock",
   reactivate: " — reactivate (same zeus session)",
+  view: " — done",
 };
 
-const PLACEHOLDER: Record<SteerMode, string> = {
+/**
+ * The modes that render a composer. `view` is excluded at the TYPE level
+ * rather than given placeholder strings nothing reads: a Record that had a
+ * `view` placeholder would be a composer the mode promises and never mounts.
+ */
+type ComposerMode = Exclude<SteerMode, "view">;
+
+const PLACEHOLDER: Record<ComposerMode, string> = {
   steer:
     "message zeus directly — steering / pivot instruction, delivered straight to its pane",
   unblock: "tell the crew how to proceed — routed straight to the cell",
@@ -123,13 +141,22 @@ const PLACEHOLDER: Record<SteerMode, string> = {
     "optional: what to adjust — delivered as the resume prompt to the job's original zeus session (leave empty to just wake it)",
 };
 
-const SEND_LABEL: Record<SteerMode, string> = {
+const SEND_LABEL: Record<ComposerMode, string> = {
   steer: "send ⌘⏎",
   unblock: "unblock ⌘⏎",
   reactivate: "reactivate ⌘⏎",
 };
 
-/** Which endpoint a mode sends to. Pinned by SteerOverlay.test.tsx. */
+/** Does this mode send anything at all? Only `view` does not. */
+export function steerHasComposer(mode: SteerMode): mode is ComposerMode {
+  return mode !== "view";
+}
+
+/**
+ * Which endpoint a mode sends to. Pinned by SteerOverlay.test.tsx. `view` has
+ * none — it answers the steer endpoint only so the signature stays total, and
+ * the body never sends in that mode (steerHasComposer gates it).
+ */
 export function steerEndpoint(mode: SteerMode): string {
   return mode === "reactivate" ? "/api/reactivate" : "/api/steer";
 }
@@ -193,6 +220,14 @@ export interface SteerOverlayProps {
    * integrator loses a visible button rather than gaining a broken one.
    */
   onRenamed?: (slug: string) => void;
+  /**
+   * `view` mode's one action: flip this modal onto the same job in
+   * reactivate mode. Optional for renameControlVisible's reason — the button
+   * is hidden outright without it, so an integrator that never wired it
+   * loses a visible control rather than gaining a dead one — and read in no
+   * other mode, since the other three already are the action.
+   */
+  onReactivate?: (slug: string) => void;
   /** See Overlay.tsx. */
   mutate: Mutate;
 
@@ -282,6 +317,7 @@ function SteerBody({
   operator,
   onClose,
   onRenamed,
+  onReactivate,
   mutate,
   onOpenArtifact,
   onOpenThread,
@@ -289,6 +325,11 @@ function SteerBody({
   rename,
 }: SteerOverlayProps & { fileSink: FileSink; rename: RenameControlState }) {
   const jobSlug = slug as string;
+  // The read-only drilldown of a done job. Every "is there a cell to act on"
+  // decision below reads this alongside `mode !== "reactivate"`: reactivate
+  // targets a dead cell and hides the cell ACTIONS, view targets a dead cell
+  // and hides the actions AND the composer.
+  const composer = steerHasComposer(mode);
   const [text, setText] = useState("");
   const [note, setNote] = useState("");
   const [chips, setChips] = useState<AttChip[]>([]);
@@ -312,7 +353,9 @@ function SteerBody({
   // nothing has been typed in the meantime. An AbortController replaces the
   // vanilla `steerOverlay.hidden || steerSlug !== slug` staleness check: an
   // unmount aborts it, so a result for a modal that has moved on never lands.
+  // Skipped in view mode: there is no composer for a draft to land in.
   useEffect(() => {
+    if (!composer) return;
     const ac = new AbortController();
     fetchDraft(jobSlug, ac.signal)
       .then((d) => {
@@ -325,7 +368,7 @@ function SteerBody({
       })
       .catch(() => {});
     return () => ac.abort();
-  }, [jobSlug, markSynced]);
+  }, [composer, jobSlug, markSynced]);
 
   // ---- the collapsible spec drawer ----------------------------------------
   // reactivate skips it: /api/job/form describes the cell that would run, and
@@ -413,10 +456,16 @@ function SteerBody({
     },
     [addFiles],
   );
-  usePasteLayer(true, ESC_PRIORITY.steer, onPaste);
+  // armed only with a composer to paste INTO: in view mode a pasted image
+  // would upload against the job and land in a chip list nothing renders
+  usePasteLayer(composer, ESC_PRIORITY.steer, onPaste);
 
   // ---- send ---------------------------------------------------------------
   const send = useCallback(async () => {
+    // view mode mounts no composer and no send button, so nothing reaches
+    // here; the guard is for the paste layer, which is armed in every mode
+    // and could otherwise queue an attachment that a later send would carry.
+    if (!composer) return;
     if (pending > 0) {
       setNote("uploading image…");
       return;
@@ -450,6 +499,7 @@ function SteerBody({
   }, [
     cancelDraft,
     chips,
+    composer,
     jobSlug,
     mode,
     mutate,
@@ -497,20 +547,30 @@ function SteerBody({
   // hoist there); only the visibility rule, which needs `job`, is decided here.
   const showRename = renameControlVisible(job, false, onRenamed);
 
+  // Every cell action is gated on `composer` as well as on the mode check it
+  // always had: a done job's cell is torn down, so there is nothing to kill,
+  // raise or mark. (All three would read false for a done job anyway — it is
+  // not live and its column is not blocked — but the gate says WHY rather
+  // than leaning on the job's state happening to agree.)
   const liveCol = liveDisplayColumn(job);
   const killable =
-    mode !== "reactivate" && (liveCol === "working" || liveCol === "blocked");
-  const showTmux = mode !== "reactivate" && !!job?.live;
-  const showDone = mode !== "reactivate" && liveCol === "blocked";
+    composer && mode !== "reactivate" && (liveCol === "working" || liveCol === "blocked");
+  const showTmux = composer && mode !== "reactivate" && !!job?.live;
+  const showDone = composer && mode !== "reactivate" && liveCol === "blocked";
+  // view's one action. Hidden when the job cannot be reactivated (no stamped
+  // session) and when nobody wired the callback — see onReactivate.
+  const showReactivate = !composer && !!job?.reactivatable && !!onReactivate;
 
   // reactivate targets a dead cell: no crew to show, no artifacts to act on,
   // and nothing to retry or mark done. PRs, threads, the two messages and the
   // questions are job history and show in every mode.
-  const showCrew = mode !== "reactivate" && !!job && crewChipsVisible(job);
+  const showCrew = composer && mode !== "reactivate" && !!job && crewChipsVisible(job);
   // PRs are job history rather than cell state, so they show in EVERY mode —
   // "what already shipped" is exactly the reactivation context.
   const prs = job?.prs ?? [];
   const artifacts = job?.artifacts ?? [];
+  // Hidden in reactivate mode only. view SHOWS them — the done job's output
+  // is the main thing its drilldown is opened for.
   const showArtifacts = mode !== "reactivate" && artifacts.length > 0;
   // Side threads are job history too (a closed thread outlives its cell), so
   // like PRs they render in every mode. ThreadChips itself drops the ⑂ branch
@@ -564,7 +624,7 @@ function SteerBody({
   // ("is gone" / "startup prompt"), which a retry would only re-fail on.
   const retryable = !!job?.health && !/is gone|startup prompt/.test(job.health);
   const question = job?.question;
-  const showActions = mode !== "reactivate" && (retryable || !!question);
+  const showActions = composer && mode !== "reactivate" && (retryable || !!question);
   // Which pool account this cell is spending on. Unlike every other term in
   // showContext this one is NOT a presence test on a wire key, and deliberately
   // so: an unbound cell is not a cell with no account, it is a cell on the
@@ -577,8 +637,9 @@ function SteerBody({
   // which is burning nothing at all, and the binder re-decides at the respawn —
   // so whatever the row still says would be the account the NEXT run may not
   // get. Answering it there would be the one thing this section must not do,
-  // which is state a dead fact as a current one.
-  const hasAccount = mode !== "reactivate";
+  // which is state a dead fact as a current one. view is the same dead cell,
+  // so the same rule.
+  const hasAccount = composer && mode !== "reactivate";
 
   const showContext =
     showCrew ||
@@ -820,6 +881,20 @@ function SteerBody({
         >
           ✕ cancel job
         </button>
+        {/* view mode's one action — the same ↺ the card's band 6 offers,
+            here so a done job's drilldown need not be closed to reach it.
+            It flips THIS modal into reactivate mode (App re-points the mode;
+            the body remounts on slug+mode), which is where the resume prompt
+            is typed. */}
+        <button
+          className="btn reactivate"
+          id="steer-reactivate"
+          hidden={!showReactivate}
+          data-slug={jobSlug}
+          onClick={() => onReactivate?.(jobSlug)}
+        >
+          ↺ reactivate
+        </button>
       </div>
       <div
         className="panel-body answer-body"
@@ -1006,63 +1081,73 @@ function SteerBody({
           />
         </div>
 
-        <CmdComposer
-          id="steer-text"
-          chipsId="steer-cmd-chips"
-          value={text}
-          onChange={setText}
-          rows={4}
-          placeholder={PLACEHOLDER[mode]}
-          onSubmit={() => void send()}
-        />
-
-        {/* the drop target is the whole PANEL, not this zone — see
-            panelDropHandlers in Overlay.tsx */}
-        <div className="att-zone" id="steer-att-zone">
-          <AttChips
-            id="steer-chips-att"
-            chips={chips}
-            onRemove={(path) =>
-              setChips((prev) => prev.filter((c) => c.path !== path))
-            }
-          />
-          <div className="att-bar">
-            <button
-              className="btn ghost att-btn"
-              id="steer-att-btn"
-              type="button"
-              title="attach images"
-              onClick={() => attInput.current?.click()}
-            >
-              📎 attach
-            </button>
-            <span className="att-hint">paste (⌘V) or drop images</span>
-            <input
-              type="file"
-              id="steer-att-input"
-              ref={attInput}
-              accept="image/png,image/jpeg,image/gif,image/webp"
-              multiple
-              hidden
-              onChange={(e) => {
-                if (e.target.files) addFiles(e.target.files);
-                e.target.value = ""; // allow re-picking the same file
-              }}
+        {/* The composer, the attach zone, the send button and the note:
+            UNMOUNTED in view mode rather than hidden, for LoadDrill's reason
+            — "no composer" is the absence of the element, and a hidden
+            textarea would still answer a #steer-text query (and still be a
+            paste target). `steerHasComposer` narrows `mode` here, which is
+            what lets the two Records below be keyed on ComposerMode. */}
+        {steerHasComposer(mode) ? (
+          <>
+            <CmdComposer
+              id="steer-text"
+              chipsId="steer-cmd-chips"
+              value={text}
+              onChange={setText}
+              rows={4}
+              placeholder={PLACEHOLDER[mode]}
+              onSubmit={() => void send()}
             />
-          </div>
-        </div>
 
-        <button
-          className="btn btn-big"
-          id="steer-send"
-          disabled={sending}
-          onClick={() => void send()}
-        >
-          {SEND_LABEL[mode]}
-        </button>
-        <div className="answer-note" id="steer-note">
-          {note}
-        </div>
+            {/* the drop target is the whole PANEL, not this zone — see
+                panelDropHandlers in Overlay.tsx */}
+            <div className="att-zone" id="steer-att-zone">
+              <AttChips
+                id="steer-chips-att"
+                chips={chips}
+                onRemove={(path) =>
+                  setChips((prev) => prev.filter((c) => c.path !== path))
+                }
+              />
+              <div className="att-bar">
+                <button
+                  className="btn ghost att-btn"
+                  id="steer-att-btn"
+                  type="button"
+                  title="attach images"
+                  onClick={() => attInput.current?.click()}
+                >
+                  📎 attach
+                </button>
+                <span className="att-hint">paste (⌘V) or drop images</span>
+                <input
+                  type="file"
+                  id="steer-att-input"
+                  ref={attInput}
+                  accept="image/png,image/jpeg,image/gif,image/webp"
+                  multiple
+                  hidden
+                  onChange={(e) => {
+                    if (e.target.files) addFiles(e.target.files);
+                    e.target.value = ""; // allow re-picking the same file
+                  }}
+                />
+              </div>
+            </div>
+
+            <button
+              className="btn btn-big"
+              id="steer-send"
+              disabled={sending}
+              onClick={() => void send()}
+            >
+              {SEND_LABEL[mode]}
+            </button>
+            <div className="answer-note" id="steer-note">
+              {note}
+            </div>
+          </>
+        ) : null}
       </div>
     </>
   );

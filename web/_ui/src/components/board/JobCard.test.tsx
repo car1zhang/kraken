@@ -601,11 +601,21 @@ describe("the card click fallback", () => {
     expect(actions.onOpenSteer).toHaveBeenCalledWith("demo", "unblock");
   });
 
-  it("opens the editor for anything that is not live", async () => {
+  it("opens the editor for a draft", async () => {
     const { card, actions } = renderCard(job({ state: "draft" }));
     await userEvent.click(card);
     expect(actions.onOpenEditor).toHaveBeenCalledWith("demo");
     expect(actions.onOpenSteer).not.toHaveBeenCalled();
+  });
+
+  it("opens the read-only VIEW of the steer drilldown on a done job", async () => {
+    // A done job reads like a blocked one: the same modal, minus the
+    // composer and the cell actions — never the editor, which showed the
+    // spec and the artifact list and nothing else the job produced.
+    const { card, actions } = renderCard(job({ state: "done" }));
+    await userEvent.click(card);
+    expect(actions.onOpenSteer).toHaveBeenCalledWith("demo", "view");
+    expect(actions.onOpenEditor).not.toHaveBeenCalled();
   });
 
   it("is the ONLY route to the counts' drilldown — the count chips are inert", async () => {
@@ -620,7 +630,7 @@ describe("the card click fallback", () => {
       }),
     );
     await userEvent.click(card.querySelector(".ct-chip")!);
-    expect(actions.onOpenEditor).toHaveBeenCalledWith("demo");
+    expect(actions.onOpenSteer).toHaveBeenCalledWith("demo", "view");
     expect(actions.onOpenArtifact).not.toHaveBeenCalled();
   });
 

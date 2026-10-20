@@ -105,6 +105,7 @@ describe("steer mode matrix", () => {
       ["steer", "j — message zeus"],
       ["unblock", "j — unblock"],
       ["reactivate", "j — reactivate (same zeus session)"],
+      ["view", "j — done"],
     ];
     for (const [mode, title] of cases) {
       const { unmount } = mount(mode);
@@ -172,6 +173,106 @@ describe("steer mode matrix", () => {
       ),
     );
     expect(reactivateJob).not.toHaveBeenCalled();
+  });
+
+  describe("view mode — the done card's read-only drilldown", () => {
+    // What a done job looks like on the wire: not live, torn down, with
+    // everything that outlives the cell still attached.
+    const doneJob = makeJob({
+      slug: "j",
+      state: "done",
+      live: false,
+      reactivatable: true,
+      detail: "PR opened, stopping here",
+      last_sent: "ship it",
+      prs: [{ url: "https://github.com/o/r/pull/73", state: "merged" }],
+      threads: [{ tid: "t1", title: "q", state: "closed", created_at: 0, closed_at: 1 }],
+      artifacts: [{ name: "90-build-report.md", url: "/artifact/j/90.md" }],
+      feedback: [{ id: 1, artifact: "90-build-report.md", note: "tighten", at: 0 }],
+      tokens: { in: 10, out: 5, cache_write: 1, cache_read: 2, sessions: 1, updated_at: 1 },
+    });
+
+    function mountView(onReactivate?: (slug: string) => void) {
+      return render(
+        <Steer
+          open
+          slug="j"
+          mode="view"
+          job={doneJob}
+          onClose={() => {}}
+          mutate={mutate}
+          onReactivate={onReactivate}
+        />,
+      );
+    }
+
+    it("mounts no composer, attach zone, send button or note", () => {
+      // UNMOUNTED, not hidden: a hidden textarea is still a paste target
+      // and still answers a query
+      mountView();
+      for (const id of ["steer-text", "steer-att-zone", "steer-send", "steer-note"]) {
+        expect(document.getElementById(id)).toBeNull();
+      }
+    });
+
+    it("keeps every history panel a blocked job's drilldown has", () => {
+      mountView();
+      for (const id of [
+        "steer-prs",
+        "steer-threads",
+        "steer-detail",
+        "steer-lastsent",
+        "steer-transcript",
+        "steer-chips",
+        "steer-feedback",
+        "steer-tokens",
+      ]) {
+        expect(document.getElementById(id), id).not.toBeNull();
+        expect(document.getElementById(id), id).not.toHaveAttribute("hidden");
+      }
+      expect(document.getElementById("steer-detail")?.textContent).toContain(
+        "PR opened, stopping here",
+      );
+    });
+
+    it("hides every control that acts on a cell", () => {
+      // the cell is torn down: nothing to kill, raise, mark done, retry, or
+      // bill — and the crew line is a dead roster
+      mountView();
+      for (const id of ["steer-kill", "steer-tmux", "steer-markdone", "steer-crew", "steer-account", "steer-actions"]) {
+        expect(document.getElementById(id), id).toHaveAttribute("hidden");
+      }
+    });
+
+    it("offers ↺ reactivate only when wired and the job allows it", async () => {
+      const user = userEvent.setup();
+      const onReactivate = vi.fn();
+      const { unmount } = mountView(onReactivate);
+      const btn = document.getElementById("steer-reactivate")!;
+      expect(btn).not.toHaveAttribute("hidden");
+      await user.click(btn);
+      expect(onReactivate).toHaveBeenCalledWith("j");
+      unmount();
+
+      // unwired: hidden outright rather than a button that does nothing
+      mountView();
+      expect(document.getElementById("steer-reactivate")).toHaveAttribute("hidden");
+    });
+
+    it("never shows ↺ in a composer mode — those modes already are the action", () => {
+      render(
+        <Steer
+          open
+          slug="j"
+          mode="reactivate"
+          job={doneJob}
+          onClose={() => {}}
+          mutate={mutate}
+          onReactivate={vi.fn()}
+        />,
+      );
+      expect(document.getElementById("steer-reactivate")).toHaveAttribute("hidden");
+    });
   });
 
   it("hides the kill / tmux / mark-done head buttons in reactivate mode", () => {
@@ -427,6 +528,21 @@ describe("#steer-chips — the artifact list", () => {
       "old-2/00-overview.md",
       "archive:old",
     );
+  });
+
+  it("shows the list in view mode — a done job's output is what the drilldown is for", () => {
+    render(
+      <Steer
+        open
+        slug="j"
+        mode="view"
+        job={{ ...artifactJob, state: "done", live: false }}
+        onClose={() => {}}
+        mutate={mutate}
+      />,
+    );
+    expect(document.getElementById("steer-chips")).not.toHaveAttribute("hidden");
+    expect(document.querySelectorAll("#steer-chips button.chip")).toHaveLength(2);
   });
 
   it("hides the list in reactivate mode and for a job with no artifacts", () => {
