@@ -368,6 +368,54 @@ describe("band 2 carries counts, not lists", () => {
     expect(card.querySelector(".crew-chip")!.getAttribute("title")).toContain("● heph-1 (opus)");
   });
 
+  // job 612: zeus' background tasks ride the roster with a `kind`, and each
+  // kind is its own chip — never the "?" other bucket — with the task
+  // descriptions in the title; a roster entry without a kind is a teammate,
+  // exactly as before the field existed.
+  it("renders background-task roster entries as per-kind chips with descriptions in the title", () => {
+    const { card } = renderCard(
+      job({
+        state: "working",
+        live: true,
+        zeus_status: "waiting",
+        roster: [
+          { name: "heph-1", model: "opus", role: "hephaestus", status: "run", working: true, kind: "teammate" },
+          {
+            name: "Checking repo usage in daemon.go",
+            model: "opus",
+            role: "general-purpose",
+            status: "running",
+            working: true,
+            kind: "subagent",
+          },
+          { name: "Reading API.md", model: "", role: "Explore", status: "running", working: true, kind: "subagent" },
+          { name: "six researcher reports", model: "", role: "monitor", status: "running", working: true, kind: "monitor" },
+        ],
+      }),
+    );
+    const chips = Array.from(card.querySelectorAll(".crew-chip"));
+    expect(chips.map((c) => c.textContent?.trim())).toEqual(["⚒︎ 1/1", "⟳ 2/2", "◷ 1/1"]);
+    const sub = card.querySelector(".crew-task.crew-chip")!;
+    expect(sub.getAttribute("title")).toContain("subagent — 2 of 2 working");
+    expect(sub.getAttribute("title")).toContain("● Checking repo usage in daemon.go (general-purpose, opus)");
+    expect(sub.getAttribute("title")).toContain("● Reading API.md (Explore)");
+    expect(sub.classList.contains("active")).toBe(true);
+    // the ? other chip is for an unnamed-god TEAMMATE, never a task
+    expect(card.querySelector(".crew-ico-other")).toBeNull();
+  });
+
+  it("renders a kind-less roster entry exactly as a teammate", () => {
+    const { card } = renderCard(
+      job({
+        state: "working",
+        live: true,
+        roster: [{ name: "probe-x", model: "opus", role: "other", status: "run", working: false }],
+      }),
+    );
+    expect(card.querySelector(".crew-ico-other")).not.toBeNull();
+    expect(card.querySelector(".crew-task")).toBeNull();
+  });
+
   // 50-contract.md, S2 `ThreadChips`: "`compact` renders ONE `<span
   // class="thread-count chip-threads">` reading `⑂ ${list.length}` — a span,
   // NOT a button (the card's own click opens the modal where the full list

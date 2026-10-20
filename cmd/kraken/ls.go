@@ -339,9 +339,17 @@ func peerCells(p, lead *core.Peer, color bool, now time.Time) []string {
 	if p.StatusAt > 0 {
 		ageStr = util.Age(now.Sub(time.UnixMilli(p.StatusAt)))
 	}
+	// A claude at its prompt with live background tasks (in-process
+	// subagents, monitors, background shells) says so beside its status —
+	// "waiting · 3 subagents · 1 monitor" — since the status word alone
+	// reads as idle while the work is inside those tasks.
+	status := util.Paint(color, util.StatusColor(p.Status), "● "+p.Status)
+	if s := core.TaskSummary(p.Tasks); s != "" {
+		status += util.Paint(color, util.Dim, " · "+s)
+	}
 	return []string{
 		util.Paint(color, util.Dim, fmt.Sprintf("%2d", p.Index)),
-		util.Paint(color, util.StatusColor(p.Status), "● "+p.Status),
+		status,
 		util.Paint(color, util.Cyan, name) + selfMark(p, color),
 		project,
 		util.Paint(color, util.Magenta, core.TruncTail(branch, 28)),

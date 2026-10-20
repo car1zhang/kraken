@@ -845,6 +845,7 @@ func DiscoverAll() ([]*Peer, []*Peer) {
 				peer.CWD = sf.CWD
 				peer.Kind = sf.Kind
 				peer.StatusAt = sf.StatusUpdatedAt
+				peer.StartedAt = sf.StartedAt
 				switch sf.Status {
 				case "busy":
 					peer.Status = "running"
@@ -893,10 +894,22 @@ func DiscoverAll() ([]*Peer, []*Peer) {
 			// untouched — and only for a real session id: a guessed one
 			// (SessionIDGuessed) could belong to another claude entirely,
 			// so reading it would be unsafe.
-			if peer.Agent == "claude" && peer.Status == "waiting" && peer.SessionID != "" && !peer.SessionIDGuessed {
-				if w := FindPendingWakeup(transcriptPath(peer.SessionID), time.Now()); w != nil {
-					peer.Status = "polling"
-					peer.Wakeup = w
+			if peer.Agent == "claude" && peer.SessionID != "" && !peer.SessionIDGuessed {
+				transcript := transcriptPath(peer.SessionID)
+				if peer.Status == "waiting" {
+					if w := FindPendingWakeup(transcript, time.Now()); w != nil {
+						peer.Status = "polling"
+						peer.Wakeup = w
+					}
+				}
+				// Background tasks ride the same transcript and the same
+				// real-session-id guard: an in-process subagent, a monitor
+				// or a background shell is invisible to the process walk
+				// above (no pid, or a child zsh it never surfaces), and the
+				// session file says nothing about them. Status is left
+				// alone — the roll call reads Tasks itself.
+				if open := ScanTasks(transcript); len(open) > 0 {
+					peer.Tasks = LiveTasks(open, peer.StartedAt, SidecarDir(transcript), pid, children, cmds, time.Now())
 				}
 			}
 			peers = append(peers, peer)

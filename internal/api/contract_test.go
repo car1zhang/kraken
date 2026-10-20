@@ -1241,6 +1241,9 @@ var webAgentSpec = map[string]fieldSpec{
 	"role":    {kind: wireString, required: true},
 	"status":  {kind: wireString, required: true},
 	"working": {kind: wireBool, required: true},
+	// additive (job 612): "teammate", or a background task's kind
+	// ("subagent" | "monitor" | "shell") riding the roster
+	"kind": {kind: wireString, required: false},
 }
 
 // webLibraryItemSpec covers library.go's webLibraryItem, the elements of GET
@@ -1300,6 +1303,17 @@ func TestWebAgentWireShape(t *testing.T) {
 		t.Fatal(err)
 	}
 	assertShape(t, "webAgent", data, webAgentSpec)
+	// a background task riding the roster carries its kind; a teammate
+	// carries "teammate" (job 612)
+	task := webAgent{Name: "Checking repo usage in daemon.go", Model: "opus", Role: "general-purpose", Status: "running", Working: true, Kind: "subagent"}
+	data, err = json.Marshal(task)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertShape(t, "webAgent", data, webAgentSpec)
+	if !strings.Contains(string(data), `"kind":"subagent"`) {
+		t.Fatalf("kind missing from %s", data)
+	}
 }
 
 // webDocQuestionSpec covers board.go's webDocQuestion, the elements of

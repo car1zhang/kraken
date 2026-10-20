@@ -101,6 +101,12 @@ type webAgent struct {
 	Role    string `json:"role"`
 	Status  string `json:"status"`
 	Working bool   `json:"working"`
+	// Kind is additive (job 612): "teammate" for the crew proper, else the
+	// background-task kind riding the roster — "subagent", "monitor",
+	// "shell". Old clients ignore it and render a task as an "other" crew
+	// entry; omitempty only so a pre-field payload shape is still a legal
+	// one, since every entry a current server emits carries it.
+	Kind string `json:"kind,omitempty"`
 }
 
 // webWakeup mirrors core.Wakeup for the wire, minus DelaySeconds — the
@@ -1127,7 +1133,7 @@ func buildWebBoard() webBoard {
 				crew := jobs.CellCrew(jobs.CellSession(j), zeus, all, members)
 				wj.ZeusStatus = crew.ZeusStatus
 				for _, a := range crew.Agents {
-					wj.Roster = append(wj.Roster, webAgent{Name: a.Name, Model: a.Model, Role: a.Role, Status: a.Status, Working: a.Working})
+					wj.Roster = append(wj.Roster, webAgent{Name: a.Name, Model: a.Model, Role: a.Role, Status: a.Status, Working: a.Working, Kind: a.Kind})
 				}
 			}
 		} else if j.Started() && j.State != "done" {

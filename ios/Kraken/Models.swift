@@ -1368,6 +1368,10 @@ struct WebRosterAgent: Decodable {
     let role: String?
     let status: String?
     let working: Bool?
+    // "teammate", or a background task's kind ("subagent" | "monitor" |
+    // "shell") riding the roster — additive (job 612), decoded only: nil on a
+    // pre-612 server means every entry is a teammate.
+    let kind: String?
 }
 
 struct WebArtifact: Decodable, Identifiable {

@@ -49,6 +49,16 @@ import (
 //     "polling" means the agent is mid poll-loop (a pending ScheduleWakeup),
 //     idle between ticks by design rather than genuinely waiting at its
 //     prompt — it counts as live work, same as "running".
+//  3. a pane claude in the cell that is NOT running but holds a live VOTING
+//     background task (core.Peer.Tasks: an in-process subagent or a
+//     monitor — never a background shell, see taskVotes), under point 1's
+//     own guards (not a side thread pane, no open question). A zeus that
+//     fans out subagents and ends its turn to wait for them sits at its
+//     prompt reading "waiting" with the work entirely inside those tasks;
+//     measured 2026-10-20, such a cell read blocked for 5m40s and sent a
+//     "blocked" notification for a job that never stopped. Shells are shown
+//     but abstain: a backgrounded dev server is exactly what a zeus leaves
+//     running at the manual-test gate, and that gate IS a block.
 //  2. a live non-lead teammate, cross-checked by backend: a tmux-backed
 //     member counts only if its pane is currently occupied by a peer whose
 //     Status is "running" — mere pane existence would also match an idle
@@ -61,7 +71,14 @@ import (
 //     from the config) is filtered up front.
 func cellActive(sess string, peers []*core.Peer, members []core.TeamMember, paneQuestion func(string) bool, skipPanes map[string]bool) bool {
 	for _, p := range peers {
-		if p.TmuxSession != sess || (p.Status != "running" && p.Status != "polling") {
+		if p.TmuxSession != sess {
+			continue
+		}
+		if p.Status != "running" && p.Status != "polling" {
+			// point 3: idle at its prompt, but with voting background work
+			if p.Agent == "claude" && hasVotingTask(p.Tasks) && !skipPanes[p.Pane] && (paneQuestion == nil || !paneQuestion(p.Pane)) {
+				return true
+			}
 			continue
 		}
 		if skipPanes[p.Pane] {
@@ -109,6 +126,23 @@ func cellActive(sess string, peers []*core.Peer, members []core.TeamMember, pane
 			if m.TmuxPaneID != "" && runningByPane[m.TmuxPaneID] {
 				return true
 			}
+		}
+	}
+	return false
+}
+
+// taskVotes reports whether a background task of this kind counts as live
+// work in the roll call (Q1 of job 612): a subagent and a monitor are work
+// in flight that will wake zeus when they finish; a background shell may be
+// a server left running at a gate, so it is shown but never votes.
+func taskVotes(kind string) bool {
+	return kind == core.TaskSubagent || kind == core.TaskMonitor
+}
+
+func hasVotingTask(tasks []core.Task) bool {
+	for _, t := range tasks {
+		if taskVotes(t.Kind) {
+			return true
 		}
 	}
 	return false
