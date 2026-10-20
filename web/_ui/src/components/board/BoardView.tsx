@@ -24,7 +24,19 @@ export interface BoardActions {
    * what DragProvider passes, so ONE callback can serve both the cards and the
    * drop table; `requireText` is only ever set by a done→working drag.
    */
-  onOpenSteer(slug: string, mode: SteerMode, opts?: { requireText?: boolean }): void;
+  onOpenSteer(
+    slug: string,
+    mode: SteerMode,
+    opts?: {
+      requireText?: boolean;
+      /**
+       * The OWNER node of a remote card (its `owner.node_id`). Present only
+       * when a remote card opened the modal; it is half the card's identity
+       * (lib/jobKey.ts), so a slug alone would find the local namesake.
+       */
+      node?: string;
+    },
+  ): void;
   /** Job editor. `null` opens it in new-job mode (the "+ NEW JOB" button). */
   onOpenEditor(slug: string | null): void;
   /**
@@ -99,6 +111,13 @@ export interface BoardViewProps {
    */
   overlayOpen?: boolean;
   /**
+   * The fleet's hide-others toggle, relayed to the board bar. App owns the
+   * state (and its kraken.hideOthers persistence) because the filter itself
+   * runs in useBoard, above this view.
+   */
+  hideOthers?: boolean;
+  onHideOthers?: (hide: boolean) => void;
+  /**
    * @deprecated Dead, and accepted only so App.tsx keeps compiling until the
    * lead drops the call site. Band 2 carries a bare artifact COUNT now
    * (ArtifactCountChip), so there is no "+N more" toggle and no per-job
@@ -151,6 +170,8 @@ export function BoardView({
   goalFilter = null,
   onGoalFilter = () => {},
   overlayOpen,
+  hideOthers = false,
+  onHideOthers,
 }: BoardViewProps) {
   /**
    * How many jobs link each goal, and every goal's text — both from the ONE
@@ -175,7 +196,10 @@ export function BoardView({
    * missing name costs the chip, while COUNTING one the filter would not match
    * costs the badge its honesty.
    */
-  const jobs = board.board?.jobs;
+  // LOCAL cards only: a remote card's goal ids are its owner's goals, and
+  // counting them here would credit this board's goal of the same id.
+  const allJobs = board.board?.jobs;
+  const jobs = useMemo(() => allJobs?.filter((j) => !j.owner), [allJobs]);
   const goalIndex = useMemo(() => {
     const counts = goalJobCounts(jobs ?? []);
     const text = new Map<number, string>();
@@ -203,6 +227,14 @@ export function BoardView({
         onClearGoal={() => onGoalFilter(null)}
         overlayOpen={overlayOpen}
         hidden={hidden}
+        hideOthers={hideOthers}
+        // offered only once there IS another kraken (or the toggle is already
+        // on, so it can always be switched back off)
+        onHideOthers={
+          onHideOthers && ((board.board?.nodes?.length ?? 0) > 0 || hideOthers)
+            ? onHideOthers
+            : undefined
+        }
       />
       <main className="board" id="board" hidden={hidden}>
         {COLUMNS.map((col) => {

@@ -62,7 +62,8 @@ func composeRawJobContent(j *jobs.Job) string {
 	fields := jobFormFields{
 		Slug: j.Slug, Repo: j.Repo, Base: j.Base,
 		Solo: j.Solo, Model: j.Model, Color: j.Color, Agent: j.Agent,
-		Spec: strings.TrimSpace(spec),
+		Visibility: j.Visibility,
+		Spec:       strings.TrimSpace(spec),
 	}
 	return serializeJobFile(fields, j.State, j.Outcome, j.Session, j.Teardown, j.Run, j.PRs, logSection)
 }
@@ -83,7 +84,11 @@ func jobFieldsFromParsed(p *jobs.Job) map[string]any {
 	return map[string]any{
 		"repo": p.Repo, "base": p.Base,
 		"solo": p.Solo, "model": p.Model, "color": p.Color, "agent": p.Agent,
-		"body": p.Body, "state": p.State, "outcome": p.Outcome,
+		// visibility lands from the raw text like color does — the job text
+		// is where it is hand-authored (an absent line reads as readonly)
+		"visibility": p.Visibility,
+		"body":       p.Body,
+		"state":      p.State, "outcome": p.Outcome,
 		"session": p.Session, "teardown": p.Teardown, "run": int64(p.Run),
 		// L6: p.Err is "" on a clean parse, which is exactly the value that
 		// must land in the row to CLEAR any earlier draft-pinning save —
@@ -194,6 +199,7 @@ func webJobCreate(w http.ResponseWriter, r *http.Request) {
 		Slug: slug, Repo: parsed.Repo, Base: parsed.Base,
 		Solo: parsed.Solo, Model: parsed.Model,
 		Color: parsed.Color, Agent: parsed.Agent, Body: parsed.Body,
+		Visibility: parsed.Visibility,
 	}); err != nil {
 		// ErrSlugTaken is a name clash the caller can fix by typing a
 		// different one, so it is a 409 like the pre-check above and never
@@ -350,7 +356,13 @@ type jobFormFields struct {
 	// POST /api/job/color is the only writer (webJobColor says why). It is
 	// still served on the form GET so a client can show the current pick.
 	Color string `json:"color"`
-	Spec  string `json:"spec"`
+	// Visibility is render-only and OFF the wire (json:"-"): serializeJobFile
+	// emits the visibility: line from it so the raw view shows the level, and
+	// both callers fill it from the stored job. POST /api/job/visibility is the
+	// only form-side writer, for colour's reasons (jobvisibility.go); keeping
+	// it out of the form's JSON means no form client can send it at all.
+	Visibility string `json:"-"`
+	Spec       string `json:"spec"`
 	// MTime is the optimistic-lock token (the row's rev), decoded via
 	// mtimeToken so a legacy client still sending the old string encoding
 	// round-trips too.
@@ -416,6 +428,9 @@ func serializeJobFile(f jobFormFields, state, outcome, session, teardown string,
 	}
 	if f.Agent != "" {
 		fmt.Fprintf(&b, "agent: %s\n", jobs.OneLine(f.Agent))
+	}
+	if f.Visibility != "" {
+		fmt.Fprintf(&b, "visibility: %s\n", jobs.OneLine(f.Visibility))
 	}
 	if state != "" {
 		fmt.Fprintf(&b, "state: %s\n", state)
@@ -502,6 +517,9 @@ func webJobSaveForm(w http.ResponseWriter, r *http.Request) {
 	// field: a full-replace body with no "color" key decodes to "" and would
 	// otherwise silently wipe the colour with nothing to restore it from.
 	req.Color = j.Color
+	// Visibility likewise: rendered from the stored job, never taken from the
+	// form (its JSON cannot carry it), and the fields map below omits it.
+	req.Visibility = j.Visibility
 	// a job resolved above, so a store is wired (LoadJobs is empty without one)
 	st := jobs.ActiveStore()
 	_, logSection := splitBodyLog(j.Body)

@@ -166,12 +166,13 @@ func TestContractCxpUsageAlwaysEmitsACodexArray(t *testing.T) {
 	}
 }
 
-// Obligation: "apiContract stays 6." The change adds two keys and retypes,
+// Obligation: "apiContract stays 6" — 7 since the fleet gate's bump, a break
+// this change had no part in. The change adds two keys and retypes,
 // renames and removes nothing, so every shipped iOS build keeps decoding this
 // payload. A bump here would make those builds refuse a response they can
 // read perfectly well.
 func TestContractCxpApiContractStaysSix(t *testing.T) {
-	if apiContract != 6 {
-		t.Errorf("apiContract = %d, want 6 — codex_accounts and codex_fetched_at are additive", apiContract)
+	if apiContract != 7 {
+		t.Errorf("apiContract = %d, want 7 (bumped by the fleet gate) — codex_accounts and codex_fetched_at are additive", apiContract)
 	}
 }

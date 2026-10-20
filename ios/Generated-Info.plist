@@ -42,6 +42,8 @@
 		<key>NSAllowsArbitraryLoads</key>
 		<true/>
 	</dict>
+	<key>NSCameraUsageDescription</key>
+	<string>Kraken scans the pairing code on your Mac's board to find it on the tailnet.</string>
 	<key>UIBackgroundModes</key>
 	<array>
 		<string>fetch</string>

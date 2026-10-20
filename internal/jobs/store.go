@@ -70,22 +70,23 @@ func ActiveStore() *store.Store {
 // slice: the api handlers move onto the store's own accessors).
 func jobFromStoreRow(sr *store.Job, prs []store.PR) *Job {
 	j := &Job{
-		ID:       sr.ID,
-		Slug:     sr.Slug,
-		Repo:     sr.Repo,
-		Base:     sr.Base,
-		Solo:     sr.Solo,
-		Model:    sr.Model,
-		Color:    sr.Color,
-		Agent:    sr.Agent,
-		Body:     sr.Body,
-		State:    sr.State,
-		Outcome:  sr.Outcome,
-		Session:  sr.Session,
-		Teardown: sr.Teardown,
-		Run:      int(sr.Run),
-		Rev:      sr.Rev,
-		ModTime:  time.UnixMilli(sr.UpdatedAt),
+		ID:         sr.ID,
+		Slug:       sr.Slug,
+		Repo:       sr.Repo,
+		Base:       sr.Base,
+		Solo:       sr.Solo,
+		Model:      sr.Model,
+		Color:      sr.Color,
+		Agent:      sr.Agent,
+		Visibility: sr.Visibility,
+		Body:       sr.Body,
+		State:      sr.State,
+		Outcome:    sr.Outcome,
+		Session:    sr.Session,
+		Teardown:   sr.Teardown,
+		Run:        int(sr.Run),
+		Rev:        sr.Rev,
+		ModTime:    time.UnixMilli(sr.UpdatedAt),
 		// L6: the editor's save stores ParseJob's Err — a job whose last save
 		// didn't parse pins to "draft" in deriveState until a later save
 		// parses clean.
@@ -216,6 +217,8 @@ func writeJobFieldsToStore(st *store.Store, j *Job, keyvals ...string) error {
 			j.Teardown = keyvals[i+1]
 		case "color":
 			j.Color = keyvals[i+1]
+		case "visibility":
+			j.Visibility = keyvals[i+1]
 		case "run":
 			if n, err := strconv.Atoi(keyvals[i+1]); err == nil {
 				j.Run = n

@@ -225,7 +225,13 @@ export interface SortableColumnProps {
  */
 export function SortableColumn({ column, jobs, children }: SortableColumnProps) {
   const ordered = useColumnJobs(column, jobs);
-  const items = useMemo(() => ordered.map((j) => jobKey(j)), [ordered]);
+  // Owned (remote) cards are NOT sortable items: they sit in the column to be
+  // read, never to be dragged, reordered past, or dropped onto — the column's
+  // order is a LOCAL server's and only its own cards are in it.
+  const items = useMemo(
+    () => ordered.filter((j) => !j.owner).map((j) => jobKey(j)),
+    [ordered],
+  );
   return (
     <SortableContext items={items} strategy={verticalListSortingStrategy}>
       {children}
@@ -261,10 +267,15 @@ export interface SortableCard {
  * unreachable, and it needs no second rule anywhere: dnd-kit never starts the
  * drag, so onDragStart never runs.
  */
-export function useSortableCard(key: string): SortableCard {
+export function useSortableCard(key: string, opts?: { inert?: boolean }): SortableCard {
   const submitting = useCardSubmitting(key);
+  // `inert` is a REMOTE card (it carries `owner`): never draggable, never a
+  // drop target, and withheld from the column's sortable items by
+  // SortableColumn — the same withheld-listeners statement the in-flight
+  // submit makes below, for a card that is not this board's to move at all.
+  const inert = opts?.inert ?? false;
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } =
-    useSortable({ id: key, disabled: submitting });
+    useSortable({ id: key, disabled: submitting || inert });
 
   // The vanilla dragstart guard (app.js:957), reimplemented one layer up.
   //
@@ -283,7 +294,7 @@ export function useSortableCard(key: string): SortableCard {
   // module's own statement, and it is the one a test can read.
   const guarded = useMemo(() => {
     const out: Record<string, (event: never) => void> = {};
-    if (submitting) return out;
+    if (submitting || inert) return out;
     for (const [name, fn] of Object.entries(listeners ?? {})) {
       out[name] = (event: never) => {
         const e = event as unknown as { target?: EventTarget | null };
@@ -292,11 +303,13 @@ export function useSortableCard(key: string): SortableCard {
       };
     }
     return out;
-  }, [listeners, submitting]);
+  }, [listeners, submitting, inert]);
 
   return {
     setNodeRef,
-    attributes: attributes as unknown as Record<string, unknown>,
+    // an inert card is not a sortable at all, so it carries none of dnd-kit's
+    // sortable aria (role/roledescription/tabIndex)
+    attributes: inert ? {} : (attributes as unknown as Record<string, unknown>),
     listeners: guarded,
     style: {
       transform: CSS.Transform.toString(transform) ?? undefined,

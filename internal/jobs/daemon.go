@@ -316,7 +316,10 @@ type daemonState struct {
 	// the active board, whose slugs are unique), with the same freed-slug
 	// hazard closed by prunePRScan.
 	PRScan map[string]int64
-	tickN  int
+	// nodes is the fleet pass' per-process memory (nodes.go): failure counts,
+	// the last announced envelope, and its single-flight flag.
+	nodes NodesState
+	tickN int
 	// offline: in-memory only, like the dedup maps above — losing it on
 	// restart just costs one duplicate "offline" notification. Set while
 	// probeOnline fails so auto-retry pokes are suppressed instead of eaten
@@ -1105,6 +1108,14 @@ func (d *daemonState) tick(mirror bool) (int, error) {
 	// TYPES INTO A LIVE PANE.
 	if !mirror {
 		LinearPass(now)
+	}
+
+	// the fleet (nodes.go): discover sibling krakens on the tailnet, announce
+	// this one, poll their card lists. Skipped under mirror because it writes
+	// the registry and, by announcing, tells every sibling that this process
+	// is a node — a sandbox serve must never present itself as the machine's.
+	if !mirror {
+		d.nodesPass(now)
 	}
 
 	// usage poll (throttled, first-tick eager so UIs have data right after

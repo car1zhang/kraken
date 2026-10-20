@@ -338,10 +338,11 @@ func TestSubmitContractJobFormGETCarriesNeitherRetiredKey(t *testing.T) {
 // TestSubmitContractAPIContractIsSix: removing `ready` from the job form and
 // `start_error` from webJob are key REMOVALS on existing shapes, which is the
 // definition of breaking — so the number moves, in the same commit as
-// ios/API.md and APIClient.swift's expectedContract.
+// ios/API.md and APIClient.swift's expectedContract. It has since moved again,
+// to 7, for the fleet gate.
 func TestSubmitContractAPIContractIsSix(t *testing.T) {
-	if apiContract != 6 {
-		t.Fatalf("apiContract = %d, want 6 (v6: ready+prereqs off the job form, start_error off webJob, queued state retired)", apiContract)
+	if apiContract != 7 {
+		t.Fatalf("apiContract = %d, want 7 (v7: the fleet gate; v6: ready+prereqs off the job form, start_error off webJob, queued state retired)", apiContract)
 	}
 }
 
@@ -363,7 +364,7 @@ func TestSubmitContractBoardServesTheBumpedContract(t *testing.T) {
 	if !ok {
 		t.Fatalf("board payload has no numeric contract key: %s", data)
 	}
-	if got, _ := n.Int64(); got != 6 {
-		t.Errorf("board contract = %d, want 6", got)
+	if got, _ := n.Int64(); got != 7 {
+		t.Errorf("board contract = %d, want 7", got)
 	}
 }

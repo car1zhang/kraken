@@ -73,6 +73,8 @@ The one long-lived process is `kraken serve` — and even it owns nothing it can
 
 `kraken serve` is the only runtime and the sole DB writer.
 
+Every `kraken serve` on a tailnet is also a **node**: it finds its siblings through `tailscale status`, polls each one's job list on the daemon tick, and shows those jobs on its own board as cards owned by the machine they run on (owner chip `label · operator`, a hide-others toggle). Each job has a visibility — `private` (never leaves its machine), `readonly` (the default: everyone on the tailnet sees it), `public` (anyone on the tailnet may steer, answer, kill, stop, finish, submit, archive, recolour or edit it; `k s <node>/<slug>` and `k r <node>/<slug>` reach it from a shell or a cell). A node alone on its tailnet is simply today's kraken. The tailnet-facing API is gated: the Mac itself and the cell hooks are the owner tier, a phone that has paired is the paired tier, another kraken is the node tier, anything else sees only `/api/health`. The iOS app pairs with ONE node by a password set on that Mac's board (the ◉ Devices overlay): the phone proves the password to every node with a per-node HMAC and keeps the resulting token in its Keychain; Log out, or Revoke on the board, ends it.
+
 Because discovery output can go stale between listing and acting, every targeted action (`k s`, `k k`, `k b`) re-verifies the pane still holds the agent you meant before touching it.
 
 ## Local mirror testing

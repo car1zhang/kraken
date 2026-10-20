@@ -700,13 +700,14 @@ func TestContractLibraryMethodNotAllowedIsJSON(t *testing.T) {
 }
 
 // TestContractLibraryIsAdditiveToTheAPIContract pins the contract's "Additive:
-// apiContract stays 6" clause. The whole library family is new keys on new
+// apiContract stays 6" clause (7 since the fleet gate's bump, which the library
+// had no part in). The whole library family is new keys on new
 // routes; nothing existing is retyped, renamed or removed, so the number must
 // not move — a bump would tell every shipped iOS build it is out of date over a
 // feature it does not have.
 func TestContractLibraryIsAdditiveToTheAPIContract(t *testing.T) {
-	if apiContract != 6 {
-		t.Fatalf("apiContract = %d, want 6 — the artifact library is additive", apiContract)
+	if apiContract != 7 {
+		t.Fatalf("apiContract = %d, want 7 (bumped by the fleet gate) — the artifact library is additive", apiContract)
 	}
 }
 

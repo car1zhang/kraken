@@ -755,6 +755,32 @@ func spawnCommand(j *Job, argv []string, brief, prompt string) (string, error) {
 	return accountEnvPrefix(j) + cmd, nil
 }
 
+// withJobSlugEnv adds the job-slug assignment (jobSlugEnvPrefix) to a claude
+// zeus command spawnCommand built, right after its account prefix so every
+// HasPrefix reading of a bound command keeps holding. The claude zeus spawns —
+// StartCell and ReactivateJob through zeusLaunch, and the limit rescue's
+// respawn — apply it, so a `kraken s <node>/<slug>` typed by zeus or any
+// teammate it starts (they inherit its process env) can say which cell sent
+// it. It is applied by those callers rather than inside spawnCommand because
+// spawnCommand's unbound output is pinned byte-identical to the pre-binding
+// command, and that pin is about the account seam, not this one.
+func withJobSlugEnv(j *Job, cmd string) string {
+	p := accountEnvPrefix(j)
+	return p + jobSlugEnvPrefix(j) + strings.TrimPrefix(cmd, p)
+}
+
+// jobSlugEnvPrefix exports KRAKEN_JOB_SLUG='<slug>' for a cell's zeus. The CLI
+// reads it (cmdSend, as the X-Kraken-From-Cell header of a cross-node steer)
+// to name the sending cell; outside a cell the variable is absent. On the
+// command string, never exec.Cmd.Env, for accountEnvPrefix's reason: tmux
+// respawn-pane builds no env from the issuing client.
+func jobSlugEnvPrefix(j *Job) string {
+	if j == nil || j.Slug == "" {
+		return ""
+	}
+	return "KRAKEN_JOB_SLUG='" + shellSingleQuote(j.Slug) + "' "
+}
+
 // codexZeusModel is zeusModel's codex arm: the model a codex cell's zeus runs
 // on — the job's own model: when it pins one, else core.CodexZeusModel. One
 // resolver for the same reason zeusModel is one: codexModelArgs puts it on the
@@ -898,7 +924,11 @@ func zeusLaunch(j *Job, wt, prompt, resumeSession string) (string, error) {
 	if resumeSession != "" {
 		resume = []string{"-r", resumeSession}
 	}
-	return spawnCommand(j, zeusSpawnArgv(j, resume...), brief, prompt)
+	cmd, err := spawnCommand(j, zeusSpawnArgv(j, resume...), brief, prompt)
+	if err != nil {
+		return "", err
+	}
+	return withJobSlugEnv(j, cmd), nil
 }
 
 // zeusLaunchBrief is the staged brief every zeus spawn carries — zeusLaunch

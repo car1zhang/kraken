@@ -26,10 +26,16 @@ enum KrakenDefaults {
 
 enum KrakenError: Error, LocalizedError {
     case message(String)
+    /// HTTP 401 from the request gate: this phone holds no pairing the server
+    /// accepts (never paired, revoked, or the password changed). The board
+    /// model treats it as "unpaired" — record and cookie cleared, back to the
+    /// pair screen — rather than as an ordinary failed request.
+    case unauthorized
 
     var errorDescription: String? {
         switch self {
         case .message(let m): return m
+        case .unauthorized: return "not paired — pair this phone with your Mac"
         }
     }
 }
@@ -50,6 +56,27 @@ private struct ReorderRequest: Encodable {
 /// and an empty object is the honest spelling of "no force, no test".
 private struct EmptyRequest: Encodable {}
 
+/// POST /api/job/visibility body.
+private struct JobVisibilityRequest: Encodable {
+    let slug: String
+    let visibility: String
+}
+
+/// POST /api/nodes/action body.
+private struct NodeActionRequest: Encodable {
+    let node: String
+    let slug: String
+    let action: String
+    let payload: NodeActionPayload
+}
+
+/// The `payload` of a remote action: `text` for steer and question, `color`
+/// for colour, nothing for the rest. A nil field is omitted from the JSON.
+struct NodeActionPayload: Encodable {
+    var text: String?
+    var color: String?
+}
+
 /// One networking client for the whole app: plain async/await URLSession,
 /// generic get/post plumbing, and a typed convenience method per endpoint.
 /// An actor so it's safe to share a single instance (and its URLSession)
@@ -63,7 +90,73 @@ actor APIClient {
     // removed from /api/board's job objects.
     // v6: ready + prereqs removed from the job form shapes, start_error
     // removed from /api/board's job objects, the queued state retired.
-    static let expectedContract = 6
+    // v7: the request gate — every board route answers 401 to a phone that
+    // has not paired, so a build without the pair screen cannot load at all.
+    static let expectedContract = 7
+
+    /// The cookie the server's gate reads when a request cannot carry the
+    /// Authorization header (WKWebView artifact pages, AsyncImage thumbnails).
+    static let pairCookieName = "kraken_pair"
+
+    /// Adds `Authorization: Bearer <token>` when a record is present, and
+    /// returns the request unchanged otherwise. `perform` runs every request
+    /// this client builds through it.
+    static func authorize(_ request: URLRequest, record: PairingRecord?) -> URLRequest {
+        guard let record else { return request }
+        var out = request
+        out.setValue("Bearer \(record.token)", forHTTPHeaderField: "Authorization")
+        return out
+    }
+
+    /// The `kraken_pair` cookie for a record: the token, scoped to the record
+    /// URL's host (and its port when the URL names one), path `/`. nil when
+    /// the record's URL has no host.
+    static func pairCookie(for record: PairingRecord) -> HTTPCookie? {
+        guard let url = URL(string: record.url), let host = url.host, !host.isEmpty else { return nil }
+        var props: [HTTPCookiePropertyKey: Any] = [
+            .name: pairCookieName,
+            .value: record.token,
+            .domain: host,
+            .path: "/",
+            .originURL: url,
+        ]
+        if let port = url.port { props[.port] = String(port) }
+        return HTTPCookie(properties: props)
+    }
+
+    static func installCookie(record: PairingRecord, into storage: HTTPCookieStorage) {
+        guard let cookie = pairCookie(for: record) else { return }
+        storage.setCookie(cookie)
+    }
+
+    /// Removes every `kraken_pair` cookie set for `url`'s host.
+    static func clearCookie(for url: String, in storage: HTTPCookieStorage) {
+        guard let host = URL(string: url)?.host?.lowercased() else { return }
+        for cookie in storage.cookies ?? [] where cookie.name == pairCookieName
+            && cookie.domain.trimmingCharacters(in: CharacterSet(charactersIn: ".")).lowercased() == host {
+            storage.deleteCookie(cookie)
+        }
+    }
+
+    /// The record `perform` authorizes with: `stored`, but only for a request
+    /// to the host (case-insensitive) and port it was issued by — a missing
+    /// port reads as the scheme's default (80 for http, 443 for https). The
+    /// token is a credential for ONE node; sending it to whatever host the
+    /// server field happens to name would hand that node a token it could
+    /// replay against ours. Pure.
+    static func record(for request: URLRequest, stored: PairingRecord?) -> PairingRecord? {
+        guard let stored,
+              let paired = URL(string: stored.url), let target = request.url,
+              let pairedHost = paired.host?.lowercased(), !pairedHost.isEmpty,
+              pairedHost == target.host?.lowercased(),
+              effectivePort(paired) == effectivePort(target) else { return nil }
+        return stored
+    }
+
+    private static func effectivePort(_ url: URL) -> Int {
+        if let port = url.port { return port }
+        return url.scheme?.lowercased() == "https" ? 443 : 80
+    }
 
     private let session: URLSession
     // Multi-MB image uploads over cellular can easily take longer than the
@@ -131,7 +224,21 @@ actor APIClient {
         return url
     }
 
-    private func perform(_ request: URLRequest, session: URLSession? = nil) async throws -> Data {
+    /// The token a request to `baseURL` would carry given `stored` — the
+    /// same host/port rule `perform` applies, so a caller that hands `perform`
+    /// that record knows exactly which token (if any) a 401 answered.
+    static func tokenSent(to baseURL: String, stored: PairingRecord?) -> String? {
+        guard let url = URL(string: baseURL) else { return nil }
+        return record(for: URLRequest(url: url), stored: stored)?.token
+    }
+
+    /// `stored` is the record to authorize with; it defaults to a fresh
+    /// Keychain read. A caller that must tell "my token was refused" from "a
+    /// tokenless or stale request was refused" reads the record once and
+    /// passes it, so the token it compares is the one actually sent.
+    private func perform(_ request: URLRequest, session: URLSession? = nil,
+                         stored: PairingRecord? = PairingStore.load()) async throws -> Data {
+        let request = Self.authorize(request, record: Self.record(for: request, stored: stored))
         let data: Data
         let response: URLResponse
         do {
@@ -141,6 +248,9 @@ actor APIClient {
         }
         guard let http = response as? HTTPURLResponse else {
             throw KrakenError.message("no HTTP response from server")
+        }
+        if http.statusCode == 401 {
+            throw KrakenError.unauthorized
         }
         guard (200...299).contains(http.statusCode) else {
             if let body = try? decoder.decode(ErrorBody.self, from: data),
@@ -201,11 +311,12 @@ actor APIClient {
         }
     }
 
-    private func get<T: Decodable>(baseURL: String, path: String, query: [(String, String)] = []) async throws -> T {
+    private func get<T: Decodable>(baseURL: String, path: String, query: [(String, String)] = [],
+                                   stored: PairingRecord? = PairingStore.load()) async throws -> T {
         let url = try buildURL(baseURL: baseURL, path: path, query: query)
         var request = URLRequest(url: url)
         request.httpMethod = "GET"
-        let data = try await perform(request)
+        let data = try await perform(request, stored: stored)
         do {
             return try decoder.decode(T.self, from: data)
         } catch {
@@ -232,6 +343,11 @@ actor APIClient {
 
     func fetchBoard(baseURL: String) async throws -> WebBoard {
         try await get(baseURL: baseURL, path: "/api/board")
+    }
+
+    /// The board, authorized with exactly `stored` (see `perform`'s `stored`).
+    func fetchBoard(baseURL: String, stored: PairingRecord?) async throws -> WebBoard {
+        try await get(baseURL: baseURL, path: "/api/board", stored: stored)
     }
 
     /// Submits a draft: the server starts its cell inline and answers only
@@ -470,6 +586,41 @@ actor APIClient {
             baseURL: baseURL, path: "/api/job/color",
             body: JobColorRequest(slug: slug, color: color)
         )
+    }
+
+    /// Sets a LOCAL job's visibility: "private" (never leaves this Mac),
+    /// "readonly" (the default — other boards see it, nobody touches it) or
+    /// "public" (other krakens may drive it). A one-field route like colour,
+    /// so it works on a live cell.
+    func setJobVisibility(baseURL: String, slug: String, visibility: String) async throws {
+        let _: OkResponse = try await post(
+            baseURL: baseURL, path: "/api/job/visibility",
+            body: JobVisibilityRequest(slug: slug, visibility: visibility)
+        )
+    }
+
+    // MARK: - pairing and the fleet
+
+    /// Revokes THIS phone's pairing on the paired node (no id: a paired caller
+    /// revokes itself). Log out calls it before wiping the Keychain record.
+    func revokePairing(baseURL: String) async throws {
+        let _: OkResponse = try await post(baseURL: baseURL, path: "/api/pair/revoke", body: EmptyRequest())
+    }
+
+    /// One action on a REMOTE public cell, through the paired node's proxy:
+    /// `node` is the owner's node id, `action` one of steer, question, kill,
+    /// done, submit, archive, color, stop. The remote node's own answer is
+    /// relayed back, so a refusal reads exactly as it would locally. Submit
+    /// starts the remote cell inline and gets the long session for the same
+    /// reason `queueJob` does.
+    func nodeAction(baseURL: String, node: String, slug: String, action: String,
+                    payload: NodeActionPayload = NodeActionPayload()) async throws {
+        let url = try buildURL(baseURL: baseURL, path: "/api/nodes/action")
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try encoder.encode(NodeActionRequest(node: node, slug: slug, action: action, payload: payload))
+        _ = try await perform(request, session: action == "submit" ? submitSession : nil)
     }
 
     // MARK: - goals

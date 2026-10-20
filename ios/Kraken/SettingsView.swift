@@ -21,6 +21,9 @@ struct SettingsView: View {
     // versa. See KrakenApp.boardVM.
     @Environment(BoardViewModel.self) private var boardVM
     @AppStorage("notifyBlocked") private var notifyBlocked = false
+    @AppStorage(BoardViewModel.hideOthersKey) private var hideOthers = false
+    @State private var pairing = PairingSession.shared
+    @State private var isLoggingOut = false
     @AppStorage("appearance") private var appearance = "system"
     /// The theme tint, persisted under the one key KTheme owns. Writing a
     /// rawValue here is the whole picker: KrakenApp observes the same key and
@@ -68,13 +71,30 @@ struct SettingsView: View {
                         VStack(alignment: .leading, spacing: 10) {
                             Text("Server").kLabelStyle()
 
-                            TextField(Self.serverURLPlaceholder, text: $serverURL)
-                                .keyboardType(.URL)
-                                .textInputAutocapitalization(.never)
-                                .autocorrectionDisabled()
-                                .focused($serverURLFocused)
-                                .font(.data(13))
-                                .kField(focused: serverURLFocused)
+                            // While paired, the address is the paired node's
+                            // and is not editable here: the token is sent only
+                            // to that host, so a different address would just
+                            // be unauthorized. Log out to pair elsewhere.
+                            if let record = pairing.record {
+                                Text(serverURL)
+                                    .font(.data(13))
+                                    .foregroundStyle(KTheme.text2)
+                                    .textSelection(.enabled)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                    .padding(.vertical, 4)
+                                pairedRow(record)
+                            } else {
+                                TextField(Self.serverURLPlaceholder, text: $serverURL)
+                                    .keyboardType(.URL)
+                                    .textInputAutocapitalization(.never)
+                                    .autocorrectionDisabled()
+                                    .focused($serverURLFocused)
+                                    .font(.data(13))
+                                    .kField(focused: serverURLFocused)
+                                Text("not paired — pair this phone from the Board tab")
+                                    .font(.voice(11))
+                                    .foregroundStyle(KTheme.revealed)
+                            }
 
                             Button {
                                 testConnection()
@@ -98,6 +118,25 @@ struct SettingsView: View {
                                     .font(.voice(12))
                                     .foregroundStyle(testIsError ? KTheme.counter : KTheme.solved)
                                     .fixedSize(horizontal: false, vertical: true)
+                            }
+                        }
+                        .padding(14)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+
+                    ThemedCard {
+                        VStack(alignment: .leading, spacing: 10) {
+                            Text("Fleet").kLabelStyle()
+
+                            Toggle(isOn: $hideOthers) {
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text("Hide others' jobs")
+                                        .font(.voice(13))
+                                        .foregroundStyle(KTheme.text)
+                                    Text("show only this Mac's cards")
+                                        .font(.voice(11))
+                                        .foregroundStyle(KTheme.text2)
+                                }
                             }
                         }
                         .padding(14)
@@ -239,6 +278,50 @@ struct SettingsView: View {
             // room for the 2pt selection ring, drawn outside each swatch's
             // own frame
             .padding(5)
+        }
+    }
+
+    private func pairedRow(_ record: PairingRecord) -> some View {
+        HStack(spacing: 10) {
+            Image(systemName: "link")
+                .foregroundStyle(KTheme.solved)
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Paired to \(record.label.isEmpty ? record.nodeID : record.label)")
+                    .font(.voice(13, weight: .semibold))
+                    .foregroundStyle(KTheme.text)
+                Text("as \(UIDevice.current.name)")
+                    .font(.voice(11))
+                    .foregroundStyle(KTheme.text2)
+            }
+            Spacer(minLength: 0)
+            Button(role: .destructive) {
+                logOut()
+            } label: {
+                if isLoggingOut {
+                    ProgressView()
+                } else {
+                    Text("Log out")
+                }
+            }
+            .buttonStyle(.bordered)
+            .disabled(isLoggingOut)
+        }
+    }
+
+    /// Revokes this phone on the paired node, then forgets the pairing here
+    /// whatever the revoke said: an unreachable Mac must not keep the phone
+    /// paired against carl's wish, and a token the phone no longer holds is
+    /// one nobody can use from it. The board drops back to the pair screen.
+    private func logOut() {
+        isLoggingOut = true
+        let url = serverURL
+        Task {
+            try? await APIClient.shared.revokePairing(baseURL: url)
+            PairingSession.shared.clear()
+            NotificationManager.shared.resetConditionTracking()
+            boardVM.board = nil
+            testResult = nil
+            isLoggingOut = false
         }
     }
 

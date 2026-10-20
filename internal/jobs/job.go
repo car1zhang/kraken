@@ -53,6 +53,13 @@ type Job struct {
 	// "claude", or "codex". Hand-authored like Model — kraken never writes it
 	// on its own. A value other than claude/codex errs the job (ParseJob).
 	Agent string `json:"agent,omitempty"`
+	// Visibility is who on the tailnet may see or drive this job: private
+	// (never leaves this machine), readonly (visible to every node, drivable
+	// by none) or public (any node may drive it). Hand-authored like Color;
+	// "" from a job text with no visibility: line, which EffectiveVisibility
+	// reads as readonly. A job loaded from the store carries its column
+	// (schema v34), which is readonly for every row that predates the field.
+	Visibility string `json:"visibility,omitempty"`
 	// State is kraken-managed ("" = never started); the human-authored spec
 	// body below the frontmatter is never rewritten.
 	State   string `json:"state,omitempty"`
@@ -221,6 +228,29 @@ func isFence(s string) bool {
 	return strings.TrimRight(s, " \t\r") == "---"
 }
 
+// The three visibility words (Job.Visibility).
+const (
+	VisibilityPrivate  = "private"
+	VisibilityReadOnly = "readonly"
+	VisibilityPublic   = "public"
+)
+
+// ValidVisibility reports whether v is exactly one of the three words —
+// case-sensitive, and "" is not one (the absent line is a separate state that
+// EffectiveVisibility resolves).
+func ValidVisibility(v string) bool {
+	return v == VisibilityPrivate || v == VisibilityReadOnly || v == VisibilityPublic
+}
+
+// EffectiveVisibility is the level a job is served at: its own value, or
+// readonly when it has none.
+func (j *Job) EffectiveVisibility() string {
+	if j.Visibility != "" {
+		return j.Visibility
+	}
+	return VisibilityReadOnly
+}
+
 // addErr accumulates parse problems; the first one decides the board's
 // error note, but all of them ride along for detail views.
 func (j *Job) addErr(msg string) {
@@ -364,6 +394,16 @@ func ParseJob(name string, data []byte) *Job {
 				j.addErr("agent must be claude or codex")
 			} else {
 				j.Agent = a
+			}
+		case "visibility":
+			// The colour arm's shape: a value off the three words errs the
+			// job (pinning it to draft) rather than being read as some
+			// default, because a typo here decides whether another machine
+			// may drive the cell.
+			if val != "" && !ValidVisibility(val) {
+				j.addErr(fmt.Sprintf("bad visibility value %q", core.TruncateOneLine(val, 24)))
+			} else {
+				j.Visibility = val
 			}
 		case "skip-doc":
 			// tolerated legacy key: jobs predating the
@@ -538,6 +578,7 @@ func JobTemplate(slug string) string {
 		"                          # applied once at cell start, default = " + core.ZeusModel + " (codex cells: " + core.CodexZeusModel + ")\n" +
 		"# color: purple           # optional: board/pane colour (red | blue | green | yellow | purple | orange | pink | cyan);\n" +
 		"                          # unset = no colour\n" +
+		"# visibility: readonly   # optional: private (never leaves this machine) | readonly (default) | public (other krakens may drive it)\n" +
 		"# agent: codex            # optional: which coding agent zeus runs (claude | codex); default claude\n" +
 		"---\n"
 }

@@ -31,7 +31,13 @@ import type {
   WatchVerdict,
   WebBoard,
   WebUsage,
+  NodeEnvelope,
+  NodeRead,
+  PairDevicesResponse,
+  RawJob,
+  WebNode,
 } from "./types.ts";
+import type { Visibility } from "../lib/fleet.ts";
 // The mental model's wire types live in lib/mm.ts and not in api/types.ts,
 // which is the one inversion in this file's imports: the contract froze
 // `MMItem` as a lib/mm.ts export because its two pure consumers there are
@@ -532,6 +538,76 @@ export const setRotationMode = (mode: "auto" | "manual") =>
  */
 export const setJobColor = (slug: string, color: string) =>
   postJSON("/api/job/color", { slug, color });
+
+// ------------------------------------------------------------ fleet
+
+/**
+ * Set a LOCAL job's visibility — `private` (never leaves this machine),
+ * `readonly` (the default), `public` (other krakens may drive it). A
+ * one-field route like colour, usable on a live cell for the same reason.
+ */
+export async function setJobVisibility(slug: string, visibility: Visibility): Promise<void> {
+  await postJSON("/api/job/visibility", { slug, visibility });
+}
+
+/** The registry, with each node's polled job list (`jobs`) filled. */
+export function fetchNodes(signal?: AbortSignal): Promise<{ nodes: WebNode[] }> {
+  return getJSON<{ nodes: WebNode[] }>("/api/nodes", signal);
+}
+
+/** This node's own envelope — the Devices overlay's identity row. */
+export const fetchNodeSelf = (signal?: AbortSignal) =>
+  getJSON<NodeEnvelope>("/api/node", signal);
+
+/**
+ * Drive a remote PUBLIC cell through this node's proxy. The owner node
+ * re-checks the job's visibility at request time, so a card that went
+ * readonly between polls refuses with a 403 rather than acting. Resolves to
+ * whatever the owner replied (`{ok:true}` for most actions).
+ */
+export function postNodeAction(
+  node: string,
+  slug: string,
+  action: string,
+  payload: Record<string, unknown> = {},
+): Promise<unknown> {
+  return postJSON<unknown>("/api/nodes/action", { node, slug, action, payload });
+}
+
+/** A remote public job's raw text, same body as `GET /api/job/raw`. */
+export function fetchNodeJobRaw(node: string, slug: string, signal?: AbortSignal) {
+  return getJSON<RawJob>(
+    `/api/nodes/job/raw?node=${encodeURIComponent(node)}&slug=${encodeURIComponent(slug)}`,
+    signal,
+  );
+}
+
+/** A remote public cell's last `n` zeus transcript blocks. */
+export function fetchNodeRead(node: string, slug: string, n: number, signal?: AbortSignal) {
+  return getJSON<NodeRead>(
+    `/api/nodes/read?node=${encodeURIComponent(node)}&slug=${encodeURIComponent(slug)}&n=${n}`,
+    signal,
+  );
+}
+
+// ------------------------------------------------------------ pairing
+
+export function fetchPairDevices(signal?: AbortSignal): Promise<PairDevicesResponse> {
+  return getJSON<PairDevicesResponse>("/api/pair/devices", signal);
+}
+
+/**
+ * Set (non-empty) or clear (empty) the pairing password. Either revokes every
+ * paired phone — `revoked` is how many. The 12-character floor is enforced
+ * server-side too; the form's own check only saves a round trip.
+ */
+export function setPairPassword(password: string): Promise<{ ok: true; revoked: number }> {
+  return postJSON<{ ok: true; revoked: number }>("/api/pair/password", { password });
+}
+
+export async function revokePairDevice(id: number): Promise<void> {
+  await postJSON("/api/pair/revoke", { id });
+}
 
 // ------------------------------------------------------------ goals
 

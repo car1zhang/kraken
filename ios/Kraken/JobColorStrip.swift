@@ -22,6 +22,9 @@ struct JobColorStrip: View {
     /// Called with the newly-saved value once a save lands, so a host that
     /// keeps its own copy can stay in step.
     var onSaved: (String) -> Void = { _ in }
+    /// How a pick is saved. nil (every local host) posts `/api/job/color`;
+    /// a remote public card passes its proxy call instead.
+    var save: ((String) async throws -> Void)? = nil
 
     /// The chip currently lit. Local rather than derived from `serverColor`
     /// so a tap is optimistic — the board's own refresh is seconds away.
@@ -116,7 +119,11 @@ struct JobColorStrip: View {
         Task {
             defer { inFlight -= 1 }
             do {
-                try await APIClient.shared.setJobColor(baseURL: baseURL, slug: slug, color: name)
+                if let save {
+                    try await save(name)
+                } else {
+                    try await APIClient.shared.setJobColor(baseURL: baseURL, slug: slug, color: name)
+                }
                 onSaved(name)
             } catch {
                 if selected == name { selected = previous }

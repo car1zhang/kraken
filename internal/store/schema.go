@@ -105,7 +105,9 @@ import (
 // repo/dir/quote/source_json/thread_session/revised_at columns and admits a
 // seventh source, `capture`; threads gains role; mm_flags is new (see
 // schemaV33).
-const schemaVersion = 33
+// Version 34 is multiplayer kraken: the nodes registry, the paired-devices
+// table, and jobs.visibility (see schemaV34).
+const schemaVersion = 34
 
 // schemaV1 creates all nine tables plus kv. Exact DDL (types, indexes) was
 // left to this package by the spec; shapes below mirror the spec's Data
@@ -1935,6 +1937,74 @@ func migrateV33MindLayer(tx *sql.Tx) error {
 	return nil
 }
 
+// schemaV34 is multiplayer kraken's storage, three independent pieces:
+//
+//   - nodes: one row per sibling `kraken serve` this node has ever seen on
+//     the tailnet, keyed on the device's tailscale stable id. The daemon's
+//     nodes pass is its writer; rows are never deleted by it, a device that
+//     went away reads online = 0. jobs_json is the last polled card list,
+//     stored verbatim so the board serves it without a network call.
+//   - pair_devices: one row per paired phone or browser. token_hash is the
+//     SHA-256 of the bearer token, never the token; UNIQUE so a collision is
+//     an insert error rather than two rows one token could match.
+//   - jobs.visibility: private | readonly | public, defaulting to readonly so
+//     every pre-existing job reads exactly what it would have been had the
+//     field existed, and nothing becomes drivable from another machine by
+//     upgrading.
+//
+// No FK anywhere: neither table refers to a job, and a node row outlives
+// anything the job tables do.
+const schemaV34 = `
+CREATE TABLE IF NOT EXISTS nodes (
+	id         TEXT    PRIMARY KEY,
+	label      TEXT    NOT NULL DEFAULT '',
+	operator   TEXT    NOT NULL DEFAULT '',
+	dns_name   TEXT    NOT NULL DEFAULT '',
+	ip         TEXT    NOT NULL DEFAULT '',
+	port       INTEGER NOT NULL DEFAULT 0,
+	build      TEXT    NOT NULL DEFAULT '',
+	contract   INTEGER NOT NULL DEFAULT 0,
+	first_seen INTEGER NOT NULL DEFAULT 0,
+	last_seen  INTEGER NOT NULL DEFAULT 0,
+	last_ok    INTEGER NOT NULL DEFAULT 0,
+	last_err   TEXT    NOT NULL DEFAULT '',
+	online     INTEGER NOT NULL DEFAULT 0,
+	jobs_json  TEXT    NOT NULL DEFAULT ''
+);
+CREATE TABLE IF NOT EXISTS pair_devices (
+	id           INTEGER PRIMARY KEY AUTOINCREMENT,
+	label        TEXT    NOT NULL DEFAULT '',
+	tailnet_name TEXT    NOT NULL DEFAULT '',
+	token_hash   TEXT    NOT NULL UNIQUE,
+	created_at   INTEGER NOT NULL DEFAULT 0,
+	last_seen_at INTEGER NOT NULL DEFAULT 0,
+	last_ip      TEXT    NOT NULL DEFAULT ''
+);
+`
+
+// schemaV34Visibility is v34's one ALTER, run by migrateV34Visibility only
+// when jobs lacks the column. ADD COLUMN has no IF NOT EXISTS form, and
+// several migration tests age a FRESH database by resetting user_version
+// alone (no downgradeFreshDB), so v34 re-runs over a jobs table that already
+// carries the column — v33's ALTERs are guarded for the same reason.
+const schemaV34Visibility = `ALTER TABLE jobs ADD COLUMN visibility TEXT NOT NULL DEFAULT 'readonly';`
+
+// migrateV34Visibility is migrations[34]'s hook: add jobs.visibility unless
+// it is already there.
+func migrateV34Visibility(tx *sql.Tx) error {
+	var n int
+	if err := tx.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('jobs') WHERE name = 'visibility'`).Scan(&n); err != nil {
+		return fmt.Errorf("probe jobs.visibility: %w", err)
+	}
+	if n > 0 {
+		return nil
+	}
+	if _, err := tx.Exec(schemaV34Visibility); err != nil {
+		return fmt.Errorf("add jobs.visibility: %w", err)
+	}
+	return nil
+}
+
 // migrationStep is one migration: SQL applied first, then an optional Go
 // hook run afterward inside the SAME transaction. Every migration before
 // v5 was a pure SQL string — DDL can't parse questions.yaml's hand-rolled
@@ -2048,8 +2118,11 @@ type migrationStep struct {
 // migrateV33MindLayer, runs the rebuild and the ALTER only when each table
 // lacks its v33 column, since neither is expressible as IF NOT EXISTS (see
 // schemaV33).
+// migrations[34] creates nodes and pair_devices (CREATE TABLE IF NOT EXISTS)
+// and adds jobs.visibility through its hook, migrateV34Visibility, which runs
+// the ALTER only when the column is missing (see schemaV34).
 // Future schema changes append
-// migrations[34], migrations[35], ... rather than editing an existing
+// migrations[35], migrations[36], ... rather than editing an existing
 // schemaV<N> string (or hook) in place, so a database created under an older
 // binary still migrates forward correctly.
 var migrations = map[int]migrationStep{
@@ -2086,6 +2159,7 @@ var migrations = map[int]migrationStep{
 	31: {sql: schemaV31},
 	32: {sql: schemaV32},
 	33: {sql: schemaV33, hook: migrateV33MindLayer},
+	34: {sql: schemaV34, hook: migrateV34Visibility},
 }
 
 // migrateV5Questions is migrations[5]'s Go hook: schemaV5's SQL has already

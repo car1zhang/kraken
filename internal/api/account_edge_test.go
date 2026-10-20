@@ -207,7 +207,7 @@ func TestEdgeAccountArchivedCardWithholdsTheKey(t *testing.T) {
 // here without the same commit moving Swift makes every shipped iOS build
 // refuse the whole board payload rather than ignore one key it does not know.
 func TestEdgeAccountContractStaysAtSix(t *testing.T) {
-	if apiContract != 6 {
-		t.Errorf("apiContract = %d, want 6 — webJob.account is additive", apiContract)
+	if apiContract != 7 {
+		t.Errorf("apiContract = %d, want 7 (bumped by the fleet gate) — webJob.account is additive", apiContract)
 	}
 }

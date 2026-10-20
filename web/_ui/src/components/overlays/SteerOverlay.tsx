@@ -71,6 +71,7 @@ import {
   type RenameControlState,
 } from "./RenameControl.tsx";
 import { TokensPanel } from "./TokensPanel.tsx";
+import { RemoteSteerBody, VisibilityControl } from "./RemoteSteer.tsx";
 import {
   AttChips,
   Overlay,
@@ -225,6 +226,15 @@ export interface SteerOverlayProps {
   onOpenArtifact(url: string, name: string, jobKey: string): void;
   /** Side-thread overlay. `tid` null opens the ⑂ branch dialog. */
   onOpenThread(slug: string, tid: string | null): void;
+  /**
+   * The OWNER node of a remote card, when one opened the modal. Its presence
+   * — not the job's — is what selects the remote body: a remote card that
+   * left the board must still never fall through to the LOCAL body, whose
+   * controls would act on a local job of the same slug.
+   */
+  node?: string;
+  /** Opens the job editor in its remote mode (a remote public card's ✎ edit). */
+  onOpenEditor?: (slug: string, node: string) => void;
   // The detail's ○ mark known and the questions panel's → decision were
   // retired with the board's one-shot marks (PR 2, Q10): text reaches the
   // mental model through the ◆ mind button, and the transcript panel below is
@@ -255,7 +265,19 @@ export function SteerOverlay(props: SteerOverlayProps) {
       onClose={props.onClose}
       {...panelDropHandlers(sink)}
     >
-      {props.slug ? (
+      {props.slug && props.node ? (
+        // a REMOTE card (opened with its owner node): the fleet body, whose
+        // every control is disabled (readonly) or proxied (public)
+        <RemoteSteerBody
+          key={props.node + "/" + props.slug}
+          node={props.node}
+          slug={props.slug}
+          job={props.job}
+          mutate={props.mutate}
+          onClose={props.onClose}
+          onOpenEditor={props.onOpenEditor}
+        />
+      ) : props.slug ? (
         <SteerBody
           key={props.slug + props.mode}
           {...props}
@@ -832,6 +854,13 @@ function SteerBody({
             it — the same placement the editor gives it, and the same reason:
             it is about the job the title names, not about the cell's state */}
         <RenameRow id="steer-rename-row" state={rename} />
+        {/* who beyond this Mac may see or drive the job — a one-field route
+            usable on a live cell, like the colour strip in the head. Withheld
+            for an archived job, which no route answers for and which never
+            leaves this machine anyway. */}
+        {job && !job.archived ? (
+          <VisibilityControl slug={jobSlug} visibility={job.visibility} mutate={mutate} />
+        ) : null}
         <div className="steer-context" id="steer-context" hidden={!showContext}>
           {/* `crew`, not `steer-crew`: .crew is the class on this element
               itself, exactly as .threads is on #steer-threads, and style.css

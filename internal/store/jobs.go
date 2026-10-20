@@ -27,7 +27,13 @@ type Job struct {
 	// default) or "codex". Part of the job's authored contract like Model, so
 	// it joins jobFieldColumns and a form/raw save may set it (unlike the
 	// account_* columns, which are cell-runtime state).
-	Agent        string
+	Agent string
+	// Visibility is who on the tailnet may see or drive this job (schema
+	// v34): "private", "readonly" or "public". The column defaults to
+	// readonly, which is what every row that predates it reads. It is in
+	// jobFieldColumns, exactly as color is: hand-authorable in the job text
+	// and landed by the raw editor's parse.
+	Visibility   string
 	Body         string
 	State        string
 	Outcome      string
@@ -135,7 +141,7 @@ var jobColumns = `id, slug, COALESCE(repo,''), COALESCE(base,''), solo,
 	COALESCE(updated_at,0), archived_at, archived_name, COALESCE(err,''),
 	COALESCE(load_unblock,0), COALESCE(load_scope,0), COALESCE(load_note,''),
 	COALESCE(load_at,0), COALESCE(account_slug,''), COALESCE(account_email,''),
-	COALESCE(account_at,0), COALESCE(agent,'')`
+	COALESCE(account_at,0), COALESCE(agent,''), COALESCE(visibility,'readonly')`
 
 func scanJob(row interface{ Scan(...any) error }) (*Job, error) {
 	var j Job
@@ -146,7 +152,7 @@ func scanJob(row interface{ Scan(...any) error }) (*Job, error) {
 		&j.Body, &j.State, &j.Outcome, &j.Session, &j.Teardown,
 		&j.Run, &j.Rev, &j.CreatedAt, &j.UpdatedAt, &archivedAt, &archivedName, &j.Err,
 		&j.Load.Unblock, &j.Load.Scope, &j.Load.Note, &j.Load.At,
-		&j.AccountSlug, &j.AccountEmail, &j.AccountAt, &j.Agent,
+		&j.AccountSlug, &j.AccountEmail, &j.AccountAt, &j.Agent, &j.Visibility,
 	)
 	if err != nil {
 		return nil, err
@@ -194,11 +200,12 @@ func (s *Store) CreateJob(j *Job) (int64, error) {
 	}
 	res, err := s.db.Exec(
 		`INSERT INTO jobs (slug, repo, base, solo, model, color, agent,
-			body, state, outcome, session, teardown, run, rev, created_at, updated_at, err)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			body, state, outcome, session, teardown, run, rev, created_at, updated_at, err,
+			visibility)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, COALESCE(NULLIF(?, ''), 'readonly'))`,
 		j.Slug, j.Repo, j.Base, j.Solo, j.Model, j.Color, j.Agent,
 		j.Body, j.State, j.Outcome, j.Session, j.Teardown, j.Run, j.Rev,
-		j.CreatedAt, j.UpdatedAt, j.Err,
+		j.CreatedAt, j.UpdatedAt, j.Err, j.Visibility,
 	)
 	if err != nil {
 		return 0, fmt.Errorf("create job %s: %w", j.Slug, err)
@@ -380,7 +387,7 @@ func loadJobsWithChildrenTx(tx *sql.Tx, query string) ([]*Job, map[int64][]PR, e
 // into the generated statement.
 var jobFieldColumns = map[string]bool{
 	"slug": true, "repo": true, "base": true,
-	"solo": true, "model": true, "color": true, "agent": true, "body": true, "state": true,
+	"solo": true, "model": true, "color": true, "agent": true, "visibility": true, "body": true, "state": true,
 	"outcome": true, "session": true, "teardown": true, "run": true, "err": true,
 }
 

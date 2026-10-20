@@ -41,7 +41,12 @@ import (
 // starts its cell in the same request, so there is no flag to set and nothing
 // to gate on), `start_error` and `prereqs` left /api/board's job objects, and
 // `state`'s value domain lost "queued" — draft · working · blocked · done.
-const apiContract = 6
+// v7: the request gate (gate.go). No key changed shape; what broke is who may
+// call: a request from another device on the tailnet with no pairing token is
+// the node tier now and is refused (401) on every board route, so a shipped
+// client that has not paired stops working against this server. Bumped so
+// such a client says why instead of failing route by route.
+const apiContract = 7
 
 // legacyCellCap is the number webBoard.CellCap is served at. See that field's
 // doc comment: nothing enforces a cap any more, and this exists only so
@@ -652,6 +657,102 @@ type webJob struct {
 	// or removal — so apiContract does NOT bump. A client that does not know
 	// the key renders the card exactly as it did before per-cell binding.
 	Account *webJobAccount `json:"account,omitempty"`
+	// Visibility is who on the tailnet may see or drive this job — private,
+	// readonly or public (jobs.EffectiveVisibility, so readonly for a job that
+	// never set one). Always present: a remote board decides which controls
+	// to offer from it, and the local modal shows the current level.
+	Visibility string `json:"visibility"`
+	// Owner names the node a REMOTE card runs on. Absent on every local card
+	// — absence is the wire's spelling of "this machine's job".
+	Owner *webJobOwner `json:"owner,omitempty"`
+}
+
+// webJobOwner is a remote card's owner chip: which node, whose, and whether
+// that node answered its last polls.
+type webJobOwner struct {
+	NodeID   string `json:"node_id"`
+	Label    string `json:"label"`
+	Operator string `json:"operator"`
+	Online   bool   `json:"online"`
+}
+
+// webNode is one registry row on the wire. Jobs (the node's card list) is
+// filled only by GET /api/nodes; on the board the cards already ride `jobs`.
+type webNode struct {
+	NodeID   string          `json:"node_id"`
+	Label    string          `json:"label"`
+	Operator string          `json:"operator"`
+	DNSName  string          `json:"dns_name"`
+	IP       string          `json:"ip"`
+	Port     int             `json:"port"`
+	Build    string          `json:"build"`
+	Contract int             `json:"contract"`
+	Online   bool            `json:"online"`
+	LastOK   int64           `json:"last_ok"`
+	LastErr  string          `json:"last_err,omitempty"`
+	Jobs     json.RawMessage `json:"jobs,omitempty"`
+}
+
+func webNodeFrom(n *store.NodeRow, withJobs bool) webNode {
+	w := webNode{NodeID: n.ID, Label: n.Label, Operator: n.Operator, DNSName: n.DNSName,
+		IP: n.IP, Port: n.Port, Build: n.Build, Contract: n.Contract, Online: n.Online,
+		LastOK: n.LastOK, LastErr: n.LastErr}
+	// re-encoded through the same per-element decode and strip the board
+	// applies, never the stored jobs_json verbatim — a sibling that serves
+	// more than it should is not repeated here either
+	if withJobs {
+		if cards, ok := strippedCards(n.JobsJSON); ok {
+			if b, err := json.Marshal(cards); err == nil {
+				w.Jobs = json.RawMessage(b)
+			}
+		}
+	}
+	return w
+}
+
+// strippedCards decodes a node's stored card list element by element — a bad
+// element drops alone — and passes each card through nodeCard. ok is false
+// when nothing is stored or the stored value is not an array (a stored `[]`
+// is ok with zero cards).
+func strippedCards(jobsJSON string) ([]webJob, bool) {
+	if jobsJSON == "" {
+		return nil, false
+	}
+	var raws []json.RawMessage
+	if err := json.Unmarshal([]byte(jobsJSON), &raws); err != nil {
+		return nil, false
+	}
+	cards := make([]webJob, 0, len(raws))
+	for _, raw := range raws {
+		var card webJob
+		if err := json.Unmarshal(raw, &card); err != nil {
+			continue
+		}
+		cards = append(cards, nodeCard(card))
+	}
+	return cards, true
+}
+
+// remoteCards are the registry's polled cards, each stamped with its owner.
+// A stored list that is not an array contributes nothing; within one, each
+// element decodes on its own, so a single malformed card drops alone. Every
+// card passes through the strip nodeCard applies to outbound cards — a
+// sibling that serves more than it should is not repeated on this board.
+func remoteCards(rows []*store.NodeRow) []webJob {
+	var out []webJob
+	for _, n := range rows {
+		cards, ok := strippedCards(n.JobsJSON)
+		if !ok {
+			continue
+		}
+		owner := webJobOwner{NodeID: n.ID, Label: n.Label, Operator: n.Operator, Online: n.Online}
+		for _, card := range cards {
+			o := owner
+			card.Owner = &o
+			out = append(out, card)
+		}
+	}
+	return out
 }
 
 type webBoard struct {
@@ -706,6 +807,11 @@ type webBoard struct {
 	// that person's turns without carrying a name of its own. Additive, same
 	// policy as Update and ShipIOS.
 	Operator string `json:"operator"`
+	// Nodes is the fleet registry (sibling krakens on the tailnet), without
+	// their card lists — those ride `jobs` with an `owner`. Absent when the
+	// registry is empty, which is every single-machine kraken: the payload is
+	// then exactly the pre-fleet one plus each card's `visibility`.
+	Nodes []webNode `json:"nodes,omitempty"`
 }
 
 // jobArtifacts collects a job's viewable artifacts from exactly one source.
@@ -1085,7 +1191,8 @@ func buildWebBoard() webBoard {
 			// go as a card moves between working and blocked. The rule itself
 			// lives in webAccountFor so it is reachable by a test — this loop
 			// is not (LiveSessions/DiscoverAll).
-			Account: webAccountFor(j),
+			Account:    webAccountFor(j),
+			Visibility: j.EffectiveVisibility(),
 		}
 		if live[jobs.CellSession(j)] {
 			wj.Cell, wj.Live = jobs.CellSession(j), true
@@ -1156,7 +1263,33 @@ func buildWebBoard() webBoard {
 	for _, a := range jobs.LoadArchivedJobs() {
 		board.Jobs = append(board.Jobs, archivedWebJob(a, activeStore, tokens, webJobGoalsFor(goals, links[a.ID])))
 	}
+	// the fleet: every sibling's polled cards after this node's own, each
+	// carrying its owner. Read from the registry the nodes pass keeps, so the
+	// merged board costs this request no network.
+	cards, nodes := fleetBoard(activeStore)
+	board.Jobs = append(board.Jobs, cards...)
+	board.Nodes = nodes
 	return board
+}
+
+// fleetBoard is the board's fleet half: every sibling's stored cards with
+// their owner, and the registry rows (without card lists). Nothing at all
+// when KRAKEN_NODES=off — the knob opts out in both directions, so a
+// registry left from before it was set never renders — or when the registry
+// is empty. Split out of buildWebBoard so the rule is reachable by a test.
+func fleetBoard(st *store.Store) ([]webJob, []webNode) {
+	if st == nil || !jobs.FleetEnabled() {
+		return nil, nil
+	}
+	rows, err := st.ListNodes()
+	if err != nil || len(rows) == 0 {
+		return nil, nil
+	}
+	nodes := make([]webNode, 0, len(rows))
+	for _, n := range rows {
+		nodes = append(nodes, webNodeFrom(n, false))
+	}
+	return remoteCards(rows), nodes
 }
 
 // archivedWebJob builds one archived job's card. Split out of buildWebBoard's
@@ -1234,6 +1367,10 @@ func archivedWebJob(a *jobs.Job, activeStore *store.Store, tokens map[int64]stor
 		// job is unarchived onto the active loop above.
 		Goals: goals,
 		Goal:  primaryJobGoal(goals),
+		// Visibility is always present on the wire; an archived card is never
+		// served to a sibling (/api/node/jobs skips the archive), so this is
+		// only ever this board's own rendering of the level.
+		Visibility: a.EffectiveVisibility(),
 	}
 }
 

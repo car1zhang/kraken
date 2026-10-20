@@ -50,6 +50,10 @@ targets:
         # to TestFlight testers until a human clicks through it — which would
         # defeat the point of shipping from the board.
         ITSAppUsesNonExemptEncryption: false
+        # The pair screen's QR reader (PairScanner.swift) scans the pairing
+        # code the board's Devices panel shows. Without this key iOS kills
+        # the app the moment the scanner asks for the camera.
+        NSCameraUsageDescription: Kraken scans the pairing code on your Mac's board to find it on the tailnet.
         UILaunchScreen: {}
         UISupportedInterfaceOrientations:
           - UIInterfaceOrientationPortrait

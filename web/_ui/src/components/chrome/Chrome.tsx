@@ -1,7 +1,10 @@
 import { useMemo, useRef } from "react";
 
-import type { WebUsage } from "../../api/types.ts";
+import { fetchNodeSelf } from "../../api/client.ts";
+import type { NodeEnvelope, WebUsage } from "../../api/types.ts";
 import type { BoardModel } from "../../hooks/useBoard.ts";
+import { usePoll } from "../../hooks/usePoll.ts";
+import { isUnauthorized, nodesStat } from "../../lib/fleet.ts";
 import { VIEWS, type View } from "../../hooks/useHashRoute.ts";
 import { age, flagCount } from "../../lib/format.ts";
 import { BackgroundControl } from "./BackgroundControl.tsx";
@@ -19,6 +22,8 @@ import { UsageStat } from "./UsageStat.tsx";
  * board re-renders every 3s.
  */
 const STATUS_ERROR_MS = 10_000;
+/** How often a refused (node-tier) board re-asks who owns it. */
+const OWNER_POLL_MS = 60_000;
 
 export interface ChromeProps {
   board: BoardModel;
@@ -35,6 +40,8 @@ export interface ChromeProps {
    * debounce and location.reload() drops that on the floor, so land it first.
    */
   onBeforeReload?(): Promise<void> | void;
+  /** Opens the Devices overlay (◉). Absent → no button (a bare harness). */
+  onOpenDevices?(): void;
 }
 
 /**
@@ -54,6 +61,7 @@ export function Chrome({
   onOpenUsage,
   onToast,
   onBeforeReload,
+  onOpenDevices,
 }: ChromeProps) {
   const b = board.board;
 
@@ -70,7 +78,9 @@ export function Chrome({
     onToast,
   });
 
-  const flags = useMemo(() => flagCount(b?.jobs ?? []), [b]);
+  // LOCAL cards only: the ⚑ count is "jobs waiting on YOU", and a remote
+  // card's pending question is its owner's to answer.
+  const flags = useMemo(() => flagCount((b?.jobs ?? []).filter((j) => !j.owner)), [b]);
 
   // The clock corner is written on every refresh, and doubles as the failure
   // line for the shared mutation path — a rejected action's text belongs here
@@ -102,9 +112,22 @@ export function Chrome({
     !!board.lastError && Date.now() - errSince.current < STATUS_ERROR_MS;
   const tick = showErr ? "✕ " + board.lastError : clock;
 
+  // The gate's refusal is not an outage: a browser on ANOTHER Mac reaching this
+  // board over the tailnet is node tier, and node tier may not read the board.
+  // Saying "unreachable" there was the misleading text this branch replaces.
+  const unpaired = isUnauthorized(board.error);
+  // …and who this board belongs to, which GET /api/node answers at node tier.
+  // Polled only while refused, so a paired or local board never asks.
+  const owner = usePoll<NodeEnvelope>((signal) => fetchNodeSelf(signal), OWNER_POLL_MS, {
+    enabled: unpaired,
+  });
+  const nodes = nodesStat(b?.nodes, b?.jobs ?? []);
+
   // A board fetch that failed says so; mid-update the server is gone ON
   // PURPOSE, and "unreachable" would read as a crash.
-  const daemonText = board.error
+  const daemonText = unpaired
+    ? "not paired — node tier"
+    : board.error
     ? update.restarting
       ? "daemon — restarting"
       : "kraken web server unreachable"
@@ -140,7 +163,10 @@ export function Chrome({
         <span className="mark">
           KRAKEN<b>▞</b>
         </span>
-        <span className={"led" + (ledOK ? " ok" : "")} id="daemon-led" />
+        <span
+          className={"led" + (ledOK ? " ok" : unpaired ? " warn" : "")}
+          id="daemon-led"
+        />
         <span className="stat" id="daemon-stat">
           {daemonText}
         </span>
@@ -158,6 +184,14 @@ export function Chrome({
           {update.buildChip || null}
         </span>
         <UsageStat usage={usage} onOpen={onOpenUsage} />
+        {/* the fleet: how many other krakens this board sees and how many of
+            their jobs it carries. Absent with an empty registry, so a lone
+            node's chrome is exactly the pre-fleet one. */}
+        {nodes ? (
+          <span className="stat" id="nodes-stat" title="other krakens on the tailnet · their jobs on this board">
+            {nodes}
+          </span>
+        ) : null}
         <span className="viewtabs">
           {VIEWS.map((v) => (
             <button
@@ -174,6 +208,21 @@ export function Chrome({
         <UpdControlButton id="update-btn" model={update.button} onClick={update.onClick} />
         <ShipControl id="ship-btn" model={ship.button} onClick={ship.onClick} />
         <BackgroundControl hasBg={!!b?.background} mutate={board.mutate} />
+        {/* ◉ Devices: pairing password, the phone QR, paired devices and the
+            nodes list. Owner tier only server-side; hidden on a refused
+            (node-tier) board, where every route behind it would 401. */}
+        {onOpenDevices && !unpaired ? (
+          <button
+            type="button"
+            className="theme-btn"
+            id="devices-btn"
+            title="devices — pair a phone, see the other krakens"
+            aria-label="devices"
+            onClick={onOpenDevices}
+          >
+            ◉
+          </button>
+        ) : null}
         <AccentToggle />
         <ScanToggle />
         <SfxToggle />
@@ -187,6 +236,14 @@ export function Chrome({
           {showErr ? null : <i>▊</i>}
         </span>
       </header>
+      {unpaired ? (
+        <div className="stale-banner unpaired-banner" id="unpaired-banner">
+          {"This board belongs to "}
+          <b>{owner.data?.label || "another kraken"}</b>
+          {owner.data?.operator ? ` (${owner.data.operator})` : ""}
+          {". Its readonly and public jobs are already on your own board, with owner chips — open your own kraken's board to see and drive them."}
+        </div>
+      ) : null}
       <StaleBanner id="stale-banner" messages={staleMessages} />
       <Banner id="update-banner" model={update.banner} onAction={update.onBannerAction} />
       <Banner id="ship-banner" model={ship.banner} onAction={ship.onBannerAction} />
