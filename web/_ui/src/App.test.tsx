@@ -4,10 +4,17 @@
 // between them, which is exactly where the editor→reactivate regression lived:
 // App passed `requireText: true` on the editor's ↺ hand-off from the React
 // port onward, so one of the two paths to reactivate a done job — click the
-// card (opens the editor, since a done card is not steerable), click ↺, click
-// send — silently dead-ended on "message is empty" while the composer's own
-// placeholder said "leave empty to just wake it". Every component test passed
-// throughout, because every component behaved exactly as told.
+// card, click ↺, click send — silently dead-ended on "message is empty" while
+// the composer's own placeholder said "leave empty to just wake it". Every
+// component test passed throughout, because every component behaved exactly
+// as told.
+//
+// The card's click now opens the steer modal in VIEW mode rather than the
+// editor (a done job reads like a blocked one; carl, 2026-10-20), and view's
+// own ↺ is a second App hand-off of the same shape — `openSteer(slug,
+// "reactivate")` with no requireText — so this is the path the pin follows.
+// The editor's ↺ keeps its own component test; from the board it is no
+// longer a done card's route.
 
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -52,26 +59,29 @@ vi.mock("./api/client.ts", async (importOriginal) => {
 import { reactivateJob } from "./api/client.ts";
 import { App } from "./App.tsx";
 
-describe("App: editor → reactivate hand-off", () => {
+describe("App: view → reactivate hand-off", () => {
   beforeEach(() => vi.clearAllMocks());
 
-  it("reactivates a done job with an empty message via card → editor → ↺ → send", async () => {
+  it("reactivates a done job with an empty message via card → view → ↺ → send", async () => {
     const user = userEvent.setup();
     const { container } = render(<App />);
 
-    // A done card is not live, so its plain click falls through to the editor.
+    // A done card's plain click opens the steer modal in view mode — the
+    // read-only drilldown, which has no composer of its own.
     await user.click(await screen.findByText("settled"));
+    expect(document.getElementById("steer-title")?.textContent).toBe("settled — done");
+    expect(document.getElementById("steer-text")).toBeNull();
 
-    // The editor's ↺ — not the card's, which shares the label. Per
-    // SteerOverlay's mode table this opens reactivate WITHOUT requireText:
-    // only a done→working drag sets that. The button is ALWAYS rendered and
-    // gated only by `hidden` (EditorOverlay's showReactivate), and user-event
-    // clicks straight through a hidden node in jsdom — so the visibility
-    // assertion is what makes this fixture honest, not the click.
-    const editorReactivate = container.querySelector("#editor-reactivate");
-    expect(editorReactivate).not.toBeNull();
-    expect(editorReactivate).not.toHaveAttribute("hidden");
-    await user.click(editorReactivate as HTMLElement);
+    // View's ↺ — not the card's, which shares the label. Per SteerOverlay's
+    // mode table this opens reactivate WITHOUT requireText: only a
+    // done→working drag sets that. The button is ALWAYS rendered and gated
+    // only by `hidden` (SteerOverlay's showReactivate), and user-event clicks
+    // straight through a hidden node in jsdom — so the visibility assertion
+    // is what makes this fixture honest, not the click.
+    const viewReactivate = container.querySelector("#steer-reactivate");
+    expect(viewReactivate).not.toBeNull();
+    expect(viewReactivate).not.toHaveAttribute("hidden");
+    await user.click(viewReactivate as HTMLElement);
 
     // Send with the composer untouched. The empty message must go through —
     // the placeholder says "leave empty to just wake it", and an empty-body

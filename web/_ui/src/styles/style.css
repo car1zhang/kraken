@@ -428,7 +428,7 @@ button, a, [role="button"], summary, label.check,
 .card.editable, .card.archived, .chip, .ac-chip, .cx-chip, .ct-chip, .dq-chip, .fb-chip, .ld-chip, .st-chip,
 .thread-chip, .thread-count, .branch-btn, .colorsel-row, .usage-stat, .archive-head,
 .goal, .goal .t,
-.dq-row.dq-answered, .cmd-chip, #thread-panehead,
+.dq-row.dq-answered, .cmd-chip,
 .panel-body.md code.code-ref, .steer-detail code.code-ref, .steer-spec-body code.code-ref,
 .panel-body.md code.artifact-ref, .steer-detail code.artifact-ref, .steer-spec-body code.artifact-ref,
 input[type="checkbox"] {
@@ -452,7 +452,6 @@ input[type="checkbox"] {
 :root[data-theme="light"] .usage-stat, :root[data-theme="light"] .archive-head,
 :root[data-theme="light"] .goal, :root[data-theme="light"] .goal .t,
 :root[data-theme="light"] .dq-row.dq-answered, :root[data-theme="light"] .cmd-chip,
-:root[data-theme="light"] #thread-panehead,
 :root[data-theme="light"] .panel-body.md code.code-ref,
 :root[data-theme="light"] .steer-detail code.code-ref,
 :root[data-theme="light"] .steer-spec-body code.code-ref,
@@ -2821,8 +2820,7 @@ input[type="text"], input:not([type]), input[type="search"], input[type="number"
 :root[data-theme="light"] .btn-big:hover,
 :root[data-theme="light"] .led,
 :root[data-theme="light"] .led.ok,
-:root[data-theme="light"] .upd .dot,
-:root[data-theme="light"] #thread-panehead .live-dot { box-shadow: none; }
+:root[data-theme="light"] .upd .dot { box-shadow: none; }
 
 /* honor the OS-level motion preference — one rule kills every animation and
    transition in the sheet, which is why no animated rule declares its own
@@ -3418,29 +3416,11 @@ input[type="text"], input:not([type]), input[type="search"], input[type="number"
   content: ""; flex: 1; height: 1px; background: color-mix(in srgb, var(--ac) 35%, transparent);
 }
 
-/* live pane mirror: plain capture-pane text, the only way to watch a live
-   thread from a phone (⌁ attach tmux raises Ghostty, which a phone can't) */
-/* the head row is the mirror's toggle (▸/▾ in its label), so it's a control:
-   the capture only polls while the reader has the <pre> open */
-#thread-panehead {
-  display: flex; align-items: center; gap: 7px;
-  font: 600 9px var(--display); letter-spacing: 0.16em; text-transform: uppercase;
-  color: var(--muted); user-select: none;
-  transition: color 80ms var(--ease);
-}
-#thread-panehead:hover { color: var(--fg); }
-#thread-panehead .live-dot {
-  width: 6px; height: 6px; background: var(--ok); box-shadow: 0 0 6px var(--ok);
-}
-.thread-pane {
-  margin: 0;
-  background: color-mix(in srgb, var(--ac) 2%, var(--b0)); border: 1px solid var(--divider);
-  padding: 9px 11px;
-  font: 9.5px/1.5 var(--mono); color: var(--muted);
-  white-space: pre; overflow-x: auto; max-height: 30vh; overflow-y: auto;
-}
+/* no live pane mirror in the thread overlay any more (the #thread-panehead
+   toggle and the .thread-pane <pre> went with it): the overlay shows the
+   conversation, and the pane is the ⧉ tmux button's business */
 
-/* what replaces the pane mirror and the composer once a thread is closed */
+/* what replaces the composer once a thread is closed */
 .thread-empty {
   border: 1px dashed var(--border-strong);
   padding: 14px; text-align: center;

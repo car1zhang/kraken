@@ -10,7 +10,8 @@ import {
 
 vi.mock("../../api/client.ts", () => ({
   fetchThreadRead: vi.fn(() => Promise.resolve({ blocks: [] })),
-  capturePane: vi.fn(() => Promise.resolve({ pane: "%1", content: "" })),
+  // no capturePane: the overlay no longer mirrors the pane, so the mock
+  // carrying one would be a client function the component does not import
   threadOp: vi.fn(() => Promise.resolve({ ok: true })),
   openTmux: vi.fn(() => Promise.resolve({ ok: true })),
 }));
@@ -194,6 +195,17 @@ describe("ThreadOverlay stale-close is ASYMMETRIC to steer's", () => {
     expect(document.getElementById("thread-composer")).toHaveAttribute("hidden");
     expect(document.getElementById("thread-revive")).not.toHaveAttribute("hidden");
     expect(document.getElementById("thread-kill")).toHaveAttribute("hidden");
+  });
+
+  it("renders NO pane mirror on a live thread — the pane is the ⧉ tmux button's business", () => {
+    // carl, 2026-10-20: the overlay is the conversation; the pane itself is
+    // one tmux click away. No toggle, no <pre>, no capture poll.
+    render(<ThreadOverlay {...base} job={job} onClose={() => {}} />);
+    expect(document.getElementById("thread-panehead")).toBeNull();
+    expect(document.getElementById("thread-pane")).toBeNull();
+    expect(document.querySelector(".thread-pane")).toBeNull();
+    // the tmux button is still there for a live thread with a pane
+    expect(document.getElementById("thread-tmux")).not.toHaveAttribute("hidden");
   });
 
   it("branch mode hides every thread-scoped head control", () => {

@@ -147,11 +147,12 @@ const STATUS_TEXT: Partial<Record<Column, string>> = {
  *
  * The card is a click target in its own right: every plain click that is not on
  * a button or chip opens something (a live working/blocked job opens the
- * steer/unblock modal on itself, everything else opens the editor, which
- * renders read-only when the server says the job is not editable). The vanilla
- * board got that ordering from one delegated document listener whose branch
- * order WAS the precedence; here each control stops propagation instead, which
- * is the same precedence expressed locally.
+ * steer/unblock modal on itself, a done job opens that same modal read-only
+ * in `view` mode, everything else opens the editor, which renders read-only
+ * when the server says the job is not editable). The vanilla board got that
+ * ordering from one delegated document listener whose branch order WAS the
+ * precedence; here each control stops propagation instead, which is the same
+ * precedence expressed locally.
  */
 export function JobCard({ job, col, actions, matchReason, matchTerms }: JobCardProps) {
   const key = jobKey(job);
@@ -165,7 +166,9 @@ export function JobCard({ job, col, actions, matchReason, matchTerms }: JobCardP
   // `editable` is only ever read as a data attribute (by the drag/e2e side, and
   // by the editor, to decide read-only) — the click fallback below decides for
   // itself, exactly as the vanilla one did: it matched `.card[data-editable]`,
-  // attribute PRESENCE, not value.
+  // attribute PRESENCE, not value. A done card still carries it although its
+  // click no longer opens the editor: the attribute says what the SERVER
+  // would let an editor do, not where the click goes.
   const editable = !job.live && ["draft", "done"].includes(col);
   const retryable = !!job.health && !/is gone|startup prompt/.test(job.health);
 
@@ -232,6 +235,15 @@ export function JobCard({ job, col, actions, matchReason, matchTerms }: JobCardP
     const liveCol = job.live ? (job.health ? "blocked" : job.state) : null;
     if (liveCol === "working" || liveCol === "blocked") {
       actions.onOpenSteer(job.slug, liveCol === "blocked" ? "unblock" : "steer");
+    } else if (job.state === "done") {
+      // A done job opens the SAME drilldown a blocked one does, read-only
+      // (carl, 2026-10-20): its artifacts, tokens, PRs, threads, last words
+      // and transcript are all there, with the composer and every cell
+      // action gone. The editor it used to open showed the spec and the
+      // artifact list and nothing else of what the job produced. Keyed on
+      // `job.state` rather than `col` for STATUS_TEXT's reason — the card is
+      // rendered from places that pass a column of their own.
+      actions.onOpenSteer(job.slug, "view");
     } else {
       actions.onOpenEditor(job.slug);
     }

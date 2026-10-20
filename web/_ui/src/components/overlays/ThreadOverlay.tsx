@@ -1,11 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { capturePane, fetchThreadRead, threadOp } from "../../api/client.ts";
+import { fetchThreadRead, threadOp } from "../../api/client.ts";
 import type { ThreadBlock, ThreadRead, WebJob } from "../../api/types.ts";
 import { ESC_PRIORITY } from "../../hooks/useEscapeStack.ts";
-import {
-  useLocalStorage,
-  useLocalStorageFlag,
-} from "../../hooks/useLocalStorage.ts";
+import { useLocalStorage } from "../../hooks/useLocalStorage.ts";
 import { usePoll } from "../../hooks/usePoll.ts";
 import { age } from "../../lib/format.ts";
 import { esc, renderMD } from "../../lib/markdown.ts";
@@ -239,15 +236,16 @@ function ThreadBody({
   const convoRef = useRef<HTMLDivElement | null>(null);
   const lastHTML = useRef<string>("");
 
-  // The live-pane mirror is opt-in and STICKY, the same gating iOS does with
-  // its Terminal tab: a capture nobody opened is a second tmux round-trip
-  // every 3s for a pane nobody is looking at. One click, remembered from then
-  // on.
-  const [mirror, setMirror] = useLocalStorageFlag("kraken-thread-mirror", false);
+  // No live-pane mirror any more (carl, 2026-10-20: "in branched we shouldn't
+  // display the pane"). The overlay is the CONVERSATION — the read endpoint's
+  // blocks — and the pane itself is one ⧉ tmux click away in Ghostty. What
+  // went with it: the sticky `kraken-thread-mirror` flag, the 3s
+  // capture-pane poll it gated, the ▸/▾ panehead toggle and the <pre> under
+  // it. `pane` below is still read, for the tmux button's target.
 
-  // The model picker's choice is STICKY for the same reason the mirror toggle
-  // is: it is a standing preference, not a per-branch decision, and re-picking
-  // it on every branch would be the typing this dialog exists to remove.
+  // The model picker's choice is STICKY: it is a standing preference, not a
+  // per-branch decision, and re-picking it on every branch would be the
+  // typing this dialog exists to remove.
   const [storedModel, setStoredModel] = useLocalStorage(
     "kraken-thread-model",
     "opus",
@@ -366,20 +364,6 @@ function ThreadBody({
     el.scrollTop = atBottom ? el.scrollHeight : prevTop;
   }, [read.data, tid, operator]);
 
-  // ---- the pane mirror ----------------------------------------------------
-  // A second tmux round-trip on every tick, so it runs ONLY while the mirror
-  // is actually open. A pane that just died is the common case here and the
-  // next read re-derives live/pane, so a capture failure stays quiet.
-  const capture = usePoll(
-    (signal) => capturePane(pane, signal),
-    3000,
-    { enabled: !!tid && live && !!pane && mirror },
-  );
-  // A capture that fails is almost always a pane that just died, and the next
-  // read re-derives live/pane — so it stays QUIET and the mirror goes away
-  // rather than freezing the last frame or explaining itself in the note.
-  const captureOK = !capture.error;
-
   const op = useCallback(
     async (
       o: "kill" | "revive" | "rename" | "send",
@@ -463,12 +447,6 @@ function ThreadBody({
     (kept ? ` · ${kept} blocks kept on the job` : "") +
     (closedAt ? ` · killed ${age(closedAt)} ago` : "") +
     " · revive to continue";
-
-  const mirrorable = live && !!pane && captureOK;
-  const paneLabel =
-    (mirror ? "▾ live pane · " : "▸ live pane · ") +
-    (job?.cell ? job.cell + " · " : "") +
-    pane;
 
   return (
     <>
@@ -702,33 +680,8 @@ function ThreadBody({
             // selectionSlug); each block below carries its own source
             data-mind-slug={jobSlug}
           />
-          {/* the panehead IS the mirror's toggle: capture-pane runs on every
-              3s tick while it is open, so it is opt-in and sticky */}
-          <div
-            className="panehead"
-            id="thread-panehead"
-            hidden={!mirrorable}
-            role="button"
-            tabIndex={0}
-            title="mirror this thread's tmux pane — polls while open"
-            onClick={() => setMirror(!mirror)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter" || e.key === " ") {
-                e.preventDefault();
-                setMirror(!mirror);
-              }
-            }}
-          >
-            <span className="live-dot"></span>
-            <span id="thread-panelabel">{paneLabel}</span>
-          </div>
-          <pre
-            className="thread-pane"
-            id="thread-pane"
-            hidden={!mirrorable || !mirror}
-          >
-            {capture.data?.content ?? ""}
-          </pre>
+          {/* no pane mirror between the conversation and the composer — see
+              the note at the top of ThreadBody */}
           <div className="thread-empty" id="thread-closed-note" hidden={live}>
             {closedNote}
           </div>
