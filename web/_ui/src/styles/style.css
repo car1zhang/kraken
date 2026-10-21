@@ -1925,9 +1925,17 @@ a.stack-chip.stack-down:hover { opacity: 0.9; border-color: var(--ac2); }
    hidden sibling takes no track: `hidden` is display:none, and a 1fr grid
    with one child is one column wide only when told so — hence the
    :has() rules, with the two-column default kept for the common case). */
-.steer-meters { display: grid; grid-template-columns: 1fr 1fr; gap: 0 10px; align-items: start; }
+.steer-meters { display: grid; grid-template-columns: 1fr 1fr; gap: 0 10px; align-items: stretch; }
 .steer-meters:has(> [hidden]) { grid-template-columns: 1fr; }
 @media (max-width: 560px) { .steer-meters { grid-template-columns: 1fr; } }
+/* Both meters are always the same height (carl, 2026-10-21): the grid
+   stretches each CONTAINER to the row, and the container is a flex column so
+   the panel inside it grows to fill — without this the panel sizes to its
+   own four tiers and the two boxes end a line apart, since the context note
+   wraps to two lines and the tokens note to one. Only the panel grows; its
+   rows keep their natural height, so the extra space lands below the note. */
+.steer-meters > * { display: flex; flex-direction: column; }
+.steer-meters > * > .cw, .steer-meters > * > .tok { flex: 1 1 auto; box-sizing: border-box; }
 
 /* the context-window meter (ContextPanel in SteerOverlay.tsx) — .tok's twin
    in the drilldown family: same raised / border-left box, same four faded
