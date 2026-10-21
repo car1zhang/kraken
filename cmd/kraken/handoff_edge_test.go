@@ -310,7 +310,7 @@ func edgeStartCtxServer(t *testing.T) *edgeCtxServer {
 
 func edgeRunCtx(stdin, slug, userLine string) string {
 	var out bytes.Buffer
-	runCtxHook(strings.NewReader(stdin), &out, slug, userLine)
+	runCtxHook(strings.NewReader(stdin), &out, slug, userLine, "")
 	return out.String()
 }
 

@@ -59,11 +59,78 @@ const ctxHookTimeout = 2 * time.Second
 // what makes this hook skip the POST entirely rather than tell the server the
 // window is empty.
 type statuslineInput struct {
-	SessionID     string `json:"session_id"`
+	SessionID string `json:"session_id"`
+	Model     struct {
+		ID string `json:"id"`
+	} `json:"model"`
 	ContextWindow struct {
 		UsedPercentage    *float64 `json:"used_percentage"`
 		ContextWindowSize int64    `json:"context_window_size"`
 	} `json:"context_window"`
+}
+
+// autoCompactWindow returns the token count Claude Code will auto-compact a
+// session on model at, as the user's own <home>/.claude/settings.json sets
+// it: the per-model `modelSettings.<model>.autoCompactWindow`, else the
+// top-level `autoCompactWindow`, else 0 for "no such setting" (a missing or
+// unparseable file reads the same way — this hook never fails). Only the user
+// file is read: the per-cell settings.json is kraken-written and never
+// carries the key, and a project or local override is a sighting this hook
+// has not had yet.
+//
+// The setting exists because the statusline's used_percentage is a share of
+// the MODEL's full window (context_window_size), while Claude Code compacts
+// at roughly 92% of this smaller window when it is set — measured 2026-10-20
+// on four zeus compactions at 460-472K tokens against a 1M window and a
+// 500K setting, and a dozen teammate compactions at 367-376K against a 400K
+// one, every one of them with the daemon's 75% handoff threshold unreachable
+// and auto_handoff fires at 0 for every job the machine had run. The window
+// is per model because the setting is: an Opus teammate and a Fable lead in
+// one cell can compact at different sizes.
+func autoCompactWindow(home, model string) int64 {
+	if home == "" {
+		return 0
+	}
+	raw, err := os.ReadFile(filepath.Join(home, ".claude", "settings.json"))
+	if err != nil {
+		return 0
+	}
+	var parsed struct {
+		AutoCompactWindow int64 `json:"autoCompactWindow"`
+		ModelSettings     map[string]struct {
+			AutoCompactWindow int64 `json:"autoCompactWindow"`
+		} `json:"modelSettings"`
+	}
+	if json.Unmarshal(raw, &parsed) != nil {
+		return 0
+	}
+	if m, ok := parsed.ModelSettings[model]; ok && m.AutoCompactWindow > 0 {
+		return m.AutoCompactWindow
+	}
+	if parsed.AutoCompactWindow > 0 {
+		return parsed.AutoCompactWindow
+	}
+	return 0
+}
+
+// effectiveFill restates the statusline's used_percentage — a share of size,
+// the model's full window — as a share of the window the session will
+// actually compact at, which is the smaller of size and autoCompact. It
+// returns that percentage (capped at 100: a session can sit past the
+// compaction point for a moment, and the daemon's threshold compares against
+// 0..100) and the window it is a share of. With no auto-compact window, or
+// one no smaller than size, or no size at all, the inputs come back as they
+// were: this hook only ever restates a number the harness gave it, never
+// invents one.
+func effectiveFill(usedPct float64, size, autoCompact int64) (float64, int64) {
+	if size <= 0 || autoCompact <= 0 || autoCompact >= size {
+		return usedPct, size
+	}
+	pct := usedPct * float64(size) / float64(autoCompact)
+	if pct > 100 {
+		pct = 100
+	}
+	return pct, autoCompact
 }
 
 // ctxHookFlags consumes the flag family every installed hook command carries
@@ -114,7 +181,7 @@ func ctxHookFlags(args []string) string {
 // line the pane renders. With --slug it is a cell's statusline, which also
 // wraps the user's own statusLine command from ~/.claude/settings.json.
 func cmdCtxHook(args []string) {
-	runCtxHook(os.Stdin, os.Stdout, ctxHookFlags(args), userStatusLineCommand(util.Home()))
+	runCtxHook(os.Stdin, os.Stdout, ctxHookFlags(args), userStatusLineCommand(util.Home()), util.Home())
 }
 
 // userStatusLineCommand returns the statusLine.command string from
@@ -201,7 +268,11 @@ func (b *cappedBuffer) Write(p []byte) (int, error) {
 // and print the user's own statusline (userStatusLine, run with the same
 // stdin) when there is one and it produced output, else `<slug> NN%`.
 // slug == "" reports nowhere and prints `ctx NN%` (see the file header).
-func runCtxHook(stdin io.Reader, stdout io.Writer, slug string, userStatusLine string) {
+//
+// settingsHome is the home whose ~/.claude/settings.json names the
+// auto-compact window (autoCompactWindow); "" reads none, and the harness'
+// own percentage is then reported and printed unchanged.
+func runCtxHook(stdin io.Reader, stdout io.Writer, slug string, userStatusLine string, settingsHome string) {
 	var in statuslineInput
 	// A read or decode failure is not reported anywhere: there is nowhere to
 	// report it to that is not the pane's chrome. The zero value falls
@@ -213,6 +284,14 @@ func runCtxHook(stdin io.Reader, stdout io.Writer, slug string, userStatusLine s
 		_ = json.Unmarshal(raw, &in)
 	}
 	pct := in.ContextWindow.UsedPercentage
+	window := in.ContextWindow.ContextWindowSize
+	if pct != nil {
+		// Restated as a share of the window the session will actually
+		// compact at (effectiveFill), since that is the number the daemon's
+		// handoff threshold and the human glancing at the pane both mean.
+		fill, w := effectiveFill(*pct, window, autoCompactWindow(settingsHome, in.Model.ID))
+		pct, window = &fill, w
+	}
 	if in.SessionID != "" && pct != nil && slug != "" {
 		// Errors dropped by contract: see the file header. A skipped report
 		// costs one render's telemetry, and the next render sends another.
@@ -220,7 +299,7 @@ func runCtxHook(stdin io.Reader, stdout io.Writer, slug string, userStatusLine s
 			"slug":                slug,
 			"session_id":          in.SessionID,
 			"used_percentage":     *pct,
-			"context_window_size": in.ContextWindow.ContextWindowSize,
+			"context_window_size": window,
 		})
 	}
 	label := "ctx"
