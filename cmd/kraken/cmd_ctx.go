@@ -62,6 +62,13 @@ const ctxHookTimeout = 2 * time.Second
 // different claims, and only the first one is worth recording. A nil here is
 // what makes this hook skip the POST entirely rather than tell the server the
 // window is empty.
+//
+// TotalInputTokens is the exact count UsedPercentage was computed from
+// (input + cache_creation + cache_read, per the statusline reference). It is a
+// plain int: Claude Code reports 0 before the first response, and that is the
+// same render in which UsedPercentage is null, so the POST that would carry a
+// zero never happens — and a report that did carry one would mean the harness
+// sent no count, which is what the server reads 0 as.
 type statuslineInput struct {
 	SessionID string `json:"session_id"`
 	Model     struct {
@@ -70,6 +77,7 @@ type statuslineInput struct {
 	ContextWindow struct {
 		UsedPercentage    *float64 `json:"used_percentage"`
 		ContextWindowSize int64    `json:"context_window_size"`
+		TotalInputTokens  int64    `json:"total_input_tokens"`
 	} `json:"context_window"`
 }
 
@@ -441,6 +449,7 @@ func runCtxHook(stdin io.Reader, stdout io.Writer, slug string, userStatusLine s
 			"session_id":          in.SessionID,
 			"used_percentage":     *pct,
 			"context_window_size": window,
+			"total_input_tokens":  in.ContextWindow.TotalInputTokens,
 		})
 	}
 	label := "ctx"

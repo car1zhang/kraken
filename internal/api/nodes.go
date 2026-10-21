@@ -84,8 +84,8 @@ func servedToNodes(wj webJob) bool {
 // and the account binding, which names this machine's pool login and is read
 // against this machine's usage snapshot, so it means nothing on another one.
 // Everything else (feedback, tokens, threads, doc questions, artifacts, PRs,
-// the load estimate, goals, the pending question, crew, detail …) is served
-// as built. The artifact URLs left on it address THIS node's /api/artifact/;
+// the load estimate, goals, the pending question, crew, detail, the lead's
+// context fill …) is served as built. The artifact URLs left on it address THIS node's /api/artifact/;
 // a receiving node rewrites every one to its own proxy (strippedCards) and
 // never serves a sibling's URL onward.
 func nodeCard(wj webJob) webJob {

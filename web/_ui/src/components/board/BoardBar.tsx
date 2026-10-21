@@ -2,6 +2,7 @@ import { useEffect, useRef } from "react";
 
 import type { JobSearchModel } from "../../hooks/useJobSearch.ts";
 import { goalChipText } from "../../lib/goals.ts";
+import { FleetPicker, type FleetPickerProps } from "./FleetPicker.tsx";
 
 export interface BoardBarProps {
   search: JobSearchModel;
@@ -27,10 +28,12 @@ export interface BoardBarProps {
   overlayOpen?: boolean;
   /** The view router hides the board rather than unmounting it, as today. */
   hidden?: boolean;
-  /** The fleet's "hide others' jobs" toggle state (App owns and persists it). */
-  hideOthers?: boolean;
-  /** Its setter. Absent → no toggle rendered (singleplayer, or a bare harness). */
-  onHideOthers?: (hide: boolean) => void;
+  /**
+   * The fleet's machines dropdown (FleetPicker), fully wired by the host:
+   * the registry, this Mac's label, the unfiltered cards, the selection and
+   * its setter. Absent → no picker rendered (singleplayer, or a bare harness).
+   */
+  fleet?: FleetPickerProps;
 }
 
 /**
@@ -63,8 +66,7 @@ export function BoardBar({
   onClearGoal,
   overlayOpen,
   hidden,
-  hideOthers,
-  onHideOthers,
+  fleet,
 }: BoardBarProps) {
   const { query, setQuery, matched, total, active } = search;
   const inputRef = useRef<HTMLInputElement>(null);
@@ -140,23 +142,13 @@ export function BoardBar({
         </span>
       ) : null}
       {active ? null : <span className="bb-hint">⌘K</span>}
-      {/* The fleet's one board-bar control: hide every card another kraken
-          polled in, on THIS browser only (persisted as kraken.hideOthers by
-          App). Rendered only when the host wires it, which BoardView does
-          when the registry is non-empty (or the toggle is on) — a lone node's
-          bar stays byte-identical to the one before the fleet existed. */}
-      {onHideOthers ? (
-        <label className="bb-fleet check" title="hide every job owned by another kraken on the tailnet (this browser only)">
-          <input
-            type="checkbox"
-            id="hide-others"
-            aria-label="hide others' jobs"
-            checked={!!hideOthers}
-            onChange={(e) => onHideOthers(e.target.checked)}
-          />
-          hide others' jobs
-        </label>
-      ) : null}
+      {/* The fleet's one board-bar control: the machines dropdown — show only
+          the cells of the machines you tick, on THIS browser only (persisted
+          as kraken.fleetNodes by App). Rendered only when the host wires it,
+          which BoardView does when the registry is non-empty (or a selection
+          is persisted) — a lone node's bar stays byte-identical to the one
+          before the fleet existed. */}
+      {fleet ? <FleetPicker {...fleet} /> : null}
       <span className="bb-read">
         {active ? (
           <>

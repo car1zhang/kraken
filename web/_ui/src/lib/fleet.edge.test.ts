@@ -76,29 +76,27 @@ describe("filterFleet", () => {
   const local3 = edgeFleetCard("nA");
   const board = [local1, remoteA, local2, remoteB, local3];
 
-  // "`hideOthers` removes every owned card … local cards are never removed;
-  // order preserved."
-  it("hideOthers keeps every local card in order", () => {
-    expect(filterFleet(board, true, [])).toEqual([local1, local2, local3]);
+  // job 634: `["local"]` keeps every local card in order, archived included
+  it("a local-only selection keeps every local card in order", () => {
+    expect(filterFleet(board, ["local"])).toEqual([local1, local2, local3]);
   });
 
-  // "otherwise removes owned cards whose `owner.node_id` is in `hiddenNodes`"
-  // — a local card whose slug equals a hidden node id survives.
-  it("hiddenNodes never removes a local card, even one whose slug is a hidden node id", () => {
-    expect(filterFleet(board, false, ["nA"])).toEqual([local1, local2, remoteB, local3]);
+  // a local card whose slug equals a selected node id is NOT matched by it
+  it("a node id never matches a local card, even one whose slug is that id", () => {
+    expect(filterFleet(board, ["nA"])).toEqual([remoteA]);
   });
 
-  it("no filter at all preserves the whole board in order", () => {
-    expect(filterFleet(board, false, [])).toEqual(board);
+  it("no selection preserves the whole board in order", () => {
+    expect(filterFleet(board, [])).toEqual(board);
   });
 
-  it("an unknown hidden node removes nothing", () => {
-    expect(filterFleet(board, false, ["nZ"])).toEqual(board);
+  it("an unknown selected node keeps nothing", () => {
+    expect(filterFleet(board, ["nZ"])).toEqual([]);
   });
 
   it("an empty board is an empty board", () => {
-    expect(filterFleet([], true, ["nA"])).toEqual([]);
-    expect(filterFleet([], false, [])).toEqual([]);
+    expect(filterFleet([], ["nA"])).toEqual([]);
+    expect(filterFleet([], [])).toEqual([]);
   });
 });
 

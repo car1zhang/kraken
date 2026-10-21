@@ -23,7 +23,8 @@ import { ThreadChips } from "../board/chips/ThreadChips.tsx";
 import { DocQuestions } from "./DocQuestions.tsx";
 import { FieldSelect } from "./FieldSelect.tsx";
 import type { Mutate } from "./Overlay.tsx";
-import { LoadDrill, steerHasTokens, ZeusTranscriptPanel } from "./SteerOverlay.tsx";
+import { ContextPanel } from "./ContextPanel.tsx";
+import { LoadDrill, steerHasContext, steerHasTokens, ZeusTranscriptPanel } from "./SteerOverlay.tsx";
 import { SwatchStrip } from "./SwatchStrip.tsx";
 import { TokensPanel } from "./TokensPanel.tsx";
 
@@ -615,9 +616,23 @@ export function RemoteSteerBody({
               />
             </div>
           ) : null}
-          {steerHasTokens(job) ? (
-            <div className="steer-tokens" id="steer-tokens">
-              <TokensPanel job={job} />
+          {/* The same two-up meters row the local body renders (SteerOverlay),
+              under the remote body's rule that a container is PRESENT only
+              when its data is — so the row itself exists only when at least
+              one meter does. A sibling's context fill is as true here as on
+              its own board: nodeCard serves the key as built. */}
+          {steerHasContext(job) || steerHasTokens(job) ? (
+            <div className="steer-meters">
+              {steerHasContext(job) ? (
+                <div className="steer-ctxwin" id="steer-ctxwin">
+                  <ContextPanel job={job} />
+                </div>
+              ) : null}
+              {steerHasTokens(job) ? (
+                <div className="steer-tokens" id="steer-tokens">
+                  <TokensPanel job={job} />
+                </div>
+              ) : null}
             </div>
           ) : null}
         </div>

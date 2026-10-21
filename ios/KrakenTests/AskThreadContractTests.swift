@@ -90,6 +90,14 @@ final class AskThreadContractTests: XCTestCase {
         XCTAssertNil(without.nodeId)
     }
 
+    /// Job 634 `WebBoard`: adds `let nodeLabel: String?` (key `node_label`).
+    func testWebBoardNodeLabel() throws {
+        let with = try JSONDecoder().decode(WebBoard.self, from: Data(askContractBoard(#","node_label":"owner-mac""#).utf8))
+        XCTAssertEqual(with.nodeLabel, "owner-mac")
+        let without = try JSONDecoder().decode(WebBoard.self, from: Data(askContractBoard("").utf8))
+        XCTAssertNil(without.nodeLabel)
+    }
+
     /// Contract E `ThreadReadResponse`: "adds let kind: String?; let answering:
     /// Bool?; let note: String?".
     func testAskContractThreadReadResponseNewKeys() throws {

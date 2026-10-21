@@ -399,16 +399,53 @@ final class FleetContractTests: XCTestCase {
         XCTAssertEqual(n?.lastOK, 1780000000000)
     }
 
-    // `FleetFilter.apply`: "hideOthers removes exactly the owned cards, order
-    // preserved."
-    func testContractFleetFilterHidesExactlyOwned() throws {
+    // `FleetFilter.apply` (job 634): an empty selection keeps every card in
+    // order; `["local"]` keeps exactly the unowned cards; a node id keeps
+    // exactly that node's cards; a mix is the union in server order.
+    func testContractFleetFilterSelectsExactlyTheMachines() throws {
         let jobs = [
             try contractFleetJob(["slug": "local-a"]),
             try contractFleetJob(["slug": "remote-b", "owner": contractFleetOwnerB]),
             try contractFleetJob(["slug": "local-c"]),
             try contractFleetJob(["slug": "remote-d", "owner": contractFleetOwnerC]),
         ]
-        XCTAssertEqual(FleetFilter.apply(jobs, hideOthers: true).map(\.slug), ["local-a", "local-c"])
-        XCTAssertEqual(FleetFilter.apply(jobs, hideOthers: false).map(\.slug), ["local-a", "remote-b", "local-c", "remote-d"])
+        XCTAssertEqual(FleetFilter.apply(jobs, selected: []).map(\.slug), ["local-a", "remote-b", "local-c", "remote-d"])
+        XCTAssertEqual(FleetFilter.apply(jobs, selected: [FleetFilter.localNode]).map(\.slug), ["local-a", "local-c"])
+        XCTAssertEqual(FleetFilter.apply(jobs, selected: ["nSTUDIOmini77CNTRL"]).map(\.slug), ["remote-b"])
+        XCTAssertEqual(FleetFilter.apply(jobs, selected: ["nKITCHEN42CNTRL", FleetFilter.localNode]).map(\.slug), ["local-a", "local-c", "remote-d"])
+        XCTAssertEqual(FleetFilter.nodeKey(of: jobs[0]), "local")
+        XCTAssertEqual(FleetFilter.nodeKey(of: jobs[1]), "nSTUDIOmini77CNTRL")
+    }
+
+    // `FleetFilter.selection(from:)` / `encode`: the persisted JSON array
+    // round-trips, deduped and with empty strings dropped.
+    func testContractFleetSelectionRoundTrips() {
+        XCTAssertEqual(FleetFilter.selection(from: FleetFilter.encode(["local", "nB"])), ["local", "nB"])
+        XCTAssertEqual(FleetFilter.selection(from: #"["local","nB","nB",""]"#), ["local", "nB"])
+        XCTAssertEqual(FleetFilter.encode([]), "[]")
+        XCTAssertEqual(FleetFilter.selection(from: "[]"), [])
+    }
+
+    // `BoardViewModel.migrateHideOthers`: `hideOthers=true` with no new key
+    // becomes `["local"]`; the legacy key is removed either way; a present new
+    // key is left alone.
+    func testContractFleetMigratesHideOthers() {
+        let d = UserDefaults(suiteName: "FleetContractTests.migrate.\(UUID().uuidString)")!
+        d.set(true, forKey: "hideOthers")
+        BoardViewModel.migrateHideOthers(d)
+        XCTAssertEqual(FleetFilter.selection(from: d.string(forKey: BoardViewModel.fleetNodesKey)), ["local"])
+        XCTAssertNil(d.object(forKey: "hideOthers"))
+
+        let e = UserDefaults(suiteName: "FleetContractTests.migrate.\(UUID().uuidString)")!
+        e.set(FleetFilter.encode(["nB"]), forKey: BoardViewModel.fleetNodesKey)
+        e.set(true, forKey: "hideOthers")
+        BoardViewModel.migrateHideOthers(e)
+        XCTAssertEqual(FleetFilter.selection(from: e.string(forKey: BoardViewModel.fleetNodesKey)), ["nB"])
+        XCTAssertNil(e.object(forKey: "hideOthers"))
+
+        let f = UserDefaults(suiteName: "FleetContractTests.migrate.\(UUID().uuidString)")!
+        d.set(false, forKey: "hideOthers")
+        BoardViewModel.migrateHideOthers(f)
+        XCTAssertNil(f.object(forKey: BoardViewModel.fleetNodesKey))
     }
 }

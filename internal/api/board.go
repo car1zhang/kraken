@@ -517,6 +517,82 @@ func webAccountFor(j *jobs.Job) *webJobAccount {
 	return &webJobAccount{Slug: j.AccountSlug, Email: j.AccountEmail, At: j.AccountAt}
 }
 
+// webJobContext is the cell lead's context-window fill as its statusline last
+// reported it (jobs.CellContext, the kv row `cell_ctx:<id>:<session>` that
+// `kraken ctx-hook` writes through /api/cell/context and the auto-handoff pass
+// reads). It is served so the steer modal can show how full zeus is beside
+// what the job has spent; nothing here is recomputed — Pct is Claude Code's
+// own input-only fill over the model's REAL window.
+//
+// "context", never "tokens" or "usage": tokens is the job's summed SPEND
+// (webTokens) and usage is account QUOTA (/api/usage), and this is a third
+// thing — how much of one live session's window is occupied right now.
+//
+// No key inside carries omitempty except Handoff, the rule webTokens states:
+// presence of the OBJECT is the whole answer, so a client reads every number
+// unconditionally. Absence is said one level up, by webJob.Context being nil
+// — see webContextFor for what it covers. Used is 0 for a row written by a
+// hook that predates the field, which a client reads as "derive from pct",
+// never as an empty window (a billed session never reports zero).
+type webJobContext struct {
+	// Pct is `context_window.used_percentage` as reported — may carry
+	// decimals (the statusline reference's example shows 23.5).
+	Pct float64 `json:"pct"`
+	// Window is `context_window_size` in tokens; 0 when the hook sent none.
+	Window int64 `json:"window"`
+	// Used is `total_input_tokens`, the exact count Pct came from; 0 when
+	// the reporting hook predates the field.
+	Used int64 `json:"used"`
+	// At is unix MILLIS of the report — webJob.mtime's convention. A report
+	// is as old as the last statusline RENDER, not the last turn, and an
+	// idle zeus renders nothing new, so age here is not staleness.
+	At int64 `json:"at"`
+	// HandoffPct is the fill at which the daemon types /handoff into the
+	// pane (jobs.HandoffThreshold), served so no client hardcodes it.
+	HandoffPct float64 `json:"handoff_pct"`
+	// Handoff is the auto-handoff pass' state for THIS session, absent when
+	// the pass has recorded none for it (a fresh session, or state left by a
+	// previous run's session, which jobs.HandoffFor refuses).
+	Handoff *webJobHandoff `json:"handoff,omitempty"`
+}
+
+// webJobHandoff mirrors jobs.HandoffSummary for the wire: fires in the
+// CURRENT streak (the pass resets the count once the last fire is two hours
+// old, so this is never a lifetime total), the last fire's unix millis (0
+// when never fired), and whether the streak hit its cap and gave up.
+type webJobHandoff struct {
+	Fires     int   `json:"fires"`
+	LastAt    int64 `json:"last_at"`
+	Exhausted bool  `json:"exhausted"`
+}
+
+// webContextFor shapes one job's recorded fill for the wire, or nil when the
+// job carries none. The presence rule is jobs.CellContextFor's — the row under
+// the job's STAMPED session, nothing else — and the nil decision lives here
+// rather than at the call site for webAccountFor's reason: absence is the
+// wire's only spelling of "unreported", so exactly one function decides it.
+//
+// Absence covers every job whose lead has never reported: a cell under a
+// minute old (no session stamped yet, or no render yet), a cell whose
+// statusLine was left alone because it already ran something else, a codex
+// cell (codex has no statusline hook), and — by archivedWebJob never calling
+// this — an ARCHIVED job, Load's call for Load's reason: a card with no cell
+// is not filling. A DONE but unarchived job keeps its key: the row survives
+// teardown, and a reactivation resumes the same session near that fill, so
+// the number is the one a reader wants before pressing the button. Display
+// state plays no part (Load's no-flicker rule).
+func webContextFor(ctxIndex map[string]jobs.CellContext, handoffIndex map[int64]jobs.HandoffSummary, j *jobs.Job) *webJobContext {
+	c, ok := jobs.CellContextFor(ctxIndex, j)
+	if !ok {
+		return nil
+	}
+	out := &webJobContext{Pct: c.Pct, Window: c.Window, Used: c.Used, At: c.At, HandoffPct: jobs.HandoffThreshold()}
+	if h, ok := jobs.HandoffFor(handoffIndex, j); ok {
+		out.Handoff = &webJobHandoff{Fires: h.Fires, LastAt: h.LastFireAt, Exhausted: h.Exhausted}
+	}
+	return out
+}
+
 type webJob struct {
 	Slug    string `json:"slug"`
 	Repo    string `json:"repo"`
@@ -715,6 +791,15 @@ type webJob struct {
 	// or removal — so apiContract does NOT bump. A client that does not know
 	// the key renders the card exactly as it did before per-cell binding.
 	Account *webJobAccount `json:"account,omitempty"`
+	// Context is the cell lead's context-window fill as its statusline last
+	// reported it (webJobContext above). A pointer with omitempty because
+	// ABSENCE IS THE WIRE'S ONLY SPELLING OF "unreported" — a zeroed object
+	// would claim an empty window, and a billed session never reports one.
+	// Served for every non-archived job with a report under its stamped
+	// session, done jobs included (a reactivation resumes near that fill);
+	// archivedWebJob withholds it, Load's call. ADDITIVE — a new optional
+	// key — so apiContract does NOT bump.
+	Context *webJobContext `json:"context,omitempty"`
 	// Visibility is who on the tailnet may see or drive this job — private,
 	// readonly or public (jobs.EffectiveVisibility, so readonly for a job that
 	// never set one). Always present: a remote board decides which controls
@@ -909,6 +994,12 @@ type webBoard struct {
 	// headless thread this node opened (origin.node_id equal) from one
 	// another node opened. Absent with no tailscale or with the fleet off.
 	NodeID string `json:"node_id,omitempty"`
+	// NodeLabel is this node's device label (jobs.DeviceLabel), read off the
+	// same cached envelope NodeID is, so the board bar's machines dropdown
+	// can name this Mac without a second poll of /api/node. Absent with the
+	// fleet off; a server older than the key makes the picker say the bare
+	// words "this Mac". Additive, no contract bump.
+	NodeLabel string `json:"node_label,omitempty"`
 }
 
 // jobArtifacts collects a job's viewable artifacts from exactly one source.
@@ -1247,6 +1338,12 @@ func buildWebBoard() webBoard {
 	// queries inside the cached build (store.ListJobTokens' own reason for
 	// existing). The archived loop below reads the same index.
 	tokens := jobTokensIndex(activeStore)
+	// Two more one-query indexes for the lead's context fill (webContextFor):
+	// every `cell_ctx:*` row and every `auto_handoff:*` row, read once here
+	// rather than per job for the token index's reason. Only the active loop
+	// reads them — an archived card carries no fill.
+	ctxIndex := jobs.CellContextIndex(activeStore)
+	handoffIndex := jobs.HandoffIndex(activeStore)
 	byState := map[string][]webJob{}
 	for _, j := range js {
 		// Computed once: this loop runs for every job on a payload rebuilt
@@ -1307,7 +1404,11 @@ func buildWebBoard() webBoard {
 			// go as a card moves between working and blocked. The rule itself
 			// lives in webAccountFor so it is reachable by a test — this loop
 			// is not (LiveSessions/DiscoverAll).
-			Account:    webAccountFor(j),
+			Account: webAccountFor(j),
+			// Context: the lead's last statusline report, out of the two
+			// indexes above and keyed on the job's stamped session. The
+			// presence rule lives in webContextFor so a test can reach it.
+			Context:    webContextFor(ctxIndex, handoffIndex, j),
 			Visibility: j.EffectiveVisibility(),
 		}
 		if live[jobs.CellSession(j)] {
@@ -1394,7 +1495,9 @@ func buildWebBoard() webBoard {
 	// nodeSelf is cachedNodeSelf outside tests (pair.go): one tailscale read
 	// per ~30 s, not one per board build
 	if jobs.FleetEnabled() {
-		board.NodeID = nodeSelf().ID
+		self := nodeSelf()
+		board.NodeID = self.ID
+		board.NodeLabel = self.Label
 	}
 	return board
 }
@@ -1492,6 +1595,12 @@ func archivedWebJob(a *jobs.Job, activeStore *store.Store, tokens map[int64]stor
 		// current one. The three columns live on the job row and survive
 		// archival in both directions, so the key comes back the moment the
 		// job is unarchived onto the active loop above.
+		//
+		// Context is NOT set either — this function never calls webContextFor
+		// — and for the same reason as Account: a context fill is a fact about
+		// a session that can still be resumed, and an archived job has to be
+		// unarchived before it can. The kv row is never deleted, so the key
+		// comes back with the job.
 		Goals: goals,
 		Goal:  primaryJobGoal(goals),
 		// Visibility is always present on the wire; an archived card is never

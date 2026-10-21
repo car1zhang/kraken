@@ -42,20 +42,54 @@ export function ownerChipText(o: WebJobOwner): string {
 }
 
 /**
- * The board's fleet filter. `hideOthers` (the board bar's toggle) drops every
- * owned card; otherwise only the owned cards of nodes hidden in the Devices
- * overlay go. Local cards are never removed, and order is preserved — the
- * columns' server order is the reorder's ground truth.
+ * The machine key of THIS node's own cards in the fleet filter's selection.
+ * A sentinel rather than the board's `node_id`: local cards carry no `owner`
+ * and are matched by that absence, and the payload's `node_id` is absent
+ * whenever tailscale is unreadable — a selection keyed on it would silently
+ * stop matching local cards exactly then. A tailscale stable id is never the
+ * bare word `local`, so the two namespaces cannot collide.
  */
-export function filterFleet(
-  jobs: WebJob[],
-  hideOthers: boolean,
-  hiddenNodes: readonly string[],
-): WebJob[] {
-  if (hideOthers) return jobs.filter((j) => j.owner === undefined);
-  if (hiddenNodes.length === 0) return jobs;
-  const hidden = new Set(hiddenNodes);
-  return jobs.filter((j) => j.owner === undefined || !hidden.has(j.owner.node_id));
+export const LOCAL_NODE = "local";
+
+/** The machine a card belongs to, in the selection's vocabulary. */
+export function jobNodeKey(j: Pick<WebJob, "owner">): string {
+  return j.owner === undefined ? LOCAL_NODE : j.owner.node_id;
+}
+
+/**
+ * The board's fleet filter: `selected` is the list of machine keys to SHOW
+ * (`LOCAL_NODE` for this Mac, a node id for a sibling). Empty means no
+ * filter — every card, local and remote, in server order. Non-empty keeps
+ * exactly the cards whose machine is listed, order preserved, so a machine
+ * that joins the tailnet while a selection is active is hidden until it is
+ * picked (Q1 of job 634: the button says what is shown, and a filter that
+ * silently widened would be one you could not trust). Nothing is ever added
+ * or reordered — the columns' server order is the reorder's ground truth.
+ */
+export function filterFleet(jobs: WebJob[], selected: readonly string[]): WebJob[] {
+  if (selected.length === 0) return jobs;
+  const shown = new Set(selected);
+  return jobs.filter((j) => shown.has(jobNodeKey(j)));
+}
+
+/**
+ * The machines dropdown's button text: what the filter shows, in as few
+ * words as it can be said. `all machines` with no selection; `this Mac` for
+ * exactly this node; a lone sibling's registry label (its id when the
+ * registry no longer lists it); otherwise `N of M machines`, M counting the
+ * registry plus this Mac. A selected key the registry does not name still
+ * counts in N — the filter is always undoable from the bar, so it must
+ * always be visible there.
+ */
+export function fleetButtonLabel(selected: readonly string[], nodes: readonly WebNode[]): string {
+  if (selected.length === 0) return "all machines";
+  if (selected.length === 1) {
+    const only = selected[0]!;
+    if (only === LOCAL_NODE) return "this Mac";
+    const n = nodes.find((x) => x.node_id === only);
+    return n ? n.label || n.node_id : only;
+  }
+  return `${selected.length} of ${nodes.length + 1} machines`;
 }
 
 /**
@@ -79,44 +113,65 @@ export { jobKey } from "./jobKey.ts";
 
 // ------------------------------------------------------------- persistence
 
-/** localStorage keys — per-browser preferences, never server state. */
-export const HIDE_OTHERS_KEY = "kraken.hideOthers";
-export const HIDDEN_NODES_KEY = "kraken.hiddenNodes";
+/**
+ * localStorage key of the machine selection — a per-browser preference, never
+ * server state. The two keys it replaced, `kraken.hideOthers` (the old
+ * all-or-nothing checkbox) and `kraken.hiddenNodes` (the Devices overlay's
+ * per-node hide column, an EXCLUSION list), are read exactly once more each,
+ * by the migration in readFleetNodes, and then removed.
+ */
+export const FLEET_NODES_KEY = "kraken.fleetNodes";
+const LEGACY_HIDE_OTHERS_KEY = "kraken.hideOthers";
+const LEGACY_HIDDEN_NODES_KEY = "kraken.hiddenNodes";
 
-/** Reads the hide-others flag; anything unreadable is the default (show). */
-export function readHideOthers(): boolean {
+/** A stored selection, or null when the key is absent or unreadable. */
+function parseFleetNodes(raw: string | null): string[] | null {
+  if (raw === null) return null;
   try {
-    return window.localStorage.getItem(HIDE_OTHERS_KEY) === "true";
-  } catch {
-    return false;
-  }
-}
-
-export function writeHideOthers(v: boolean): void {
-  try {
-    window.localStorage.setItem(HIDE_OTHERS_KEY, v ? "true" : "false");
-  } catch {
-    // private window / blocked storage: the toggle still works for this tab
-  }
-}
-
-/** Reads the hidden node ids; a malformed value is the empty list. */
-export function readHiddenNodes(): string[] {
-  try {
-    const raw = window.localStorage.getItem(HIDDEN_NODES_KEY);
-    if (!raw) return [];
     const v: unknown = JSON.parse(raw);
-    return Array.isArray(v) ? v.filter((s): s is string => typeof s === "string") : [];
+    if (!Array.isArray(v)) return [];
+    const out: string[] = [];
+    for (const s of v) {
+      if (typeof s === "string" && s !== "" && !out.includes(s)) out.push(s);
+    }
+    return out;
   } catch {
     return [];
   }
 }
 
-export function writeHiddenNodes(ids: readonly string[]): void {
+/**
+ * Reads the machine selection. A present key wins, however it reads (a
+ * malformed value is the empty selection, not a fall-through to the legacy
+ * keys). An ABSENT key is the one-time migration: the old checkbox's `"true"`
+ * meant "only this Mac", which is exactly `["local"]`, so that is written
+ * under the new key and both legacy keys are removed. The old hidden-nodes
+ * list is dropped rather than mapped: an exclusion list only becomes an
+ * inclusion list with the registry in hand, which this read does not have.
+ * Anything unreadable — a private window, blocked storage — reads as no
+ * selection and throws nothing.
+ */
+export function readFleetNodes(): string[] {
   try {
-    window.localStorage.setItem(HIDDEN_NODES_KEY, JSON.stringify(ids));
+    const stored = parseFleetNodes(window.localStorage.getItem(FLEET_NODES_KEY));
+    if (stored !== null) return stored;
+    const migrated = window.localStorage.getItem(LEGACY_HIDE_OTHERS_KEY) === "true" ? [LOCAL_NODE] : [];
+    if (migrated.length > 0) {
+      window.localStorage.setItem(FLEET_NODES_KEY, JSON.stringify(migrated));
+    }
+    window.localStorage.removeItem(LEGACY_HIDE_OTHERS_KEY);
+    window.localStorage.removeItem(LEGACY_HIDDEN_NODES_KEY);
+    return migrated;
   } catch {
-    // see writeHideOthers
+    return [];
+  }
+}
+
+export function writeFleetNodes(keys: readonly string[]): void {
+  try {
+    window.localStorage.setItem(FLEET_NODES_KEY, JSON.stringify(keys));
+  } catch {
+    // private window / blocked storage: the filter still works for this tab
   }
 }
 
