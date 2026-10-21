@@ -86,6 +86,8 @@ func main() {
 		cmdWatchlist(rest)
 	case "load":
 		cmdLoad(rest)
+	case "stack":
+		cmdStack(rest)
 	case "artifacts":
 		cmdArtifacts(rest)
 	case "mm":
@@ -228,6 +230,16 @@ Commands:
                       Both numbers or neither — a half estimate has no ratio,
                       and 'clear' is how an estimate is removed. get prints
                       the pair as JSON ({"load": null} when unestimated).
+  k stack add|rm|get|clear <slug> ...
+                      cell-side verb zeus uses to register the URLs of the
+                      stack it spun up for manual testing, proxied the same
+                      way as 'k questions': add <slug> <url> [--label "<name>"]
+                      puts a linked chip on the job's card beside its PR
+                      chips (the daemon dials loopback ports every tick and
+                      dims a chip whose port stops listening); rm <slug>
+                      <url-or-label> drops one; clear <slug> drops them all
+                      (do this after the manual-test gate passes — teardown
+                      does it anyway). get prints {"stack": [...]} as JSON.
   k artifacts get <slug> [name]
   k artifacts get --archived <slug> [name]
                       read any job's artifacts — a sibling's, or a torn-down
