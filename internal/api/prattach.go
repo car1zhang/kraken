@@ -73,11 +73,21 @@ func prAttachHandler(w http.ResponseWriter, r *http.Request) {
 	// hours later. An unknown repo — unresolvable, origin unreadable, or an
 	// origin JobRepoOriginPrefix cannot reduce to github.com/<owner>/<repo> —
 	// fails OPEN: refusing on missing evidence would drop real PRs, the exact
-	// loss the hook exists to prevent.
+	// loss the hook exists to prevent. And a PR of another repo that the job's
+	// SPEC names is a deliverable, not a wander: a job can be filed against one
+	// checkout and told to open its PR in another, and the refusal dropped
+	// exactly that PR — the daemon then never tracked it, the card never
+	// chipped it and the lead kept reporting it as awaiting checks. A repo
+	// named in the spec is one the job was told to touch; the attach is logged
+	// under its own event so the cross-repo chip is never a mystery, and the
+	// daemon's restart repair vouches for it the same way (specNamedPRs).
 	if prefix, ok := jobs.JobRepoOriginPrefix(j); ok && !jobs.PRURLInRepo(req.URL, prefix) {
-		util.LogEvent("web", "info", "pr-attach-refused", j.Slug+": "+req.URL+" refused — outside the job's repo "+prefix)
-		webJSON(w, http.StatusConflict, map[string]string{"error": req.URL + " is not in " + j.Slug + "'s repo (" + prefix + ")"})
-		return
+		if !jobs.PRRepoNamedInSpec(j, req.URL) {
+			util.LogEvent("web", "info", "pr-attach-refused", j.Slug+": "+req.URL+" refused — outside the job's repo "+prefix)
+			webJSON(w, http.StatusConflict, map[string]string{"error": req.URL + " is not in " + j.Slug + "'s repo (" + prefix + ")"})
+			return
+		}
+		util.LogEvent("web", "info", "pr-attach-cross-repo", j.Slug+": "+req.URL+" attached — outside the job's repo "+prefix+" but named in its spec")
 	}
 	attached, err := jobs.AttachJobPR(j, req.URL)
 	if err != nil {
