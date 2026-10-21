@@ -875,8 +875,10 @@ struct JobDetailView: View {
     private var canReactivate: Bool {
         !isArchived && column == .done && job.reactivatable == true
     }
-    // A side thread forks zeus' session into a second claude in the cell's
-    // own tmux window, so branching only makes sense while that cell is up.
+    // A side thread forks zeus' session — headless (an ask thread) or into a
+    // second claude in the cell's own tmux window (a pane thread) — and the
+    // server refuses either without a live cell, so branching is offered
+    // only while that cell is up.
     // Existing threads stay readable either way — a closed thread's
     // conversation outlives its window, and the board keeps serving it.
     private var canBranchThread: Bool { job.live }
@@ -2037,13 +2039,6 @@ extension JobDetailView {
     }
 }
 
-/// One side-thread chip — "⑂ <title>", green while the thread's window is
-/// live, red once it's closed (paused, revivable — the CLI's running/waiting
-/// status pairing). Same outlined-stroke treatment as PRChip
-/// above, so a job's chips all read as one family.
-/// Not private: the board card renders these too, in its own chip row (see
-/// JobCardView), so a job's branches read the same on the board as they do in
-/// the detail sheet.
 /// Doc questions in display order — the local and remote sheets both list them
 /// through this. Matches web's sortDocQuestions exactly (app.js): open
 /// questions first (importance rank P0 < P1 < P2, ties keep server order),
@@ -2100,11 +2095,36 @@ struct JobRosterSection: View {
     }
 }
 
+/// The board's own node id (`WebBoard.nodeId`), injected by BoardView so a
+/// thread chip can tell an ask thread this node opened from one another node
+/// opened (see `threadOriginBadge`). nil outside the board, and on a board
+/// with no tailscale or the fleet off.
+private struct BoardNodeIdKey: EnvironmentKey {
+    static let defaultValue: String? = nil
+}
+
+extension EnvironmentValues {
+    var boardNodeId: String? {
+        get { self[BoardNodeIdKey.self] }
+        set { self[BoardNodeIdKey.self] = newValue }
+    }
+}
+
+/// One side-thread chip — "⑂ <title>", green while the thread is live, red
+/// once it's closed (revivable — the CLI's running/waiting status pairing),
+/// plus "from <node>" when `threadOriginBadge` names another node. Same
+/// outlined-stroke treatment as PRChip above, so a job's chips all read as
+/// one family.
+/// Not private: the board card renders these too, in its own chip row (see
+/// JobCardView), so a job's branches read the same on the board as they do in
+/// the detail sheet.
 struct ThreadChip: View {
     let thread: WebThread
+    @Environment(\.boardNodeId) private var boardNodeId
 
     var body: some View {
         let color = thread.isLive ? KTheme.solved : KTheme.stopped
+        let badge = threadOriginBadge(thread, boardNodeId: boardNodeId)
         HStack(spacing: 4) {
             // A mind thread (the one ◆ mind captures route to) wears the
             // diamond instead of the branch glyph — web's `mind` chip.
@@ -2124,6 +2144,14 @@ struct ThreadChip: View {
                 .lineLimit(1)
                 .truncationMode(.tail)
                 .frame(maxWidth: 140, alignment: .leading)
+            if let badge {
+                Text("from \(badge)")
+                    .font(.data(9))
+                    .foregroundStyle(KTheme.skillInfo)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                    .frame(maxWidth: 90, alignment: .leading)
+            }
         }
         .font(.data(10, weight: .semibold))
         .foregroundStyle(color)
@@ -2133,14 +2161,19 @@ struct ThreadChip: View {
         .overlay(Capsule().stroke(color.opacity(0.45), lineWidth: 1))
         .contentShape(Capsule())
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel("\(thread.isMind ? "mind thread" : "thread") \(thread.displayTitle) — \(thread.isLive ? "live" : "closed")")
+        .accessibilityLabel("\(thread.isMind ? "mind thread" : "thread") \(thread.displayTitle) — \(thread.isLive ? "live" : "closed")"
+                            + (badge.map { ", from \($0)" } ?? ""))
     }
 }
 
 /// Branching a new side thread: a name (required — it's how the thread is
-/// identified everywhere afterward) and an optional first message. Forks
-/// zeus' session into a second claude in its own window of the same cell, so
-/// it only appears while the cell is live (see canBranchThread). No draft
+/// identified everywhere afterward), a first message, and the Headless toggle
+/// (on by default). Headless asks the server for an ask thread — no pane,
+/// kraken serve answers each message with a headless fork of zeus' session —
+/// and needs the first message, since that is the question it answers. Off,
+/// it branches a pane thread as before: a second claude in its own window of
+/// the cell, first message optional. Either kind needs a live cell, so this
+/// only appears while the cell is live (see canBranchThread). No draft
 /// persistence here on purpose: unlike a steer, this composer is a one-shot
 /// naming step, not a message that's worth surviving an app kill.
 private struct BranchThreadView: View {
@@ -2154,6 +2187,7 @@ private struct BranchThreadView: View {
     @FocusState private var seedFocused: Bool
     @State private var title = ""
     @State private var seed = ""
+    @State private var headless = true
     @State private var isBusy = false
     @State private var errorMessage: String?
 
@@ -2161,10 +2195,23 @@ private struct BranchThreadView: View {
         title.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
+    private var trimmedSeed: String {
+        seed.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private var canBranch: Bool {
+        !trimmedTitle.isEmpty && (!headless || !trimmedSeed.isEmpty)
+    }
+
     var body: some View {
         Form {
             kSection {
-                Text("Forks zeus' session into a second claude in its own window of the cell — ask questions without disturbing the run. Closing the thread later keeps the conversation.")
+                Toggle("Headless", isOn: $headless)
+                    .font(.voice(13))
+                    .foregroundStyle(KTheme.text)
+                Text(headless
+                     ? "headless: a read-only fork with no pane — each message is answered by a fork of zeus' session, without disturbing the run."
+                     : "pane: a full claude in a tmux window, as before — forks zeus' session into its own window of the cell. Closing the thread later keeps the conversation.")
                     .font(.voice(12))
                     .foregroundStyle(KTheme.text2)
             }
@@ -2172,7 +2219,7 @@ private struct BranchThreadView: View {
                 TextField("what this thread is for", text: $title)
                     .kField()
             }
-            kSection("First message (optional)") {
+            kSection(headless ? "Question" : "First message (optional)") {
                 TextField("what to ask", text: $seed, axis: .vertical)
                     .focused($seedFocused)
                     .kField(focused: seedFocused, minHeight: 100)
@@ -2197,23 +2244,25 @@ private struct BranchThreadView: View {
                 .labelStyle(.iconOnly)
                 .accessibilityLabel("Branch")
                 .buttonStyle(.glassProminent)
-                .disabled(isBusy || trimmedTitle.isEmpty)
+                .disabled(isBusy || !canBranch)
             }
         }
         .disabled(isBusy)
     }
 
     private func branch() {
+        guard canBranch else { return }
         let name = trimmedTitle
-        guard !name.isEmpty else { return }
-        let text = seed.trimmingCharacters(in: .whitespacesAndNewlines)
+        let text = trimmedSeed
+        let asHeadless = headless
         isBusy = true
         errorMessage = nil
         Task {
             do {
                 let resp = try await APIClient.shared.threadAction(
                     baseURL: baseURL, slug: job.slug, op: .branch,
-                    title: name, text: text.isEmpty ? nil : text
+                    title: name, text: text.isEmpty ? nil : text,
+                    headless: asHeadless
                 )
                 isBusy = false
                 if let tid = resp.tid, !tid.isEmpty {
@@ -2224,9 +2273,15 @@ private struct BranchThreadView: View {
                         // this call site does not choose a model (the server
                         // resolves the branch's tier itself). Filling in a
                         // guess would flash a model the thread may not run.
+                        // `origin` stays nil for the same reason: the server
+                        // stamps it, and an ask thread this node opened
+                        // carries no badge anyway. A headless branch is
+                        // answering its first question the moment it exists.
                         tid: tid, title: name, state: "live", pane: nil, model: nil,
                         createdAt: Int64(Date().timeIntervalSince1970 * 1000),
-                        closedAt: nil
+                        closedAt: nil,
+                        kind: asHeadless ? "headless" : "pane",
+                        answering: asHeadless ? true : nil
                     ))
                 } else {
                     onBranched(nil)

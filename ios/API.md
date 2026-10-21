@@ -102,6 +102,7 @@ the way in (`mtimeToken`), for old clients — but always emit a number.
 | `goals` | object (`{"week": [goal], "day": [goal]}`) | always (both arrays `[]`, never `null`) | the CURRENT local week's and today's goals — the same two arrays `GET /api/goals` serves, from the same store call, so the board key and that endpoint can never disagree. Periods are `store.GoalPeriods(time.Now())`: `day` is today's local `2006-01-02` date, `week` is the local Monday of this week. Added additively, no contract bump. Modeled in the iOS app as `WebGoals` (Models.swift), **Optional** on `WebBoard` for the same reason `update` is, and hand-decoded for the same blast-radius reason (see that struct's comment) |
 | `background` | object (`{"updated_at": number}`) | omitted when no background is set | the board's optional background image (api/background.go): the upload stamp alone (unix millis), never the bytes — `GET /api/background` serves those, with `?v=<updated_at>` as the cache-buster. ABSENT is the wire's only "no background". Added additively, no contract bump. Modeled in the iOS app as `WebBackground` (Models.swift), **Optional** on `WebBoard`; the app decodes it but does not render a background yet (a noted follow-up) |
 | `operator` | string | always | the name kraken's agents use for the person running it — `jobs.Operator()`: `KRAKEN_OPERATOR` (from the environment or `~/.kraken/env`), else `$USER`, else `"the operator"`. The web board labels the operator's turns in a side thread with it (falling back to `you` when the key is absent, i.e. an older server). Added additively, no contract bump. Modeled in the iOS app as `operatorName: String?` (JSON key `operator` — `operator` is a Swift keyword), **Optional** on `WebBoard`; the app decodes it but renders nothing from it yet |
+| `node_id` | string | omitempty | this node's tailscale stable id (the `node_id` of its `NodeEnvelope`); absent when tailscale is unreadable or under `KRAKEN_NODES=off`. A client compares a headless thread's `origin.node_id` with it to tell this node's own threads from another node's. Added additively, no contract bump. Modeled in the iOS app as `nodeId: String?` on `WebBoard` |
 
 `webUpdate` (api/update.go) — assembled by one function (`currentUpdate`)
 shared with `GET /api/update/status`, so the board key and the poller's
@@ -275,8 +276,12 @@ field set, same json tags as the old `questions.yaml` record it replaces):
 | `addressed_at` | string | omitempty | RFC3339 timestamp, server-stamped alongside `addressed` |
 
 `webThread` (one `threads` row, `store.Thread`'s board-facing subset — a side
-thread is a fork of zeus' session running as a second claude in its own tmux
-window of the same cell):
+thread is a fork of zeus' session, of one of two kinds: a **pane** thread runs
+as a second claude in its own tmux window of the same cell; a **headless**
+thread (an "ask thread") has no window and runs one `claude -p` per question,
+read-only, and may be opened from another node — see `POST /api/node/action`.
+`kind` says how a thread runs and `role` says what it is for; they are
+independent, except that a headless thread is always `role: "ask"`):
 
 | key | type | optionality | notes |
 |---|---|---|---|
@@ -288,6 +293,10 @@ window of the same cell):
 | `role` | string | always | `ask` (an ordinary side thread — every row branched before schema v33 reads back as `ask`) \| `mind` (the job's mind thread, branched by `POST /api/mm/capture`: the one thread allowed to write the operator's mental model). Clients show a `mind` chip. Additive |
 | `created_at` | number | always | unix millis the thread was branched |
 | `closed_at` | number | omitempty | unix millis the thread was closed; absent (0) while live |
+| `kind` | string | always | `pane` \| `headless` (schema v36). Every thread from before headless threads existed is `pane`, in either role. A headless thread never has a `pane`; `closed` means it was closed, not that a window died. Not to be confused with `role`'s `ask`, which a pane thread carries too. Additive |
+| `origin` | object | omitempty | who opened a headless thread: `{"node_id": string, "label": string, "login": string}` — the node's tailscale stable id and label and the person's login, all three always present once the object rides. Absent when the row names nobody (every pane thread). Compare `node_id` with the board's own `node_id` to tell this node's threads from another node's. Additive |
+| `answering` | bool | omitempty | `true` while a question is in flight on a headless thread; absent otherwise. Additive |
+| `note` | string | omitempty | the last ask run's failure line (`ask failed: …`, `ask timed out after 5m0s`, `ask cancelled`, `answer interrupted — kraken serve restarted`); absent after a clean answer. Additive |
 
 The provenance columns — `session_id`, `parent_session`, `fork_uuid`, `seed`,
 `cwd` — and the tmux window target deliberately never ride the board poll;
@@ -842,27 +851,55 @@ Every side-thread mutation, one body shape across all five ops
 | `op` | string | required | `branch` \| `kill` \| `revive` \| `rename` \| `send` |
 | `tid` | string | required for `kill`/`revive`/`rename`/`send` | |
 | `title` | string | required for `branch`/`rename` | |
-| `text` | string | required for `send`; optional for `branch` | |
+| `text` | string | required for `send` and for a headless `branch`; optional for a pane `branch` | |
 | `model` | string | optional for `branch`, ignored by every other op | `haiku` \| `sonnet` \| `opus` \| `fable` — the tier the new thread's claude runs on, matched EXACTLY (not trimmed, not case-folded). Omit or send `""` for the pre-existing behaviour: the job's own `model`, then kraken's default. Anything else is a 400. The web board's branch overlay sends it; the iOS client has no picker, which is why `ThreadActionRequest` in Models.swift carries no `model` field |
 | `role` | string | optional for `branch`, ignored by every other op | `ask` (default when omitted or `""`) \| `mind`, matched exactly; anything else is a 400 `bad role — want ask or mind`, nothing spawned. Stored on the row and kept across a `revive`. Clients normally reach a mind thread through `POST /api/mm/capture` rather than this field |
+| `headless` | bool | optional for `branch`, ignored by every other op | how the thread runs, independent of `role`. With `role` `ask` (or omitted): absent or `true` opens a **headless** thread, `false` a **pane** thread exactly as before headless threads existed. With `role` `mind`: absent or `false` (a mind thread is always a pane); `true` is a 400 `a mind thread cannot be headless`. Additive |
 
-- **`branch`** — `{slug, op:"branch", title, text?, model?}`: forks zeus' session
+- **`branch`** (headless, the default for `role` `ask`) — `{slug, op:"branch", title, text, model?, headless?: true}`:
+  opens a headless thread whose origin is this node and asks `text` as its
+  first question: one `claude -p` process forks zeus' session under a
+  brand-new session id, with read-only tools (Read, Grep, Glob, WebFetch,
+  WebSearch) and the cell's worktree as its cwd, and the question on stdin.
+  The reply comes as soon as the process has started, with the row's
+  `answering` true; the answer lands in the thread's transcript
+  (`GET /api/thread/read`). `text` is REQUIRED here (400 `missing text`). A
+  title over 120 characters (after trimming) is 400 `<slug>: ask title is too
+  long (max 120 characters)`, and a question over 16384 bytes is 400 `<slug>:
+  ask question is too long (max 16 KB)` — the same two bounds on every route
+  that asks or sends. Further refusals: the pane branch's own (no live cell,
+  no forkable zeus, bad model). The 5-thread cap (409 `ask thread cap reached
+  — close one first`) counts only live headless threads opened by OTHER
+  nodes and binds only them, so another node can never block the owner's own
+  branches.
+- **`branch`** (pane) — `{slug, op:"branch", title, text?, model?, role?, headless:false}` (or `role:"mind"` with `headless` absent): forks zeus' session
   into a new claude in a fresh window of the same cell, in the same worktree, under
   a brand-new session id. `text` is the seed prompt and is OPTIONAL — branching
   with nothing to say yet is legitimate, and the thread comes up idle. `model` is
   the thread's own tier and is likewise optional; it is stored on the row, so a
-  later `revive` comes back on the same one. This is
-  the only op whose success body carries the new `tid`.
+  later `revive` comes back on the same one. `branch` is
+  the only op whose success body carries the new `tid`, headless or not.
 - **`kill`** — `{slug, op:"kill", tid}`: kills the thread's window and marks
   the row closed. The ROW SURVIVES: its session id still locates the
-  transcript, so the conversation stays readable and revivable.
+  transcript, so the conversation stays readable and revivable. On a headless
+  thread: kills any question in flight (its note becomes `ask cancelled`) and
+  closes the row; no window is involved.
 - **`revive`** — `{slug, op:"revive", tid}`: resumes the SAME claude session
   in a fresh window (no re-fork). Refused if the thread is already live, or
-  if the job's cell is gone — reactivate the job first.
+  if the job's cell is gone — reactivate the job first. On a headless thread:
+  reopens the row only (nothing is spawned until the next `send`); refused
+  with `thread <tid> of <slug> is already live` on a live one, and with the
+  5-thread cap's 409 when the thread was opened by another node and that
+  node's share of the cap is full.
 - **`rename`** — `{slug, op:"rename", tid, title}`: retitles the row; never
   touches the pane, so it works on closed threads too.
 - **`send`** — `{slug, op:"send", tid, text}`: types a message into the live
-  thread's pane, through the same verify-before-acting guard `k s` uses.
+  thread's pane, through the same verify-before-acting guard `k s` uses. On a
+  headless thread: asks `text` as this node's operator by resuming the
+  thread's own session headlessly, replying `{"ok": true}` as soon as the run
+  has started (before the answer exists); 409 `store: thread is already
+  answering` while a question is in flight, 409 `store: thread is closed` on a
+  closed one.
 
 Response: `{"ok": true}`, plus `"tid"` on a `branch`. Errors: 400 for a
 missing required field, an unrecognized `op` (the message names every valid
@@ -894,11 +931,15 @@ Response:
 |---|---|---|---|
 | `blocks` | array | always | the tail blocks, oldest-first; `[]`, never `null` |
 | `counted` | number | always | non-tool blocks counted toward `n` (same meaning as `/api/peers/read`) |
-| `live` | bool | always | the row is `live` AND still has a pane — i.e. there is somewhere to send to; gate the composer on this |
+| `live` | bool | always | the row is `live` AND either still has a pane or is a headless thread — i.e. there is somewhere to send to; gate the composer on this |
 | `pane` | string | always | the live thread's pane (`""` when closed) — feed it to `/api/peers/capture` to mirror the window |
 | `fork_uuid` | string | always | the transcript uuid the fork hangs off (`""` when none was recorded) |
 | `source` | string | always | `transcript` when the fork's transcript was readable, `none` when there is nothing to read yet |
 | `session` | string | always | the thread's OWN claude session id (`""` before one is recorded) — what a mind-button capture of one of this thread's blocks sends as the transcript source's `session`. Additive (schema v33) |
+| `kind` | string | always | `pane` \| `headless`, as on `webThread`. Additive |
+| `answering` | bool | always | `true` while a headless thread has a question in flight; poll until it clears. Additive |
+| `note` | string | always | the last ask run's failure line, `""` when none (see `webThread.note`). Additive |
+| `origin` | object | omitempty | as on `webThread`: `{"node_id", "label", "login"}`, absent when the row names nobody. Additive |
 
 Each block is `/api/peers/read`'s shape — `kind` (string, always:
 `user`\|`text`\|`thinking`\|`tool`\|`teammate`), `text` (string, always),
@@ -1905,7 +1946,7 @@ The probe target a sibling's discover pass hits. `404 {"error":"fleet off"}` whe
 
 This node's non-archived **readonly** and **public** cards — a private card is absent, not blanked. Each is the board's own card object minus exactly two keys: `owner` (the receiver stamps it from its registry) and `account` (the binding names this machine's pool login, which means nothing on another machine). Everything else rides as built — `feedback`, `tokens`, `threads`, `doc_questions`, `artifacts`, `prs`, `load`, `goals`/`goal`, `question`, `roster`, `detail`, `last_sent`, `color`, `visibility`. The `artifacts[].url` values are the OWNER's (`/api/artifact/<slug>/<home>/<name>`); a receiving board rewrites each to its own `/api/nodes/artifact?node=&slug=&name=` and never serves the owner's URL onward. `jobs` is `[]` under `KRAKEN_NODES=off`.
 
-Readonly and public are READ alike on every node route below; only `POST /api/node/action` tells them apart. The owner-only writes (feedback, doc-question answers, threads, goals, rename, visibility, uploads, the mental model) have no node route on any visibility. Visibility is read from the store on every request, so a flip to private refuses everything that arrives after it.
+Readonly and public are READ alike on every node route below; only `POST /api/node/action` tells them apart, and its three ask-thread actions (`thread-ask`, `thread-send`, `thread-kill`) are admitted on both. The owner-only writes (feedback, doc-question answers, pane threads and every other thread op, goals, rename, visibility, uploads, the mental model) have no node route on any visibility. Visibility is read from the store on every request, so a flip to private refuses everything that arrives after it.
 
 ### `GET /api/node/job?slug=` (node tier) → `{"job": webJob, "artifacts": [string], "question"?: webQuestion}`
 
@@ -1937,7 +1978,7 @@ Body: the sender's `NodeEnvelope`. Records (upserts) the sender under the addres
 
 ### `POST /api/node/action` (node tier)
 
-Body `{"slug": string, "action": string, "payload": object, "from": {"cell": string}}`. Drives a **public** cell from another node. Order of refusals: 404 `no such job` (unknown or private), `403 {"error":"not public"}` (visibility read from the store at request time), `400 unknown action` (anything but `steer`, `question`, `kill`, `done`, `submit`, `archive`, `color`, `save`, `stop`). Each action runs the handler the local route runs and replies exactly what it replies:
+Body `{"slug": string, "action": string, "payload": object, "from": {"cell": string}}`. Drives a **public** cell from another node (or asks in a readonly one — the ask-thread actions below). Order of refusals: 404 `no such job` (unknown or private), `403 {"error":"not public"}` (visibility read from the store at request time; skipped for the three ask-thread actions), `400 unknown action` (anything but `steer`, `question`, `kill`, `done`, `submit`, `archive`, `color`, `save`, `stop` and the three ask-thread actions), `400 bad payload` for a payload that does not decode. Each action runs the handler the local route runs and replies exactly what it replies:
 
 | action | payload | local route |
 |---|---|---|
@@ -1947,6 +1988,14 @@ Body `{"slug": string, "action": string, "payload": object, "from": {"cell": str
 | `color` | `{"color"}` | `/api/job/color` |
 | `save` | `{"content", "mtime"}` (a `text` key is ignored) | `/api/job/save` |
 
+**Ask-thread actions** — `thread-ask`, `thread-send`, `thread-kill` — are admitted on a **readonly or public** cell alike: after the 404 above they skip the `not public` 403 entirely. They open and drive **headless** threads only (`kind: "headless"`, always `role: "ask"`). The thread's origin is the caller's verified tailnet identity — `{"node_id": <caller's tailscale stable id>, "label": <the steer prefix's label>, "login": <caller's login>}` — never anything in the body. A headless thread opened this way has NO tools at all and runs with the cell dir as its cwd. A question another node sends runs with NO tools even in a thread the owner opened (whose cwd stays the worktree): the read-only tools apply only when both the thread and the question are the owner's own. Every question is stamped `[from <label> · <login>]` (`[from <label>]` when the caller's login is unknown) on stdin, and any line of the question itself that begins with `[from` is prefixed `· `, so it cannot pass for a stamp. A question not both opened and sent by the owner also has every `@` rewritten to `＠` (U+FF20), so it cannot `@`-mention a file, and the `[from …]` stamp's label and login are rewritten the same way on every run. The origin's label and login are truncated to 120 runes. Each success invalidates the board cache and logs a `node-action` event naming the action, slug and sender label (never the text).
+
+| action | payload | behaviour and refusals |
+|---|---|---|
+| `thread-ask` | `{"title", "text", "model"?}` | 400 `missing title` / `missing text` on blanks; 400 `bad model — want haiku, sonnet, opus or fable` for a `model` outside the four aliases (omitted: the job's `model`, then kraken's default); 400 `<slug>: ask title is too long (max 120 characters)` / `<slug>: ask question is too long (max 16 KB)`; then the local headless `branch`'s refusals (409 with jobs' own message, e.g. the 5-thread cap — at most 5 live headless threads opened by other nodes per job — or no live cell). Success `{"ok": true, "tid": "<tid>"}`, returned as soon as the first run has started |
+| `thread-send` | `{"tid", "text"}` | 400 `missing tid` / `missing text`; 400 `<slug>: ask question is too long (max 16 KB)`; 404 `unknown thread`; 409 for a pane thread, a closed thread (`store: thread is closed`), a question already in flight (`store: thread is already answering`) or no live cell. Any caller may send into any headless thread. Success `{"ok": true}` before the answer exists |
+| `thread-kill` | `{"tid"}` | 400 `missing tid`; 404 `unknown thread`; `409 {"error":"thread <tid> of <slug> is a pane thread — only its owner can close it"}`; `403 {"error":"not your thread"}` unless the thread's `origin.node_id` is the caller's own; then the local `kill` (stops any run in flight, closes the row). Success `{"ok": true}` |
+
 Mirror-gated (plain-text 403).
 
 ### `GET /api/nodes` (node tier) → `{"nodes": [webNode]}`
@@ -1955,7 +2004,7 @@ The registry with each node's stored card list in `jobs`. Node tier so an unpair
 
 ### `POST /api/nodes/action` (paired)
 
-Body `{"node": string (node_id), "slug": string, "action": string, "payload": object}`. Forwards to that node's `POST /api/node/action`, setting `from.cell` from the request's `X-Kraken-From-Cell` header (the CLI sets it inside a cell from `KRAKEN_JOB_SLUG`), and relays the sibling's status and JSON body, always as `application/json` with `X-Content-Type-Options: nosniff`. A sibling 401 is relayed as `502 {"error":"<label> did not recognise this node"}` (never as a 401, which a client would read as its own gate) and a non-JSON body as `502 {"error":"<label> answered non-JSON"}`, `<label>` being the node's label or else its id; a transport error is `502 {"error": "<transport error>"}`; 404 `no such node`. Timeout 5 s (60 s for `submit`). Mirror-gated (plain-text 403).
+Body `{"node": string (node_id), "slug": string, "action": string, "payload": object}`. Forwards to that node's `POST /api/node/action`, setting `from.cell` from the request's `X-Kraken-From-Cell` header (the CLI sets it inside a cell from `KRAKEN_JOB_SLUG`), and relays the sibling's status and JSON body, always as `application/json` with `X-Content-Type-Options: nosniff`. A sibling 401 is relayed as `502 {"error":"<label> did not recognise this node"}` (never as a 401, which a client would read as its own gate) and a non-JSON body as `502 {"error":"<label> answered non-JSON"}`, `<label>` being the node's label or else its id; a transport error is `502 {"error": "<transport error>"}`; 404 `no such node`. Timeout 5 s (60 s for `submit`, 30 s for `thread-ask`, whose far side runs a discovery pass and starts a process before answering; `thread-send` and `thread-kill` take the 5 s default). Mirror-gated (plain-text 403).
 
 ### `GET /api/nodes/job/raw?node=&slug=`, `GET /api/nodes/read?node=&slug=&n=`, `GET /api/nodes/transcript?node=&slug=&n=&turns=`, `GET /api/nodes/thread/read?node=&slug=&tid=&n=` (paired)
 

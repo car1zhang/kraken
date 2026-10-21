@@ -55,6 +55,8 @@ export interface JobCardProps {
    * usual status lines otherwise.
    */
   matchTerms?: readonly string[];
+  /** `board.node_id` — this node's own id, handed to ThreadChips. */
+  boardNodeID?: string;
   /**
    * @deprecated Dead, and accepted only so App.tsx keeps compiling until the
    * lead drops the two call sites. The card no longer LISTS artifacts — band 2
@@ -156,7 +158,14 @@ const STATUS_TEXT: Partial<Record<Column, string>> = {
  * precedence; here each control stops propagation instead, which is the same
  * precedence expressed locally.
  */
-export function JobCard({ job, col, actions, matchReason, matchTerms }: JobCardProps) {
+export function JobCard({
+  job,
+  col,
+  actions,
+  matchReason,
+  matchTerms,
+  boardNodeID,
+}: JobCardProps) {
   const key = jobKey(job);
   // A card another kraken polled in. It renders in the same columns as the
   // local ones, but it is never this board's to drag, reorder or act on
@@ -412,11 +421,14 @@ export function JobCard({ job, col, actions, matchReason, matchTerms }: JobCardP
           ) : null}
           <ThreadChips
             job={job}
-            // a remote card carries no threads (its owner keeps them); the
-            // no-op handler only satisfies the prop
+            // compact renders one count span with no click of its own, so the
+            // handler is never called here. A remote card's threads open from
+            // its steer modal (RemoteSteer.tsx), which routes them through the
+            // owner node; the local handler would open them as THIS node's.
             onOpenThread={remote ? () => {} : actions.onOpenThread}
             withBranch={false}
             compact
+            boardNodeID={boardNodeID}
           />
           {/* the stage badge: which pipeline skill zeus last used. Like the
               goal chip below it is a fact ABOUT the job rather than something

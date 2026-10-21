@@ -100,9 +100,11 @@ func TestJobProjectDirsDerivesFromTheWorktreeString(t *testing.T) {
 	}
 	// FOUR bases: {current <slug>-<id> cell, legacy bare-<slug> cell} x
 	// {wt-<repo>, legacy bare wt}. See JobProjectDirs' doc comment — each
-	// missing base reports as a clean zero rather than an error.
-	if len(dirs) != 4 {
-		t.Fatalf("dirs = %v, want both cell namings x both worktree namings", dirs)
+	// missing base reports as a clean zero rather than an error. Then the
+	// two cell dirs themselves (current, legacy), where a remote ask thread
+	// runs — moved from 4 to 6 by the ask-thread job.
+	if len(dirs) != 6 {
+		t.Fatalf("dirs = %v, want both cell namings x both worktree namings, then both cell dirs", dirs)
 	}
 	wantMain := filepath.Join(util.Home(), ".claude", "projects",
 		core.ProjectDirName(CellWorktree(j, repo)))
@@ -680,8 +682,9 @@ func TestJobProjectDirsReportsAShortList(t *testing.T) {
 		}
 	}
 	full, err := JobProjectDirs(j, repo)
-	if err != nil || len(full) != 5 {
-		t.Fatalf("dirs = %v (err %v), want the four bases plus the deeper one", full, err)
+	// 7 since the ask-thread job: plus the two cell dirs
+	if err != nil || len(full) != 7 {
+		t.Fatalf("dirs = %v (err %v), want the four bases plus the deeper one plus the two cell dirs", full, err)
 	}
 
 	// 0111: traversable but NOT listable — the EMFILE / permission-blip shape
@@ -694,8 +697,9 @@ func TestJobProjectDirsReportsAShortList(t *testing.T) {
 	if err == nil {
 		t.Fatal("an unlistable projects root must be reported — a silently short list deletes watermarks")
 	}
-	if len(short) != 4 {
-		t.Errorf("dirs = %v, want the four bases still returned alongside the error", short)
+	// 6 since the ask-thread job: the two cell dirs ride along too
+	if len(short) != 6 {
+		t.Errorf("dirs = %v, want the four bases and the two cell dirs still returned alongside the error", short)
 	}
 }
 

@@ -421,21 +421,44 @@ describe("RemoteSteerBody context containers", () => {
     expect(chip.getAttribute("data-key")).toBe("nSTUDIO/remote-job");
   });
 
-  // `#steer-threads` "(`ThreadChips` with `withBranch={false}`, a chip click
-  // calling `onOpenThread(job.slug, tid, node)`)" — a readonly card's thread
-  // opens on THIS board with the owner's node id, and offers no branch.
-  it("opens a readonly card's thread with the owner's node and offers no branch", async () => {
+  // REWRITTEN (ask threads port, 50-contract.md slice D `RemoteSteerBody`):
+  // "the threads row mounts ThreadChips with withBranch={!!job.live} … with
+  // the branch label "⑂ ask", on readonly AND public; clicking it calls
+  // onOpenThread(slug, null, node)". A readonly card's thread chip still
+  // opens with the owner's node id. Replaces the offers-no-branch pin.
+  it("opens a readonly card's thread with the owner's node and offers ⑂ ask", async () => {
     edgeFPStubFetch();
     const { onOpenThread } = edgeFPMountSteer(edgeFPRichJob("readonly"));
     await edgeFPSettle();
     const threads = document.getElementById("steer-threads")!;
     expect(threads).not.toBeNull();
-    // AMENDED (run-2 arbitration): the chip label carries the ⑂ glyph by
-    // design; no branch control and no second button
     expect(threads.textContent).not.toMatch(/branch/i);
-    expect(threads.querySelectorAll("button").length).toBeLessThanOrEqual(1);
+    expect(threads.querySelectorAll("button").length).toBe(2);
     fireEvent.click(within(threads).getByText(/why the retry/));
     expect(onOpenThread).toHaveBeenCalledWith("remote-job", "t9", "nSTUDIO");
+    fireEvent.click(within(threads).getByText("⑂ ask"));
+    expect(onOpenThread).toHaveBeenLastCalledWith("remote-job", null, "nSTUDIO");
+  });
+
+  it("offers no ⑂ ask on a card whose cell is not live", async () => {
+    edgeFPStubFetch();
+    edgeFPMountSteer(edgeFPRichJob("readonly", { live: false }));
+    await edgeFPSettle();
+    expect(document.body.textContent).not.toContain("⑂ ask");
+  });
+
+  // "when a live remote card has NO threads it renders a sibling
+  // <div class="threads" id="steer-ask"> holding a lone ⑂ ask BranchButton"
+  it("renders a lone ⑂ ask in #steer-ask on a live card with no threads", async () => {
+    edgeFPStubFetch();
+    const { onOpenThread } = edgeFPMountSteer(edgeFPRichJob("readonly", { threads: [] }));
+    await edgeFPSettle();
+    expect(document.getElementById("steer-threads")).toBeNull();
+    const ask = document.getElementById("steer-ask")!;
+    expect(ask).not.toBeNull();
+    expect(ask.querySelectorAll("button").length).toBe(1);
+    fireEvent.click(within(ask).getByText("⑂ ask"));
+    expect(onOpenThread).toHaveBeenCalledWith("remote-job", null, "nSTUDIO");
   });
 
   // "`#steer-actions`, present only while a question is pending: it IS the
@@ -553,26 +576,44 @@ describe("ThreadOverlay with node", () => {
   const job = edgeFPJob("public", { threads: [{ tid: "t1", title: "why the retry", state: "live", pane: "%7", created_at: 0 }] });
   const base = { open: true as const, slug: "remote-job", onBranched: () => {}, mutate: edgeFPMutate, onClose: () => {}, job, node: "nSTUDIO" };
 
-  // `ThreadOverlay`: "With `node` set: `tid === null` renders nothing (the
-  // branch dialog is owner-only)" — AMENDED (run-1 arbitration): the overlay
-  // shell (`#thread-overlay > .panel`) renders with an EMPTY panel.
-  it("renders an empty shell for tid null", async () => {
+  // REWRITTEN (ask threads port, 50-contract.md slice D `ThreadOverlay`):
+  // "with node and tid === null renders the new-thread dialog in REMOTE mode
+  // … it fetches nothing before branch" — and a blank question posts nothing.
+  // Replaces the empty-shell pin.
+  it("renders the remote ask dialog for tid null, fetching nothing before branch", async () => {
     const f = edgeFPStubFetch();
-    const { container } = render(<ThreadOverlay {...base} tid={null} />);
+    render(<ThreadOverlay {...base} tid={null} />);
     await edgeFPSettle();
-    const panel = container.querySelector("#thread-overlay > .panel");
-    expect(panel).not.toBeNull();
-    expect(panel!.children.length).toBe(0);
-    expect(panel!.textContent).toBe("");
-    expect(document.body.querySelector("textarea, input, select")).toBeNull();
+    expect(document.getElementById("thread-new")).not.toBeNull();
+    expect(document.getElementById("thread-branch")!.textContent).toBe("⑂ ask studio ⌘⏎");
+    expect(f).not.toHaveBeenCalled();
+    fireEvent.click(document.getElementById("thread-branch")!);
+    await edgeFPSettle();
     expect(f).not.toHaveBeenCalled();
   });
 
+  // "a composer … exactly when threadComposerAllowed(thread, read, true)":
+  // a CLOSED headless thread gets none.
+  it("offers no composer on a closed headless thread", async () => {
+    edgeFPStubFetch((u) =>
+      u.pathname === "/api/nodes/thread/read"
+        ? { status: 200, body: { blocks: [{ kind: "text", text: "thread says hello" }], live: false, kind: "headless" } }
+        : undefined,
+    );
+    const askJob = edgeFPJob("public", {
+      threads: [{ tid: "t3", title: "why is CI red", state: "closed", created_at: 0, kind: "headless" }],
+    });
+    render(<ThreadOverlay {...base} job={askJob} tid="t3" />);
+    await waitFor(() => expect(document.body.textContent).toMatch(/thread says hello/));
+    await edgeFPSettle();
+    expect(document.getElementById("thread-composer")).toBeNull();
+  });
+
   // "reads via `fetchNodeThreadRead(node, slug, tid)` on the same cadence;
-  // renders the head (title, state) and the blocks as today; renders NO
-  // composer, send, branch, kill, revive or model control, and stamps no
-  // `data-mind-*`" — on a PUBLIC card's live thread, where a local overlay
-  // would show all of them.
+  // renders the head (title, state) and the blocks as today … and stamps no
+  // `data-mind-*`" — and a PANE thread (no `kind`) on a PUBLIC card, live,
+  // gets no composer, send, branch, kill, revive or model control, where a
+  // local overlay would show them.
   it("reads through the proxy without n and renders no control", async () => {
     const f = edgeFPStubFetch();
     render(<ThreadOverlay {...base} tid="t1" />);

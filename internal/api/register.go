@@ -40,6 +40,10 @@ func RoutePatterns() []string {
 // into jobs).
 func Register(mux *http.ServeMux) {
 	jobs.SetOnFleetChanged(webBoardCache.invalidate)
+	// an ask run ends after its request has answered, so its row's answering
+	// flag reaches the board through this hook rather than the request's own
+	// invalidate
+	jobs.AskDoneHook = webBoardCache.invalidate
 	registerRoutes(mux)
 }
 

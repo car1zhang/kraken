@@ -278,6 +278,7 @@ export function BoardView({
                   actions={actions}
                   matchReason={search.reasonByKey.get(jobKey(j))}
                   matchTerms={search.terms}
+                  boardNodeID={board.board?.node_id}
                 />
               )}
             />

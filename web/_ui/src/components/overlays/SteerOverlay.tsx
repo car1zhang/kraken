@@ -228,6 +228,11 @@ export interface SteerOverlayProps {
    * server sends none, and both fall back to "you" / "the operator".
    */
   operator?: string;
+  /**
+   * `board.node_id` — this node's own id, which the thread chips compare a
+   * headless thread's origin against (lib/threadquick.ts threadOriginBadge).
+   */
+  boardNodeID?: string;
   onClose: () => void;
   /**
    * A rename succeeded — the caller re-points `slug` at the SAME job under its
@@ -337,6 +342,7 @@ export function SteerOverlay(props: SteerOverlayProps) {
           onOpenArtifact={props.onOpenArtifact}
           onOpenThread={props.onOpenThread}
           operator={props.operator}
+          boardNodeID={props.boardNodeID}
         />
       ) : props.slug ? (
         <SteerBody
@@ -363,6 +369,7 @@ function SteerBody({
   job,
   usage,
   operator,
+  boardNodeID,
   onClose,
   onRenamed,
   onReactivate,
@@ -909,6 +916,15 @@ function SteerBody({
             can be recoloured. A pick POSTs the colour and never sends a
             steer message. */}
         <ColorPicker slug={jobSlug} color={job?.color} mutate={mutate} />
+        {/* who beyond this Mac may see or drive the job: the same dropdown,
+            in the same row, riding its own one-field route like the colour.
+            Withheld for an archived job, which no route answers for and which
+            never leaves this machine anyway. */}
+        {job && !job.archived ? (
+          <span className="f-swatches compact" title="visibility">
+            <VisibilityControl slug={jobSlug} visibility={job.visibility} mutate={mutate} />
+          </span>
+        ) : null}
         <RenameButton id="steer-rename" state={rename} visible={showRename} />
         <span className="spacer"></span>
         <button
@@ -967,13 +983,6 @@ function SteerBody({
             it — the same placement the editor gives it, and the same reason:
             it is about the job the title names, not about the cell's state */}
         <RenameRow id="steer-rename-row" state={rename} />
-        {/* who beyond this Mac may see or drive the job — a one-field route
-            usable on a live cell, like the colour strip in the head. Withheld
-            for an archived job, which no route answers for and which never
-            leaves this machine anyway. */}
-        {job && !job.archived ? (
-          <VisibilityControl slug={jobSlug} visibility={job.visibility} mutate={mutate} />
-        ) : null}
         <div className="steer-context" id="steer-context" hidden={!showContext}>
           {/* `crew`, not `steer-crew`: .crew is the class on this element
               itself, exactly as .threads is on #steer-threads, and style.css
@@ -1000,13 +1009,14 @@ function SteerBody({
             ))}
           </div>
           {/* The card passes withBranch={false}, delegating ⑂ to this modal —
-              so this is the ONLY mount point of BranchButton in the app, and
-              with it unrendered no control anywhere could branch a thread.
+              so this is the ONLY mount point of BranchButton for a local job
+              (RemoteSteer.tsx mounts the other, as ⑂ ask on a remote card),
+              and with it unrendered no control could branch a local thread.
               Default withBranch here (no argument), which is exactly the split
               BranchButton's header states. */}
           <div className="threads" id="steer-threads" hidden={!showThreads}>
             {job && showThreads ? (
-              <ThreadChips job={job} onOpenThread={onOpenThread} />
+              <ThreadChips job={job} onOpenThread={onOpenThread} boardNodeID={boardNodeID} />
             ) : null}
           </div>
           <div

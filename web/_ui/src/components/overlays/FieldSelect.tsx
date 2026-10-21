@@ -26,6 +26,13 @@ interface FieldSelectProps {
    * button and the row both say the default rather than showing a dash the
    * user has to decode. The value picked and stored is still "". */
   emptyLabel?: string;
+  /** Drop the — row: for a field with no empty value (visibility always has
+   * one of its options). */
+  noEmpty?: boolean;
+  /** `data-testid` on the button, the interactive control. */
+  testId?: string;
+  /** A tooltip per value, on its row and (for the current value) the button. */
+  titles?: Record<string, string>;
 }
 
 /** What a value reads as: itself, or the em-dash the empty value has always
@@ -56,6 +63,9 @@ export function FieldSelect({
   disabled,
   label,
   emptyLabel,
+  noEmpty = false,
+  testId,
+  titles,
 }: FieldSelectProps) {
   const [open, setOpen] = useState(false);
   const rootRef = useRef<HTMLSpanElement | null>(null);
@@ -72,6 +82,7 @@ export function FieldSelect({
         className={sel ? "colorsel-row sel" : "colorsel-row"}
         role="option"
         aria-selected={sel}
+        title={titles?.[val]}
         onClick={() => {
           // Unconditional, even on the row already selected — same stance as
           // the colour picker: a re-pick still calls onPick rather than
@@ -92,6 +103,8 @@ export function FieldSelect({
         type="button"
         id={id}
         className="colorsel-btn"
+        data-testid={testId}
+        title={titles?.[value]}
         disabled={disabled}
         aria-label={label ? `${label}: ${value || empty}` : undefined}
         aria-haspopup="listbox"
@@ -106,7 +119,7 @@ export function FieldSelect({
           still clickable. */}
       {open && !disabled ? (
         <span className="colorsel-menu" role="listbox">
-          {row("")}
+          {noEmpty ? null : row("")}
           {options.map((x) => row(x))}
         </span>
       ) : null}

@@ -110,7 +110,9 @@ import (
 // Version 35 adds job_stacks: a cell's manual-test URLs, one row per
 // (job, url), registered by the cell through `kraken stack` and deleted with
 // the cell (see schemaV35).
-const schemaVersion = 35
+// Version 36 adds ask threads' six columns to threads: kind (pane |
+// headless), the three origin columns, answering and note (see schemaV36).
+const schemaVersion = 36
 
 // schemaV1 creates all nine tables plus kv. Exact DDL (types, indexes) was
 // left to this package by the spec; shapes below mirror the spec's Data
@@ -2031,6 +2033,61 @@ func migrateV34Visibility(tx *sql.Tx) error {
 	return nil
 }
 
+// schemaV36 is ask threads' storage (jobs/askthread.go), and its SQL half is
+// empty: all six changes are ADD COLUMNs, which SQLite cannot spell IF NOT
+// EXISTS, so every one runs in the hook, migrateV36AskThreads, behind a
+// column probe — the v33/v34 pattern, for the same reason (several migration
+// tests age a fresh database by resetting user_version alone, and the step
+// then replays over a threads table that already has the columns).
+//
+// The six columns, all on threads:
+//
+//   - kind: how the thread RUNS — 'pane' (an interactive claude in a tmux
+//     window, the only kind before v36, so the DEFAULT gives every existing
+//     row it) or 'headless' (one `claude -p` per question, no pane). It is
+//     orthogonal to v33's role, which says what the thread is FOR ('ask' for
+//     carl's question thread, 'mind' for the mind thread): a pane thread may
+//     have either role, a headless one is always role 'ask' (AddThread
+//     refuses headless + mind). The value is 'headless' rather than 'ask'
+//     because 'ask' is already a role value on the same wire object.
+//   - origin_node, origin_label, origin_login: the tailscale node id, its
+//     label and the login that opened the thread. Empty on every pre-v36
+//     row; origin_node is also empty on a row opened by a node with no
+//     tailscale or the fleet off.
+//   - answering: the one-question-in-flight flag ClaimThreadAnswering
+//     compare-and-sets, so one thread never has two runs on its session id.
+//   - note: the last run's failure line, empty after a clean answer.
+const schemaV36 = ``
+
+// schemaV36Columns is v36's six ALTERs in order, each run by
+// migrateV36AskThreads only when threads lacks the column (see schemaV36).
+var schemaV36Columns = []struct{ column, ddl string }{
+	{"kind", `ALTER TABLE threads ADD COLUMN kind TEXT NOT NULL DEFAULT 'pane' CHECK(kind IN ('pane','headless'));`},
+	{"origin_node", `ALTER TABLE threads ADD COLUMN origin_node TEXT NOT NULL DEFAULT '';`},
+	{"origin_label", `ALTER TABLE threads ADD COLUMN origin_label TEXT NOT NULL DEFAULT '';`},
+	{"origin_login", `ALTER TABLE threads ADD COLUMN origin_login TEXT NOT NULL DEFAULT '';`},
+	{"answering", `ALTER TABLE threads ADD COLUMN answering INTEGER NOT NULL DEFAULT 0;`},
+	{"note", `ALTER TABLE threads ADD COLUMN note TEXT NOT NULL DEFAULT '';`},
+}
+
+// migrateV36AskThreads is migrations[36]'s hook: add each of the six thread
+// columns unless it is already there.
+func migrateV36AskThreads(tx *sql.Tx) error {
+	for _, c := range schemaV36Columns {
+		var n int
+		if err := tx.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('threads') WHERE name = ?`, c.column).Scan(&n); err != nil {
+			return fmt.Errorf("probe threads.%s: %w", c.column, err)
+		}
+		if n > 0 {
+			continue
+		}
+		if _, err := tx.Exec(c.ddl); err != nil {
+			return fmt.Errorf("add threads.%s: %w", c.column, err)
+		}
+	}
+	return nil
+}
+
 // migrationStep is one migration: SQL applied first, then an optional Go
 // hook run afterward inside the SAME transaction. Every migration before
 // v5 was a pure SQL string — DDL can't parse questions.yaml's hand-rolled
@@ -2149,8 +2206,12 @@ type migrationStep struct {
 // the ALTER only when the column is missing (see schemaV34).
 // migrations[35] creates job_stacks (CREATE TABLE IF NOT EXISTS, no hook;
 // see schemaV35).
+// migrations[36] adds the six ask-thread columns to threads (kind,
+// origin_node, origin_label, origin_login, answering, note); its SQL is empty
+// and the hook, migrateV36AskThreads, runs each ALTER only when the column is
+// missing (see schemaV36).
 // Future schema changes append
-// migrations[36], migrations[37], ... rather than editing an existing
+// migrations[37], migrations[38], ... rather than editing an existing
 // schemaV<N> string (or hook) in place, so a database created under an older
 // binary still migrates forward correctly.
 var migrations = map[int]migrationStep{
@@ -2189,6 +2250,7 @@ var migrations = map[int]migrationStep{
 	33: {sql: schemaV33, hook: migrateV33MindLayer},
 	34: {sql: schemaV34, hook: migrateV34Visibility},
 	35: {sql: schemaV35},
+	36: {sql: schemaV36, hook: migrateV36AskThreads},
 }
 
 // migrateV5Questions is migrations[5]'s Go hook: schemaV5's SQL has already

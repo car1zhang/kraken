@@ -1238,6 +1238,9 @@ struct BoardView: View {
             // it does, the pair screen stands in for the board.
             if KrakenDefaults.isConfigured(serverURL) && pairing.isPaired {
                 withRouting(withSheets(withPolling(boardStack)))
+                    // Read by ThreadChip and the thread views to leave this
+                    // node's own ask threads unbadged (threadOriginBadge).
+                    .environment(\.boardNodeId, vm.board?.nodeId)
             } else {
                 BoardPairView {
                     router.selectedTab = .settings
@@ -1449,6 +1452,7 @@ struct BoardView: View {
                 }
             }
             .environment(jobSheetNav)
+            .environment(\.boardNodeId, vm.board?.nodeId)
         case .newJob:
             NavigationStack {
                 NewJobSheet(baseURL: serverURL) {
@@ -3030,6 +3034,7 @@ private struct BoardOverviewSheet: View {
                 JobDetailView(job: job, baseURL: baseURL, onUpdate: onUpdate)
             }
             .environment(jobSheetNav)
+            .environment(\.boardNodeId, vm.board?.nodeId)
         }
         .onChange(of: selectedJob?.id) { jobSheetNav.childPushed = false }
         // Same auto-dismiss-on-staleness as BoardView's own job sheet — this

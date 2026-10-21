@@ -47,9 +47,10 @@ const tokensIdleInterval = 10 * time.Minute
 const tokensIdleBatch = 8
 
 // JobProjectDirs returns the absolute ~/.claude/projects directories holding
-// a job's transcripts — zeus', every side thread's, and every teammate's,
-// since they all run in the cell's worktree and Claude Code buckets
-// transcripts by cwd.
+// a job's transcripts — zeus', every pane thread's and self-origin ask
+// thread's, and every teammate's, since they all run in the cell's worktree
+// and Claude Code buckets transcripts by cwd — plus, last, the cell dir's own
+// project dirs, where a remote-origin ask thread's transcripts land.
 //
 // The path is derived from CellWorktree's STRING, never from
 // ExistingWorktree: teardownCell removes the cell dir (cell.go), so
@@ -172,6 +173,32 @@ func JobProjectDirs(j *Job, repo string) ([]string, error) {
 	for _, name := range bases {
 		out = append(out, filepath.Join(root, name))
 	}
+	// The cell dir itself, under every name it has held: a remote-origin ask
+	// thread runs with the cell dir as its cwd (askthread.go), so its
+	// transcripts are filed there. These are exact names only and never join
+	// `bases`: a cell dir's munged name can be a prefix of OTHER jobs' cell
+	// dirs (job `demo` id 25's `…-cells-demo-25` prefixes job `demo-25-x` id
+	// 7's `…-cells-demo-25-x-7`; the doc comment above explains why only the
+	// `-wt` anchor separates cell names), so sweeping its extensions would
+	// count a stranger's spend. Appended last, after every worktree-derived
+	// dir, on every return path below. The legacy bare-slug dirs of former
+	// slugs are listed too, so a rename never drops a dir this list returned
+	// before it (the watermark reason above).
+	cellDirNames := append(cellDirCandidates(j), legacyCellDir(j))
+	for _, f := range j.FormerSlugs {
+		if s := util.Slugify(f); s != "" {
+			cellDirNames = append(cellDirNames, filepath.Join(cellsRoot(), s))
+		}
+	}
+	var cellDirs []string
+	for _, d := range cellDirNames {
+		name := core.ProjectDirName(d)
+		if seen[name] {
+			continue
+		}
+		seen[name] = true
+		cellDirs = append(cellDirs, filepath.Join(root, name))
+	}
 	// One ReadDir of ~/.claude/projects (~145 entries) per job per refresh.
 	// It is comparable to the WalkDir each returned dir already costs, and
 	// only jobs the pass actually decided to sum get here. A projects dir that
@@ -188,9 +215,9 @@ func JobProjectDirs(j *Job, repo string) ([]string, error) {
 		// for "they went away". Exactly the root-absent/subtree-failed split
 		// core.SumTokensDelta's walk makes, for the same reason.
 		if os.IsNotExist(err) {
-			return out, nil
+			return append(out, cellDirs...), nil
 		}
-		return out, fmt.Errorf("list %s: %v", root, err)
+		return append(out, cellDirs...), fmt.Errorf("list %s: %v", root, err)
 	}
 	for _, e := range entries {
 		if !e.IsDir() || seen[e.Name()] {
@@ -204,7 +231,7 @@ func JobProjectDirs(j *Job, repo string) ([]string, error) {
 			}
 		}
 	}
-	return out, nil
+	return append(out, cellDirs...), nil
 }
 
 // refreshJobTokens sums one job's transcripts forward from the watermarks in

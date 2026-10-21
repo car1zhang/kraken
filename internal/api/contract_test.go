@@ -203,6 +203,9 @@ var webBoardSpec = map[string]fieldSpec{
 	// The fleet registry (board.go's webNode), present only when this node
 	// knows at least one sibling kraken. Additive.
 	"nodes": {kind: wireArray, required: false},
+	// This node's tailscale stable id, absent with no tailscale or the fleet
+	// off; clients compare a thread's origin.node_id with it. Additive.
+	"node_id": {kind: wireString, required: false},
 }
 
 // webBackgroundSpec covers background.go's webBackground — webBoard's
@@ -1405,6 +1408,96 @@ var webThreadSpec = map[string]fieldSpec{
 	"role":       {kind: wireString, required: true},
 	"created_at": {kind: wireNumber, required: true},
 	"closed_at":  {kind: wireNumber, required: false},
+	// headless ask threads (jobs/askthread.go), all additive: kind on every
+	// thread ("pane" | "headless", independent of role), origin only when
+	// the row names one, answering only while true, note only when set
+	"kind":      {kind: wireString, required: true},
+	"origin":    {kind: wireObject, required: false},
+	"answering": {kind: wireBool, required: false},
+	"note":      {kind: wireString, required: false},
+}
+
+// webThreadOriginSpec is webThread's "origin" object: every key always
+// present once the object rides.
+var webThreadOriginSpec = map[string]fieldSpec{
+	"node_id": {kind: wireString, required: true},
+	"label":   {kind: wireString, required: true},
+	"login":   {kind: wireString, required: true},
+}
+
+// TestWebThreadHeadlessWireShape pins a headless row's wire: kind
+// "headless" beside role "ask", the origin object, and answering/note
+// riding only when set — and a pane row's kind "pane".
+func TestWebThreadHeadlessWireShape(t *testing.T) {
+	rows := webThreadsFrom([]store.Thread{
+		{TID: "t3", State: "live", Kind: "headless", Role: "ask", OriginNode: "nSTUDIO", OriginLabel: "studio-mini", OriginLogin: "jess@probook.ai", Answering: true, Note: "ask failed: boom", CreatedAt: 1},
+		{TID: "t4", State: "live", Kind: "headless", Role: "ask", CreatedAt: 1},
+		{TID: "t5", State: "live", Role: "mind", CreatedAt: 1},
+	})
+	data, err := json.Marshal(rows[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertShape(t, "webThread (headless)", data, webThreadSpec)
+	var m map[string]json.RawMessage
+	if err := json.Unmarshal(data, &m); err != nil {
+		t.Fatal(err)
+	}
+	assertShape(t, "webThread.origin", m["origin"], webThreadOriginSpec)
+	for _, k := range []string{"kind", "origin", "answering", "note"} {
+		if _, ok := m[k]; !ok {
+			t.Errorf("populated headless row: key %q missing", k)
+		}
+	}
+	if string(m["role"]) != `"ask"` {
+		t.Errorf("role = %s, want \"ask\" beside kind headless", m["role"])
+	}
+	data, err = json.Marshal(rows[1])
+	if err != nil {
+		t.Fatal(err)
+	}
+	m = nil
+	if err := json.Unmarshal(data, &m); err != nil {
+		t.Fatal(err)
+	}
+	for _, k := range []string{"origin", "answering", "note"} {
+		if _, ok := m[k]; ok {
+			t.Errorf("bare headless row: key %q present, want it omitted", k)
+		}
+	}
+	if string(m["kind"]) != `"headless"` {
+		t.Errorf("kind = %s, want \"headless\"", m["kind"])
+	}
+	// a hand-built row with no Kind reads as a pane on the wire
+	data, err = json.Marshal(rows[2])
+	if err != nil {
+		t.Fatal(err)
+	}
+	m = nil
+	if err := json.Unmarshal(data, &m); err != nil {
+		t.Fatal(err)
+	}
+	if string(m["kind"]) != `"pane"` || string(m["role"]) != `"mind"` {
+		t.Errorf("pane mind row: kind = %s, role = %s; want \"pane\", \"mind\"", m["kind"], m["role"])
+	}
+}
+
+// TestNodeThreadActionsWire pins the three action names /api/node/action
+// admits on a readonly card (ios/API.md's node action table): exactly these,
+// and none of them also in nodeActions, whose members stay public-only.
+func TestNodeThreadActionsWire(t *testing.T) {
+	want := []string{"thread-ask", "thread-send", "thread-kill"}
+	if len(nodeThreadActions) != len(want) {
+		t.Errorf("nodeThreadActions = %v, want exactly %v", nodeThreadActions, want)
+	}
+	for _, a := range want {
+		if !nodeThreadActions[a] {
+			t.Errorf("nodeThreadActions is missing %q", a)
+		}
+		if nodeActions[a] {
+			t.Errorf("%q is in nodeActions too — it would be public-only", a)
+		}
+	}
 }
 
 func TestWebThreadWireShape(t *testing.T) {
@@ -2398,6 +2491,12 @@ var threadReadSpec = map[string]fieldSpec{
 	"fork_uuid": {kind: wireString, required: true},
 	"source":    {kind: wireString, required: true},
 	"session":   {kind: wireString, required: true},
+	// headless ask threads, additive: kind/answering/note always ride (note
+	// "" when none); origin only when the row names one
+	"kind":      {kind: wireString, required: true},
+	"answering": {kind: wireBool, required: true},
+	"note":      {kind: wireString, required: true},
+	"origin":    {kind: wireObject, required: false},
 }
 
 // threadReadBlockSpec is /api/thread/read's block element: /api/peers/read's

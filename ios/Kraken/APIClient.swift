@@ -71,10 +71,14 @@ private struct NodeActionRequest: Encodable {
 }
 
 /// The `payload` of a remote action: `text` for steer and question, `color`
-/// for colour, nothing for the rest. A nil field is omitted from the JSON.
+/// for colour, `title` + `text` for thread-ask, `tid` + `text` for
+/// thread-send, `tid` for thread-kill, nothing for the rest. A nil field is
+/// omitted from the JSON.
 struct NodeActionPayload: Encodable {
     var text: String?
     var color: String?
+    var title: String?
+    var tid: String?
 }
 
 /// GET /api/nodes/job/raw's reply, decoded down to the one key the phone
@@ -177,6 +181,15 @@ actor APIClient {
     // cannot ride the 5s cap: a timeout there reports failure for a cell that
     // is in fact coming up, which is the one wrong answer available here.
     private let submitSession: URLSession
+    // A remote `thread-ask` is relayed to the owner, which looks the cell up
+    // and starts a claude process before it answers; the paired node gives
+    // the `thread-ask` relay 30 s. On the 5s cap a slow owner would read as
+    // a failure for a thread that was in fact created, and the natural retry
+    // would open a second one. `thread-send` shares this session only for
+    // symmetry: the relay caps a send at its 5 s default anyway, so the
+    // longer client timeout buys a send nothing. Used only by nodeAction for
+    // those two actions.
+    private let askSession: URLSession
     private let decoder = JSONDecoder()
     private let encoder = JSONEncoder()
 
@@ -194,6 +207,11 @@ actor APIClient {
         submitConfig.timeoutIntervalForRequest = 60
         submitConfig.timeoutIntervalForResource = 60
         submitSession = URLSession(configuration: submitConfig)
+
+        let askConfig = URLSessionConfiguration.ephemeral
+        askConfig.timeoutIntervalForRequest = 30
+        askConfig.timeoutIntervalForResource = 30
+        askSession = URLSession(configuration: askConfig)
     }
 
     // MARK: - low-level plumbing
@@ -515,20 +533,25 @@ actor APIClient {
     // MARK: - side threads
 
     /// One side-thread mutation, all five ops through the one endpoint the
-    /// server exposes: "branch" (needs `title`, optional seed `text`, and is
-    /// the only op whose response carries a `tid`), "kill"/"revive" (`tid`),
+    /// server exposes: "branch" (needs `title` and a seed `text` — optional
+    /// only for a pane thread, `headless: false` — and is the only op whose
+    /// response carries a `tid`), "kill"/"revive" (`tid`),
     /// "rename" (`tid` + `title`), "send" (`tid` + `text`). Unused arguments
     /// stay nil and never ride on the wire. Errors — a dead cell, an unknown
     /// tid, a send to a closed thread — surface as KrakenError verbatim like
     /// every other action here.
+    /// `headless` rides only on "branch": nil leaves the key off (the server
+    /// then opens a headless ask thread), false asks for a pane thread.
     @discardableResult
     func threadAction(
         baseURL: String, slug: String, op: ThreadOp,
-        tid: String? = nil, title: String? = nil, text: String? = nil
+        tid: String? = nil, title: String? = nil, text: String? = nil,
+        headless: Bool? = nil
     ) async throws -> ThreadActionResponse {
         try await post(
             baseURL: baseURL, path: "/api/threads",
-            body: ThreadActionRequest(slug: slug, op: op.rawValue, tid: tid, title: title, text: text)
+            body: ThreadActionRequest(slug: slug, op: op.rawValue, tid: tid, title: title, text: text,
+                                      headless: headless)
         )
     }
 
@@ -615,12 +638,14 @@ actor APIClient {
         let _: OkResponse = try await post(baseURL: baseURL, path: "/api/pair/revoke", body: EmptyRequest())
     }
 
-    /// One action on a REMOTE public cell, through the paired node's proxy:
-    /// `node` is the owner's node id, `action` one of steer, question, kill,
-    /// done, submit, archive, color, stop. The remote node's own answer is
-    /// relayed back, so a refusal reads exactly as it would locally. Submit
-    /// starts the remote cell inline and gets the long session for the same
-    /// reason `queueJob` does.
+    /// One action on a REMOTE cell, through the paired node's proxy: `node`
+    /// is the owner's node id, `action` one of steer, question, kill, done,
+    /// submit, archive, color, stop (public cards only) or thread-ask,
+    /// thread-send, thread-kill (readonly and public). The remote node's own
+    /// answer is relayed back, so a refusal reads exactly as it would
+    /// locally. Submit starts the remote cell inline and gets the long session
+    /// for the same reason `queueJob` does; thread-ask and thread-send get
+    /// `askSession`'s 30 s (see its declaration).
     func nodeAction(baseURL: String, node: String, slug: String, action: String,
                     payload: NodeActionPayload = NodeActionPayload()) async throws {
         let url = try buildURL(baseURL: baseURL, path: "/api/nodes/action")
@@ -628,7 +653,13 @@ actor APIClient {
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.httpBody = try encoder.encode(NodeActionRequest(node: node, slug: slug, action: action, payload: payload))
-        _ = try await perform(request, session: action == "submit" ? submitSession : nil)
+        let session: URLSession?
+        switch action {
+        case "submit": session = submitSession
+        case "thread-ask", "thread-send": session = askSession
+        default: session = nil
+        }
+        _ = try await perform(request, session: session)
     }
 
     /// A remote job's raw text, relayed by the paired node from its owner's
@@ -636,6 +667,16 @@ actor APIClient {
     /// Readonly and public jobs both answer; private or unknown is a 404.
     func fetchNodeJobRaw(baseURL: String, node: String, slug: String) async throws -> NodeJobRaw {
         try await get(baseURL: baseURL, path: "/api/nodes/job/raw", query: [("node", node), ("slug", slug)])
+    }
+
+    /// A remote job's side thread, relayed by the paired node from its
+    /// owner's `GET /api/node/thread/read` — the same body as the local
+    /// `readThread`. `n` rides only when given.
+    func fetchNodeThreadRead(baseURL: String, node: String, slug: String, tid: String,
+                             n: Int?) async throws -> ThreadReadResponse {
+        var query = [("node", node), ("slug", slug), ("tid", tid)]
+        if let n { query.append(("n", String(n))) }
+        return try await get(baseURL: baseURL, path: "/api/nodes/thread/read", query: query)
     }
 
     // MARK: - goals

@@ -1140,6 +1140,14 @@ a.stack-chip.stack-down:hover { opacity: 0.9; border-color: var(--ac2); }
 .thread-chip.closed { color: var(--stopped); border-color: color-mix(in srgb, var(--stopped) 30%, var(--b1)); }
 .thread-chip.closed:hover { background: color-mix(in srgb, var(--stopped) 12%, transparent); border-color: var(--stopped); color: var(--fg); }
 .thread-chip.closed .dot { background: var(--stopped); }
+/* an ask thread opened from another node: "from <node>" after the label,
+   split off by a rule in the accent voice so it reads as provenance rather
+   than as part of the thread's name */
+.thread-chip .thread-origin {
+  color: var(--ac);
+  border-left: 1px solid var(--b1);
+  margin-left: 5px; padding-left: 5px;
+}
 /* the card's collapsed form of the same thing (S2's `compact`): a bare count,
    a SPAN rather than a button — the card's own click opens the modal that
    holds the list — so it takes the resting chip look and no hover fill.
@@ -2499,25 +2507,10 @@ a.stack-chip.stack-down:hover { opacity: 0.9; border-color: var(--ac2); }
 #usage-overlay .dim { opacity: 0.55; }
 .btn.mini { font-size: 8.5px; letter-spacing: 0.08em; padding: 2px 7px; }
 
-/* ---- fleet: the steer modal's visibility control and remote body, the
-   devices overlay ----
+/* ---- fleet: the remote body, the devices overlay ----
    All in the usage drilldown's vocabulary (u-sect heads, mono 9–10px, theme
-   tokens only) so the new surfaces read as more of the same board. */
-.steer-vis { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 10px; }
-.steer-vis .vis-label { font: 600 9px var(--mono); letter-spacing: 0.12em; text-transform: uppercase; color: var(--muted); }
-.vis-seg { display: inline-flex; }
-.vis-opt {
-  font: 9px var(--mono); letter-spacing: 0.06em; padding: 3px 9px;
-  background: none; color: var(--muted); border: 1px solid var(--border);
-}
-.vis-opt + .vis-opt { border-left: none; }
-.vis-opt.on { color: var(--accent); border-color: var(--accent); background: var(--accent-soft); }
-.vis-opt.on + .vis-opt { border-left: 1px solid var(--border); }
-.vis-opt[data-visibility="public"].on { color: var(--ok); border-color: var(--ok); background: color-mix(in srgb, var(--ok) 8%, transparent); }
-.steer-vis .vis-hint { color: var(--muted); font-size: 9px; flex-basis: 100%; }
-/* the editor's field-row copy: inline, no bottom gap, no hint line */
-.steer-vis.compact { margin-bottom: 0; flex-wrap: nowrap; gap: 6px; }
-.steer-vis.compact .vis-label { font: inherit; letter-spacing: inherit; text-transform: none; }
+   tokens only) so the new surfaces read as more of the same board. The
+   visibility control is a FieldSelect and wears the .colorsel* skin. */
 
 .remote-question { border: none; padding: 0; margin: 0; min-width: 0; }
 .remote-question:disabled { opacity: 0.55; }
@@ -3424,6 +3417,16 @@ a.stack-chip.stack-down:hover { opacity: 0.9; border-color: var(--ac2); }
 /* the model the thread was branched on: the same pill in the quiet voice — it
    is a fact about the thread, not a state that can change under the reader */
 .thread-pill.model { color: var(--muted); text-transform: none; letter-spacing: 0.06em; }
+/* ask threads: who opened it (the accent voice, like the chip's badge), the
+   question in flight (--warn, on the LED's stepped ppulse while it lasts), and
+   the last run's failure note (--stopped, ellipsised — the full text is its
+   title) */
+.thread-pill.thread-origin { color: var(--ac); text-transform: none; letter-spacing: 0.06em; }
+#thread-answering { color: var(--warn); animation: ppulse 2s step-end infinite; }
+#thread-note {
+  font: 10px var(--mono); color: var(--stopped);
+  max-width: 40ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
 
 /* branch dialog: says plainly what the fork does and doesn't touch */
 .thread-banner {
@@ -3446,6 +3449,9 @@ a.stack-chip.stack-down:hover { opacity: 0.9; border-color: var(--ac2); }
   padding: 8px 10px; width: 100%;
 }
 .thread-field textarea { resize: vertical; min-height: 70px; }
+/* the headless toggle: one checkbox beside its words, not a full-width field */
+.thread-headless-field { flex-direction: row; align-items: center; gap: 7px; }
+.thread-field input[type="checkbox"] { width: auto; padding: 0; margin: 0; accent-color: var(--ac); }
 .thread-field input:hover, .thread-field textarea:hover { border-color: var(--ac); }
 .thread-field input:focus, .thread-field textarea:focus {
   outline: none; border-color: var(--ac); box-shadow: var(--glow);
