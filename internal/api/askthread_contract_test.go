@@ -440,6 +440,37 @@ func TestAskContractWebBoardNodeIDKey(t *testing.T) {
 	}
 }
 
+// Job 634 `webBoard`: "NodeLabel string `json:"node_label,omitempty"`" —
+// present when set, absent when empty, and on a built board it is the
+// envelope's label beside the envelope's id (both under the fleet gate).
+func TestWebBoardNodeLabelKey(t *testing.T) {
+	b, err := json.Marshal(webBoard{NodeLabel: "owner-mac"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m := askContractObj(t, "board", b); m["node_label"] != "owner-mac" {
+		t.Errorf("webBoard{NodeLabel} = %s, want node_label owner-mac", b)
+	}
+	b, err = json.Marshal(webBoard{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := askContractObj(t, "board", b)["node_label"]; ok {
+		t.Errorf("an empty NodeLabel still serialises node_label: %s", b)
+	}
+
+	askContractEnv(t) // fleet on, nodeSelf → {nOWNER, owner-mac, Owner}
+	built := buildWebBoard()
+	if built.NodeID != "nOWNER" || built.NodeLabel != "owner-mac" {
+		t.Errorf("built board = node_id %q node_label %q, want nOWNER / owner-mac", built.NodeID, built.NodeLabel)
+	}
+	t.Setenv("KRAKEN_NODES", "off")
+	off := buildWebBoard()
+	if off.NodeID != "" || off.NodeLabel != "" {
+		t.Errorf("fleet off still names this node: node_id %q node_label %q", off.NodeID, off.NodeLabel)
+	}
+}
+
 // Contract C `threadsReq`: "Headless *bool `json:"headless,omitempty"`" — an
 // explicit false is distinguishable from absent.
 func TestAskContractThreadsReqHeadless(t *testing.T) {

@@ -21,7 +21,9 @@ struct SettingsView: View {
     // versa. See KrakenApp.boardVM.
     @Environment(BoardViewModel.self) private var boardVM
     @AppStorage("notifyBlocked") private var notifyBlocked = false
-    @AppStorage(BoardViewModel.hideOthersKey) private var hideOthers = false
+    // The machine filter's selection, as FleetFilter encodes it; the board's
+    // columns observe the same key (see BoardViewModel.jobs).
+    @AppStorage(BoardViewModel.fleetNodesKey) private var fleetNodesRaw = ""
     @State private var pairing = PairingSession.shared
     @State private var isLoggingOut = false
     @AppStorage("appearance") private var appearance = "system"
@@ -124,19 +126,44 @@ struct SettingsView: View {
                         .frame(maxWidth: .infinity, alignment: .leading)
                     }
 
+                    // The machine filter — the web board bar's machines dropdown,
+                    // as a Settings card: one toggle per machine (this Mac, then
+                    // the registry), ticked means shown, none ticked means every
+                    // card, plus a reset once anything is ticked. The selection
+                    // is this phone's preference, like the web one is the
+                    // browser's.
                     ThemedCard {
                         VStack(alignment: .leading, spacing: 10) {
-                            Text("Fleet").kLabelStyle()
-
-                            Toggle(isOn: $hideOthers) {
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text("Hide others' jobs")
-                                        .font(.voice(13))
-                                        .foregroundStyle(KTheme.text)
-                                    Text("show only this Mac's cards")
-                                        .font(.voice(11))
-                                        .foregroundStyle(KTheme.text2)
+                            HStack {
+                                Text("Machines").kLabelStyle()
+                                Spacer()
+                                if !fleetNodes.isEmpty {
+                                    Button("show all") { fleetNodes = [] }
+                                        .font(.voice(12))
+                                        .foregroundStyle(KTheme.accent)
+                                        .accessibilityIdentifier("fleet-show-all")
                                 }
+                            }
+                            Text(fleetNodes.isEmpty ? "showing every machine's cards" : "showing only the machines ticked below")
+                                .font(.voice(11))
+                                .foregroundStyle(KTheme.text2)
+
+                            machineRow(key: FleetFilter.localNode,
+                                       title: boardVM.board?.nodeLabel ?? "this Mac",
+                                       subtitle: boardVM.board?.nodeLabel == nil
+                                           ? "the kraken this phone is paired with"
+                                           : "this Mac" + ((boardVM.board?.operatorName).map { " · \($0)" } ?? ""),
+                                       online: true)
+                            ForEach(boardVM.board?.nodes ?? [], id: \.nodeID) { n in
+                                machineRow(key: n.nodeID,
+                                           title: n.label.isEmpty ? n.nodeID : n.label,
+                                           subtitle: (n.operator.isEmpty ? "" : n.operator + " · ") + (n.online ? "online" : "offline — last polled cards still shown"),
+                                           online: n.online)
+                            }
+                            // a persisted key the registry no longer names stays
+                            // listed, so the filter can always be undone here
+                            ForEach(staleFleetKeys, id: \.self) { key in
+                                machineRow(key: key, title: key, subtitle: "no longer on the tailnet", online: false)
                             }
                         }
                         .padding(14)
@@ -279,6 +306,48 @@ struct SettingsView: View {
             // own frame
             .padding(5)
         }
+    }
+
+    /// The machine filter's selection, decoded from and re-encoded into the
+    /// one @AppStorage string the board's columns observe.
+    private var fleetNodes: [String] {
+        get { FleetFilter.selection(from: fleetNodesRaw) }
+        nonmutating set { fleetNodesRaw = FleetFilter.encode(newValue) }
+    }
+
+    /// Selected keys the registry no longer names (never `localNode`), so a
+    /// stale filter is still visible and undoable here.
+    private var staleFleetKeys: [String] {
+        let known = Set((boardVM.board?.nodes ?? []).map(\.nodeID))
+        return fleetNodes.filter { $0 != FleetFilter.localNode && !known.contains($0) }
+    }
+
+    /// One machine's toggle: ticked means its cards are shown. The binding
+    /// edits the whole selection, so a pick never clobbers another row's.
+    private func machineRow(key: String, title: String, subtitle: String, online: Bool) -> some View {
+        Toggle(isOn: Binding(
+            get: { fleetNodes.contains(key) },
+            set: { on in
+                var next = fleetNodes.filter { $0 != key }
+                if on { next.append(key) }
+                fleetNodes = next
+            }
+        )) {
+            HStack(spacing: 10) {
+                Circle()
+                    .fill(online ? KTheme.solved : KTheme.text2.opacity(0.4))
+                    .frame(width: 7, height: 7)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(title)
+                        .font(.voice(13))
+                        .foregroundStyle(KTheme.text)
+                    Text(subtitle)
+                        .font(.voice(11))
+                        .foregroundStyle(KTheme.text2)
+                }
+            }
+        }
+        .accessibilityIdentifier("fleet-machine-\(key)")
     }
 
     private func pairedRow(_ record: PairingRecord) -> some View {

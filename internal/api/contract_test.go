@@ -206,6 +206,9 @@ var webBoardSpec = map[string]fieldSpec{
 	// This node's tailscale stable id, absent with no tailscale or the fleet
 	// off; clients compare a thread's origin.node_id with it. Additive.
 	"node_id": {kind: wireString, required: false},
+	// This node's device label, for the machines dropdown's self row.
+	// Absent with the fleet off. Additive.
+	"node_label": {kind: wireString, required: false},
 }
 
 // webBackgroundSpec covers background.go's webBackground — webBoard's

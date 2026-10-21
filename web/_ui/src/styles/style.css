@@ -785,9 +785,20 @@ input[type="password"], .thread-name-label {
 }
 .bb-clear:hover { color: var(--fg); }
 .bb-hint { color: var(--muted); opacity: 0.6; font-size: 9px; }
-/* the fleet's hide-others toggle: a muted checkbox label, the bar's own scale */
-.bb-fleet { display: inline-flex; align-items: center; gap: 5px; color: var(--muted); font-size: 9px; white-space: nowrap; }
-.bb-fleet input { margin: 0; }
+/* the fleet's machines dropdown (FleetPicker): the goal picker's .colorsel/.gm
+   skin, plus a lit button while a selection is active — the button IS the
+   filter's visible owner, so there is no separate chip like the goal filter's */
+.fp.fp-on .colorsel-btn { color: var(--fg); border-color: var(--ac); }
+.fp-menu { min-width: 220px; max-width: 340px; }
+.fp-row .gm-lbl { flex: 0 1 auto; }
+.fp-dot { width: 7px; height: 7px; flex: none; border-radius: 50%; background: var(--muted); opacity: 0.5; }
+.fp-dot.on { background: var(--ok); opacity: 1; }
+.fp-self { flex: none; color: var(--tint); font-size: 8px; letter-spacing: 0.08em; }
+.fp-count { margin-left: auto; padding-left: 14px; color: var(--muted); }
+.fp-sep { display: block; border-top: 1px solid var(--divider); margin: 3px 0; }
+/* a selected machine the registry no longer lists: kept so the filter can be
+   undone from the bar, drawn as the stale thing it is */
+.fp-stale { opacity: 0.55; }
 /* the goal filter's chip: the filter's visible owner, tinted with --tint like
    the card's goal chip so the two read as the same subject, but its OWN class
    family — that one is an inert span that falls through to the card's click,

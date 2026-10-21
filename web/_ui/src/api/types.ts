@@ -651,6 +651,13 @@ export interface WebBoard {
    * node's own ask threads unbadged.
    */
   node_id?: string;
+  /**
+   * THIS node's device label (`webBoard.node_label`, `jobs.DeviceLabel`), so
+   * the board bar's machines dropdown can name this Mac without a second poll
+   * of `/api/node`. Absent with the fleet off, and on a server older than the
+   * key — the picker then says the bare words "this Mac".
+   */
+  node_label?: string;
 }
 
 /** `webJobOwner` (internal/api/board.go): the node a remote card runs on. */

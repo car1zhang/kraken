@@ -4,6 +4,10 @@
 // logic, just shapes; ios/API.md documents them and
 // internal/api/contract_test.go pins them).
 //
+// Foundation is imported explicitly for FleetFilter's JSONSerialization —
+// everything else here is Codable shapes the stdlib already covers.
+import Foundation
+//
 // Rule of thumb applied throughout: a Go struct field tagged `,omitempty`
 // becomes an Optional in Swift (the key may be entirely absent, and for
 // slices Go's nil-vs-empty distinction can even surface as JSON `null`;
@@ -74,6 +78,11 @@ struct WebBoard: Decodable {
     // against a thread's origin node by `threadOriginBadge`, so an ask
     // thread this node opened carries no "from" badge.
     let nodeId: String?
+    // This node's device label (`node_label`, additive and `omitempty`:
+    // absent with the fleet off, and on a server older than the key). Names
+    // the "this Mac" row of Settings' machine filter; absent, that row reads
+    // the bare words.
+    let nodeLabel: String?
 
     enum CodingKeys: String, CodingKey {
         case daemon
@@ -89,6 +98,7 @@ struct WebBoard: Decodable {
         case operatorName = "operator"
         case nodesBox = "nodes"
         case nodeId = "node_id"
+        case nodeLabel = "node_label"
     }
 }
 
@@ -238,10 +248,48 @@ enum FrontmatterText {
     }
 }
 
+/// The board's machine filter — the iOS port of the web board bar's machines
+/// dropdown (job 634). The selection is the list of machine KEYS to show:
+/// `localNode` for this Mac's own cards, a node's tailscale stable id for a
+/// sibling's. Empty is no filter.
 enum FleetFilter {
-    /// `hideOthers` removes exactly the remote (owned) cards, order kept.
-    static func apply(_ jobs: [WebJob], hideOthers: Bool) -> [WebJob] {
-        hideOthers ? jobs.filter { $0.owner == nil } : jobs
+    /// The key of this node's own cards. A sentinel rather than the board's
+    /// `nodeId`: local cards carry no `owner` and are matched by that absence,
+    /// and `nodeId` is absent whenever the server's tailscale is unreadable. A
+    /// tailscale stable id is never the bare word `local`.
+    static let localNode = "local"
+
+    /// The machine a card belongs to, in the selection's vocabulary.
+    static func nodeKey(of job: WebJob) -> String {
+        job.owner?.nodeID ?? localNode
+    }
+
+    /// Empty `selected` returns `jobs` unchanged, order kept; otherwise exactly
+    /// the cards whose machine key is in `selected`, order kept. A machine that
+    /// joins the tailnet while a selection is active is hidden until picked.
+    static func apply(_ jobs: [WebJob], selected: [String]) -> [WebJob] {
+        if selected.isEmpty { return jobs }
+        let shown = Set(selected)
+        return jobs.filter { shown.contains(nodeKey(of: $0)) }
+    }
+
+    /// The persisted form: a JSON array of keys in one UserDefaults string
+    /// (`@AppStorage` takes a String, not an array). Anything unreadable — nil,
+    /// malformed JSON, a non-array — is the empty selection; duplicates and
+    /// empty strings are dropped.
+    static func selection(from raw: String?) -> [String] {
+        guard let raw, let data = raw.data(using: .utf8),
+              let any = try? JSONSerialization.jsonObject(with: data),
+              let list = any as? [Any] else { return [] }
+        var out: [String] = []
+        for case let s as String in list where !s.isEmpty && !out.contains(s) { out.append(s) }
+        return out
+    }
+
+    /// The inverse of `selection(from:)`; an empty selection encodes as `[]`.
+    static func encode(_ selected: [String]) -> String {
+        guard let data = try? JSONSerialization.data(withJSONObject: selected) else { return "[]" }
+        return String(decoding: data, as: UTF8.self)
     }
 }
 

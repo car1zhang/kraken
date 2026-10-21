@@ -159,19 +159,23 @@ describe("filterFleet", () => {
   const b2 = contractFleetJob("dream", { owner: contractFleetOwnerB });
   const all = [local1, b1, local2, c1, b2];
 
-  // "hideOthers removes every owned card"; "local cards are never removed;
-  // order preserved."
-  it("hideOthers removes exactly the owned cards", () => {
-    expect(filterFleet(all, true, [])).toEqual([local1, local2]);
+  // job 634: the selection is the machines to SHOW — `local` keeps exactly
+  // the unowned cards, order preserved
+  it("a local-only selection keeps exactly the unowned cards", () => {
+    expect(filterFleet(all, ["local"])).toEqual([local1, local2]);
   });
 
-  // "otherwise removes owned cards whose owner.node_id is in hiddenNodes"
-  it("hides exactly the named node's cards", () => {
-    expect(filterFleet(all, false, ["nSTUDIOmini77CNTRL"])).toEqual([local1, local2, c1]);
+  // a node id keeps exactly that node's cards
+  it("a node id keeps exactly that node's cards", () => {
+    expect(filterFleet(all, ["nSTUDIOmini77CNTRL"])).toEqual([b1, b2]);
   });
 
-  it("keeps everything, in order, when nothing is hidden", () => {
-    expect(filterFleet(all, false, [])).toEqual(all);
+  it("a mixed selection is the union, in server order", () => {
+    expect(filterFleet(all, ["nKITCHEN42CNTRL", "local"])).toEqual([local1, local2, c1]);
+  });
+
+  it("keeps everything, in order, with no selection", () => {
+    expect(filterFleet(all, [])).toEqual(all);
   });
 });
 

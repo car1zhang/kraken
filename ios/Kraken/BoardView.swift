@@ -50,18 +50,37 @@ final class BoardViewModel {
         }
     }
 
-    /// Every card in `column`, local and remote, minus the remote ones when
-    /// Settings' "Hide others' jobs" switch is on. The switch is read straight
-    /// from UserDefaults: BoardView observes the same key through @AppStorage,
-    /// which is what re-runs this when it flips.
+    /// Every card in `column`, local and remote, narrowed to the machines
+    /// ticked in Settings' machine filter (none ticked: every card). The
+    /// selection is read straight from UserDefaults: BoardView observes the
+    /// same key through @AppStorage, which is what re-runs this when it
+    /// changes.
     func jobs(in column: BoardColumn) -> [WebJob] {
-        let hideOthers = UserDefaults.standard.bool(forKey: Self.hideOthersKey)
-        return FleetFilter.apply(board?.jobs ?? [], hideOthers: hideOthers)
+        let selected = FleetFilter.selection(from: UserDefaults.standard.string(forKey: Self.fleetNodesKey))
+        return FleetFilter.apply(board?.jobs ?? [], selected: selected)
             .filter { BoardTheme.column(for: $0) == column }
     }
 
-    /// The `@AppStorage` key of Settings' "Hide others' jobs" switch.
-    static let hideOthersKey = "hideOthers"
+    /// The `@AppStorage` key of Settings' machine filter: a JSON array of
+    /// machine keys (FleetFilter). Replaces the old `hideOthers` Bool, which
+    /// is read once more by `migrateHideOthers` and then removed.
+    static let fleetNodesKey = "fleetNodes"
+    private static let legacyHideOthersKey = "hideOthers"
+
+    /// One-time migration of the old all-or-nothing switch: `hideOthers=true`
+    /// meant "only this Mac", which is exactly `[FleetFilter.localNode]`.
+    /// Runs only while the new key is absent; the legacy key is removed
+    /// either way, so this is a no-op from the second launch on.
+    static func migrateHideOthers(_ defaults: UserDefaults = .standard) {
+        guard defaults.object(forKey: fleetNodesKey) == nil else {
+            defaults.removeObject(forKey: legacyHideOthersKey)
+            return
+        }
+        if defaults.bool(forKey: legacyHideOthersKey) {
+            defaults.set(FleetFilter.encode([FleetFilter.localNode]), forKey: fleetNodesKey)
+        }
+        defaults.removeObject(forKey: legacyHideOthersKey)
+    }
 
     /// Non-blocking contract-handshake warnings for the latest board fetch —
     /// most severe first. `contract` absent or below what this app expects
@@ -1149,9 +1168,9 @@ struct BoardPairView: View {
 
 struct BoardView: View {
     @AppStorage("serverURL") private var serverURL = KrakenDefaults.serverURL
-    // Observed so flipping Settings' switch re-renders the columns, whose
-    // `vm.jobs(in:)` reads the same key (see BoardViewModel.jobs).
-    @AppStorage(BoardViewModel.hideOthersKey) private var hideOthers = false
+    // Observed so a pick in Settings' machine filter re-renders the columns,
+    // whose `vm.jobs(in:)` reads the same key (see BoardViewModel.jobs).
+    @AppStorage(BoardViewModel.fleetNodesKey) private var fleetNodesRaw = ""
     // The pairing gate: pairing, Log out and a 401 all change this.
     @State private var pairing = PairingSession.shared
     @Environment(\.scenePhase) private var scenePhase
