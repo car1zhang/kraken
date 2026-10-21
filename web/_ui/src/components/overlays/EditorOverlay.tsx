@@ -899,8 +899,9 @@ function EditorBody({
                 active={!archived}
               />
             </div>
-            {/* visibility — the steer modal's three-way control, HERE as well
-                because a DRAFT card opens this editor and never the steer
+            {/* visibility — the steer modal's dropdown, HERE as well, in the
+                colour's format (a bare label over the dropdown), because a
+                DRAFT card opens this editor and never the steer
                 modal, so without it a draft could not be made public or
                 private from the board at all. Like colour and goals it rides
                 its own ungated one-field route (setJobVisibility) and is NOT
@@ -908,13 +909,13 @@ function EditorBody({
                 which the server deliberately makes ignore `visibility`. Withheld
                 for an archived job, which no route answers for. */}
             {slug && job && !archived ? (
-              <div className="f-field f-visibility">
+              <div className="f-colors f-visibility">
+                visibility
                 <VisibilityControl
                   id="f-visibility"
                   slug={slug}
                   visibility={job.visibility}
                   mutate={mutate}
-                  compact
                 />
               </div>
             ) : null}

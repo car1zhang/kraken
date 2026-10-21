@@ -1,12 +1,13 @@
-// The branch dialog's two derivations, plus the model list it renders.
+// The branch dialog's two derivations, the model list it renders, and the two
+// ask-thread rules (the origin badge, whether a composer is offered).
 //
-// They sit in lib/ rather than in ThreadOverlay.tsx because both are pure
-// string/array functions with no React in them, and both are read by code that
-// runs on every poll tick — the title preview under the question box and the
-// poll-speed decision. ThreadOverlay keeps the derivations that need its markup
-// (threadBlockHTML, threadConvoRender); these two need nothing.
+// They sit in lib/ rather than in ThreadOverlay.tsx because all are pure
+// functions with no React in them, read by code that runs on every poll tick —
+// the title preview under the question box, the poll-speed decision, the
+// chips and the overlay head. ThreadOverlay keeps the derivations that need
+// its markup (threadBlockHTML, threadConvoRender).
 
-import type { ThreadBlock } from "../api/types.ts";
+import type { ThreadBlock, ThreadRead, WebThread } from "../api/types.ts";
 
 /**
  * The models a side thread may be branched on, in the order the picker renders
@@ -92,4 +93,56 @@ export function threadAwaitingReply(
   // own's last, so the `?.` is for noUncheckedIndexedAccess and not a state
   // that can be reached.
   return blocks[blocks.length - 1]?.kind !== "text";
+}
+
+/**
+ * The "from <node>" badge an ask thread wears, or null for none.
+ *
+ * An ask thread is a row whose `kind` is "headless". `kind` is not `role`:
+ * `role` ("ask" | "mind") says what the thread is FOR and rides every thread
+ * object already, while `kind` says how it RUNS (a pane, or headless `claude
+ * -p` runs). That is why the kind value is "headless" rather than "ask" — a
+ * pane thread with `role: "ask"` is the ordinary side thread, and must stay
+ * unbadged.
+ *
+ * null for a pane thread (a row without `kind` is one), for a row that records
+ * no origin, and for an ask thread opened from THIS node — the board's own
+ * `node_id`. An absent `boardNodeID` compares as "": a board with no tailscale
+ * or with `KRAKEN_NODES=off` states no node id, and SelfNodeID stamps "" on the
+ * rows such a node opens, so they are its own.
+ *
+ * Otherwise the origin's device label, falling back to its login, then to its
+ * node id; an origin with all three blank is null rather than an empty badge.
+ */
+export function threadOriginBadge(
+  t: WebThread,
+  boardNodeID: string | undefined,
+): string | null {
+  if (t.kind !== "headless" || !t.origin) return null;
+  const o = t.origin;
+  if ((o.node_id ?? "") === (boardNodeID ?? "")) return null;
+  return o.label || o.login || o.node_id || null;
+}
+
+/**
+ * Whether the thread view offers a composer.
+ *
+ * `live` is the read's own `live` once a read has landed, else
+ * `t.state === "live"`; with neither (a just-branched thread the board has not
+ * caught yet) it is true, the overlay head's own fallback.
+ *
+ *   - remote (a card another node owns): only a live headless (ask) thread.
+ *     Any node that can see the card may send into it; a pane thread —
+ *     including a row with no `kind`, whichever its `role` — is the owner's
+ *     alone.
+ *   - local: any live thread, pane or headless.
+ */
+export function threadComposerAllowed(
+  t: Pick<WebThread, "kind" | "state"> | undefined,
+  read: ThreadRead | null,
+  remote: boolean,
+): boolean {
+  const live = read ? !!read.live : t ? t.state === "live" : true;
+  if (remote) return t?.kind === "headless" && live;
+  return live;
 }

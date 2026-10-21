@@ -413,6 +413,7 @@ export function App() {
               // lose a line the instant it lifts off the column.
               matchReason={search.reasonByKey.get(jobKey(job))}
               matchTerms={search.terms}
+              boardNodeID={board.board?.node_id}
               expanded={expandedKeys.has(jobKey(job))}
               onToggleExpanded={toggleExpanded}
             />
@@ -479,6 +480,7 @@ export function App() {
         // server, daemon down) simply draws none.
         usage={usage.data}
         operator={board.board?.operator}
+        boardNodeID={board.board?.node_id}
         // view mode's ↺: re-point the SAME overlay at the same job in
         // reactivate mode. The body is keyed on slug+mode, so this is a fresh
         // mount of the composer, exactly as the card's own ↺ button gives.
@@ -571,12 +573,12 @@ export function App() {
         tid={thread?.tid ?? null}
         job={jobFor(thread?.slug, thread?.node)}
         onClose={() => setThread(null)}
-        onBranched={(tid) =>
-          setThread((t) => (t ? { slug: t.slug, tid } : t))
-        }
+        // spreads the open thread so a remote ask keeps its owner `node`
+        onBranched={(tid) => setThread((t) => (t ? { ...t, tid } : t))}
         mutate={mutate}
         operator={board.board?.operator}
         node={thread?.node}
+        boardNodeID={board.board?.node_id}
       />
 
       {/* ◆ mind — once, over every view. A capture lands in a mind thread:

@@ -426,6 +426,12 @@ export const removeMM = (id: number) => postJSON("/api/mm/remove", { id });
  * rename or a send never restates (or accidentally rewrites) the thread's
  * model. It carries a THREAD_MODELS alias, and the server 400s anything else by
  * name, which is why the picker is the only thing that sets it.
+ *
+ * `headless` is read by BRANCH alone too: true (or absent, for an `ask` role)
+ * asks for a headless ask thread, false for a pane thread. It is orthogonal to
+ * `role` — a mind thread is always a pane, and the server refuses `role: "mind"`
+ * with `headless: true`. It rides the body only when the caller passes it,
+ * since the spread copies only the keys `extra` holds.
  */
 export const threadOp = (
   slug: string,
@@ -437,6 +443,8 @@ export const threadOp = (
     model?: string;
     /** branch only: `ask` (default) or `mind`. */
     role?: "ask" | "mind";
+    /** branch only: headless (an ask thread, no pane) or a pane thread. */
+    headless?: boolean;
   } = {},
 ) => postJSON<{ ok: true; tid?: string }>("/api/threads", { slug, op, ...extra });
 
@@ -560,10 +568,13 @@ export const fetchNodeSelf = (signal?: AbortSignal) =>
   getJSON<NodeEnvelope>("/api/node", signal);
 
 /**
- * Drive a remote PUBLIC cell through this node's proxy. The owner node
- * re-checks the job's visibility at request time, so a card that went
- * readonly between polls refuses with a 403 rather than acting. Resolves to
- * whatever the owner replied (`{ok:true}` for most actions).
+ * Drive a remote cell through this node's proxy. Most actions need a PUBLIC
+ * card; the three thread actions (`thread-ask`, `thread-send`, `thread-kill`)
+ * are admitted on readonly cards too. The owner node re-checks the job's
+ * visibility at request time, so a card that went readonly between polls
+ * refuses a public-only action with a 403 rather than acting. Resolves to
+ * whatever the owner replied (`{ok:true}` for most actions, plus `tid` for
+ * `thread-ask`).
  */
 export function postNodeAction(
   node: string,

@@ -69,6 +69,11 @@ struct WebBoard: Decodable {
     private let nodesBox: TolerantWebNodes?
     /// The registry, or nil when the server sent none.
     var nodes: [WebNode]? { nodesBox?.nodes }
+    // This node's own tailscale stable id (`node_id`, additive and
+    // `omitempty`: absent with no tailscale or the fleet off). Compared
+    // against a thread's origin node by `threadOriginBadge`, so an ask
+    // thread this node opened carries no "from" badge.
+    let nodeId: String?
 
     enum CodingKeys: String, CodingKey {
         case daemon
@@ -83,6 +88,7 @@ struct WebBoard: Decodable {
         case background
         case operatorName = "operator"
         case nodesBox = "nodes"
+        case nodeId = "node_id"
     }
 }
 
@@ -1354,9 +1360,19 @@ struct WatchVerdictRequest: Encodable {
 // the same cell, so carl can ask questions without disturbing the run. A
 // thread can be killed (the window dies, the conversation survives) and
 // revived later, which is why `pane` comes and goes while `tid` never does.
-// `title`/`pane`/`model`/`closed_at` are `omitempty` on the wire → Optional
-// here per the rule atop this file; `tid`/`state`/`created_at` are always
-// present.
+// That is the `kind: "pane"` thread. A `kind: "headless"` thread (an ask
+// thread) holds no pane at all: kraken serve runs one headless claude per
+// question against the fork's session, so it is driven only through the
+// thread API (send/kill/revive), and `answering` is set while a question is in
+// flight. `kind` is orthogonal to `role` (`ask` | `mind`): the kind VALUE is
+// "headless" rather than "ask" precisely because `role: "ask"` already rides
+// this wire, so a headless thread reads `role: "ask", kind: "headless"`.
+// `title`/`pane`/`model`/`closed_at`/`origin`/`answering`/`note` are
+// `omitempty` on the wire → Optional here per the rule atop this file;
+// `tid`/`state`/`created_at` are always present, and `kind` is present on
+// every thread from a server that has it — Optional only so an older
+// server's threads still decode (they read as pane threads: `isHeadless`
+// false).
 struct WebThread: Decodable, Identifiable {
     let tid: String
     let title: String?
@@ -1371,11 +1387,27 @@ struct WebThread: Decodable, Identifiable {
     let closedAt: Int64?
     /// `ask` | `mind` — additive; nil from a server predating thread roles.
     var role: String? = nil
+    // The four below are `var … = nil` for the reason `role` is: the
+    // memberwise initializer then lets the app's own call sites (a freshly
+    // branched thread, a capture's mind thread) leave them out.
+    /// `"pane"` or `"headless"` (see the comment above the struct).
+    var kind: String? = nil
+    /// The node and login that opened the thread; nil when the row records
+    /// none.
+    var origin: WebThreadOrigin? = nil
+    /// True while an ask thread's question is being answered; nil otherwise.
+    var answering: Bool? = nil
+    /// What the last ask run left behind when it did not finish cleanly
+    /// (e.g. a failure or timeout line); nil when there is none.
+    var note: String? = nil
 
     var id: String { tid }
 
     /// A mind thread: the one a capture routes highlighted text to.
     var isMind: Bool { role == "mind" }
+
+    /// An ask thread: no pane, one headless claude per question.
+    var isHeadless: Bool { kind == "headless" }
 
     /// "live" means a claude is actually running in the thread's window;
     /// anything else (closed) is a conversation waiting to be revived —
@@ -1393,7 +1425,39 @@ struct WebThread: Decodable, Identifiable {
         case tid, title, state, pane, model, role
         case createdAt = "created_at"
         case closedAt = "closed_at"
+        case kind, origin, answering, note
     }
+}
+
+/// Who opened a thread: `origin` on a thread object (webThreadOrigin in
+/// internal/api). All three keys are present whenever `origin` is.
+struct WebThreadOrigin: Decodable {
+    let nodeId: String
+    let label: String
+    let login: String
+
+    enum CodingKeys: String, CodingKey {
+        case nodeId = "node_id"
+        case label, login
+    }
+}
+
+/// The "from …" badge a thread chip carries — the same rule as the web
+/// board's `threadOriginBadge` (web/_ui/src/lib/threadquick.ts): nil for a
+/// non-headless thread, for a thread with no origin, and for an ask thread
+/// this board's own node opened (`origin.nodeId == boardNodeId`); otherwise
+/// the origin's label, falling back to its login, then its node id, and nil
+/// when all three are blank. A nil `boardNodeId` compares as "": a board with
+/// no tailscale or with `KRAKEN_NODES=off` states no node id, and the server
+/// stamps "" as the origin node of the rows such a node opens (SelfNodeID),
+/// so they are its own.
+func threadOriginBadge(_ t: WebThread, boardNodeId: String?) -> String? {
+    guard t.isHeadless, let origin = t.origin else { return nil }
+    if origin.nodeId == (boardNodeId ?? "") { return nil }
+    for candidate in [origin.label, origin.login, origin.nodeId] where !candidate.isEmpty {
+        return candidate
+    }
+    return nil
 }
 
 // The five ops POST /api/threads accepts, spelled once so no call site can
@@ -1404,7 +1468,8 @@ enum ThreadOp: String {
 }
 
 // ThreadActionRequest mirrors POST /api/threads' single body shape across all
-// five ops — "branch" (title + optional seed text), "kill"/"revive" (tid),
+// five ops — "branch" (title + seed text, which the server requires unless
+// `headless` is false), "kill"/"revive" (tid),
 // "rename" (tid + title), "send" (tid + text). Unused fields stay nil and
 // JSONEncoder omits them entirely, same as SpawnRequest above.
 //
@@ -1419,6 +1484,9 @@ struct ThreadActionRequest: Encodable {
     var tid: String? = nil
     var title: String? = nil
     var text: String? = nil
+    /// "branch" only: true (or absent) opens a headless ask thread, false a
+    /// pane thread. nil leaves the key off, as for the fields above.
+    var headless: Bool? = nil
 }
 
 // POST /api/threads' success body: the uniform {"ok": true}, plus the new
@@ -1489,11 +1557,18 @@ struct ThreadReadResponse: Decodable {
     // "transcript" when the fork's transcript was readable, "none" when
     // there's nothing to read yet (freshly branched, never spoken to).
     let source: String
+    // The thread's kind ("pane"/"headless"), whether a question is in flight,
+    // and the last run's note ("" when none). The server sends all three on
+    // every read; Optional only so a server that predates them still decodes.
+    let kind: String?
+    let answering: Bool?
+    let note: String?
 
     enum CodingKeys: String, CodingKey {
         case blocks, counted, live, pane
         case forkUUID = "fork_uuid"
         case source
+        case kind, answering, note
     }
 }
 

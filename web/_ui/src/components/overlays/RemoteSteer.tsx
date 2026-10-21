@@ -18,8 +18,10 @@ import { CrewChips, crewChipsVisible } from "../board/chips/CrewPills.tsx";
 import { FeedbackPanel } from "../board/chips/FeedbackPanel.tsx";
 import { PRChip } from "../board/chips/PRChips.tsx";
 import { QuestionBlock } from "../board/chips/QuestionBlock.tsx";
+import { BranchButton } from "../board/chips/BranchButton.tsx";
 import { ThreadChips } from "../board/chips/ThreadChips.tsx";
 import { DocQuestions } from "./DocQuestions.tsx";
+import { FieldSelect } from "./FieldSelect.tsx";
 import type { Mutate } from "./Overlay.tsx";
 import { LoadDrill, steerHasTokens, ZeusTranscriptPanel } from "./SteerOverlay.tsx";
 import { SwatchStrip } from "./SwatchStrip.tsx";
@@ -43,63 +45,49 @@ const VIS_HINT: Record<Visibility, string> = {
 };
 
 /**
- * A LOCAL job's visibility: three buttons, the current one pressed. A pick
- * posts the one-field route (usable on a live cell, like colour) through the
- * shared mutation path; the pressed state shown while it is in flight is
- * optimistic and falls back to whatever the refetched board says.
+ * A LOCAL job's visibility: a FieldSelect dropdown (the job-colour dropdown's
+ * `.colorsel*` skin) offering private, readonly and public, with no empty
+ * row. The id and `data-testid="visibility-control"` land on its button, the
+ * interactive control; each value's explanation is its row's tooltip and the
+ * button's. A pick of a DIFFERENT value posts the one-field route (usable on
+ * a live cell, like colour) once through the shared mutation path; the value
+ * shown while it is in flight is optimistic and falls back to whatever the
+ * refetched board says. Re-picking the current value posts nothing.
  */
 export function VisibilityControl({
   slug,
   visibility,
   mutate,
   id = "steer-visibility",
-  compact = false,
 }: {
   slug: string;
   visibility: string | undefined;
   mutate: Mutate;
   /** DOM id — the steer modal's default, the editor passes its own */
   id?: string;
-  /** omit the explanatory line (the editor's one-line field row); the
-   *  explanation stays on each option's tooltip */
-  compact?: boolean;
 }) {
   const [pick, setPick] = useState<Visibility | null>(null);
   const known = (VISIBILITIES as readonly string[]).includes(visibility ?? "")
     ? (visibility as Visibility)
     : "readonly";
   const current = pick ?? known;
-  const choose = async (v: Visibility) => {
-    if (v === current) return;
-    setPick(v);
-    await mutate(() => setJobVisibility(slug, v));
+  const choose = async (v: string) => {
+    if (v === current || !(VISIBILITIES as readonly string[]).includes(v)) return;
+    setPick(v as Visibility);
+    await mutate(() => setJobVisibility(slug, v as Visibility));
     setPick(null);
   };
   return (
-    <div
-      className={"steer-vis" + (compact ? " compact" : "")}
+    <FieldSelect
       id={id}
-      data-testid="visibility-control"
-    >
-      <span className="vis-label">visibility</span>
-      <span className="vis-seg" role="radiogroup" aria-label="visibility">
-        {VISIBILITIES.map((v) => (
-          <button
-            key={v}
-            type="button"
-            role="radio"
-            aria-checked={v === current}
-            className={"vis-opt" + (v === current ? " on" : "")}
-            data-visibility={v}
-            title={VIS_HINT[v]}
-            onClick={() => void choose(v)}
-          >
-            {v}
-          </button>
-        ))}
-      </span>
-      {compact ? null : <span className="vis-hint">{VIS_HINT[current]}</span>}
-    </div>
+      testId="visibility-control"
+      label="visibility"
+      value={current}
+      options={[...VISIBILITIES]}
+      noEmpty
+      titles={VIS_HINT}
+      onPick={(v) => void choose(v)}
+    />
   );
 }
 
@@ -229,13 +217,18 @@ export interface RemoteSteerBodyProps {
   onOpenEditor?: (slug: string, node: string) => void;
   /** opens an artifact chip in the viewer — SteerOverlayProps.onOpenArtifact */
   onOpenArtifact(url: string, name: string, jobKey: string): void;
-  /** opens one of the job's threads, read through the owner node */
-  onOpenThread(slug: string, tid: string, node: string): void;
+  /**
+   * opens one of the job's threads, read through the owner node; `tid` null
+   * opens the remote new-thread dialog (the ⑂ ask button)
+   */
+  onOpenThread(slug: string, tid: string | null, node: string): void;
   /**
    * `board.operator` — the transcript panel's and load drill's label only for
    * a card with no owner; an owned card uses the owner's (ownerTurnLabel)
    */
   operator?: string;
+  /** `board.node_id` — this node's own id, for the thread chips' origin badges */
+  boardNodeID?: string;
 }
 
 /**
@@ -245,17 +238,22 @@ export interface RemoteSteerBodyProps {
  * spend and the spec — and differs only in what it lets you DO, decided by
  * lib/fleet.ts remoteMode:
  *
- *  - `readonly` (its owner has not opened it to the net): no control at all.
- *    Absent rather than disabled, so nothing on screen offers an action the
- *    owner would refuse; the one exception is the pending question, drawn
- *    inside a disabled fieldset so its options stay readable.
+ *  - `readonly` (its owner has not opened it to the net): no control but the
+ *    threads row's ⑂ ask. Absent rather than disabled, so nothing on screen
+ *    offers an action the owner would refuse; the one exception is the
+ *    pending question, drawn inside a disabled fieldset so its options stay
+ *    readable.
  *  - `public`: the controls (colour, stop, mark done, cancel, submit,
  *    archive, edit, the composer and the question's options), each posting
  *    `/api/nodes/action` through this node's proxy, which the owner re-checks
  *    at request time.
  *
- * In both modes the panels whose writes are the owner's alone (doc-question
- * answers, feedback notes, threads) render read-only, and nothing here stamps
+ * In both modes, while the card reports its cell live, the threads row ends
+ * in ⑂ ask, which opens ThreadOverlay's remote new-thread dialog (the
+ * `thread-ask` action, admitted on readonly and public cards alike — it opens
+ * a HEADLESS thread on the owner, never a pane). The panels whose writes are
+ * the owner's alone (doc-question answers, feedback notes) render read-only
+ * in both modes, and nothing here stamps
  * a `data-mind-*` source: the mental model is this machine's, and this is
  * another machine's content. The account binding is not shown — it names the
  * owner's pool login, and the local panel reads THIS machine's usage.
@@ -279,6 +277,7 @@ export function RemoteSteerBody({
   onOpenArtifact,
   onOpenThread,
   operator,
+  boardNodeID,
 }: RemoteSteerBodyProps) {
   const mode = job ? remoteMode(job) : "readonly";
   const ro = mode !== "public";
@@ -529,14 +528,24 @@ export function RemoteSteerBody({
             </div>
           ) : null}
           {threads.length ? (
-            // no ⑂ branch: forking a zeus is its owner's to do
+            // ThreadChips appends ⑂ ask only while job.live
             <div className="threads" id="steer-threads">
               <ThreadChips
                 job={job}
-                withBranch={false}
-                onOpenThread={(s, tid) => {
-                  if (tid) onOpenThread(s, tid, node);
-                }}
+                withBranch={!!job.live}
+                branchLabel="⑂ ask"
+                boardNodeID={boardNodeID}
+                onOpenThread={(s, tid) => onOpenThread(s, tid, node)}
+              />
+            </div>
+          ) : job.live ? (
+            // a live card with no threads yet: ⑂ ask alone, in its own row,
+            // since #steer-threads is mounted only when there are threads
+            <div className="threads" id="steer-ask">
+              <BranchButton
+                job={job}
+                label="⑂ ask"
+                onOpenThread={(s, tid) => onOpenThread(s, tid, node)}
               />
             </div>
           ) : null}

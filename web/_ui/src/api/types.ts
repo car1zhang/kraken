@@ -169,6 +169,28 @@ export interface WebThread {
    * from an older server, which means `ask`.
    */
   role?: "ask" | "mind" | string;
+  /**
+   * How the thread RUNS, orthogonal to `role` (what it is FOR): `pane` — an
+   * interactive claude in a tmux window of the cell — or `headless` — an ask
+   * thread with no pane, answered one `claude -p` run per question. The value
+   * is "headless" rather than "ask" because `role: "ask"` already names the
+   * ordinary pane side thread. Optional and widened with string only for a
+   * server predating the key; absence reads as a pane thread.
+   */
+  kind?: "pane" | "headless" | string;
+  /** Who opened the thread; absent when the row records nobody. */
+  origin?: WebThreadOrigin;
+  /** Present (true) only while a headless thread's question is being answered. */
+  answering?: boolean;
+  /** The last ask run's failure, e.g. "ask timed out after 5m0s"; absent when none. */
+  note?: string;
+}
+
+/** `webThreadOrigin` (internal/api): the node and login a thread was opened from. */
+export interface WebThreadOrigin {
+  node_id: string;
+  label: string;
+  login: string;
 }
 
 export type PRState = "open" | "merged" | "closed" | string;
@@ -623,6 +645,12 @@ export interface WebBoard {
    * chrome shows no `nodes` stat at all (lib/fleet.ts `nodesStat`).
    */
   nodes?: WebNode[];
+  /**
+   * THIS node's tailscale stable id (`webBoard.node_id`); absent with no
+   * tailscale or with the fleet off. Read by `threadOriginBadge` to leave this
+   * node's own ask threads unbadged.
+   */
+  node_id?: string;
 }
 
 /** `webJobOwner` (internal/api/board.go): the node a remote card runs on. */
@@ -762,6 +790,14 @@ export interface ThreadRead {
    * server omits it.
    */
   session?: string;
+  /** The row's kind (`pane` | `headless`); optional only for an older server. */
+  kind?: "pane" | "headless" | string;
+  /** Whether a headless thread's question is in flight right now. */
+  answering?: boolean;
+  /** The row's note — the last ask run's failure — "" when none. */
+  note?: string;
+  /** Who opened the thread; omitted when the row records nobody. */
+  origin?: WebThreadOrigin;
 }
 
 /** One block of zeus' transcript, `GET /api/job/transcript` (jobs.TranscriptBlock). */

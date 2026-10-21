@@ -59,6 +59,9 @@ const contractFPThreadRead = {
   session: "s9",
 };
 
+/** When set, the thread read replies with this instead (reset before each test). */
+let contractFPThreadReadOver: unknown = null;
+
 type ContractFPCall = { url: string; method: string; body: unknown };
 
 /** Routes by pathname; records every call. */
@@ -80,7 +83,10 @@ function contractFPStubFetch(): ContractFPCall[] {
     let reply: unknown = { ok: true };
     if (path === "/api/nodes/job/raw" || path === "/api/job/raw") reply = contractFPRaw;
     else if (path === "/api/nodes/transcript" || path === "/api/job/transcript") reply = contractFPTranscript;
-    else if (path === "/api/nodes/thread/read" || path === "/api/thread/read") reply = contractFPThreadRead;
+    else if (path === "/api/nodes/thread/read" || path === "/api/thread/read")
+      reply = contractFPThreadReadOver ?? contractFPThreadRead;
+    else if (path === "/api/nodes/action" && (body as { action?: string } | undefined)?.action === "thread-ask")
+      reply = { ok: true, tid: "t3" };
     else if (path === "/api/goals") reply = { goals: { week: [], day: [] } };
     const text = typeof reply === "string" ? reply : JSON.stringify(reply);
     return Promise.resolve({
@@ -205,6 +211,7 @@ let contractFPCalls: ContractFPCall[] = [];
 
 beforeEach(() => {
   vi.unstubAllGlobals();
+  contractFPThreadReadOver = null;
   contractFPCalls = contractFPStubFetch();
 });
 afterEach(() => {
@@ -588,41 +595,115 @@ describe("FeedbackPanel readOnly", () => {
 });
 
 describe("ThreadOverlay with node", () => {
-  function contractFPThread(tid: string | null) {
+  function contractFPThread(tid: string | null, over: Partial<WebJob> = {}, onBranched = vi.fn()) {
     const props: ContractFPLoose = {
       open: true,
       slug: "tech-comms",
       tid,
       node: "nSTUDIO77",
-      job: contractFPJob("readonly"),
+      job: contractFPJob("readonly", over),
       onClose: () => {},
-      onBranched: () => {},
+      onBranched,
       mutate: contractFPMutate,
+      boardNodeID: "nCARL",
     };
-    return render(<ThreadOverlay {...props} />);
+    return { onBranched, ...render(<ThreadOverlay {...props} />) };
   }
 
-  // AMENDED (join run 1): "With node set: tid === null renders the overlay
-  // SHELL only (#thread-overlay > .panel with an EMPTY panel: no control, no
-  // text, no fetch — the branch dialog is owner-only)".
-  it("renders only the empty shell for tid null", async () => {
+  // REWRITTEN (ask threads port, 50-contract.md slice D `ThreadOverlay`):
+  // "with node and tid === null renders the new-thread dialog in REMOTE mode
+  // (#thread-new present, a banner …, the seed textarea, name, the sticky
+  // model picker, #thread-branch labelled "⑂ ask <node label> ⌘⏎") … it
+  // fetches nothing before branch". Replaces the empty-shell pin.
+  it("renders the remote ask dialog for tid null and fetches nothing", async () => {
     contractFPThread(null);
-    const panel = document.querySelector("#thread-overlay > .panel");
-    expect(panel).not.toBeNull();
-    expect(panel!.children).toHaveLength(0);
-    expect(panel!.textContent).toBe("");
-    expect(document.querySelector("#thread-overlay button")).toBeNull();
-    expect(document.querySelector("#thread-overlay textarea")).toBeNull();
-    expect(document.getElementById("thread-new")).toBeNull();
-    expect(document.getElementById("thread-tid")).toBeNull();
+    expect(document.getElementById("thread-new")).not.toBeNull();
+    expect(document.getElementById("thread-seed")).not.toBeNull();
+    expect(document.getElementById("thread-new-name")).not.toBeNull();
+    expect(document.getElementById("thread-models")).not.toBeNull();
+    expect(document.getElementById("thread-branch")!.textContent).toBe("⑂ ask studio-mini ⌘⏎");
+    const banner = document.querySelector("#thread-new .thread-banner")!.textContent ?? "";
+    expect(banner).toContain(
+      "Opens a headless fork of zeus' conversation on studio-mini, the owner's Mac, on that cell's account.",
+    );
+    expect(banner).toContain("Jess sees who asked.");
+    // a remote ask is always headless: no toggle is offered
+    expect(document.getElementById("thread-headless")).toBeNull();
     await new Promise((r) => setTimeout(r, 50));
     expect(contractFPCalls).toEqual([]);
   });
 
+  // "branch posts postNodeAction(node, slug, "thread-ask", {title, text,
+  // model}) and on res.tid calls onBranched(tid, title)".
+  it("posts thread-ask through the proxy and hands the tid to onBranched", async () => {
+    const user = userEvent.setup();
+    const { onBranched } = contractFPThread(null);
+    await user.type(document.getElementById("thread-seed")!, "why is CI red on the rollout PR?");
+    await user.click(document.getElementById("thread-branch")!);
+    await waitFor(() => expect(onBranched).toHaveBeenCalledWith("t3", "why is CI red on the rollout PR?"));
+    const post = contractFPCalls.find((c) => c.method === "POST");
+    expect(new URL(post!.url, "http://k").pathname).toBe("/api/nodes/action");
+    expect(post!.body).toEqual({
+      node: "nSTUDIO77",
+      slug: "tech-comms",
+      action: "thread-ask",
+      payload: { title: "why is CI red on the rollout PR?", text: "why is CI red on the rollout PR?", model: "opus" },
+    });
+  });
+
+  // "a composer #thread-composer with #thread-text and #thread-send exactly
+  // when threadComposerAllowed(thread, read, true)" — a live HEADLESS thread.
+  const contractFPAskJob: Partial<WebJob> = {
+    threads: [
+      {
+        tid: "t3",
+        title: "why is CI red",
+        state: "live",
+        created_at: 1,
+        role: "ask",
+        kind: "headless",
+        origin: { node_id: "nSTUDIO77", label: "studio-mini", login: "jess@probook.ai" },
+      },
+    ],
+  };
+
+  it("keeps the composer mounted but disabled while the headless thread is answering", async () => {
+    contractFPThreadReadOver = { ...contractFPThreadRead, live: true, kind: "headless", answering: true, note: "" };
+    contractFPThread("t3", contractFPAskJob);
+    await waitFor(() => expect(document.getElementById("thread-answering")).not.toBeNull());
+    expect(document.getElementById("thread-answering")!.textContent).toBe("answering…");
+    expect(document.getElementById("thread-origin")!.textContent).toBe("from studio-mini");
+    expect(document.getElementById("thread-composer")).not.toBeNull();
+    expect(document.getElementById("thread-text")).toBeDisabled();
+    expect(document.getElementById("thread-send")).toBeDisabled();
+    for (const id of ["thread-kill", "thread-revive", "thread-tmux", "thread-models"]) {
+      expect(document.getElementById(id), id).toBeNull();
+    }
+  });
+
+  it("offers a composer on a live headless thread and posts thread-send", async () => {
+    const user = userEvent.setup();
+    contractFPThreadReadOver = { ...contractFPThreadRead, live: true, kind: "headless", answering: false, note: "" };
+    contractFPThread("t3", contractFPAskJob);
+    await waitFor(() => expect(document.getElementById("thread-composer")).not.toBeNull());
+    await waitFor(() => expect(document.getElementById("thread-text")).not.toBeDisabled());
+    const box = document.getElementById("thread-text") as HTMLTextAreaElement;
+    await user.type(box, "and the lint job?");
+    await user.click(document.getElementById("thread-send")!);
+    await waitFor(() => expect(box.value).toBe(""));
+    const post = contractFPCalls.find((c) => c.method === "POST");
+    expect(post!.body).toEqual({
+      node: "nSTUDIO77",
+      slug: "tech-comms",
+      action: "thread-send",
+      payload: { tid: "t3", text: "and the lint job?" },
+    });
+  });
+
   // "reads via fetchNodeThreadRead(node, slug, tid) on the same cadence;
-  // renders the head (title, state) and the blocks as today; renders NO
-  // composer, send, branch, kill, revive or model control, and stamps no
-  // data-mind-*."
+  // renders the head (title, state) and the blocks as today … and stamps no
+  // data-mind-*" — and a PANE thread (no `kind`) gets no composer and no
+  // control at all.
   it("reads through the node proxy, renders the blocks, and no control", async () => {
     contractFPThread("t1");
     await waitFor(() => expect(document.body.textContent).toContain("contractfp because the lock"));

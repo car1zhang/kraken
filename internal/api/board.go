@@ -255,6 +255,44 @@ type webThread struct {
 	Role      string `json:"role"`
 	CreatedAt int64  `json:"created_at"` // unix millis
 	ClosedAt  int64  `json:"closed_at,omitempty"`
+	// Kind is how the thread runs, on every thread: "pane" (a claude in a
+	// tmux window) or "headless" (an ask thread, jobs/askthread.go). It is
+	// independent of Role above, which says what the thread is for; a
+	// headless thread is always role "ask".
+	Kind string `json:"kind"`
+	// Origin is who opened a headless thread, absent when the row names
+	// nobody (every pane thread). A client compares origin.node_id with the
+	// board's own node_id to tell its own threads from another node's.
+	Origin *webThreadOrigin `json:"origin,omitempty"`
+	// Answering is present (true) while a question is in flight.
+	Answering bool `json:"answering,omitempty"`
+	// Note is the last ask run's failure line, absent after a clean answer.
+	Note string `json:"note,omitempty"`
+}
+
+// webThreadOrigin is a headless thread's opener: the node's tailscale stable
+// id and label, and the login of the person on it.
+type webThreadOrigin struct {
+	NodeID string `json:"node_id"`
+	Label  string `json:"label"`
+	Login  string `json:"login"`
+}
+
+// webThreadOriginFrom is nil when the row names no origin at all.
+func webThreadOriginFrom(t store.Thread) *webThreadOrigin {
+	if t.OriginNode == "" && t.OriginLabel == "" && t.OriginLogin == "" {
+		return nil
+	}
+	return &webThreadOrigin{NodeID: t.OriginNode, Label: t.OriginLabel, Login: t.OriginLogin}
+}
+
+// threadKind is the row's kind for the wire. store always reads one back;
+// the fallback covers a Thread value built by hand.
+func threadKind(t store.Thread) string {
+	if t.Kind == "" {
+		return "pane"
+	}
+	return t.Kind
 }
 
 // webThreadsFrom converts store.Thread rows into the wire DTO — same
@@ -274,6 +312,8 @@ func webThreadsFrom(ts []store.Thread) []webThread {
 		out[i] = webThread{
 			TID: t.TID, Title: t.Title, State: t.State, Pane: t.Pane,
 			Model: t.Model, Role: role, CreatedAt: t.CreatedAt, ClosedAt: t.ClosedAt,
+			Kind: threadKind(t), Origin: webThreadOriginFrom(t),
+			Answering: t.Answering, Note: t.Note,
 		}
 	}
 	return out
@@ -865,6 +905,10 @@ type webBoard struct {
 	// registry is empty, which is every single-machine kraken: the payload is
 	// then exactly the pre-fleet one plus each card's `visibility`.
 	Nodes []webNode `json:"nodes,omitempty"`
+	// NodeID is this node's tailscale stable id, so a client can tell a
+	// headless thread this node opened (origin.node_id equal) from one
+	// another node opened. Absent with no tailscale or with the fleet off.
+	NodeID string `json:"node_id,omitempty"`
 }
 
 // jobArtifacts collects a job's viewable artifacts from exactly one source.
@@ -1347,6 +1391,11 @@ func buildWebBoard() webBoard {
 	cards, nodes := fleetBoard(activeStore)
 	board.Jobs = append(board.Jobs, cards...)
 	board.Nodes = nodes
+	// nodeSelf is cachedNodeSelf outside tests (pair.go): one tailscale read
+	// per ~30 s, not one per board build
+	if jobs.FleetEnabled() {
+		board.NodeID = nodeSelf().ID
+	}
 	return board
 }
 
