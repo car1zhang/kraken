@@ -60,6 +60,7 @@ import { GoalMultiPicker } from "./GoalMultiPicker.tsx";
 import { CrewChips, crewChipsVisible } from "../board/chips/CrewPills.tsx";
 import { FeedbackPanel } from "../board/chips/FeedbackPanel.tsx";
 import { PRChip } from "../board/chips/PRChips.tsx";
+import { StackChip } from "../board/chips/StackChips.tsx";
 import { QuestionBlock } from "../board/chips/QuestionBlock.tsx";
 import { ThreadChips } from "../board/chips/ThreadChips.tsx";
 import { CmdComposer } from "./CmdComposer.tsx";
@@ -628,6 +629,10 @@ function SteerBody({
   // PRs are job history rather than cell state, so they show in EVERY mode —
   // "what already shipped" is exactly the reactivation context.
   const prs = job?.prs ?? [];
+  // Stack links: the cell's manual-test URLs. Shown wherever present — the
+  // server already drops them at teardown, so a reactivate-mode open simply
+  // has none.
+  const stack = job?.stack ?? [];
   const artifacts = job?.artifacts ?? [];
   // Hidden in reactivate mode only. view SHOWS them — the done job's output
   // is the main thing its drilldown is opened for.
@@ -698,6 +703,7 @@ function SteerBody({
   const showContext =
     showCrew ||
     prs.length > 0 ||
+    stack.length > 0 ||
     showThreads ||
     !!detail ||
     !!lastSent ||
@@ -982,6 +988,15 @@ function SteerBody({
           <div className="prs" id="steer-prs" hidden={!prs.length}>
             {prs.map((pr, i) => (
               <PRChip key={`${pr.url}|${i}`} pr={pr} />
+            ))}
+          </div>
+          {/* The cell's stack links, directly under the PRs as on the card
+              (StackChip, not StackChips, for the wrapper reason above). A
+              remote card's links render as spans — localhost on another
+              machine is not this stack. */}
+          <div className="stack" id="steer-stack" hidden={!stack.length}>
+            {stack.map((l, i) => (
+              <StackChip key={`${l.url}|${i}`} link={l} remote={job?.owner !== undefined} />
             ))}
           </div>
           {/* The card passes withBranch={false}, delegating ⑂ to this modal —

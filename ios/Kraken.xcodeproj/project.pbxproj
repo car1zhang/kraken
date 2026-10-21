@@ -49,6 +49,7 @@
 		7B9AB6E1268B1EEE7912CA3A /* IsoViewerURLTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0B56817EB4F9A51045F07DF7 /* IsoViewerURLTests.swift */; };
 		7F53B4F4BE9C944368D05543 /* MarkdownHTML.swift in Sources */ = {isa = PBXBuildFile; fileRef = 88C06544957AD8F799F8BAF4 /* MarkdownHTML.swift */; };
 		8811D0B613988D4DDB702C85 /* RouterEdgeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0F3F798576EC055BA3C40C7D /* RouterEdgeTests.swift */; };
+		88AE8B5A9AF0C83279E0FB71 /* StackLinkDecodeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6F9BD30C7A2B062012863FF1 /* StackLinkDecodeTests.swift */; };
 		8C51E66B10F9E6ED69609303 /* RenameDecodeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0C16F5D0D283D5BEF12F36F0 /* RenameDecodeTests.swift */; };
 		8DCE80061C02793DEFC49C0D /* MarkdownParser.swift in Sources */ = {isa = PBXBuildFile; fileRef = B71F5D2794B798146B0453D4 /* MarkdownParser.swift */; };
 		8ED3FDEA37C23328E9AD32CF /* MarkdownText.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8E6DA711F2F4A1D3BAADCEBA /* MarkdownText.swift */; };
@@ -134,6 +135,7 @@
 		6828266B704A0A112919C779 /* Pairing.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Pairing.swift; sourceTree = "<group>"; };
 		6B012C601FB4C04BCDFD7482 /* ShipIOSDecodeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShipIOSDecodeTests.swift; sourceTree = "<group>"; };
 		6EB79250CEE1E9860F42AAA4 /* ArtifactView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ArtifactView.swift; sourceTree = "<group>"; };
+		6F9BD30C7A2B062012863FF1 /* StackLinkDecodeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StackLinkDecodeTests.swift; sourceTree = "<group>"; };
 		6FFE7FE60319DD8D13BA7E81 /* NewJobSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NewJobSheet.swift; sourceTree = "<group>"; };
 		72E06CEE2AC576AD66847847 /* RemoteJobDetail.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteJobDetail.swift; sourceTree = "<group>"; };
 		78A57259A9AFE75E8A80841D /* PortabilityEdgeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PortabilityEdgeTests.swift; sourceTree = "<group>"; };
@@ -236,6 +238,7 @@
 				2FBFC7931A192704FAE6B80A /* RouterContractTests.swift */,
 				0F3F798576EC055BA3C40C7D /* RouterEdgeTests.swift */,
 				6B012C601FB4C04BCDFD7482 /* ShipIOSDecodeTests.swift */,
+				6F9BD30C7A2B062012863FF1 /* StackLinkDecodeTests.swift */,
 				2A02FA58EF4090DED9A2EE09 /* ThemeContractTests.swift */,
 				0B256477B621D4DB3400A33C /* ThemeEdgeTests.swift */,
 				21990B7F0784450E2DF9B2F4 /* UpdateDecodeTests.swift */,
@@ -444,6 +447,7 @@
 				E02C46E50115B9116776E0B1 /* RouterContractTests.swift in Sources */,
 				8811D0B613988D4DDB702C85 /* RouterEdgeTests.swift in Sources */,
 				4B8AC3B17AEE418F8CE1BB80 /* ShipIOSDecodeTests.swift in Sources */,
+				88AE8B5A9AF0C83279E0FB71 /* StackLinkDecodeTests.swift in Sources */,
 				75B434D7704803154C21E271 /* ThemeContractTests.swift in Sources */,
 				56343700466CB1F1F673DE87 /* ThemeEdgeTests.swift in Sources */,
 				1FEE8E3C18E0B4C8CBCF15DE /* UpdateDecodeTests.swift in Sources */,

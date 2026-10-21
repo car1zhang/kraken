@@ -991,6 +991,13 @@ func (d *daemonState) tick(mirror bool) (int, error) {
 		for _, j := range jobs {
 			autoHandoffPass(ActiveStore(), j, all, live, now)
 		}
+		// stack probe (its own pass, same per-tick cadence): dial each live
+		// cell's loopback stack links and stamp up/down on change
+		// (stackprobe.go). It writes rows a mirror board must not, which is
+		// why it sits in this block; it types into no pane.
+		for _, j := range jobs {
+			stackProbePass(ActiveStore(), j, live, now)
+		}
 		// usage-limit rescue (its own pass, same per-tick cadence): a cell
 		// whose claudes hit their account's usage limit is REBOUND to a
 		// healthier pool slot — one job row, nothing machine-wide — and then,
