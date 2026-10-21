@@ -9,9 +9,12 @@ import (
 	"os"
 	"os/exec"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"time"
+
+	"kraken/internal/core"
 )
 
 // prhook.go — `kraken pr-hook <slug>`, wired as a Claude Code PostToolUse
@@ -183,8 +186,19 @@ func JobRepoOriginPrefix(j *Job) (prefix string, ok bool) {
 	if !ok {
 		return "", false
 	}
+	return githubPrefix(p)
+}
+
+// githubPrefix reduces a raw origin prefix (originToPrefix's output) to the
+// `github.com/<owner>/<repo>` shape PRURLInRepo compares against, stripping an
+// https userinfo (`user@github.com/o/r`, how a second GitHub account is often
+// cloned) and refusing anything githubRepoPrefix does not match. It is the
+// normalisation JobRepoOriginPrefix applies, split out so a caller that
+// already holds the raw prefix (the restart repair) reaches the same shape
+// without resolving the repo a second time.
+func githubPrefix(p string) (string, bool) {
 	if at := strings.Index(p, "@"); at >= 0 && !strings.Contains(p[:at], "/") {
-		p = p[at+1:] // https userinfo: `user@github.com/o/r` → `github.com/o/r`
+		p = p[at+1:]
 	}
 	if !githubRepoPrefix.MatchString(p) {
 		return "", false
@@ -214,6 +228,83 @@ func PRURLInRepo(url, prefix string) bool {
 		}
 	}
 	return true
+}
+
+// prURLRepo pulls owner and repo out of a GitHub pull request URL — the exact
+// shape prURLShape (api) vouches for, so a URL that reached PRRepoNamedInSpec
+// through the attach route always matches.
+var prURLRepo = regexp.MustCompile(`^https://github\.com/([\w.-]+)/([\w.-]+)/pull/\d+$`)
+
+// PRRepoNamedInSpec reports whether the job's own spec text names the GitHub
+// repo a pull request URL belongs to — `owner/repo` as a whole token, bare or
+// inside a `github.com/owner/repo` reference or a clone URL, matched
+// case-insensitively like PRURLInRepo. It is the one way a job's deliverable
+// may legitimately land outside the checkout its `repo:` names: a job filed
+// against one checkout and told by its spec to open its PR in another ships
+// there, and the attach route's foreign-repo refusal (built for a cell that
+// wandered into a sibling checkout nobody asked it to touch) would otherwise
+// drop the very PR the spec ordered. A repo named in the spec is one the job
+// was told to touch; a repo that merely shares a prefix or a dotted suffix
+// (`owner/repo-ios`, `owner/repo.js` against `owner/repo`) is not named, and
+// neither is a repo that appears only as a link to one of its pull requests or
+// issues (`github.com/owner/repo/pull/7`, `owner/repo#12`), which is a
+// citation rather than a destination. The text is the job's spec body, mid-run
+// log included, so a Linear- or Slack-born job's quoted ticket counts as spec
+// here too. A nil job, an empty body or a URL outside prURLRepo's shape names
+// nothing.
+func PRRepoNamedInSpec(j *Job, url string) bool {
+	if j == nil || strings.TrimSpace(j.Body) == "" {
+		return false
+	}
+	m := prURLRepo.FindStringSubmatch(url)
+	if m == nil {
+		return false
+	}
+	// A whole token: not preceded by a repo-name character (so `other-owner/repo`
+	// does not vouch for `owner/repo`), not followed by one (so `owner/repo-ios`
+	// does not vouch for `owner/repo`); a `.` after the token is a boundary only
+	// when it ends the text or precedes whitespace — a sentence's full stop — so
+	// `owner/repo.js` does not vouch for `owner/repo` either. A trailing `.git`
+	// is the clone spelling.
+	re := regexp.MustCompile(`(?i)(^|[^\w.-])(` + regexp.QuoteMeta(m[1]+"/"+m[2]) + `)(\.git)?($|[^\w.-]|\.($|\s))`)
+	for _, loc := range re.FindAllStringSubmatchIndex(j.Body, -1) {
+		end := loc[5] // the end of the owner/repo token itself
+		if loc[6] >= 0 {
+			end = loc[7] // …or of its `.git` suffix, so `owner/repo.git/pull/7` is a citation too
+		}
+		rest := strings.ToLower(j.Body[end:])
+		if strings.HasPrefix(rest, "/pull/") || strings.HasPrefix(rest, "/issues/") || strings.HasPrefix(rest, "#") {
+			continue
+		}
+		return true
+	}
+	return false
+}
+
+// specNamedPRs is the recorded PR URLs of j that lie OUTSIDE the job's own
+// repo (ownPrefix, JobRepoOriginPrefix's shape; empty admits every URL) and
+// whose repo its spec names (see PRRepoNamedInSpec): the daemon's restart
+// repair vouches for these exactly as it vouches for a create it found in the
+// lead's transcript, because that transcript scan is narrowed to the job's own
+// repo and would otherwise let the repair drop, on the first pass after every
+// restart, the one cross-repo PR the attach route had admitted on purpose.
+// Own-repo PRs are left to the repair's existing evidence: a spec that names
+// the job's own repo (common) must not make every own-repo record immune to
+// the repair that exists to drop mis-attached ones.
+func specNamedPRs(j *Job, ownPrefix string) []string {
+	if j == nil {
+		return nil
+	}
+	var urls []string
+	for _, r := range j.PRs {
+		if ownPrefix != "" && PRURLInRepo(r.URL, ownPrefix) {
+			continue
+		}
+		if PRRepoNamedInSpec(j, r.URL) {
+			urls = append(urls, r.URL)
+		}
+	}
+	return urls
 }
 
 // defaultServeAddr is kraken serve's default bind address (matches
@@ -347,7 +438,22 @@ func AttachJobPR(j *Job, url string) (attached bool, err error) {
 // about it until serve comes back and the daemon's branch-list poll
 // notices. Always returns (never os.Exit(1)); every outcome is a single
 // stderr line: attached, NOT attached (the 409), or NOT RECORDED (any other
-// answer, serve unreachable included).
+// answer, serve unreachable included). The stderr line is a trace only: on
+// exit 0 Claude Code hands a PostToolUse hook's stderr to no model and shows
+// it in no prompt, so a cell whose PR was refused went on telling the
+// operator the PR was "ready for your merge" and planning its next step
+// around a merge bump kraken could never send, since kraken was not tracking
+// the PR at all. So when any URL was not attached, the same fact also goes to
+// STDOUT as Claude Code's hook JSON (`hookSpecificOutput.additionalContext`),
+// which lands in the model's context at the end of the tool call. The text
+// differs by arm, because the two arms mean different things: a 409 is a PR
+// kraken will never track on its own (the daemon's branch poll lists the
+// job's OWN repo), while a transport failure or a non-200 is a PR kraken has
+// not recorded YET — one on the cell branch is picked up by that same branch
+// poll once serve accepts it — so the first tells the agent to say so in its
+// final message and the second tells it not to assume a merge or CI notice
+// until the board shows the PR. An attached PR prints nothing to stdout; the
+// ordinary case stays silent.
 func PrHook(slug string) {
 	raw, err := io.ReadAll(os.Stdin)
 	if err != nil {
@@ -368,6 +474,7 @@ func PrHook(slug string) {
 			// really made
 		}
 	}
+	var refused, unrecorded []string
 	for _, url := range extractPRURLs(raw, prefix) {
 		status, body := postPRAttachStatus(slug, url)
 		switch status {
@@ -377,8 +484,60 @@ func PrHook(slug string) {
 			// serve's repo check: the PR is real, but it lives in another
 			// repo than the job's, so it is not this job's record.
 			fmt.Fprintf(os.Stderr, "pr-hook %s: NOT attached (outside the job's repo): %s — %s\n", slug, url, serveErrorText(body))
+			reason := core.TruncateOneLine(serveErrorText(body), 200)
+			if !strings.Contains(reason, url) {
+				reason = url + " — " + reason // serve's own text normally opens with the URL
+			}
+			refused = append(refused, reason+" (NOT attached to job "+slug+")")
 		default:
 			fmt.Fprintf(os.Stderr, "pr-hook %s: PR NOT RECORDED (serve unreachable): %s\n", slug, url)
+			why := "kraken serve did not answer"
+			if status != 0 {
+				why = "kraken serve answered HTTP " + strconv.Itoa(status) + ": " + core.TruncateOneLine(serveErrorText(body), 200)
+			}
+			unrecorded = append(unrecorded, url+" was NOT recorded for job "+slug+" ("+why+")")
 		}
 	}
+	if out := prHookContext(refused, unrecorded); out != "" {
+		fmt.Fprintln(os.Stdout, out)
+	}
+}
+
+// prHookContext is the hook JSON PrHook prints on stdout when a PR was not
+// attached: Claude Code reads a PostToolUse hook's stdout as JSON and adds
+// `hookSpecificOutput.additionalContext` to the model's context, so this is
+// the one channel through which the agent that ran `gh pr create` learns
+// where kraken stands on the PR it just opened. Each arm says what its
+// outcome means for the agent and what to do about it, since a bare refusal
+// would read as something to retry: a refused PR gets no chip and no merge or
+// CI notice, ever, and naming its repo in the spec BEFORE a PR is opened is
+// the one route that would have tracked it (the hook has already fired for
+// this one); an unrecorded PR is not tracked yet, and one on the cell branch
+// in the job's own repo is picked up by the daemon's branch poll once serve
+// accepts it, so the agent must not assume notices until the board shows it.
+// Nothing to say (every URL attached) returns "", and the caller prints
+// nothing; a marshal failure does the same, mirroring RunRecallHook's check.
+func prHookContext(refused, unrecorded []string) string {
+	if len(refused)+len(unrecorded) == 0 {
+		return ""
+	}
+	var parts []string
+	if len(refused) > 0 {
+		parts = append(parts, strings.Join(refused, "; ")+
+			". kraken is NOT tracking the refused PR(s): the board shows no chip and the daemon will send no merge or CI notice for them. "+
+			"Do not wait on one — say so in your final message. Naming the repo in the job spec before a PR is opened is how a cross-repo PR gets tracked; this one needs the operator.")
+	}
+	if len(unrecorded) > 0 {
+		parts = append(parts, strings.Join(unrecorded, "; ")+
+			". kraken has not recorded the unrecorded PR(s) yet: one on the cell branch in the job's own repo is picked up by the daemon's branch poll once kraken serve accepts it, "+
+			"so do not assume a merge or CI notice until the board shows the PR, and say in your final message that it was opened.")
+	}
+	out, err := json.Marshal(hookStdout{Specific: hookStdoutSpecific{
+		HookEventName:     "PostToolUse",
+		AdditionalContext: "[kraken pr-hook] " + strings.Join(parts, " "),
+	}})
+	if err != nil {
+		return ""
+	}
+	return string(out)
 }

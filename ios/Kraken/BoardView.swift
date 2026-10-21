@@ -2705,18 +2705,19 @@ private struct CardChipFlow: Layout {
 }
 
 /// The stage badge: which pipeline skill zeus most recently used
-/// (info/aim/do/pr/dream), read off zeus' transcript server-side —
+/// (info/aim/do/dream), read off zeus' transcript server-side —
 /// see `webJob.Stage` (internal/api/board.go) for what absence covers.
 /// Like the goal it is a fact ABOUT the job rather than something it
 /// contains, so the card slots it with the identity chips (after the
 /// threads, before the goal — the slot web's `.st-chip` takes).
 ///
 /// Each stage wears its skill's own icon and palette colour (`KTheme.skill*`
-/// — the same five tokens the steer modal's command chips and the DREAM
+/// — the same tokens the steer modal's command chips and the DREAM
 /// surface wear, mirrored from web's `--skill-*`), so a column of badges
 /// sorts by eye; web's `.st-chip-<stage>` carries the text-glyph sibling of
 /// each symbol and the two lists move together. A stage this build does not
-/// name (including the retired `graph`) falls back to the accent
+/// name (including the retired `graph`, and `pr`, which folded into `do`
+/// when the PR became do's own last step) falls back to the accent
 /// look with a neutral symbol rather than drawing nothing — a symbol rather
 /// than web's bare-name treatment because `KChip.icon` is non-optional, so
 /// this chip structurally always draws one: the name is the payload, the
@@ -2729,7 +2730,6 @@ private struct StageChip: View {
         case "info": return ("info.circle", KTheme.skillInfo)
         case "aim": return ("scope", KTheme.skillAim)
         case "do": return ("gearshape.fill", KTheme.skillDo)
-        case "pr": return ("arrow.triangle.branch", KTheme.skillPr)
         case "dream": return ("moon.fill", KTheme.skillDream)
         default: return ("arrow.triangle.turn.up.right.diamond", KTheme.accent)
         }

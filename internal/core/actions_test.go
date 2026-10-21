@@ -4,6 +4,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 )
 
 // pinned as an invariant, not a value: the point of -x/-y is to clear tmux's
@@ -107,5 +108,64 @@ func TestNoGhosttyWindowErrIsMatchable(t *testing.T) {
 	msg := err.Error()
 	if !strings.Contains(msg, `"cell-demo-2:"`) || !strings.Contains(msg, "set-titles") {
 		t.Fatalf("message lost the session or the set-titles remedy: %q", msg)
+	}
+}
+
+// The double-open guard's three pure halves. The whole-path behaviour
+// (second raise of one session queues, then reads the first's window as
+// attached) needs tmux and Ghostty, so what is pinned here is each piece's
+// contract: the lock is per session, the freshness window is what the
+// fallback consults and it closes, and the settle wait returns the moment its
+// condition holds rather than after its timeout.
+func TestSessionLockIsPerSession(t *testing.T) {
+	a := sessionLock("cell-demo-2")
+	if sessionLock("cell-demo-2") != a {
+		t.Fatalf("two lookups of one session returned different mutexes")
+	}
+	if sessionLock("cell-demo-2-5") == a {
+		t.Fatalf("two sessions share a mutex — a raise of one would block the other")
+	}
+}
+
+func TestFreshlyOpenedWindow(t *testing.T) {
+	const s = "cell-fresh-test"
+	now := time.Now()
+	if freshlyOpened(s, now) {
+		t.Fatalf("a session this process never opened reads as fresh")
+	}
+	raiseMu.Lock()
+	raiseOpened[s] = now
+	raiseMu.Unlock()
+	t.Cleanup(func() {
+		raiseMu.Lock()
+		delete(raiseOpened, s)
+		raiseMu.Unlock()
+	})
+	if !freshlyOpened(s, now.Add(attachFresh/2)) {
+		t.Fatalf("a window opened %s ago is not fresh; the fallback would kick it", attachFresh/2)
+	}
+	if freshlyOpened(s, now.Add(attachFresh)) {
+		t.Fatalf("a window opened %s ago still reads as fresh; a stuck window could never be replaced", attachFresh)
+	}
+}
+
+func TestWaitUntilReturnsOnCondition(t *testing.T) {
+	calls := 0
+	start := time.Now()
+	if !waitUntil(func() bool { calls++; return calls >= 3 }, time.Second, time.Millisecond) {
+		t.Fatalf("condition became true within the timeout but waitUntil reported false")
+	}
+	if calls != 3 {
+		t.Fatalf("waitUntil polled %d times, want 3 (once before any sleep, then per step)", calls)
+	}
+	if time.Since(start) > 500*time.Millisecond {
+		t.Fatalf("waitUntil kept waiting after its condition held")
+	}
+	start = time.Now()
+	if waitUntil(func() bool { return false }, 20*time.Millisecond, time.Millisecond) {
+		t.Fatalf("a condition that never holds reported true")
+	}
+	if time.Since(start) < 20*time.Millisecond {
+		t.Fatalf("waitUntil gave up before its timeout")
 	}
 }

@@ -355,15 +355,16 @@ type recallHookPayload struct {
 	StopHookActive bool   `json:"stop_hook_active"`
 }
 
-// recallHookOutput is the exact shape Claude Code reads a hook's stdout as.
-// A struct rather than a map so the two keys marshal in a fixed order and the
+// hookStdout is the exact shape Claude Code reads a hook's stdout as. A
+// struct rather than a map so the two keys marshal in a fixed order and the
 // spelling — camelCase, unlike every other wire shape in this binary — is
-// declared once, where it is owned by Claude Code rather than by kraken.
-type recallHookOutput struct {
-	Specific recallHookSpecific `json:"hookSpecificOutput"`
+// declared once, where it is owned by Claude Code rather than by kraken. The
+// recall hook (UserPromptSubmit) and the pr-hook (PostToolUse) both emit it.
+type hookStdout struct {
+	Specific hookStdoutSpecific `json:"hookSpecificOutput"`
 }
 
-type recallHookSpecific struct {
+type hookStdoutSpecific struct {
 	HookEventName     string `json:"hookEventName"`
 	AdditionalContext string `json:"additionalContext"`
 }
@@ -464,8 +465,8 @@ func RunRecallHook(in io.Reader, out io.Writer, slug ...string) {
 	// hookEventName is echoed VERBATIM from the payload rather than derived:
 	// Claude Code matches a hook's output against the event it fired, so a
 	// name this process guessed would be a name it could get wrong.
-	msg, err := json.Marshal(recallHookOutput{
-		Specific: recallHookSpecific{
+	msg, err := json.Marshal(hookStdout{
+		Specific: hookStdoutSpecific{
 			HookEventName:     p.HookEventName,
 			AdditionalContext: decoded.Context,
 		},

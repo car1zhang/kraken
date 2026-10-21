@@ -669,7 +669,7 @@ struct WebJob: Decodable, Identifiable {
     // zeus' own refined status (running/polling/waiting/question), distinct
     // from `state` — absent when zeus isn't resolvable yet.
     let zeusStatus: String?
-    // The pipeline skill zeus most recently used (info/aim/do/pr/dream),
+    // The pipeline skill zeus most recently used (info/aim/do/dream),
     // read off zeus' transcript server-side — see webJob.Stage
     // (internal/api/board.go) for what absence covers. Additive key, no
     // contract bump.
@@ -703,6 +703,13 @@ struct WebJob: Decodable, Identifiable {
     // Open/merged/closed PRs associated with this job, if any — additive key,
     // absent on older servers just like every other omitempty field here.
     let prs: [JobPR]?
+    // The cell's manual-test URLs (`kraken stack add`, job 622): one entry
+    // per link the cell registered, absent when it registered none and always
+    // absent on an archived job (the rows die with the cell). Decoded,
+    // tolerant of any `status` string, and NOT rendered yet: a localhost
+    // link means nothing on the phone until it is rewritten to the owner's
+    // tailnet host (Q3 of that job, open). Additive key.
+    let stack: [JobStackLink]?
     // zeus' open doc questions (answered or not), served straight from
     // `questions` rows in kraken.db — no file, no parse step, so there is
     // no more malformed-questions-file case (docQuestionsErr is gone, v5).
@@ -833,6 +840,7 @@ struct WebJob: Decodable, Identifiable {
         case reactivatable
         case lastSent = "last_sent"
         case prs
+        case stack
         case docQuestions = "doc_questions"
         case feedback
         case threads
@@ -1188,6 +1196,18 @@ struct WebJobLoad: Decodable {
 struct JobPR: Decodable {
     let url: String
     let state: String
+}
+
+// JobStackLink mirrors one entry of a job's `stack` array (ios/API.md's
+// `jobStackLink`, internal/api/jobstack.go's webStackLink): the url the cell
+// registered, its optional label, the daemon probe's last verdict on the port
+// (`up` | `down` | `unknown` — a plain String so a future word decodes), and
+// the registration time in unix millis.
+struct JobStackLink: Decodable {
+    let url: String
+    let label: String
+    let status: String
+    let at: Int64
 }
 
 // WebDocQuestion mirrors one `questions` row (board.go's webDocQuestion /

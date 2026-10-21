@@ -42,8 +42,8 @@ import (
 //     entry that is not a zsh quirk but a destructive shape — in a cell the
 //     worktree is shared with live teammates, a stash sweeps THEIR
 //     uncommitted work along with the caller's, and it is a twice-recorded
-//     destructive incident with a "the ban is absolute" rule in pr/SKILL.md
-//     (do/SKILL.md carries the shared-worktree half) that implementers
+//     destructive incident with a "the ban is absolute" rule in do/SKILL.md's
+//     cell section (its step 5 carries the shared-worktree half) that implementers
 //     measurably keep reinventing around — the rules live in files only the
 //     lead reads. Read-only `git stash list` and `git stash show` pass;
 //     `create` is blocked for uniformity although it changes nothing in the

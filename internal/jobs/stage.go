@@ -19,8 +19,13 @@ import (
 // an agent writes — a self-reported stage would outlive the phase the same
 // way a session file's "busy" outlives the turn.
 
-// pipelineStageSet names the five phase-governing skills — the only skill
-// names that count as a stage. `load`, `handoff` and `direct` are
+// pipelineStageSet names the four phase-governing skills — the only skill
+// names that count as a stage. `pr` was a fifth until its PR step folded
+// into `do` (job 624: every /do now ends with the PR, opened BEFORE the
+// manual-test gate, and revisions are pushed to it), so a Read of a
+// `pr/SKILL.md` in an older transcript no longer matches and the badge
+// falls back to the signal before it — `do`, the phase that job was
+// actually in. `load`, `handoff` and `direct` are
 // deliberately absent: `load` is a reference skill (no phase, no cell
 // section — see skills.go's SkillsFS comment) consulted mid-phase, so a
 // `load` hit would overwrite the real phase with a lookup; `handoff` is a
@@ -41,15 +46,14 @@ var pipelineStageSet = map[string]bool{
 	"info":  true,
 	"aim":   true,
 	"do":    true,
-	"pr":    true,
 	"dream": true,
 }
 
-// IsPipelineStage reports whether a skill name is one of the five
+// IsPipelineStage reports whether a skill name is one of the four
 // phase-governing pipeline skills. Exported for the root package's
 // skills-embed test, which holds this set in lockstep with the embedded
-// bundle (every embedded skill except `load` and `handoff` must be a stage,
-// and a stage cannot outlive its skill).
+// bundle (every embedded skill except `load`, `handoff` and `direct` must
+// be a stage, and a stage cannot outlive its skill).
 func IsPipelineStage(name string) bool { return pipelineStageSet[name] }
 
 // PipelineStages returns the stage names, sorted. Exported for the same
@@ -76,7 +80,9 @@ func PipelineStages() []string {
 //  3. an assistant Read of `<anywhere>/.claude/skills/<name>/SKILL.md` — the
 //     route the cell brief actually mandates (crew.go: skills are read by
 //     path, never invoked by name, since a personal skill shadows the
-//     worktree copy), so for do/pr it is often the ONLY signal that appears.
+//     worktree copy), so for a /do that skipped Phase 1 — nobody typed `/do`;
+//     zeus read do's SKILL.md and started — it is the ONLY signal that
+//     appears.
 //
 // stageCommandRe matches shape 2's tag (with or without the leading slash —
 // both spellings appear in real transcripts; the class includes `:` `.` `/`
@@ -129,19 +135,21 @@ type stageCacheEntry struct {
 // unchanged file returns the cached verdict without rescanning.
 //
 // Last-wins across all three signal shapes is the whole algorithm: a cell
-// moves through its phases in transcript order (spec → /aim → /do → pr), so
-// the most recent signal is the current stage. The known false positive is a
-// cell that READS a pipeline skill it is not in — and for a dream cell,
-// whose whole job is opening and editing the six skill files, that is the
-// NORMAL case, not an exotic one: its badge lands on whichever skill it
-// touched last and stays wrong for the rest of the run, since no later real
-// signal ever arrives (measured on dream-2026-08-14: the last three signals
-// were reads of do, aim, pr — badge `pr`). The simple rule is kept anyway
-// because the badge is advisory, a dream job's slug already names what it
-// is, and ranking Read below the other shapes would break the common case
-// to fix the rare one: an ordinary cell ENTERS pr by reading pr's SKILL.md
-// (the brief forbids invoking it by name), so for the phase most worth
-// showing the Read is the only signal there is.
+// moves through its phases in transcript order (spec → /aim → /do, the PR
+// being do's own last step), so the most recent signal is the current
+// stage. The known false positive is a cell that READS a pipeline skill it
+// is not in — and for a dream cell, whose whole job is opening and editing
+// the skill files, that is the NORMAL case, not an exotic one: its badge
+// lands on whichever skill it touched last and stays wrong for the rest of
+// the run, since no later real signal ever arrives (measured on
+// dream-2026-08-14, when `pr` was still a skill of its own: the last three
+// signals were reads of do, aim, pr — badge `pr`). The simple rule is kept
+// anyway because the badge is advisory, a dream job's slug already names
+// what it is, and ranking Read below the other shapes would break the
+// common case to fix the rare one: a cell that skips Phase 1 ENTERS do by
+// reading do's SKILL.md (the brief forbids invoking it by name, and nobody
+// typed `/do`), so for the phase most worth showing the Read is often the
+// only signal there is.
 func FindStage(transcript string) string {
 	info, statErr := os.Stat(transcript)
 	if statErr == nil {

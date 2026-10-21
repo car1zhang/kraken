@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"kraken/internal/jobs"
@@ -97,5 +98,37 @@ func TestPrAttachHandlerRefusals(t *testing.T) {
 				t.Errorf("status = %d, want %d, body %s", rec.Code, c.wantStatus, rec.Body.String())
 			}
 		})
+	}
+}
+
+// TestPrAttachHandlerSpecNamedRepoAttaches pins the carve-out in the repo
+// gate: a PR of another repo attaches when the job's spec body names that
+// repo, under its own event, while a PR of a repo the spec does NOT name is
+// still refused on the same job.
+func TestPrAttachHandlerSpecNamedRepoAttaches(t *testing.T) {
+	t.Setenv("KRAKEN_LOGS_DIR", t.TempDir())
+	t.Setenv("HOME", t.TempDir())
+	writeTestJobBody(t, "pr-attach-spec", "", "# Spec\n\nRe-root the mirror on github.com/other-org/mirror-core and open the PR there.\n")
+	logicAPIGitRepo(t, "monolith", "https://github.com/carl/kraken.git")
+
+	named := "https://github.com/other-org/mirror-core/pull/1"
+	logicWantAttach(t, logicPost(t, "pr-attach-spec", named), true)
+	if prs := logicJobPRs(t, "pr-attach-spec"); len(prs) != 1 || prs[0] != named {
+		t.Fatalf("job PRs after a spec-named attach = %v, want [%s]", prs, named)
+	}
+	evs := logicEvents(t, "pr-attach-cross-repo")
+	if len(evs) != 1 || !strings.Contains(evs[0].Msg, named) || !strings.Contains(evs[0].Msg, logicPrefix) {
+		t.Fatalf("pr-attach-cross-repo events = %+v, want exactly one naming the URL and the job's prefix", evs)
+	}
+	if refused := logicEvents(t, "pr-attach-refused"); len(refused) != 0 {
+		t.Fatalf("pr-attach-refused events = %+v, want none for the spec-named attach", refused)
+	}
+
+	// A repo the spec does not name — sharing the named one's prefix — is
+	// still refused, and the earlier attach is untouched.
+	unnamed := "https://github.com/other-org/mirror-core-ios/pull/2"
+	logicWant409(t, logicPost(t, "pr-attach-spec", unnamed), unnamed)
+	if prs := logicJobPRs(t, "pr-attach-spec"); len(prs) != 1 {
+		t.Fatalf("job PRs after the refusal = %v, want the one spec-named PR only", prs)
 	}
 }

@@ -1,4 +1,4 @@
-import { Fragment, type CSSProperties, type ReactNode } from "react";
+import { Fragment, useState, type CSSProperties, type ReactNode } from "react";
 
 import type { WebJob } from "../../api/types.ts";
 import type { Column } from "../../lib/columns.ts";
@@ -14,6 +14,7 @@ import { DocQuestionChip, docQuestionChipVisible } from "./chips/DocQuestionChip
 import { FeedbackChip, feedbackChipVisible } from "./chips/FeedbackChip.tsx";
 import { LoadChip, loadChipVisible } from "./chips/LoadChip.tsx";
 import { PRChips } from "./chips/PRChips.tsx";
+import { StackChips } from "./chips/StackChips.tsx";
 import { StageChip, stageChipVisible } from "./chips/StageChip.tsx";
 import { ThreadChips, threadChipsVisible } from "./chips/ThreadChips.tsx";
 import { WakeupChip } from "./chips/WakeupChip.tsx";
@@ -170,6 +171,12 @@ export function JobCard({ job, col, actions, matchReason, matchTerms }: JobCardP
   // it. The card is being drawn in WORKING while the job's own state still
   // says draft — see useDragReorder's Submitting.
   const submitting = useCardSubmitting(key);
+  // True while an "attach tmux" POST is in flight. The server now waits for
+  // the Ghostty window's client to appear before answering (up to a few
+  // seconds on a cold launch), and a button that looks idle for that long
+  // gets clicked again — which is the double open that used to race two
+  // windows and leave the loser showing Ghostty's launch-failure banner.
+  const [attaching, setAttaching] = useState(false);
   // `editable` is only ever read as a data attribute (by the drag/e2e side, and
   // by the editor, to decide read-only) — the click fallback below decides for
   // itself, exactly as the vanilla one did: it matched `.card[data-editable]`,
@@ -484,8 +491,14 @@ export function JobCard({ job, col, actions, matchReason, matchTerms }: JobCardP
            the QuestionBlock is the steer modal's, and band 2's `.chip-question`
            flag is all the board says about it. */}
 
-      {/* ---- band 5: PRS, alone. See the band note above for why not band 2. */}
+      {/* ---- band 5: PRS, and the cell's STACK LINKS under them. Both name a
+           specific external thing to go and open — the PR is what the job
+           produced, the stack link is what to go and try — which is why
+           neither sits among band 2's inventory counts. Its own row rather
+           than a child of .prs so the PR row's test pins and padding stay
+           exactly what they were. */}
       <PRChips prs={job.prs} />
+      <StackChips job={job} />
 
       {/* ---- band 6: ACTIONS. */}
       {hasActions ? (
@@ -495,12 +508,17 @@ export function JobCard({ job, col, actions, matchReason, matchTerms }: JobCardP
               className="btn tmux-open open-tmux"
               data-slug={job.slug}
               title="raise zeus' pane in Ghostty"
+              disabled={attaching}
               onClick={(ev) => {
                 ev.stopPropagation();
-                actions.onOpenTmux(job.slug);
+                if (attaching) return;
+                setAttaching(true);
+                void Promise.resolve(actions.onOpenTmux(job.slug)).finally(() =>
+                  setAttaching(false),
+                );
               }}
             >
-              ⌁ attach tmux
+              {attaching ? "⌁ attaching…" : "⌁ attach tmux"}
             </button>
           ) : null}
           {retryable ? (

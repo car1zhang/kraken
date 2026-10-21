@@ -991,6 +991,13 @@ func (d *daemonState) tick(mirror bool) (int, error) {
 		for _, j := range jobs {
 			autoHandoffPass(ActiveStore(), j, all, live, now)
 		}
+		// stack probe (its own pass, same per-tick cadence): dial each live
+		// cell's loopback stack links and stamp up/down on change
+		// (stackprobe.go). It writes rows a mirror board must not, which is
+		// why it sits in this block; it types into no pane.
+		for _, j := range jobs {
+			stackProbePass(ActiveStore(), j, live, now)
+		}
 		// usage-limit rescue (its own pass, same per-tick cadence): a cell
 		// whose claudes hit their account's usage limit is REBOUND to a
 		// healthier pool slot — one job row, nothing machine-wide — and then,
@@ -1536,7 +1543,7 @@ func mergeBumpWanted(j *Job, live map[string]bool) bool {
 // stopped at a gate for a LATER PR must not read "continue" as that gate
 // opening.
 func mergeBumpMessage(url string) string {
-	return prWatchPrefix() + " " + url + " has MERGED into its base branch. That branch is finished: do not push to it, re-run its checks, or report it as awaiting checks or review. Any further change starts on a fresh branch recycled off origin/main (the pr skill's recycle step). If this PR completed the job's work, say so in your closing message and stop; if not, continue and open the follow-up from the recycled branch. Any gate you are stopped at still holds — this notice does not answer it."
+	return prWatchPrefix() + " " + url + " has MERGED into its base branch. That branch is finished: do not push to it, re-run its checks, or report it as awaiting checks or review. Any further change starts on a fresh branch recycled off origin/main (the recycle step in do/SKILL.md's cell section). If this PR completed the job's work, say so in your closing message and stop; if not, continue and open the follow-up from the recycled branch. Any gate you are stopped at still holds — this notice does not answer it."
 }
 
 // prWatchPrefix opens EVERY message the PR watcher types into a pane. It is
@@ -1887,6 +1894,19 @@ func (d *daemonState) repairPRs(j *Job, all []*core.Peer) {
 				if _, statErr := os.Stat(transcript); statErr == nil {
 					vouchedOK = true
 					for _, url := range transcriptPRURLs(transcript, prefix) {
+						createVouched[url] = true
+					}
+					// A PR of another repo that the spec names was attached on
+					// purpose (api/prattach.go's carve-out); the transcript scan
+					// above is narrowed to the job's own repo and can never
+					// vouch for it, so it would be dropped here on the first
+					// pass after every restart. The own-repo exclusion needs the
+					// NORMALISED prefix (githubPrefix: userinfo stripped), not the
+					// raw one the transcript scan uses — a `user@github.com/o/r`
+					// origin would otherwise never match its own PRs and the
+					// exclusion would silently admit them.
+					own, _ := githubPrefix(prefix)
+					for _, url := range specNamedPRs(j, own) {
 						createVouched[url] = true
 					}
 				}

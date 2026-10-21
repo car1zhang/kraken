@@ -43,6 +43,11 @@ var mirrorGatedRoutes = []string{
 	// route's own gate wraps only the /color it types into a live pane, not
 	// its write.
 	"/api/job/load",
+	// job stack: the same inline gate as load (jobstack.go), for the same
+	// reason its GET must stay reachable — `kraken stack get` and the board
+	// read it. With mirror off the table's {"slug":"nonexistent"} body 400s
+	// on the missing op before any store access.
+	"/api/job/stack",
 	// goals: the same inline gate on both routes (goals.go). /api/goals gates
 	// inline because its GET must stay reachable — the phone's drawer and
 	// `kraken goals get` are both reads, and a mirror refusing a read would be

@@ -1923,6 +1923,13 @@ func teardownCell(j *Job, repo string, live map[string]bool, force bool) error {
 	if err := CloseThreadsForTeardown(j); err != nil {
 		fmt.Fprintf(os.Stderr, "kraken: closing %s's thread rows failed: %v\n", j.Slug, err)
 	}
+	// the cell's stack links (its manual-test URLs, jobstack.go) died with
+	// the session too — unlike threads they have no transcript to point at,
+	// so the rows are deleted outright and a reactivated job starts with
+	// none. Same never-fatal posture as the thread close above.
+	if err := DeleteStacksForTeardown(j); err != nil {
+		fmt.Fprintf(os.Stderr, "kraken: deleting %s's stack links failed: %v\n", j.Slug, err)
+	}
 	// the cell dir (doc source, artifacts) goes too: the final sync above
 	// mirrored the artifacts into the store, which is their durable home.
 	//

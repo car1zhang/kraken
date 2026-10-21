@@ -176,7 +176,7 @@ payload, so a client sees exactly what it has always seen.
 | `detail` | string | omitempty | zeus' last assistant text, full multi-line text capped at 4000 runes (not bytes). Set wherever zeus' transcript resolves: live started cells, `cell_gone` jobs, and DONE jobs (by stamped session — the cell is torn down but the transcript outlives it), so a done card carries its final report until archived. Additive, no contract bump |
 | `question` | object (`webQuestion`) | omitempty (null-able) | |
 | `zeus_status` | string | omitempty | zeus' own refined status (running/polling/waiting/question); live started, non-done cells only, omitted when zeus isn't resolvable |
-| `stage` | string | omitempty | the pipeline skill zeus most recently used — one of the five phase-governing skill names (`info`/`aim`/`do`/`pr`/`dream`; `graph` was retired with the knowledge graph, and a client renders an unknown stage with its generic fallback), read off zeus' transcript (`jobs.FindStage`: last Skill invocation, `/name` command message, or Read of a `.claude/skills/<name>/SKILL.md` wins; the reference skill `load` never counts). Started jobs with a resolvable transcript only (live, `cell_gone`, or done by stamped session). Absence covers three states the wire does not separate — no resolvable transcript, any failed or truncated scan, and no pipeline skill used yet — all rendered the same way (no badge). Rendered as one card chip on both clients. Additive, no contract bump |
+| `stage` | string | omitempty | the pipeline skill zeus most recently used — one of the four phase-governing skill names (`info`/`aim`/`do`/`dream`; `graph` was retired with the knowledge graph and `pr` folded into `do` when the PR became do's own last step, and a client renders an unknown stage with its generic fallback), read off zeus' transcript (`jobs.FindStage`: last Skill invocation, `/name` command message, or Read of a `.claude/skills/<name>/SKILL.md` wins; the reference skill `load` never counts). Started jobs with a resolvable transcript only (live, `cell_gone`, or done by stamped session). Absence covers three states the wire does not separate — no resolvable transcript, any failed or truncated scan, and no pipeline skill used yet — all rendered the same way (no badge). Rendered as one card chip on both clients. Additive, no contract bump |
 | `wakeup` | object (`webWakeup`) | omitempty (null-able) | pending `ScheduleWakeup` from zeus' transcript — cell is on a poll timer, still counts as `working`; render a countdown chip. Additive, no contract bump |
 | `roster` | array (`webAgent`) | omitempty | live crew (teammates) PLUS zeus' live background tasks (in-process subagents, monitors, background shells — each entry's `kind` says which; job 612), live started non-done cells only |
 | `health` | string | omitempty | "" (absent) = healthy |
@@ -187,6 +187,7 @@ payload, so a client sees exactly what it has always seen.
 | `reactivatable` | bool | omitempty | has a recorded zeus session, and either done or `cell_gone` |
 | `last_sent` | string | omitempty | last real user message from zeus' session transcript, any send channel (board steer, `k s`, direct tmux typing); omitted when no transcript is resolvable or it has no user turn yet; one-line, capped 4000 runes (not bytes). Question-answer digit keypresses never appear (they're tool_results, not user text); started jobs with a resolvable transcript — live, `cell_gone`, or done (by stamped session) |
 | `prs` | array (`jobPR`) | omitempty | every PR shipped from the cell branch (daemon-tracked history, never cleared); render as linked state chips |
+| `stack` | array (`jobStackLink`) | omitempty | the cell's manual-test URLs, registered by the cell through `kraken stack add` (`job_stacks` rows, schema v35); render as linked chips beside the PRs, dimmed when `status` is `down`. Absent means the cell registered none; always absent on an archived job (the rows are deleted at cell teardown, so a reactivated job starts with none). The web board renders a sibling node's links as plain labels, since `localhost` on another machine is not this stack; iOS decodes and does not render yet. Additive, no contract bump |
 | `doc_questions` | array (`webDocQuestion`) | omitempty | zeus' open doc questions (answered or not), served straight from `questions` rows in `kraken.db` — no file, no parse step, so there is no more cell-gone-read-only or malformed-file case; never set for archived jobs. Additive, no contract bump |
 | `feedback` | array (`webFeedback`) | omitempty | per-job feedback entries (open + addressed), served straight from `feedback` rows in `kraken.db`; unlike `doc_questions`, IS populated for archived jobs (rows outlive the cell). Additive, no contract bump |
 | `color` | string | omitempty | the job's color, one of `red` \| `blue` \| `green` \| `yellow` \| `purple` \| `orange` \| `pink` \| `cyan` (the names Claude Code's `/color` accepts, in that order); absent or `""` means the job has NO color and must render exactly as an uncolored job always has — no swatch, no reserved space. Clients degrade an unrecognized name to "no color" rather than failing. Additive, no contract bump |
@@ -212,6 +213,8 @@ empty is one a client keeps rendering affordances for. `prereqs` went with the
 feature.
 
 `jobPR`: `url` (string, always), `state` (string, always: `open` \| `merged` \| `closed`). The PR number for display derives from the url's trailing `/pull/<n>`.
+
+`jobStackLink` (jobstack.go): `url` (string, always — `http`/`https` only, no credentials; the server refuses anything else), `label` (string, always, may be `""` — the cell's short name, capped at 24 runes server-side), `status` (string, always: `up` \| `down` \| `unknown` — the daemon's loopback probe's last verdict; `unknown` from registration and forever for a non-loopback host, which is never dialled; decode tolerantly, a future word is possible), `at` (number, always, unix millis — registration time). The chip label is `⇱ <label> :<port>` with the port taken from the url (scheme default when absent); a `down` link renders muted and struck through but stays clickable, since the probe can be one tick stale after a restart.
 
 `webArtifact`: `name` (string, always — in store mode this may contain `/`
 for a nested path, e.g. `icon-variations/v2.png`), `url` (string, always).
@@ -1780,6 +1783,31 @@ is worth stating rather than omitting.
 Errors: 400 `missing slug` (the query parameter absent or empty), 404 for an
 unknown slug. A GET is a read, so it stays reachable under `--mirror`.
 **Additive, no contract bump.**
+
+### `POST /api/job/stack`
+
+The cell's write of its STACK LINKS — the URLs of whatever it spun up for manual testing — reached only through the `kraken stack add|rm|clear` cell verb (cmd/kraken/cmd_stack.go). Its own one-field route for `/api/job/load`'s reasons (written on a LIVE cell, never through the full-replace form save), and PER-OP for `/api/job/goal`'s: a client sends what it wants changed, never the list it believes is current.
+
+Request: `{"slug": string, "op": "add" | "remove" | "clear", "url": string, "label": string}`.
+
+- `op: add` needs `url`, which must parse with scheme `http` or `https`, a non-empty host and no userinfo (400 `bad url: …` naming the rule otherwise). Re-adding a url the job already has UPDATES its label and keeps its `status` and `at`. The ninth distinct url is a 400 naming the cap (8 per job). `label` is optional, one-lined and truncated at 24 runes rather than refused. Refused 409 when the job has never started or is done — there is no cell to link a stack to.
+- `op: remove` needs a token in `url`: matched against each link's url first, then its label; nothing matched is a 404.
+- `op: clear` takes neither and is a 200 even on an empty list.
+- The body is decoded with **unknown fields rejected**: `slug`, `op`, `url`, `label` and nothing else.
+
+Response: `{"ok": true}`. The list rides back on the next `/api/board` poll (`webJob.stack`).
+
+Errors: 400 (bad json; an unrecognized field; a missing or unknown `op`; `add` without `url` or with a refused url; `remove` without a token; the per-job cap), 404 (no such job, or `remove` of a token no link matches), 409 (`add` on a draft or done job), 413 (body over 1 MiB), 500 (write failed). Gated under `--mirror` with the standard plain-text 403; 405 is served by the route for any method but GET and POST.
+
+Like `/api/job/load`, the write bumps NEITHER the job's `rev` NOR `updated_at`. Rows are deleted at cell teardown (`teardownCell`), so a done or reactivated job carries none. **Additive, no contract bump.**
+
+### `GET /api/job/stack?slug=`
+
+zeus-side read through the `kraken stack get` cell verb; the clients read `webJob.stack` on `/api/board` instead.
+
+Response: `{"stack": [jobStackLink]}` — always an array, **empty** (never null) for a job with no links, in registration order.
+
+Errors: 400 `missing slug`, 404 for an unknown slug. A read, so it stays reachable under `--mirror`. **Additive, no contract bump.**
 
 ### `GET /api/job/list`
 

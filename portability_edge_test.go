@@ -28,7 +28,8 @@ import (
 //     `Documents` or `KRAKEN_PLUTO_DIR`;
 //   - none of the retired pluto symbols or files exists;
 //   - the embedded skills carry no carl, no malformed operator placeholder,
-//     no pluto path, no he/him/his, and pr/SKILL.md no carl/ prefix;
+//     no pluto path, no he/him/his, and do/SKILL.md (which carries the PR
+//     rules since the pr skill folded into it) no carl/ prefix;
 //   - the Makefile's label knob reaches every launchctl target, and
 //     install-completion never creates ~/.oh-my-zsh.
 
@@ -258,7 +259,7 @@ func edgeEmbeddedSkills(t *testing.T) map[string]string {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, must := range []string{"aim/SKILL.md", "do/SKILL.md", "info/SKILL.md", "pr/SKILL.md",
+	for _, must := range []string{"aim/SKILL.md", "do/SKILL.md", "info/SKILL.md",
 		"dream/SKILL.md", "load/SKILL.md", "handoff/SKILL.md", "direct/SKILL.md", "aim/assets/hermes-contract.md"} {
 		if _, ok := out[must]; !ok {
 			t.Fatalf("embedded bundle lacks %s (have %d .md files)", must, len(out))
@@ -331,17 +332,19 @@ func TestEdgeEmbeddedSkillsNameNoPluto(t *testing.T) {
 }
 
 // Contract: "pr/SKILL.md: no branch-rename step, no carl/ prefix, no monolith
-// category list; it says a cell never renames its branch".
+// category list; it says a cell never renames its branch". The PR rules live
+// in do/SKILL.md's step 8 since the pr skill folded into it (job 624), so
+// the assertions hold against do.
 func TestEdgePRSkillHasNoCarlPrefixOrRename(t *testing.T) {
-	pr := edgeEmbeddedSkills(t)["pr/SKILL.md"]
-	if strings.Contains(strings.ToLower(pr), "carl/") {
-		t.Errorf("pr/SKILL.md still carries a carl/ branch prefix")
+	src := edgeEmbeddedSkills(t)["do/SKILL.md"]
+	if strings.Contains(strings.ToLower(src), "carl/") {
+		t.Errorf("do/SKILL.md still carries a carl/ branch prefix")
 	}
-	if regexp.MustCompile(`git branch -[mM]\b|git branch --move\b`).MatchString(pr) {
-		t.Errorf("pr/SKILL.md still carries a branch-rename command")
+	if regexp.MustCompile(`git branch -[mM]\b|git branch --move\b`).MatchString(src) {
+		t.Errorf("do/SKILL.md still carries a branch-rename command")
 	}
-	if !regexp.MustCompile(`(?i)never renames?\b[^.\n]*\bbranch|branch[^.\n]*\bnever (?:be )?renamed`).MatchString(pr) {
-		t.Errorf("pr/SKILL.md does not say a cell never renames its branch")
+	if !regexp.MustCompile(`(?i)never renames?\b[^.\n]*\bbranch|branch[^.\n]*\bnever (?:be )?renamed`).MatchString(src) {
+		t.Errorf("do/SKILL.md does not say a cell never renames its branch")
 	}
 }
 

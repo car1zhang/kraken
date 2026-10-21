@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 
@@ -76,6 +76,9 @@ const BAND_OF: Array<[string, number]> = [
   // "card child in no band" and hiding which rule it broke.
   ["question", 4],
   ["prs", 5],
+  // the cell's stack links share band 5 with the PRs: both name an external
+  // thing to go and open (StackChips.tsx).
+  ["stack", 5],
   ["card-actions", 6],
 ];
 
@@ -690,6 +693,33 @@ describe("the card click fallback", () => {
     await userEvent.click(screen.getByTitle("raise zeus' pane in Ghostty"));
     expect(actions.onOpenTmux).toHaveBeenCalledWith("demo");
     expect(actions.onOpenEditor).not.toHaveBeenCalled();
+  });
+
+  // The server answers an open only once the Ghostty window's tmux client has
+  // appeared — seconds on a cold launch. Until then the button is disabled and
+  // says so: a second click inside that window used to open a second window
+  // whose `attach -d` kicked the first, and a kick inside 250 ms of launch
+  // shows Ghostty's launch-failure banner on the loser.
+  it("disables the tmux button while its open is in flight", async () => {
+    const actions = stubActions();
+    let settle!: (v: Error | null) => void;
+    vi.mocked(actions.onOpenTmux).mockReturnValue(
+      new Promise<Error | null>((resolve) => {
+        settle = resolve;
+      }),
+    );
+    renderCard(job({ state: "draft", live: true, cell: "c" }), actions);
+    const btn = screen.getByTitle("raise zeus' pane in Ghostty");
+    await userEvent.click(btn);
+    expect(btn).toBeDisabled();
+    expect(btn.textContent).toBe("⌁ attaching…");
+    await userEvent.click(btn);
+    expect(actions.onOpenTmux).toHaveBeenCalledTimes(1);
+    await act(async () => {
+      settle(null);
+    });
+    await waitFor(() => expect(btn).not.toBeDisabled());
+    expect(btn.textContent).toBe("⌁ attach tmux");
   });
 });
 

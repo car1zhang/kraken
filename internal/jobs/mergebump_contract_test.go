@@ -31,6 +31,16 @@ func TestContractMergeBumpMessageWording(t *testing.T) {
 	if strings.Contains(msg, "\n") {
 		t.Errorf("message contains a newline: %q", msg)
 	}
+	// The recycle lives in do/SKILL.md's cell section since the pr skill
+	// folded into do (job 624); a notice pointing zeus at "the pr skill"
+	// sends it to a file that no longer exists in the worktree — or, worse,
+	// to a personal skill of that name with other branch rules.
+	if strings.Contains(msg, "pr skill") {
+		t.Errorf("message still points at the retired pr skill: %q", msg)
+	}
+	if !strings.Contains(msg, "do/SKILL.md") {
+		t.Errorf("message does not name do/SKILL.md as the recycle's home: %q", msg)
+	}
 }
 
 func TestContractMergeBumpMessageDeterministic(t *testing.T) {

@@ -9,6 +9,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"kraken/internal/util"
@@ -232,6 +233,27 @@ type RaiseOutcome struct {
 // the client there is healthy — a background tab, a non-Ghostty terminal,
 // set-titles off — and kicking it would trade a diagnosable message for
 // destroying a window the user may be looking at.
+//
+// Two opens of one session issued within a fraction of a second used to
+// RACE: `open -na` returns the moment LaunchServices has the app, several
+// hundred ms before the window's `tmux attach` lands, so the second call's
+// `list-clients` also read "nobody attached" and opened a second window,
+// whose `-d` then kicked the first. A kicked kraken window normally just
+// closes, but one kicked inside 250 ms of its own launch instead shows
+// Ghostty's "failed to launch the requested command" banner — Ghostty on
+// macOS flags ANY exit under `abnormal-command-exit-runtime` (default 250 ms)
+// as a launch failure regardless of exit code, because of its own
+// `login -flp` wrapper (upstream `Surface.zig` childExited; a kicked client
+// exits 0 after printing `[detached (from session …)]`, measured 2026-10-21).
+// The board's attach button produced that double six times in 503 opens on
+// one machine, 159–821 ms apart. Three things close it: calls for one session
+// SERIALIZE in-process (sessionLock), an open WAITS until the client has
+// actually appeared before returning (attachSettle), so the queued call sees
+// it attached, and a window this process opened inside attachFresh is never
+// swapped out by the reattach fallback — it was just put on screen, and a
+// raise-mechanism failure on it says nothing about it being hidden. Two
+// `k o` processes share neither the lock nor the watermark; the wait alone
+// still keeps their second open from landing inside the first's 250 ms.
 func RaiseSession(session string) (RaiseOutcome, error) {
 	// an empty target is a caller bug — refuse it by name rather than
 	// letting it surface as a misleading "tmux session  is gone" below. The
@@ -242,6 +264,9 @@ func RaiseSession(session string) (RaiseOutcome, error) {
 	if session == "" {
 		return RaiseOutcome{}, fmt.Errorf("empty tmux session name")
 	}
+	lock := sessionLock(session)
+	lock.Lock()
+	defer lock.Unlock()
 	// the caller may hold a snapshot up to a second old — without this check
 	// a dead session would pop an empty Ghostty window that fails to attach.
 	// SessionAlive's "=" exact-match matters here: a bare -t target also
@@ -251,12 +276,11 @@ func RaiseSession(session string) (RaiseOutcome, error) {
 	if !SessionAlive(session) {
 		return RaiseOutcome{}, fmt.Errorf("tmux session %s is gone", session)
 	}
-	out, err := exec.Command("tmux", "list-clients", "-t", "="+session, "-F", "#{client_tty}").Output()
-	attached := err == nil && strings.TrimSpace(string(out)) != ""
-	if !attached {
+	if !sessionAttached(session) {
 		if err := openGhosttyAttach(session); err != nil {
 			return RaiseOutcome{}, fmt.Errorf("open Ghostty: %v", err)
 		}
+		settleAttach(session)
 		return RaiseOutcome{Attached: true}, nil
 	}
 	ferr := focusGhosttyWindow(session)
@@ -272,14 +296,110 @@ func RaiseSession(session string) (RaiseOutcome, error) {
 		// close that window mid-keystroke for nothing
 		return RaiseOutcome{}, nil
 	}
+	if freshlyOpened(session, time.Now()) {
+		// this process put a window for the session on screen moments ago
+		// (a double click on the board's attach button is the measured
+		// case); a new app window comes up frontmost, so there is nothing
+		// to raise and a swap would only kick it
+		util.LogEvent("core", "info", "open", fmt.Sprintf("raise %s: window opened %s ago, not reattaching", session, time.Since(raiseOpenedAt(session)).Round(time.Millisecond)))
+		return RaiseOutcome{}, nil
+	}
 	if err := openGhosttyAttach(session); err != nil {
 		return RaiseOutcome{FocusErr: fmt.Errorf("%v; reattach fallback failed: %v", ferr, err)}, nil
 	}
+	settleAttach(session)
 	// the raise failure is swallowed by the successful fallback — keep it
 	// diagnosable in the event log, since it's the signal that granting
 	// Accessibility would restore in-place raising
 	util.LogEvent("core", "info", "open", fmt.Sprintf("raise %s fell back to reattach: %v", session, ferr))
 	return RaiseOutcome{Attached: true}, nil
+}
+
+// The double-open guard's state, all in-process: one serve handles every
+// board click, which is where the measured doubles come from.
+const (
+	// attachSettle bounds how long an open waits for its client to appear
+	// in `list-clients`; a cold Ghostty launch takes a few hundred ms, and
+	// past this the window is assumed stuck (or Ghostty absent) and the
+	// caller gets its answer without one
+	attachSettle = 3 * time.Second
+	attachPoll   = 100 * time.Millisecond
+	// attachFresh is how long after this process opened a window the
+	// reattach fallback declines to swap it out
+	attachFresh = 5 * time.Second
+)
+
+var (
+	raiseMu     sync.Mutex
+	raiseLocks  = map[string]*sync.Mutex{}
+	raiseOpened = map[string]time.Time{}
+)
+
+// sessionLock returns the mutex RaiseSession holds for one session, so
+// concurrent raises of the same session queue instead of racing, while
+// raises of different sessions stay independent.
+func sessionLock(session string) *sync.Mutex {
+	raiseMu.Lock()
+	defer raiseMu.Unlock()
+	l, ok := raiseLocks[session]
+	if !ok {
+		l = &sync.Mutex{}
+		raiseLocks[session] = l
+	}
+	return l
+}
+
+// sessionAttached reports whether any tmux client is attached to the session
+// ("=" exact-match, as everywhere in this file).
+func sessionAttached(session string) bool {
+	out, err := exec.Command("tmux", "list-clients", "-t", "="+session, "-F", "#{client_tty}").Output()
+	return err == nil && strings.TrimSpace(string(out)) != ""
+}
+
+// settleAttach stamps the open watermark and waits, bounded by attachSettle,
+// for the opened window's client to show up in `list-clients`, so a raise
+// queued behind this one on sessionLock reads the session as attached
+// instead of opening a second window. A window that never attaches is logged
+// and the caller proceeds — the open itself already succeeded.
+func settleAttach(session string) {
+	raiseMu.Lock()
+	raiseOpened[session] = time.Now()
+	raiseMu.Unlock()
+	if !waitUntil(func() bool { return sessionAttached(session) }, attachSettle, attachPoll) {
+		util.LogEvent("core", "warn", "open", fmt.Sprintf("raise %s: no client attached %s after opening Ghostty", session, attachSettle))
+	}
+}
+
+// raiseOpenedAt is when this process last opened a window for the session,
+// zero when it never has.
+func raiseOpenedAt(session string) time.Time {
+	raiseMu.Lock()
+	defer raiseMu.Unlock()
+	return raiseOpened[session]
+}
+
+// freshlyOpened reports whether this process opened a window for the session
+// within attachFresh of now — the one condition under which the reattach
+// fallback stands down. Split out pure so the window can be pinned by a test.
+func freshlyOpened(session string, now time.Time) bool {
+	at := raiseOpenedAt(session)
+	return !at.IsZero() && now.Sub(at) < attachFresh
+}
+
+// waitUntil polls cond every step until it is true (returning true) or
+// timeout has elapsed (returning false). cond is checked once before any
+// sleep, so an already-true condition returns immediately.
+func waitUntil(cond func() bool, timeout, step time.Duration) bool {
+	deadline := time.Now().Add(timeout)
+	for {
+		if cond() {
+			return true
+		}
+		if time.Now().After(deadline) {
+			return false
+		}
+		time.Sleep(step)
+	}
 }
 
 // currentSession names the tmux session $TMUX_PANE points into, or "" when
@@ -310,7 +430,10 @@ func currentSession() string {
 // Ghostty window — split out pure so a test can pin the shape. -d is
 // unconditional: a no-op when no client is attached, and what makes a burst
 // of opens converge on one window (each attach kicks the previous client)
-// instead of leaving strays. "=" forces exact-match resolution for the same
+// instead of leaving strays — though a kick landing inside 250 ms of the
+// previous window's launch shows Ghostty's launch-failure banner instead of
+// closing it, which is why RaiseSession serializes and settles opens before
+// a second one can be issued. "=" forces exact-match resolution for the same
 // prefix-collision reason SessionAlive documents.
 func ghosttyAttachArgs(session string) []string {
 	return []string{"-na", "Ghostty.app", "--args", "-e", "tmux", "attach-session", "-d", "-t", "=" + session}

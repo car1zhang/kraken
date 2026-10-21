@@ -13,8 +13,9 @@ import (
 )
 
 // skills_embed_test.go verifies the go:embed directive actually captured
-// every kraken-owned skill — the six pipeline skills plus the reference skill
-// `load` — and that each SKILL.md's renamed frontmatter took: this can only
+// every kraken-owned skill — the four pipeline skills plus the three
+// phase-less ones (`load`, `handoff`, `direct`) — and that each SKILL.md's
+// renamed frontmatter took: this can only
 // be checked from package main, since the embed.FS
 // itself (skillsFS) lives here, not in jobs (jobs only sees the fs.Sub'd
 // jobs.SkillsFS assigned by init()). It also pins the three worktree-relative
@@ -24,10 +25,11 @@ import (
 // counts and header-comment shape.
 func TestSkillsFSContainsExpectedSkills(t *testing.T) {
 	want := map[string]string{
-		"info":  "info",
-		"aim":   "aim",
+		"info": "info",
+		"aim":  "aim",
+		// `do` ends with the PR: the `pr` skill folded into it in job 624,
+		// so a `pr` dir here would be a stale copy nothing points at.
 		"do":    "do",
-		"pr":    "pr",
 		"dream": "dream",
 		// `load` governs no phase — it is the ladders zeus looks a rung up in
 		// mid-phase — so TestSkillsOwnTheCellContract has nothing to say about
@@ -214,7 +216,13 @@ func TestSkillsOwnTheCellContract(t *testing.T) {
 		{"do", []string{
 			"90-build-report.md", "Discrepancies vs. the plan", "Complications",
 			"Deferred", "Verification",
-			// the cell section: the crew, the gate, the handoff to /pr
+			// the manual-test gate's stack-link verbs (job 622): the add
+			// before the gate line when a port-backed process is involved,
+			// the clear after the reply passes it. The brief says only "shut
+			// test services down" and names neither verb (crew_test.go's
+			// no-restating rule), so this is their only home.
+			"kraken stack add", "kraken stack clear",
+			// the cell section: the crew, the PR step, the gate behind it
 			"Inside A Kraken Cell", "hephaestus", "athena-logic", "athena-edge", "athena-style",
 			// the crew are TEAMMATES. The ownership line moved on 2026-08-21:
 			// the brief keeps the crew's IDENTITY (what makes an agent a
@@ -273,21 +281,29 @@ func TestSkillsOwnTheCellContract(t *testing.T) {
 			"author but do not run", "EVERY implementation slice is done",
 			"stop each still-running teammate with `TaskStop`", "There is no team-delete step",
 			"read-only exploration only",
-			"manual test ready:", "`.claude/skills/pr/SKILL.md`", "do NOT invoke `/pr` by name",
+			"manual test ready:",
+			// the PR step is do's own (step 8) since the pr skill folded
+			// into it: the branch rule (a cell's branch is the one kraken
+			// minted under its configurable prefix, so the skill names no
+			// prefix of its own and forbids the rename the old `carl/` step
+			// performed), the create command, the recycle, the
+			// never-ends-the-job and never-poll rules, and the ORDER —
+			// opened before the gate, every revision pushed to it
+			"### 8. Open The PR", "a cell never renames its branch", "gh pr create",
+			"git fetch origin && git checkout -B", "NEVER ends the job",
+			"awaiting checks", "Never poll", "Every later change is a push to this PR",
+			"Open the PR, then stop at the manual-test gate",
+			// the two edges the PR-before-gate order creates: a push to a
+			// PR that merged while zeus waited, and a standalone /do on the
+			// base branch — plus the by-name ban the brief also carries
+			"while the PR is still OPEN", "the base branch itself",
+			"Never invoke a `pr` skill by name",
 			"JOB SPEC is the contract", "Never declare the job done",
 			// the never-hard-wrap rule; see the same token on aim above. /do's
 			// copy binds 90-build-report.md, the one artifact a job that skips
 			// Phase 1 still ships — on that path neither aim nor info is read,
 			// so without this copy that report is bound by nothing.
 			"ONE source line",
-		}},
-		{"pr", []string{
-			// the branch rule: a cell's branch is the one kraken minted under
-			// its configurable prefix, so the skill names no prefix of its own
-			// and forbids the rename the old `carl/` step performed.
-			"Inside A Kraken Cell", "a cell never renames its branch", "gh pr create",
-			"git fetch origin && git checkout -B", "NEVER ends the job",
-			"awaiting checks", "Never poll",
 		}},
 		// dream owns the nightly corroboration pass end to end: the
 		// destination rule (which is the only mistake here that is hard to
@@ -381,7 +397,9 @@ func TestSkillsOwnTheCellContract(t *testing.T) {
 			"no open questions ever",
 			// the closing lines stay the phase skills'
 			"the closing line is the phase skill's",
-			"`.claude/skills/pr/SKILL.md`", "90-build-report.md",
+			// the PR step stays do's under direct, and it still precedes
+			// the gate
+			"the PR step (step 8", "90-build-report.md",
 			// solo outranks the review word: a solo job has no agents at all
 			"solo means no teammates and no subagents at all",
 			// the override's scope reaches the brief's crew paragraph — the
@@ -415,7 +433,7 @@ func TestSkillsOwnTheCellContract(t *testing.T) {
 // leaving the column empty, so that a note reaches the pass saying what carl
 // asked for rather than saying one artifact was patched. crew_test.go's
 // forbidden-token list keeps the verb out of zeus' brief; this keeps it out of
-// the four skills an ordinary cell actually reads.
+// every skill an ordinary cell actually reads.
 //
 // Without it the regression is silent and the reversal is one plausible edit:
 // `info/SKILL.md` DID name this verb until the change that added this test
@@ -434,7 +452,7 @@ func TestSkillsOwnTheCellContract(t *testing.T) {
 // appears in no non-dream skill today, so the looser match costs nothing.
 func TestOnlyDreamNamesTheFeedbackWriteVerb(t *testing.T) {
 	const verb = "feedback addressed"
-	for _, skill := range []string{"aim", "info", "do", "pr", "handoff", "direct"} {
+	for _, skill := range []string{"aim", "info", "do", "handoff", "direct"} {
 		if strings.Contains(readEmbedded(t, skill+"/SKILL.md"), verb) {
 			t.Errorf(".claude/skills/%s/SKILL.md names %q — only dream/SKILL.md may. "+
 				"That column is the nightly pass' alone; a skill an ordinary cell reads "+
@@ -515,7 +533,8 @@ func TestDirectPointersResolve(t *testing.T) {
 		"### 4. Plan The Implementation", // the delegation bullets direct skips whole
 		"### 5. Implement",               // the un-delegated path direct routes every job onto
 		"### 7. Write The Build Report",  // the join row direct rewrites
-		"### 9. Clean Up Agents",         // the step direct says has nothing to stop
+		"### 8. Open The PR",             // the step direct names as still do's, ahead of the gate
+		"### 10. Clean Up Agents",        // the step direct says has nothing to stop
 	} {
 		if !strings.Contains(do, "\n"+heading) {
 			t.Errorf(".claude/skills/do/SKILL.md no longer has %q at a line start — direct/SKILL.md's "+
@@ -575,7 +594,7 @@ func TestJobsSkillsFSWiredByInit(t *testing.T) {
 	for _, e := range entries {
 		names[e.Name()] = true
 	}
-	for _, want := range []string{"info", "aim", "do", "pr", "dream", "load", "handoff", "direct"} {
+	for _, want := range []string{"info", "aim", "do", "dream", "load", "handoff", "direct"} {
 		if !names[want] {
 			t.Errorf("jobs.SkillsFS root missing skill dir %q, got %v", want, names)
 		}

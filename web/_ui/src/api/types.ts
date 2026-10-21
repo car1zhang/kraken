@@ -179,6 +179,27 @@ export interface JobPR {
 }
 
 /**
+ * The daemon probe's verdict on a stack link's port (internal/jobs/stackprobe.go):
+ * `unknown` from birth and forever for a non-loopback host, `up`/`down` once a
+ * loopback dial has run. Widened with string for the same reason PRState is.
+ */
+export type StackStatus = "up" | "down" | "unknown" | string;
+
+/**
+ * One manual-test URL a cell registered with `kraken stack add`, mirroring
+ * api.webStackLink (internal/api/jobstack.go). All four keys are always
+ * present once the array is; an empty label is a real answer (the chip then
+ * shows the port alone).
+ */
+export interface StackLink {
+  url: string;
+  label: string;
+  status: StackStatus;
+  /** unix millis, registration time */
+  at: number;
+}
+
+/**
  * Per-job token spend, mirroring api.webTokens (internal/api/board.go:299).
  *
  * Counters are RAW and unweighted — no blended cost, deliberately: cache reads
@@ -339,8 +360,8 @@ export interface WebJob {
   question?: WebQuestion;
   zeus_status?: ZeusStatus;
   /**
-   * The pipeline skill zeus most recently used — one of the five
-   * phase-governing skill names (info/aim/do/pr/dream), read off zeus'
+   * The pipeline skill zeus most recently used — one of the four
+   * phase-governing skill names (info/aim/do/dream), read off zeus'
    * transcript server-side. Absent when no transcript resolves or no pipeline
    * skill has been used yet; the card renders its one stage chip when a
    * non-empty value is present. Typed as bare string rather than a union: the
@@ -366,6 +387,12 @@ export interface WebJob {
   cell_gone?: boolean;
   reactivatable?: boolean;
   prs?: JobPR[];
+  /**
+   * The cell's manual-test URLs, one chip each in the card's PR band. ABSENT
+   * (never `[]`) when the cell registered none and always absent on an
+   * archived card: the rows are deleted with the cell at teardown.
+   */
+  stack?: StackLink[];
   doc_questions?: WebDocQuestion[];
   feedback?: WebFeedback[];
   threads?: WebThread[];

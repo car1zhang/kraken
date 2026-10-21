@@ -585,7 +585,7 @@ func LastTurnUUID(path string) string {
 // output, the post-compaction summary, or an interrupt marker. Every one of
 // these lands as a user record and parses as a "user" block, and none of
 // them is a new turn. A SKILL invocation is deliberately not here: carl's
-// `/do`, `/pr`, `/aim`, `/info` land as records beginning `<command-message>`
+// `/do`, `/aim`, `/info` land as records beginning `<command-message>`
 // (38 of 38 such records in 250 cell transcripts, measured 2026-10-08), and
 // each of those IS carl's next prompt — the turn carl is reading during.
 func harnessUserRecord(text string) bool {

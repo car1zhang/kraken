@@ -29,7 +29,7 @@ Three outputs, three destinations. Getting this wrong is the only mistake here t
 change; the machine keeps the reasoning. This is structural rather than a redaction rule, which is
 why it is reliable: a commit contains a diff, and that is all it ever contains.
 
-The pr skill's body template (`.claude/skills/pr/SKILL.md`) asks for a `## Context` section with
+The do skill's PR-body template (`.claude/skills/do/SKILL.md`, the PR step) asks for a `## Context` section with
 "error logs, or motivation"; in a dream PR that section carries the MECHANISM in a sentence — what
 was wrong, why the change fixes it, the measured numbers of the mechanism itself — and never the
 evidence: no session id, cell or job name, operator name or quoted remark, and no log line from a

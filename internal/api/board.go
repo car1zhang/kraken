@@ -518,8 +518,10 @@ type webJob struct {
 	// Question mirrors an unanswered AskUserQuestion call in zeus'
 	// transcript; the board renders it as header + option buttons.
 	Question *webQuestion `json:"question,omitempty"`
-	// Stage is the pipeline skill zeus most recently used — one of the five
-	// phase-governing skill names (info, aim, do, pr, dream) — read
+	// Stage is the pipeline skill zeus most recently used — one of the four
+	// phase-governing skill names (info, aim, do, dream; `pr` folded into do
+	// in job 624, and a client renders an unknown stage with its generic
+	// fallback) — read
 	// off zeus' transcript (jobs.FindStage), never declared by any agent.
 	// Set only where a transcript already resolves (live started cells, the
 	// cell-gone branch and done jobs — exactly the branches that read Detail).
@@ -573,6 +575,13 @@ type webJob struct {
 	// PRs mirrors the job file's kraken-owned prs: list — every PR the
 	// cell ever shipped, rendered by the clients as linked state chips.
 	PRs []jobs.JobPR `json:"prs,omitempty"`
+	// Stack is the cell's manual-test URLs (jobstack.go), one linked chip
+	// each beside the PR chips. Served straight from `job_stacks` rows for
+	// active jobs; absent (omitempty, and webStackLinksFrom returns nil for
+	// no rows) when the cell registered none, and never set for archived
+	// jobs — the rows are deleted at teardown, so an archived job has none
+	// to show. ADDITIVE, so apiContract does not bump.
+	Stack []webStackLink `json:"stack,omitempty"`
 	// DocQuestions mirrors zeus' open doc questions (answered or not),
 	// served straight from `questions` rows in kraken.db — live or dead, no
 	// file, no parse step, so there is no more malformed-file case (see
@@ -1212,6 +1221,10 @@ func buildWebBoard() webBoard {
 			Artifacts: jobArtifacts(j, live[jobs.CellSession(j)]),
 			ModTime:   j.ModTime.Unix(),
 			PRs:       j.PRs,
+			// Stack: the cell's manual-test URLs, store-only like Threads
+			// below. Teardown deletes the rows, so a done job simply has
+			// none; nothing here gates on liveness.
+			Stack: webStackLinksFrom(jobs.ListStackLinks(j)),
 			// DocQuestions/Feedback: one uniform path straight off the store,
 			// live or dead, any state — no file, no cell-dir liveness check
 			// (see jobQuestions/jobFeedback). Never set for archived jobs,
