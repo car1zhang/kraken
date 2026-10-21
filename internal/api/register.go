@@ -151,6 +151,10 @@ func registerRoutes(mux routeMux) {
 	// cells it is most useful on, and a full form save from a client that
 	// predates the field would clear it.
 	mux.HandleFunc("/api/job/goal", jobGoalHandler)
+	// A cell's stack links (jobstack.go): one-field route like load and goal,
+	// GET open, POST gated inline so `kraken stack get` and the board's read
+	// stay reachable under --mirror.
+	mux.HandleFunc("/api/job/stack", jobStackHandler)
 	mux.HandleFunc("/api/threads", threadsHandler)
 	mux.HandleFunc("/api/thread/read", threadReadHandler)
 	// Zeus' own conversation tail for the steer modal's transcript panel
