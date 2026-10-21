@@ -250,16 +250,24 @@ func registerRoutes(mux routeMux) {
 	mux.HandleFunc("/api/node/job", nodeJobHandler)
 	mux.HandleFunc("/api/node/job/raw", nodeJobRawHandler)
 	mux.HandleFunc("/api/node/read", nodeReadHandler)
+	mux.HandleFunc("/api/node/artifact", nodeArtifactHandler)
+	mux.HandleFunc("/api/node/transcript", nodeTranscriptHandler)
+	mux.HandleFunc("/api/node/thread/read", nodeThreadReadHandler)
 	mux.HandleFunc("/api/node/announce", mirrorGated(nodeAnnounceHandler))
 	mux.HandleFunc("/api/node/action", mirrorGated(nodeActionHandler))
-	// The registry read and the proxies a paired client or this Mac drives a
-	// sibling's public cell through. The action proxy is mirror-gated: a
-	// mirror must drive nothing real, and the sibling cannot tell a mirror's
-	// request from the live deployment's. The two relayed GETs are reads.
+	// The registry read and the proxies through which a paired client or this
+	// Mac reads a sibling's readonly and public cells (the six relayed GETs)
+	// and drives its public ones (the action proxy). The action proxy is
+	// mirror-gated: a mirror must drive nothing real, and the sibling cannot
+	// tell a mirror's request from the live deployment's. The relayed GETs
+	// are reads.
 	mux.HandleFunc("/api/nodes", nodesHandler)
 	mux.HandleFunc("/api/nodes/action", mirrorGated(nodesActionHandler))
 	mux.HandleFunc("/api/nodes/job/raw", nodesJobRawHandler)
 	mux.HandleFunc("/api/nodes/read", nodesReadHandler)
+	mux.HandleFunc("/api/nodes/artifact", nodesArtifactHandler)
+	mux.HandleFunc("/api/nodes/transcript", nodesTranscriptHandler)
+	mux.HandleFunc("/api/nodes/thread/read", nodesThreadReadHandler)
 	// Pairing (pair.go). The password write is mirror-gated: it revokes every
 	// paired device of the deployment whose database a mirror might hold.
 	mux.HandleFunc("/api/pair/password", mirrorGated(pairPasswordHandler))

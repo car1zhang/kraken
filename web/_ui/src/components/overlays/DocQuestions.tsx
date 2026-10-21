@@ -81,6 +81,12 @@ export interface DocQuestionsProps {
    * on the ⑂ branch button it renders.
    */
   onAskBranched?: (slug: string, tid: string) => void;
+  /**
+   * Render the rows with no way to write: no answer input, no send / accept /
+   * re-answer, no ask. Another node's job — answers are its owner's to give,
+   * whatever the job's visibility.
+   */
+  readOnly?: boolean;
   // The answered rows' → decision / ◆ decided mint was retired with the
   // board's other one-shot marks (PR 2, Q10): a decision now reaches the
   // mental model by highlighting the answer and pressing ◆ mind.
@@ -94,6 +100,7 @@ export function DocQuestions({
   job,
   mutate,
   onAskBranched,
+  readOnly = false,
 }: DocQuestionsProps) {
   const list = job.doc_questions || [];
   const slug = job.slug;
@@ -267,6 +274,20 @@ export function DocQuestions({
   if (!list.length) return null;
   const sorted = sortDocQuestions(list);
   const hasOpen = sorted.some((q) => !q.answer);
+
+  if (readOnly) {
+    return (
+      <div className="doc-questions">
+        {sorted.map((q) =>
+          q.answer ? (
+            <AnsweredRow key={q.id} slug={slug} q={q} />
+          ) : (
+            <ReadOnlyOpenRow key={q.id} q={q} />
+          ),
+        )}
+      </div>
+    );
+  }
 
   return (
     <div className="doc-questions">
@@ -522,6 +543,34 @@ function EditableRow({
   );
 }
 
+/**
+ * An OPEN question in a read-only panel: EditableRow's head, context and
+ * recommendation with no answer row and no ask toggle beneath them.
+ */
+function ReadOnlyOpenRow({ q }: { q: WebDocQuestion }) {
+  const imp = (q.importance || "P2").toLowerCase();
+  return (
+    <div className="dq-row">
+      <div className="dq-head">
+        <span className={`dq-imp ${imp}`}>{q.importance || "P2"}</span>
+        <span className="dq-q" title={q.text}>
+          {q.id} — {q.text}
+        </span>
+      </div>
+      {q.context ? (
+        <div className="dq-ctx" title={q.context}>
+          {q.context}
+        </div>
+      ) : null}
+      {q.recommendation ? (
+        <div className="dq-rec" title={q.recommendation}>
+          rec: {q.recommendation}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 function AnsweredRow({
   slug,
   q,
@@ -529,12 +578,16 @@ function AnsweredRow({
 }: {
   slug: string;
   q: WebDocQuestion;
-  onReopen: () => void;
+  /** absent in a read-only panel: the row is then not a re-answer target */
+  onReopen?: () => void;
 }) {
   const imp = (q.importance || "P2").toLowerCase();
-  const title = q.answered_at
-    ? `answered ${String(q.answered_at)} — click to re-answer`
-    : "click to re-answer";
+  const answered = q.answered_at ? `answered ${String(q.answered_at)}` : "";
+  const title = onReopen
+    ? answered
+      ? `${answered} — click to re-answer`
+      : "click to re-answer"
+    : answered || undefined;
   return (
     <div
       className="dq-row dq-answered"

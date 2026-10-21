@@ -515,14 +515,20 @@ struct ArtifactPagerView: View {
     /// sheet is on screen.
     @State private var selectionInPage = ""
 
+    /// false for another Mac's artifacts: feedback is an owner-only write, so
+    /// no page offers the pencil whatever its URL parses as.
+    private let feedbackEnabled: Bool
+
     init(
         artifacts: [WebArtifact],
         selected: WebArtifact,
         baseURL: String,
+        feedbackEnabled: Bool = true,
         onFeedbackCreated: ((ArtifactRef, String) -> Void)? = nil
     ) {
         self.baseURL = baseURL
         self.pages = artifactPages(in: artifacts, selected: selected)
+        self.feedbackEnabled = feedbackEnabled
         self.onFeedbackCreated = onFeedbackCreated
         _selection = State(initialValue: selected.url)
     }
@@ -535,7 +541,7 @@ struct ArtifactPagerView: View {
             ForEach(pages) { artifact in
                 ArtifactView(
                     name: artifact.name, baseURL: baseURL, path: artifact.url,
-                    showsFeedbackButton: artifact.url == selection,
+                    showsFeedbackButton: feedbackEnabled && artifact.url == selection,
                     onFeedbackCreated: onFeedbackCreated,
                     // The SELECTED page only, for `showsFeedbackButton`'s
                     // reason: there is one toolbar, so there is one document

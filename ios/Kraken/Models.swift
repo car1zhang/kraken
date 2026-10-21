@@ -186,6 +186,52 @@ extension WebJob {
     }
 }
 
+/// The spec text of a job's raw document: its YAML frontmatter dropped. The
+/// Swift twin of the web board's `stripFrontmatter` — same rule, same results.
+enum FrontmatterText {
+    /// When `text` opens with a `---` line (`\n` or `\r\n`) and a LATER line
+    /// is exactly `---` (a trailing `\r` allowed), everything after that
+    /// closing line with its leading run of newlines trimmed; otherwise
+    /// `text` unchanged.
+    ///
+    /// Walked as UTF-8 bytes rather than Characters because Swift folds
+    /// `\r\n` into ONE Character, so a Character-level `hasPrefix("---\n")`
+    /// misses a CRLF document and a split on `"\n"` never splits its lines.
+    /// Every byte compared is ASCII, so each cut lands on a scalar boundary.
+    ///
+    /// A leading UTF-8 byte-order mark (EF BB BF) is skipped before the fence
+    /// test, so a job file saved with one still loses its frontmatter instead
+    /// of rendering raw YAML. Text with no frontmatter comes back unchanged,
+    /// mark included.
+    static func body(of text: String) -> String {
+        let all = Array(text.utf8)
+        let bom: [UInt8] = [0xEF, 0xBB, 0xBF]
+        let bytes = all.starts(with: bom) ? Array(all.dropFirst(bom.count)) : all
+        let dash = UInt8(ascii: "-"), cr = UInt8(ascii: "\r"), lf = UInt8(ascii: "\n")
+        let fence: [UInt8] = [dash, dash, dash]
+        var i: Int
+        if bytes.starts(with: fence + [lf]) {
+            i = 4
+        } else if bytes.starts(with: fence + [cr, lf]) {
+            i = 5
+        } else {
+            return text
+        }
+        while i < bytes.count {
+            let end = bytes[i...].firstIndex(of: lf) ?? bytes.count
+            var line = bytes[i..<end]
+            if line.last == cr { line = line.dropLast() }
+            if line.elementsEqual(fence) {
+                var k = min(end + 1, bytes.count)
+                while k < bytes.count, bytes[k] == lf || bytes[k] == cr { k += 1 }
+                return String(decoding: bytes[k...], as: UTF8.self)
+            }
+            i = end + 1
+        }
+        return text
+    }
+}
+
 enum FleetFilter {
     /// `hideOthers` removes exactly the remote (owned) cards, order kept.
     static func apply(_ jobs: [WebJob], hideOthers: Bool) -> [WebJob] {

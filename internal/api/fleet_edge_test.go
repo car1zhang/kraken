@@ -1073,9 +1073,13 @@ func TestEdgeFleetNodeJobPrivateArchivedUnknownIndistinguishable(t *testing.T) {
 	}
 }
 
-// raw and read: "readonly → `403 {"error":"not public"}`; private/unknown →
-// 404" — a job with no visibility line reads as readonly.
-func TestEdgeFleetNodeRawAndReadRefuseNonPublic(t *testing.T) {
+// raw and read (round 2, remote parity): "readonly and public answer; private
+// and unknown → 404 no such job" — a job with no visibility line reads as
+// readonly. Before round 2 a readonly job answered 403 `not public` here;
+// the operator's steer opened every READ to readonly cards, so raw answers
+// the local body and read reaches its own 409 (these jobs have no live zeus).
+// Corrected by the lead as an obsoleted pin.
+func TestEdgeFleetNodeRawAndReadAnswerReadonlyRefusePrivate(t *testing.T) {
 	st := edgeFleetEnv(t)
 	edgeFleetJob(t, st, "ro-job", "readonly")
 	edgeFleetJob(t, st, "default-job", "")
@@ -1083,12 +1087,15 @@ func TestEdgeFleetNodeRawAndReadRefuseNonPublic(t *testing.T) {
 	for name, h := range map[string]http.HandlerFunc{"/api/node/job/raw": nodeJobRawHandler, "/api/node/read": nodeReadHandler} {
 		for _, slug := range []string{"ro-job", "default-job"} {
 			rec := edgeFleetDo(h, edgeFleetReq(http.MethodGet, name+"?slug="+slug, nil, "100.88.0.5:1"))
-			if rec.Code != http.StatusForbidden {
-				t.Errorf("%s %s: status %d, want 403", name, slug, rec.Code)
+			if rec.Code == http.StatusForbidden || rec.Code == http.StatusNotFound {
+				t.Errorf("%s %s: status %d, want a readonly job answered (not 403/404)", name, slug, rec.Code)
 				continue
 			}
-			if got := edgeFleetErr(t, rec); got != "not public" {
-				t.Errorf("%s %s: error %q, want not public", name, slug, got)
+			if name == "/api/node/job/raw" && rec.Code != http.StatusOK {
+				t.Errorf("%s %s: status %d, want 200", name, slug, rec.Code)
+			}
+			if name == "/api/node/read" && rec.Code != http.StatusConflict {
+				t.Errorf("%s %s: status %d, want 409 (no live zeus)", name, slug, rec.Code)
 			}
 		}
 		for _, slug := range []string{"secret-job", "never-existed"} {

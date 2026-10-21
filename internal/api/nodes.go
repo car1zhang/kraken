@@ -8,8 +8,11 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"kraken/internal/core"
@@ -19,17 +22,25 @@ import (
 )
 
 // nodes.go — the node API: what a sibling kraken (or any tailnet device) may
-// read and do on this node, and the proxies this node's own owner or paired
-// clients reach a sibling's public cells through.
+// read and do on this node, and the proxies through which this node's own
+// owner or paired clients read a sibling's readonly and public cells and
+// drive its public ones.
 //
 // Node-tier routes serve this node's own cards only, filtered by visibility on
-// every request: a private job is ABSENT (its detail answers the same 404 an
-// unknown slug does, so nobody can tell it exists), a readonly one is
-// visible and untouchable, a public one may be driven. The drive routes read
-// the job's visibility from the store at request time — never from a cached
-// card — so a flip to private refuses every remote action that arrives after
-// the flip. GET /api/nodes (node tier too) serves the siblings' card lists
-// this node has stored, never this node's own private jobs.
+// every request: a private job is ABSENT (every read answers the same 404 an
+// unknown slug does, so nobody can tell it exists). A readonly job and a
+// public one are READ alike — the card as this board builds it (minus the
+// owner and account binding), and, each per-job route gated by visibleJob,
+// its job text, its artifacts, its zeus transcript and its side threads. Only
+// WRITES tell them apart: POST /api/node/action drives a public job and
+// refuses a readonly one 403 (publicJob), and the owner-only writes
+// (feedback, doc-question answers, threads, goals, rename, visibility,
+// uploads, the mental model) have no node route at all, on any visibility.
+// Every gate reads the job's visibility from the store at request time —
+// never from a cached card — so a flip to private refuses every remote read
+// or action that arrives after the flip. GET /api/nodes (node tier too)
+// serves the siblings' card lists this node has stored, never this node's
+// own private jobs.
 
 // getOnly refuses anything but GET with 405.
 func getOnly(w http.ResponseWriter, r *http.Request) bool {
@@ -65,20 +76,19 @@ func servedToNodes(wj webJob) bool {
 	return wj.Visibility == jobs.VisibilityReadOnly || wj.Visibility == jobs.VisibilityPublic
 }
 
-// nodeCard is a card as a sibling receives it: the object this board renders,
-// minus what stays home whatever a job's visibility — carl's feedback notes,
-// token spend, the account binding, side threads and doc questions — and minus
-// artifact URLs, which address THIS node's /api/artifact/ and would resolve
-// against the viewer's own node (a same-slug job there) if served onward.
-// Artifact names come with GET /api/node/job instead.
+// nodeCard is a card as a sibling receives it: the object this board renders
+// with exactly two keys cleared — the owner stamp (a card served from here is
+// this node's own, and the receiver stamps the owner from its registry row)
+// and the account binding, which names this machine's pool login and is read
+// against this machine's usage snapshot, so it means nothing on another one.
+// Everything else (feedback, tokens, threads, doc questions, artifacts, PRs,
+// the load estimate, goals, the pending question, crew, detail …) is served
+// as built. The artifact URLs left on it address THIS node's /api/artifact/;
+// a receiving node rewrites every one to its own proxy (strippedCards) and
+// never serves a sibling's URL onward.
 func nodeCard(wj webJob) webJob {
 	wj.Owner = nil
-	wj.Feedback = nil
-	wj.Tokens = nil
 	wj.Account = nil
-	wj.Threads = nil
-	wj.DocQuestions = nil
-	wj.Artifacts = nil
 	return wj
 }
 
@@ -122,18 +132,11 @@ func nodeJobHandler(w http.ResponseWriter, r *http.Request) {
 	if !getOnly(w, r) {
 		return
 	}
-	slug := r.URL.Query().Get("slug")
-	if !jobs.FleetEnabled() || slug == "" {
-		noSuchJob(w)
-		return
-	}
-	// Existence and visibility come from the job row (LoadJobs holds active
-	// jobs only, so an archived slug is absent here), never from the board
+	// Existence and visibility come from the job row, never from the board
 	// cache: a readonly or public job answers 200 whatever its state and
 	// whether or not its cell is live.
-	j := jobs.JobBySlug(jobs.LoadJobs(), slug)
-	if j == nil || j.EffectiveVisibility() == jobs.VisibilityPrivate {
-		noSuchJob(w)
+	j := visibleJob(w, r.URL.Query().Get("slug"))
+	if j == nil {
 		return
 	}
 	wj, ok := cachedCard(j.Slug)
@@ -174,13 +177,30 @@ func rowCard(j *jobs.Job) webJob {
 	}
 }
 
-// publicJob resolves slug to an active job and refuses anything not public:
-// unknown or private → 404 (indistinguishable), readonly → 403. It reads the
-// store, not the board cache.
-func publicJob(w http.ResponseWriter, slug string) *jobs.Job {
-	j := jobs.JobBySlug(jobs.LoadJobs(), slug)
-	if !jobs.FleetEnabled() || j == nil || j.EffectiveVisibility() == jobs.VisibilityPrivate {
+// visibleJob is every node-tier READ's gate: slug resolved among the ACTIVE
+// jobs (LoadJobs holds no archived one), and anything a sibling may not see —
+// fleet off, an empty or unknown slug, a private job — answers the one
+// noSuchJob 404, so the four cannot be told apart. A readonly or public job
+// is returned with nothing written. It reads the store, not the board cache.
+func visibleJob(w http.ResponseWriter, slug string) *jobs.Job {
+	if !jobs.FleetEnabled() || slug == "" {
 		noSuchJob(w)
+		return nil
+	}
+	j := jobs.JobBySlug(jobs.LoadJobs(), slug)
+	if j == nil || j.EffectiveVisibility() == jobs.VisibilityPrivate {
+		noSuchJob(w)
+		return nil
+	}
+	return j
+}
+
+// publicJob is the WRITE gate, nodeActionHandler's alone: visibleJob's 404s,
+// then readonly → 403. A readonly job is read like a public one and driven
+// like no one's.
+func publicJob(w http.ResponseWriter, slug string) *jobs.Job {
+	j := visibleJob(w, slug)
+	if j == nil {
 		return nil
 	}
 	if j.EffectiveVisibility() != jobs.VisibilityPublic {
@@ -190,10 +210,15 @@ func publicJob(w http.ResponseWriter, slug string) *jobs.Job {
 	return j
 }
 
-// nodeJobRawHandler is GET /api/node/job/raw?slug=: the job text of a PUBLIC
-// job, the remote editor's load — exactly GET /api/job/raw's body.
+// nodeJobRawHandler is GET /api/node/job/raw?slug=: the job text of a
+// readonly or public job — exactly GET /api/job/raw's body. Its `editable` is
+// the owner's local rule; whether a remote client offers a save is that
+// client's business, and the save itself goes through publicJob.
 func nodeJobRawHandler(w http.ResponseWriter, r *http.Request) {
-	if publicJob(w, r.URL.Query().Get("slug")) == nil {
+	if !getOnly(w, r) {
+		return
+	}
+	if visibleJob(w, r.URL.Query().Get("slug")) == nil {
 		return
 	}
 	webJobRaw(w, r)
@@ -217,13 +242,13 @@ func readCount(r *http.Request) int {
 }
 
 // nodeReadHandler is GET /api/node/read?slug=&n=: the last n blocks of a
-// PUBLIC cell's zeus transcript — the remote `k r` — in /api/peers/read's
-// shape.
+// readonly or public cell's zeus transcript — the remote `k r` — in
+// /api/peers/read's shape.
 func nodeReadHandler(w http.ResponseWriter, r *http.Request) {
 	if !getOnly(w, r) {
 		return
 	}
-	j := publicJob(w, r.URL.Query().Get("slug"))
+	j := visibleJob(w, r.URL.Query().Get("slug"))
 	if j == nil {
 		return
 	}
@@ -252,6 +277,244 @@ func nodeReadHandler(w http.ResponseWriter, r *http.Request) {
 		out = append(out, m)
 	}
 	webJSON(w, http.StatusOK, map[string]any{"blocks": out, "counted": counted})
+}
+
+// serveLocalGet is serveLocal's GET sibling: it runs a local read's handler
+// on a synthesized GET path?q, so a node read answers with exactly the bytes
+// the owner's own board gets from that route.
+func serveLocalGet(w http.ResponseWriter, r *http.Request, path string, h http.HandlerFunc, q url.Values) {
+	req, err := http.NewRequestWithContext(r.Context(), http.MethodGet, path+"?"+q.Encode(), nil)
+	if err != nil {
+		webJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	req.RemoteAddr = r.RemoteAddr
+	h(w, req)
+}
+
+// copyQuery copies each named parameter from r's query into q when non-empty.
+func copyQuery(q url.Values, r *http.Request, keys ...string) {
+	for _, k := range keys {
+		if v := r.URL.Query().Get(k); v != "" {
+			q.Set(k, v)
+		}
+	}
+}
+
+// noSuchArtifact is the one refusal every artifact miss gets.
+func noSuchArtifact(w http.ResponseWriter) {
+	webJSON(w, http.StatusNotFound, map[string]string{"error": "no such artifact"})
+}
+
+// nodeArtifactHandler is GET /api/node/artifact?slug=&name=: one artifact of
+// a readonly or public job, as bytes. name must be one the owner's own card
+// lists — the list is the allowlist, so nothing a sibling names reaches the
+// disk or the table unless this board would have offered it — and it is read
+// from the one source that list came from (the live cell dir, else the
+// artifacts table). A live-cell name is served only when every segment
+// Lstat's as a real directory and the last as a regular file
+// (regularNoLinks) and the open itself refuses a link (readRegularNoFollow),
+// so no symlink in artifacts/ is followed. The bytes are
+// written directly rather than through http.ServeFile, so a name that is a
+// directory on disk can never list.
+func nodeArtifactHandler(w http.ResponseWriter, r *http.Request) {
+	inertArtifactHeaders(w, artifactMimeType(r.URL.Query().Get("name")))
+	if !getOnly(w, r) {
+		return
+	}
+	q := r.URL.Query()
+	j := visibleJob(w, q.Get("slug"))
+	if j == nil {
+		return
+	}
+	name := q.Get("name")
+	if strings.TrimSpace(name) == "" {
+		noSuchArtifact(w)
+		return
+	}
+	var list []webArtifact
+	live := false
+	if wj, ok := cachedCard(j.Slug); ok {
+		list, live = wj.Artifacts, wj.Live
+	} else {
+		list = rowCard(j).Artifacts
+	}
+	listed := false
+	for _, a := range list {
+		if a.Name == name {
+			listed = true
+			break
+		}
+	}
+	if !listed {
+		noSuchArtifact(w)
+		return
+	}
+	var data []byte
+	if live {
+		p, ok := ArtifactPath(j, "cell", name)
+		if !ok || !regularNoLinks(jobs.CellArtifacts(j), name) {
+			noSuchArtifact(w)
+			return
+		}
+		b, tooBig, ok := readRegularNoFollow(p)
+		if tooBig {
+			artifactTooBig(w)
+			return
+		}
+		if !ok {
+			noSuchArtifact(w)
+			return
+		}
+		data = b
+	} else {
+		b, _, ok := ArtifactBytes(j, "pluto", name)
+		if !ok {
+			noSuchArtifact(w)
+			return
+		}
+		if len(b) > nodeReplyMax {
+			artifactTooBig(w)
+			return
+		}
+		data = b
+	}
+	w.Header().Set("Content-Type", artifactMimeType(name))
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(data)
+}
+
+// inertArtifactHeaders are the headers every artifact reply served to or for
+// another node carries, refusals included, given the mime type of the NAME
+// the request asked for. nosniff and no-store always. A plain `sandbox` CSP —
+// no allow-scripts, no allow-same-origin — only when that type is one a
+// browser runs script in, text/html or image/svg+xml: such an artifact is
+// rendered in a frame on the viewer's board origin, and a hostile node's page
+// must not act there. Any other type (a PDF, an image) gets no CSP, since it
+// cannot script, and a browser's built-in PDF viewer can refuse to load
+// inside a sandboxed document. The rule keys on the requested name alone,
+// so a refusal (a JSON 404 or 502) carries the CSP exactly when a success
+// would have.
+//
+// Why no script at all rather than an opaque origin with scripts: a script
+// in an opaque origin can still send CORS simple requests to this node, which
+// on the owner's machine arrive from loopback and are classified owner. The
+// gate refuses every non-JSON POST (postContentTypeOK) and every POST with a
+// foreign or `null` Origin (postOriginOK); the no-script rule is the layer
+// that depends on neither, nor on every route staying behind them. The same
+// `sandbox` directive guards feedback.go's snapshot route.
+func inertArtifactHeaders(w http.ResponseWriter, mimeType string) {
+	h := w.Header()
+	h.Set("X-Content-Type-Options", "nosniff")
+	h.Set("Cache-Control", "no-store")
+	if scriptableMime(mimeType) {
+		h.Set("Content-Security-Policy", "sandbox")
+	}
+}
+
+// scriptableMime reports whether a browser would run script in a document of
+// this type: html or svg, whatever parameters follow.
+func scriptableMime(mimeType string) bool {
+	base, _, _ := strings.Cut(mimeType, ";")
+	base = strings.ToLower(strings.TrimSpace(base))
+	return base == "text/html" || base == "image/svg+xml"
+}
+
+// readRegularNoFollow reads p only if p itself is not a symlink (O_NOFOLLOW
+// makes the open fail on one) and the opened handle is a regular file. It
+// closes the gap between regularNoLinks' walk and the read: a file swapped
+// for a link after the walk is refused at the open, and the Fstat is of the
+// very handle the bytes come from.
+//
+// O_NONBLOCK is harmless on a regular file and keeps the open itself from
+// blocking should a FIFO be swapped in during that race. A file larger than
+// nodeReplyMax is refused (tooBig) rather than read: a sibling's relay would
+// refuse it anyway, and the read goes through a LimitReader, so a file that
+// grows after the Fstat is still never read past the cap.
+func readRegularNoFollow(p string) (data []byte, tooBig, ok bool) {
+	f, err := os.OpenFile(p, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
+	if err != nil {
+		return nil, false, false
+	}
+	defer f.Close()
+	fi, err := f.Stat()
+	if err != nil || !fi.Mode().IsRegular() {
+		return nil, false, false
+	}
+	if fi.Size() > nodeReplyMax {
+		return nil, true, false
+	}
+	b, err := io.ReadAll(io.LimitReader(f, nodeReplyMax+1))
+	if err != nil {
+		return nil, false, false
+	}
+	if len(b) > nodeReplyMax {
+		return nil, true, false
+	}
+	return b, false, true
+}
+
+// artifactTooBig is the refusal for an artifact over nodeReplyMax.
+func artifactTooBig(w http.ResponseWriter) {
+	webJSON(w, http.StatusRequestEntityTooLarge, map[string]string{"error": "artifact over 16 MB"})
+}
+
+// regularNoLinks reports whether name, under root, is a regular file reached
+// without crossing a symlink: every segment is Lstat'd, each intermediate
+// must be a real directory and the last a regular file. A link anywhere in
+// artifacts/ would otherwise let a sibling read its target — ArtifactPath
+// stats through links — on a job that is readonly by default.
+func regularNoLinks(root, name string) bool {
+	p := root
+	segs := strings.Split(strings.TrimPrefix(name, "/"), "/")
+	for i, seg := range segs {
+		p = filepath.Join(p, seg)
+		fi, err := os.Lstat(p)
+		if err != nil {
+			return false
+		}
+		if i < len(segs)-1 {
+			if !fi.IsDir() {
+				return false
+			}
+		} else if !fi.Mode().IsRegular() {
+			return false
+		}
+	}
+	return true
+}
+
+// nodeTranscriptHandler is GET /api/node/transcript?slug=&n=&turns=: a
+// readonly or public job's zeus transcript, answered by the steer modal's own
+// /api/job/transcript handler.
+func nodeTranscriptHandler(w http.ResponseWriter, r *http.Request) {
+	if !getOnly(w, r) {
+		return
+	}
+	j := visibleJob(w, r.URL.Query().Get("slug"))
+	if j == nil {
+		return
+	}
+	q := url.Values{"slug": {j.Slug}}
+	copyQuery(q, r, "n", "turns")
+	serveLocalGet(w, r, "/api/job/transcript", jobTranscriptHandler, q)
+}
+
+// nodeThreadReadHandler is GET /api/node/thread/read?slug=&tid=&n=: one side
+// thread of a readonly or public job, answered by /api/thread/read's own
+// handler. The thread lookup is keyed on the gated job, so a tid belonging to
+// any other job answers that handler's "unknown thread".
+func nodeThreadReadHandler(w http.ResponseWriter, r *http.Request) {
+	if !getOnly(w, r) {
+		return
+	}
+	j := visibleJob(w, r.URL.Query().Get("slug"))
+	if j == nil {
+		return
+	}
+	q := url.Values{"slug": {j.Slug}}
+	copyQuery(q, r, "tid", "n")
+	serveLocalGet(w, r, "/api/thread/read", threadReadHandler, q)
 }
 
 // nodeAnnounceHandler is POST /api/node/announce: a sibling saying "I am a
@@ -576,11 +839,7 @@ func nodesGetProxy(w http.ResponseWriter, r *http.Request, path string, params .
 		return
 	}
 	q := url.Values{}
-	for _, k := range params {
-		if v := r.URL.Query().Get(k); v != "" {
-			q.Set(k, v)
-		}
-	}
+	copyQuery(q, r, params...)
 	out, err := http.NewRequestWithContext(r.Context(), http.MethodGet, nodeBase(n)+path+"?"+q.Encode(), nil)
 	if err != nil {
 		webJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
@@ -597,4 +856,91 @@ func nodesJobRawHandler(w http.ResponseWriter, r *http.Request) {
 // nodesReadHandler is GET /api/nodes/read?node=&slug=&n=.
 func nodesReadHandler(w http.ResponseWriter, r *http.Request) {
 	nodesGetProxy(w, r, "/api/node/read", "slug", "n")
+}
+
+// nodesTranscriptHandler is GET /api/nodes/transcript?node=&slug=&n=&turns=.
+func nodesTranscriptHandler(w http.ResponseWriter, r *http.Request) {
+	nodesGetProxy(w, r, "/api/node/transcript", "slug", "n", "turns")
+}
+
+// nodesThreadReadHandler is GET /api/nodes/thread/read?node=&slug=&tid=&n=.
+func nodesThreadReadHandler(w http.ResponseWriter, r *http.Request) {
+	nodesGetProxy(w, r, "/api/node/thread/read", "slug", "tid", "n")
+}
+
+// nodeReplyMax bounds a sibling's reply; it mirrors internal/jobs/nodes.go's
+// unexported constant of the same name and value.
+const nodeReplyMax = 16 << 20
+
+// nodesProxyArtifactTimeout is the artifact relay's: an artifact may be a
+// rendered page or an image of several megabytes, against a one-line action.
+const nodesProxyArtifactTimeout = 15 * time.Second
+
+// nodesArtifactHandler is GET /api/nodes/artifact?node=&slug=&name=: a
+// sibling's artifact, relayed as bytes from its /api/node/artifact. The URLs
+// strippedCards writes onto every remote card point here.
+func nodesArtifactHandler(w http.ResponseWriter, r *http.Request) {
+	// its own 405/404 too, not only relayBytes' replies
+	inertArtifactHeaders(w, artifactMimeType(r.URL.Query().Get("name")))
+	if !getOnly(w, r) {
+		return
+	}
+	n := findNode(r.URL.Query().Get("node"))
+	if n == nil {
+		webJSON(w, http.StatusNotFound, map[string]string{"error": "no such node"})
+		return
+	}
+	name := r.URL.Query().Get("name")
+	q := url.Values{"slug": {r.URL.Query().Get("slug")}, "name": {name}}
+	out, err := http.NewRequestWithContext(r.Context(), http.MethodGet, nodeBase(n)+"/api/node/artifact?"+q.Encode(), nil)
+	if err != nil {
+		webJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
+		return
+	}
+	relayBytes(w, n, out, nodesProxyArtifactTimeout, artifactMimeType(name))
+}
+
+// relayBytes is relay for a reply that is not JSON: a sibling's 200 is served
+// verbatim under mimeType — the CALLER's type, computed from the name it
+// asked for, never the sibling's Content-Type header — and every other reply
+// follows relay's rules (a 401 or a non-JSON refusal becomes a 502 naming the
+// sibling). inertArtifactHeaders for mimeType ride every reply, 502s
+// included: the bytes are another node's, served on this node's origin, and
+// the sandbox CSP an html or svg name gets is what keeps a sibling's page
+// from running as this origin.
+func relayBytes(w http.ResponseWriter, n *store.NodeRow, req *http.Request, timeout time.Duration, mimeType string) {
+	inertArtifactHeaders(w, mimeType)
+	resp, err := nodesProxyDo(req, timeout)
+	if err != nil {
+		webJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
+		return
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(io.LimitReader(resp.Body, nodeReplyMax+1))
+	if err != nil {
+		webJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
+		return
+	}
+	label := nodeLabel(n)
+	if len(body) > nodeReplyMax {
+		webJSON(w, http.StatusBadGateway, map[string]string{"error": label + " answered more than 16 MB"})
+		return
+	}
+	if resp.StatusCode == http.StatusUnauthorized {
+		webJSON(w, http.StatusBadGateway, map[string]string{"error": label + " did not recognise this node"})
+		return
+	}
+	if resp.StatusCode == http.StatusOK {
+		w.Header().Set("Content-Type", mimeType)
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(body)
+		return
+	}
+	if !json.Valid(body) {
+		webJSON(w, http.StatusBadGateway, map[string]string{"error": label + " answered non-JSON"})
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(resp.StatusCode)
+	_, _ = w.Write(body)
 }

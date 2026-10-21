@@ -77,6 +77,14 @@ struct NodeActionPayload: Encodable {
     var color: String?
 }
 
+/// GET /api/nodes/job/raw's reply, decoded down to the one key the phone
+/// reads. The owner also sends `slug`, `mtime` and `editable`; they are
+/// ignored, and `editable` would be the owner's LOCAL rule anyway — the phone
+/// offers no remote edit in either mode.
+struct NodeJobRaw: Decodable {
+    let content: String
+}
+
 /// One networking client for the whole app: plain async/await URLSession,
 /// generic get/post plumbing, and a typed convenience method per endpoint.
 /// An actor so it's safe to share a single instance (and its URLSession)
@@ -621,6 +629,13 @@ actor APIClient {
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.httpBody = try encoder.encode(NodeActionRequest(node: node, slug: slug, action: action, payload: payload))
         _ = try await perform(request, session: action == "submit" ? submitSession : nil)
+    }
+
+    /// A remote job's raw text, relayed by the paired node from its owner's
+    /// `GET /api/node/job/raw` — the remote sheet's Spec section reads it.
+    /// Readonly and public jobs both answer; private or unknown is a 404.
+    func fetchNodeJobRaw(baseURL: String, node: String, slug: String) async throws -> NodeJobRaw {
+        try await get(baseURL: baseURL, path: "/api/nodes/job/raw", query: [("node", node), ("slug", slug)])
     }
 
     // MARK: - goals

@@ -574,7 +574,7 @@ export function postNodeAction(
   return postJSON<unknown>("/api/nodes/action", { node, slug, action, payload });
 }
 
-/** A remote public job's raw text, same body as `GET /api/job/raw`. */
+/** A remote readonly or public job's raw text, same body as `GET /api/job/raw`. */
 export function fetchNodeJobRaw(node: string, slug: string, signal?: AbortSignal) {
   return getJSON<RawJob>(
     `/api/nodes/job/raw?node=${encodeURIComponent(node)}&slug=${encodeURIComponent(slug)}`,
@@ -582,10 +582,48 @@ export function fetchNodeJobRaw(node: string, slug: string, signal?: AbortSignal
   );
 }
 
-/** A remote public cell's last `n` zeus transcript blocks. */
+/**
+ * A remote readonly or public cell's last `n` zeus transcript blocks. Kept as
+ * the `/api/nodes/read` client, but no SPA view calls it now — the remote
+ * steer modal reads `fetchNodeTranscript` instead.
+ */
 export function fetchNodeRead(node: string, slug: string, n: number, signal?: AbortSignal) {
   return getJSON<NodeRead>(
     `/api/nodes/read?node=${encodeURIComponent(node)}&slug=${encodeURIComponent(slug)}&n=${n}`,
+    signal,
+  );
+}
+
+/**
+ * A remote job's zeus transcript, proxied to its owner's `/api/job/transcript`
+ * — the same body `fetchJobTranscriptTurns` reads locally.
+ */
+export function fetchNodeTranscript(
+  node: string,
+  slug: string,
+  turns: number,
+  signal?: AbortSignal,
+): Promise<JobTranscript> {
+  return getJSON<JobTranscript>(
+    `/api/nodes/transcript?node=${encodeURIComponent(node)}&slug=${encodeURIComponent(slug)}&turns=${turns}`,
+    signal,
+  );
+}
+
+/**
+ * One side thread of a remote job, proxied to its owner's `/api/thread/read`.
+ * `n` rides only when given, so the owner's own default applies otherwise.
+ */
+export function fetchNodeThreadRead(
+  node: string,
+  slug: string,
+  tid: string,
+  n?: number,
+  signal?: AbortSignal,
+): Promise<ThreadRead> {
+  return getJSON<ThreadRead>(
+    `/api/nodes/thread/read?node=${encodeURIComponent(node)}&slug=${encodeURIComponent(slug)}&tid=${encodeURIComponent(tid)}` +
+      (n !== undefined ? `&n=${n}` : ""),
     signal,
   );
 }

@@ -468,8 +468,9 @@ private struct ArtifactRow: View {
 /// "show all (N)" toggle. N counts top-level nodes only — a folder counts as
 /// one row here even though it may hold many files, and a folder that's
 /// visible (whether in the first 3 or revealed by the toggle) keeps its own
-/// DisclosureGroup, unaffected by this view's expand state.
-private struct CollapsedArtifactList: View {
+/// DisclosureGroup, unaffected by this view's expand state. Not private: the
+/// remote job sheet lists another Mac's artifacts through this same tree.
+struct CollapsedArtifactList: View {
     let artifacts: [WebArtifact]
     let onOpen: (WebArtifact) -> Void
 
@@ -906,57 +907,15 @@ struct JobDetailView: View {
             VStack(alignment: .leading, spacing: 14) {
                 headerCard
 
-                // zeus' triage estimate, spelled out. The board card carries
-                // the same estimate as a one-line badge ("⚡ 4.0× 2→8"), which
-                // is enough to RANK a column of blocked cards but not enough
-                // to act on: it says a 2 and an 8 without saying what a 2 is.
-                // This is where the two numbers get their words back, so it
-                // sits above Tokens — a fact to act on outranks a fact about
-                // the past.
-                //
-                // `load` being nil is what hides the whole section, and nil
-                // has three meanings that all render the same way (never
-                // estimated, cleared, archived — see WebJob.load). None of
-                // them is an estimate of zero, so nothing here draws a 0 in
-                // its place.
-                //
-                // A present but UNUSABLE pair hides it too, and for the same
-                // reason rather than a second one: a zero on either side has
-                // no ratio, and printing "unblock 0/10" under a Triage heading
-                // asserts an estimate of zero — a thing this system says does
-                // not exist. `badgeText` is nil on exactly that shape (see
-                // WebJobLoad.roi), so it is the gate. Neither client can be
-                // sent one by this server — a clear drops the key, a half
-                // estimate is a 400 — so this is defence against a hand-edited
-                // row, and web's drilldown hides on the same test, which is
-                // what keeps the two boards drilling down on the same jobs.
-                if let load = job.load, load.badgeText != nil {
-                    JobSectionCard("Triage") { loadRows(load) }
-                }
-
-                // Token spend sits this high — beside Repo rather than down
-                // with Artifacts — because it is one glanceable fact about
-                // the job as a whole, and the artifact tree below can run
-                // long enough to bury anything under it. `tokens` being nil
-                // is what hides the whole section: nil means NEVER MEASURED
-                // (no transcripts, or the daemon hasn't reached this job),
-                // which is a different answer from a measured zero, and a
-                // rendered 0 would state the false one.
-                //
-                // The second half of the gate matches web's `tokensHTML`
-                // (`if (!total && !sessions) return ""`): a row that is
-                // all-zero AND counted no transcript files says nothing a
-                // reader can use, and rendering it prints four counters, an
-                // origin split and a "measured across 0 transcripts" line
-                // that together read as a measurement rather than as its
-                // absence. It is reachable — a first measurement whose files
-                // all vanish between the walk and the next pass — and the two
-                // surfaces are meant to render this block identically.
-                if let tokens = job.tokens,
-                   tokens.input + tokens.output + tokens.cacheWrite + tokens.cacheRead > 0
-                       || tokens.sessions > 0 {
-                    JobSectionCard("Tokens") { tokensRows(tokens) }
-                }
+                // zeus' triage estimate, spelled out — above Tokens, since a
+                // fact to act on outranks a fact about the past. Token spend
+                // sits this high — beside Repo rather than down with
+                // Artifacts — because it is one glanceable fact about the job
+                // as a whole, and the artifact tree below can run long enough
+                // to bury anything under it. Both are shared views the remote
+                // sheet renders too; each carries its own hide rule.
+                JobTriageSection(load: job.load)
+                JobTokensSection(tokens: job.tokens)
 
                 // Outside every editability gate on purpose. The spec editor
                 // (and the color picker inside it) is only reachable through
@@ -995,20 +954,7 @@ struct JobDetailView: View {
                 if let outcome = job.outcome, !outcome.isEmpty, column == .done || isArchived {
                     JobSectionCard("Outcome") { Text(outcome).font(.voice(13)).foregroundStyle(KTheme.solved) }
                 }
-                if job.zeusStatus?.isEmpty == false || !(job.roster ?? []).isEmpty {
-                    JobSectionCard("Roster") {
-                        CrewChipsView(zeusStatus: job.zeusStatus, roster: job.roster ?? [])
-                        ForEach(Array((job.roster ?? []).enumerated()), id: \.offset) { _, agent in
-                            HStack(spacing: 4) {
-                                Text(agent.working == true ? "●" : "○")
-                                    .foregroundStyle(agent.working == true ? KTheme.solved : KTheme.text2)
-                                Text("\(agent.name) (\(agent.model))")
-                                    .foregroundStyle(KTheme.text2)
-                            }
-                            .font(.data(12))
-                        }
-                    }
-                }
+                JobRosterSection(job: job)
                 if !allThreads.isEmpty || canBranchThread {
                     JobSectionCard("Threads") {
                         if !allThreads.isEmpty {
@@ -1314,7 +1260,7 @@ struct JobDetailView: View {
                 HStack(spacing: 8) {
                     StateCapsule(state: job.state)
                     if let load = job.load, load.badgeText != nil {
-                        roiCapsule(load)
+                        JobROICapsule(load: load)
                     }
                     Spacer(minLength: 0)
                 }
@@ -1362,6 +1308,28 @@ struct JobDetailView: View {
         }
     }
 
+    /// The hairline between a card's header row and its rows — the shared
+    /// translucent edge token, so it fades with the glass instead of reading
+    /// as a drawn rule.
+    private var cardDivider: some View {
+        Rectangle()
+            .fill(KTheme.hairline)
+            .frame(height: 1)
+    }
+}
+
+/// zeus' ROI ratio as a capsule beside the state, with its age — rendered on
+/// the local and the remote sheet's header alike.
+///
+/// Painted by `BoardTheme.style(forLoadBand:)` exactly as the board card's
+/// badge is, so one estimate reads the same on both surfaces — including
+/// `cold`'s dash and dim, which stay on the badge alone and never on the
+/// age beside it. The rounded capsule and the SF Symbol bolt (see
+/// `roiBoltPrefix`) are the only changes: the ratio text, the band, the age
+/// clause and the one-line rule are the badge's own.
+struct JobROICapsule: View {
+    let load: WebJobLoad
+
     /// The leading bolt on `WebJobLoad.badgeText` — U+26A1 HIGH VOLTAGE SIGN
     /// and a space.
     ///
@@ -1375,15 +1343,7 @@ struct JobDetailView: View {
     /// prefix; the guard keeps a future prefix-less shape rendering untouched.
     private static let roiBoltPrefix = "⚡ "
 
-    /// zeus' ROI ratio as a capsule beside the state, with its age.
-    ///
-    /// Painted by `BoardTheme.style(forLoadBand:)` exactly as the board card's
-    /// badge is, so one estimate reads the same on both surfaces — including
-    /// `cold`'s dash and dim, which stay on the badge alone and never on the
-    /// age beside it. The rounded capsule and the SF Symbol bolt (see
-    /// `roiBoltPrefix`) are the only changes: the ratio text, the band, the age
-    /// clause and the one-line rule are the badge's own.
-    private func roiCapsule(_ load: WebJobLoad) -> some View {
+    var body: some View {
         let now = Int64(Date().timeIntervalSince1970 * 1000)
         let style = BoardTheme.style(forLoadBand: load.band ?? .even)
         let badge = load.badgeText ?? ""
@@ -1428,15 +1388,9 @@ struct JobDetailView: View {
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(load.summary(nowMillis: now) ?? (load.badgeText ?? ""))
     }
+}
 
-    /// The hairline between a card's header row and its rows — the shared
-    /// translucent edge token, so it fades with the glass instead of reading
-    /// as a drawn rule.
-    private var cardDivider: some View {
-        Rectangle()
-            .fill(KTheme.hairline)
-            .frame(height: 1)
-    }
+extension JobDetailView {
 
     // MARK: - floating action bar
 
@@ -1597,7 +1551,38 @@ struct JobDetailView: View {
         .padding(.bottom, 8)
     }
 
-    // MARK: - triage estimate
+}
+
+// MARK: - triage estimate
+
+/// zeus' triage estimate, spelled out, for both the local and the remote job
+/// sheet — one view so the two cannot drift. The board card carries the same
+/// estimate as a one-line badge ("⚡ 4.0× 2→8"), which is enough to RANK a
+/// column of blocked cards but not enough to act on: it says a 2 and an 8
+/// without saying what a 2 is. This is where the two numbers get their words
+/// back.
+struct JobTriageSection: View {
+    let load: WebJobLoad?
+
+    var body: some View {
+        // `load` being nil is what hides the whole section, and nil has three
+        // meanings that all render the same way (never estimated, cleared,
+        // archived — see WebJob.load). None of them is an estimate of zero,
+        // so nothing here draws a 0 in its place.
+        //
+        // A present but UNUSABLE pair hides it too, and for the same reason
+        // rather than a second one: a zero on either side has no ratio, and
+        // printing "unblock 0/10" under a Triage heading asserts an estimate
+        // of zero — a thing this system says does not exist. `badgeText` is
+        // nil on exactly that shape (see WebJobLoad.roi), so it is the gate.
+        // Neither client can be sent one by this server — a clear drops the
+        // key, a half estimate is a 400 — so this is defence against a
+        // hand-edited row, and web's drilldown hides on the same test, which
+        // is what keeps the two boards drilling down on the same jobs.
+        if let load, load.badgeText != nil {
+            JobSectionCard("Triage") { loadRows(load) }
+        }
+    }
 
     /// zeus' two 1–10 estimates with their anchor labels, the ratio between
     /// them, and zeus' one-line rationale.
@@ -1728,7 +1713,35 @@ struct JobDetailView: View {
         }
     }
 
-    // MARK: - token spend
+}
+
+// MARK: - token spend
+
+/// The job's token spend, for both the local and the remote job sheet — one
+/// view so the two cannot drift.
+struct JobTokensSection: View {
+    let tokens: WebTokens?
+
+    var body: some View {
+        // `tokens` being nil is what hides the whole section: nil means NEVER
+        // MEASURED (no transcripts, or the daemon hasn't reached this job),
+        // which is a different answer from a measured zero, and a rendered 0
+        // would state the false one.
+        //
+        // The second half of the gate matches web's `tokensHTML`
+        // (`if (!total && !sessions) return ""`): a row that is all-zero AND
+        // counted no transcript files says nothing a reader can use, and
+        // rendering it prints four counters, an origin split and a "measured
+        // across 0 transcripts" line that together read as a measurement
+        // rather than as its absence. It is reachable — a first measurement
+        // whose files all vanish between the walk and the next pass — and the
+        // two surfaces are meant to render this block identically.
+        if let tokens,
+           tokens.input + tokens.output + tokens.cacheWrite + tokens.cacheRead > 0
+               || tokens.sessions > 0 {
+            JobSectionCard("Tokens") { tokensRows(tokens) }
+        }
+    }
 
     /// Renders one raw counter at a glance: 15_756_009 -> "15.8M". Precision
     /// shrinks as the magnitude grows (2dp under 10, 1dp under 100, none
@@ -1896,6 +1909,9 @@ struct JobDetailView: View {
         }
         return note
     }
+}
+
+extension JobDetailView {
 
     /// One `label … value` row inside a card — the LabeledContent shape the
     /// glass idiom uses: prose caption on the left, the value in mono on the
@@ -1960,25 +1976,7 @@ struct JobDetailView: View {
         }
     }
 
-    // Matches web's sortDocQuestions exactly (app.js): open questions first
-    // (importance rank P0 < P1 < P2, ties keep server order), answered
-    // questions last (server order). The explicit `offset` tiebreak is
-    // load-bearing — unlike JS's Array#sort (guaranteed stable since
-    // ES2019), Swift's sorted(by:) is documented as NOT guaranteed stable.
-    private var sortedDocQuestions: [WebDocQuestion] {
-        let rank: [String: Int] = ["P0": 0, "P1": 1, "P2": 2]
-        let indexed = Array(mergedDocQuestions.enumerated())
-        let open = indexed.filter { !$0.element.isAnswered }
-        let answered = indexed.filter { $0.element.isAnswered }
-        let sortedOpen = open.sorted { a, b in
-            let ra = rank[a.element.importance] ?? 3
-            let rb = rank[b.element.importance] ?? 3
-            if ra != rb { return ra < rb }
-            return a.offset < b.offset
-        }
-        let sortedAnswered = answered.sorted { $0.offset < $1.offset }
-        return sortedOpen.map(\.element) + sortedAnswered.map(\.element)
-    }
+    private var sortedDocQuestions: [WebDocQuestion] { sortDocQuestions(mergedDocQuestions) }
 
     // Submitting a Doc Questions answer (free text or "Accept recommendation")
     // — same busy/error/onUpdate handling as answerQuestion above, but
@@ -2008,12 +2006,7 @@ struct JobDetailView: View {
     // still the more useful half to read first, but not a queue of work owed.
     // The explicit offset tiebreak is load-bearing for the same reason it is
     // there: Swift's sorted(by:) is documented as NOT stable.
-    private var sortedFeedback: [WebFeedback] {
-        let indexed = Array(mergedFeedback.enumerated())
-        let open = indexed.filter { !$0.element.isAddressed }.sorted { $0.offset < $1.offset }
-        let addressed = indexed.filter { $0.element.isAddressed }.sorted { $0.offset < $1.offset }
-        return open.map(\.element) + addressed.map(\.element)
-    }
+    private var sortedFeedback: [WebFeedback] { sortFeedback(mergedFeedback) }
 
     // A note created from the artifact viewer, folded in as an optimistic row
     // until the next board poll replaces it with the served one. `ref.name`
@@ -2046,6 +2039,62 @@ struct JobDetailView: View {
 /// Not private: the board card renders these too, in its own chip row (see
 /// JobCardView), so a job's branches read the same on the board as they do in
 /// the detail sheet.
+/// Doc questions in display order — the local and remote sheets both list them
+/// through this. Matches web's sortDocQuestions exactly (app.js): open
+/// questions first (importance rank P0 < P1 < P2, ties keep server order),
+/// answered questions last (server order). The explicit `offset` tiebreak is
+/// load-bearing — unlike JS's Array#sort (guaranteed stable since ES2019),
+/// Swift's sorted(by:) is documented as NOT guaranteed stable.
+func sortDocQuestions(_ questions: [WebDocQuestion]) -> [WebDocQuestion] {
+    let rank: [String: Int] = ["P0": 0, "P1": 1, "P2": 2]
+    let indexed = Array(questions.enumerated())
+    let open = indexed.filter { !$0.element.isAnswered }
+    let answered = indexed.filter { $0.element.isAnswered }
+    let sortedOpen = open.sorted { a, b in
+        let ra = rank[a.element.importance] ?? 3
+        let rb = rank[b.element.importance] ?? 3
+        if ra != rb { return ra < rb }
+        return a.offset < b.offset
+    }
+    let sortedAnswered = answered.sorted { $0.offset < $1.offset }
+    return sortedOpen.map(\.element) + sortedAnswered.map(\.element)
+}
+
+/// Feedback notes in display order — un-addressed first, addressed after,
+/// each in server order; the local and remote sheets both list them through
+/// this. The offset tiebreak is there because Swift's sorted(by:) is
+/// documented as NOT stable.
+func sortFeedback(_ notes: [WebFeedback]) -> [WebFeedback] {
+    let indexed = Array(notes.enumerated())
+    let open = indexed.filter { !$0.element.isAddressed }.sorted { $0.offset < $1.offset }
+    let addressed = indexed.filter { $0.element.isAddressed }.sorted { $0.offset < $1.offset }
+    return open.map(\.element) + addressed.map(\.element)
+}
+
+/// The cell's crew: zeus' status and role chips, then one line per agent. The
+/// local and remote sheets both render it, hidden when there is nothing to
+/// show.
+struct JobRosterSection: View {
+    let job: WebJob
+
+    var body: some View {
+        if job.zeusStatus?.isEmpty == false || !(job.roster ?? []).isEmpty {
+            JobSectionCard("Roster") {
+                CrewChipsView(zeusStatus: job.zeusStatus, roster: job.roster ?? [])
+                ForEach(Array((job.roster ?? []).enumerated()), id: \.offset) { _, agent in
+                    HStack(spacing: 4) {
+                        Text(agent.working == true ? "●" : "○")
+                            .foregroundStyle(agent.working == true ? KTheme.solved : KTheme.text2)
+                        Text("\(agent.name) (\(agent.model))")
+                            .foregroundStyle(KTheme.text2)
+                    }
+                    .font(.data(12))
+                }
+            }
+        }
+    }
+}
+
 struct ThreadChip: View {
     let thread: WebThread
 
@@ -2328,7 +2377,11 @@ struct QuestionSummary: View {
 /// other board action.
 struct DocQuestionCard: View {
     let item: WebDocQuestion
-    var onAnswer: (String) -> Void
+    var onAnswer: (String) -> Void = { _ in }
+    /// Another Mac's job: the row renders its text, context, importance,
+    /// recommendation and answer, and no control at all — answering a doc
+    /// question is an owner-only write, in either remote mode.
+    var readOnly = false
 
     @State private var answerText = ""
 
@@ -2388,23 +2441,27 @@ struct DocQuestionCard: View {
                         .font(.voice(12))
                         .foregroundStyle(KTheme.polling)
                         .fixedSize(horizontal: false, vertical: true)
-                    Button("Accept recommendation") {
-                        onAnswer(recommendation)
+                    if !readOnly {
+                        Button("Accept recommendation") {
+                            onAnswer(recommendation)
+                        }
+                        .font(.data(11, weight: .semibold))
+                        .buttonStyle(.glass)
                     }
-                    .font(.data(11, weight: .semibold))
-                    .buttonStyle(.glass)
                 }
-                HStack(spacing: 8) {
-                    TextField("answer", text: $answerText)
-                        .kField()
-                    Button("Send") {
-                        let trimmed = answerText.trimmingCharacters(in: .whitespacesAndNewlines)
-                        guard !trimmed.isEmpty else { return }
-                        onAnswer(trimmed)
+                if !readOnly {
+                    HStack(spacing: 8) {
+                        TextField("answer", text: $answerText)
+                            .kField()
+                        Button("Send") {
+                            let trimmed = answerText.trimmingCharacters(in: .whitespacesAndNewlines)
+                            guard !trimmed.isEmpty else { return }
+                            onAnswer(trimmed)
+                        }
+                        .font(.data(11, weight: .semibold))
+                        .buttonStyle(.glassProminent)
+                        .disabled(answerText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                     }
-                    .font(.data(11, weight: .semibold))
-                    .buttonStyle(.glassProminent)
-                    .disabled(answerText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)

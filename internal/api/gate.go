@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"mime"
 	"net"
 	"net/http"
 	"strings"
@@ -147,6 +148,79 @@ func tailnetDeviceFor(ip string) (core.TailnetIdentity, bool) {
 	return id, true
 }
 
+// multipartPosts are the only POST routes whose shipped callers send a body
+// that is not JSON: both are file uploads, posted as multipart/form-data by
+// the SPA (client.ts uploadImage/uploadBackground) and iOS (APIClient's
+// image upload). multipart/form-data is itself a CORS simple-request type, so
+// the JSON rule cannot cover them (requiring JSON would break every shipped
+// uploader); postOriginOK is what refuses a browser's cross-origin POST to
+// them.
+var multipartPosts = map[string]bool{"/api/upload": true, "/api/background": true}
+
+// postContentTypeOK is the gate's JSON rule for writes: every POST under
+// /api/ other than multipartPosts must carry Content-Type application/json,
+// requireJSONPost's rule applied to the whole API in one place so no write
+// route (and no route added later) can miss it. A JSON POST is never a CORS
+// simple request, so a page on another origin — or a sandboxed, opaque-origin
+// frame on this one — has to preflight it, and this server answers no
+// preflight with CORS headers. That matters most for the owner tier, which
+// is classified by address alone: without the rule, a script in any page the
+// owner's browser loads could fire a text/plain POST at loopback and have it
+// run as owner. Every shipped caller already sends the header (the SPA's
+// postJSON, iOS's post and pairing requests, the CLI's qfPost and hookPost,
+// and the cell hooks' client.Post calls).
+func postContentTypeOK(r *http.Request) bool {
+	if r.Method != http.MethodPost || !strings.HasPrefix(r.URL.Path, "/api/") || multipartPosts[r.URL.Path] {
+		return true
+	}
+	mediaType, _, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
+	return err == nil && mediaType == "application/json"
+}
+
+// gateRefuse writes one of the gate's own refusals: a JSON error body, with
+// nosniff like every other reply the node routes write by hand.
+func gateRefuse(w http.ResponseWriter, status int, msg string) {
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	webJSON(w, status, map[string]string{"error": msg})
+}
+
+// postOriginOK refuses a POST that a browser marked as coming from another
+// origin. A browser sends Origin on every cross-origin POST, and the literal
+// "null" from an opaque origin (a sandboxed frame, among others), so a
+// present Origin that is not this server's own — "http://" + r.Host, or
+// "https://" when the request arrived over TLS — is refused, "null"
+// included. An ABSENT Origin passes: iOS (URLSession), the CLI, the cell
+// hooks and node-to-node calls send none, while a browser always sends it on
+// a cross-origin POST. This is what refuses a browser's cross-origin POST to
+// the two multipart upload routes, which the JSON rule cannot cover.
+//
+// What it does NOT cover: a DNS-rebinding page. Its origin is a hostname
+// that the attacker re-points at 127.0.0.1, so its Origin equals the Host it
+// sends, the request arrives from loopback, and the gate classifies it
+// owner. Closing that needs a Host allowlist, which is a separate change.
+//
+// The comparison relies on r.Host carrying the port exactly as the page's
+// own origin does. Checked for this server: Go's server takes r.Host from
+// the Host header, which a browser writes as host:port for a non-default
+// port (127.0.0.1:7878 on both sides); the board is served over plain HTTP
+// (web/serve.go calls srv.Serve on a plain listener and imports no TLS); and
+// the vite dev proxy keeps the browser's Host (changeOrigin: false), so a
+// dev page's http://localhost:5173 still matches its own Host.
+func postOriginOK(r *http.Request) bool {
+	if r.Method != http.MethodPost {
+		return true
+	}
+	origin, present := r.Header["Origin"]
+	if !present {
+		return true
+	}
+	scheme := "http"
+	if r.TLS != nil {
+		scheme = "https"
+	}
+	return len(origin) == 1 && strings.EqualFold(origin[0], scheme+"://"+r.Host)
+}
+
 // pairCookieName is the cookie a paired client's header-less loads carry.
 const pairCookieName = "kraken_pair"
 
@@ -220,15 +294,18 @@ var routePolicy = func() map[string]Tier {
 	m := map[string]Tier{
 		"/api/health": TierAnon,
 
-		"/api/node":           TierNode,
-		"/api/node/jobs":      TierNode,
-		"/api/node/job":       TierNode,
-		"/api/node/job/raw":   TierNode,
-		"/api/node/read":      TierNode,
-		"/api/node/announce":  TierNode,
-		"/api/node/action":    TierNode,
-		"/api/pair/challenge": TierNode,
-		"/api/pair":           TierNode,
+		"/api/node":             TierNode,
+		"/api/node/jobs":        TierNode,
+		"/api/node/job":         TierNode,
+		"/api/node/job/raw":     TierNode,
+		"/api/node/read":        TierNode,
+		"/api/node/artifact":    TierNode,
+		"/api/node/transcript":  TierNode,
+		"/api/node/thread/read": TierNode,
+		"/api/node/announce":    TierNode,
+		"/api/node/action":      TierNode,
+		"/api/pair/challenge":   TierNode,
+		"/api/pair":             TierNode,
 		// an unpaired phone fans its pairing out over the registry its seed
 		// serves, so the registry list itself is node tier; the proxies that
 		// act through it stay paired
@@ -380,7 +457,10 @@ func touchPaired(d *store.PairDevice, ip string) {
 
 // Gate wraps the mux both listeners serve. It classifies the request, puts
 // the tier and identity on its context, and answers 401 when the tier is
-// below the route's floor. It runs under --mirror too: who may reach a
+// below the route's floor; past the floor, a POST carrying a foreign Origin
+// answers 403 (postOriginOK) and a POST under /api/ without a JSON
+// Content-Type answers 415 (postContentTypeOK). Every refusal carries
+// nosniff (gateRefuse). It runs under --mirror too: who may reach a
 // mirror's board is the same question.
 func Gate(h http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -392,7 +472,15 @@ func Gate(h http.Handler) http.Handler {
 		}
 		if tier < floor {
 			logRefusal(ipText, r.URL.Path, tier, floor)
-			webJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+			gateRefuse(w, http.StatusUnauthorized, "unauthorized")
+			return
+		}
+		if !postOriginOK(r) {
+			gateRefuse(w, http.StatusForbidden, "cross-origin post refused")
+			return
+		}
+		if !postContentTypeOK(r) {
+			gateRefuse(w, http.StatusUnsupportedMediaType, "content-type must be application/json")
 			return
 		}
 		if tier == TierPaired {

@@ -1856,11 +1856,12 @@ Every `kraken serve` on the tailnet is a **node**. A node finds its siblings thr
 | node | any other tailnet device (tailscale status, else `tailscale whois`) | `/api/health`, `/api/node*`, `GET /api/nodes`, `/api/pair/challenge`, `POST /api/pair`, the SPA shell and assets |
 | anon | anything else | `/api/health` |
 
-A route with no policy entry under `/api/` is owner-only (fail closed). The app sends the bearer on every JSON call and installs the same token as the `kraken_pair` cookie for artifact and image loads. A 401 means "not paired (any more)": clear the stored record and show the pair screen.
+A route with no policy entry under `/api/` is owner-only (fail closed). Past the tier check, the gate answers every `POST` under `/api/` that does not carry `Content-Type: application/json` with `415 {"error":"content-type must be application/json"}` — on every tier, owner included — except the two multipart uploads, `POST /api/upload` and `POST /api/background`. A JSON POST is never a CORS simple request, so a page on another origin cannot send one without a preflight this server never grants; without the rule, a script in any page could fire a text/plain POST at loopback and have it run as owner. The JSON rule alone does not cover the two multipart uploads, so the gate also answers any `POST` whose `Origin` header is present and is not this server's own (`http://<Host>`; the literal `null` an opaque-origin frame sends counts as foreign) with `403 {"error":"cross-origin post refused"}`, checked before the 415. A request with no `Origin` passes — the app, the CLI and the cell hooks send none. Every gate refusal (401, 403, 415) carries `X-Content-Type-Options: nosniff`. The app sends the bearer on every JSON call and installs the same token as the `kraken_pair` cookie for artifact and image loads. A 401 means "not paired (any more)": clear the stored record and show the pair screen.
 
 Wire additions on existing shapes (all additive):
 - `webJob.visibility` — string, always present: `private`|`readonly`|`public` (readonly when the job never set one).
 - `webJob.owner` — object, **absent on every local card**: `{"node_id": string, "label": string, "operator": string, "online": bool}` naming the node a remote card runs on. A card's identity is owner plus slug — two nodes can each have a `dream-2026-10-20`.
+- A remote card's `artifacts[].url` is always THIS node's proxy URL, `/api/nodes/artifact?node=<node_id>&slug=<slug>&name=<name>` (`name` last, so a `.html` name still ends the URL); the URL the owner served is never passed on, and an artifact with a blank name is dropped.
 - `webBoard.nodes` — array of `webNode` (below, without `jobs`), **absent** when the registry is empty (every single-machine kraken).
 - Under `KRAKEN_NODES=off` both `nodes` and every owner-chipped card are absent, whatever the registry holds.
 
@@ -1874,19 +1875,33 @@ The probe target a sibling's discover pass hits. `404 {"error":"fleet off"}` whe
 
 ### `GET /api/node/jobs` (node tier) → `{"node": NodeEnvelope, "jobs": [webJob]}`
 
-This node's non-archived **readonly** and **public** cards — a private card is absent, not blanked. Each is the board's own card object minus what never leaves the machine: `feedback`, `tokens`, `account`, `threads`, `doc_questions` and `artifacts` (artifact URLs address this node; names come from `/api/node/job`). No `owner` key. `jobs` is `[]` under `KRAKEN_NODES=off`.
+This node's non-archived **readonly** and **public** cards — a private card is absent, not blanked. Each is the board's own card object minus exactly two keys: `owner` (the receiver stamps it from its registry) and `account` (the binding names this machine's pool login, which means nothing on another machine). Everything else rides as built — `feedback`, `tokens`, `threads`, `doc_questions`, `artifacts`, `prs`, `load`, `goals`/`goal`, `question`, `roster`, `detail`, `last_sent`, `color`, `visibility`. The `artifacts[].url` values are the OWNER's (`/api/artifact/<slug>/<home>/<name>`); a receiving board rewrites each to its own `/api/nodes/artifact?node=&slug=&name=` and never serves the owner's URL onward. `jobs` is `[]` under `KRAKEN_NODES=off`.
+
+Readonly and public are READ alike on every node route below; only `POST /api/node/action` tells them apart. The owner-only writes (feedback, doc-question answers, threads, goals, rename, visibility, uploads, the mental model) have no node route on any visibility. Visibility is read from the store on every request, so a flip to private refuses everything that arrives after it.
 
 ### `GET /api/node/job?slug=` (node tier) → `{"job": webJob, "artifacts": [string], "question"?: webQuestion}`
 
-One readonly or public card, its artifact names, and its pending AskUserQuestion when there is one. A private, archived or unknown slug all answer the identical `404 {"error":"no such job"}`.
+One readonly or public card (as in `/api/node/jobs`), its artifact names, and its pending AskUserQuestion when there is one. A private, archived or unknown slug all answer the identical `404 {"error":"no such job"}`.
 
 ### `GET /api/node/job/raw?slug=` (node tier)
 
-`GET /api/job/raw`'s exact body (`{"slug","content","mtime","editable"}`) for a **public** job — the remote editor's load. `403 {"error":"not public"}` for a readonly job; 404 `no such job` for private/unknown. Visibility is read from the store on every request.
+`GET /api/job/raw`'s exact body (`{"slug","content","mtime","editable"}`) for a **readonly or public** job. `editable` is the owner's local rule; whether a client offers a save is its own remote mode's business (a save is an action, public only). `405` for anything but GET; 404 `no such job` for private, unknown, archived, an empty slug, or under `KRAKEN_NODES=off`.
 
 ### `GET /api/node/read?slug=&n=` (node tier)
 
-A public cell's last `n` zeus transcript blocks (default 5, clamped 1–50), `/api/peers/read`'s shape: `{"blocks": [{"kind": string, "text": string, "from"?: string}], "counted": int}`. 403/404 as above; `409` when the cell has no live zeus.
+A readonly or public cell's last `n` zeus transcript blocks (default 5, clamped 1–50), `/api/peers/read`'s shape: `{"blocks": [{"kind": string, "text": string, "from"?: string}], "counted": int}`. 404 as above; `409 {"error":"<slug> has no live zeus"}` when the cell has no live zeus.
+
+### `GET /api/node/artifact?slug=&name=` (node tier) → bytes
+
+One artifact of a readonly or public job. Refusals, in order: `405 {"error":"GET only"}` for anything but GET; 404 `no such job` (as above); `404 {"error":"no such artifact"}` when `name` is blank, is not EXACTLY the `name` of one entry of the owner's own artifact list for that job, or cannot be read — and, for a live cell, when any segment of the path is a symlink or the last is not a regular file. An artifact larger than 16 MB is `413 {"error":"artifact over 16 MB"}` and is never read whole; exactly 16 MB is served. That is the same bound the receiving node's relay applies. The bytes come from the same source the list did — the live cell's artifacts dir, else the artifacts table. EVERY reply, refusals included, carries `X-Content-Type-Options: nosniff` and `Cache-Control: no-store`; when the requested `name` is html or svg (`text/html`, `image/svg+xml`) every reply also carries `Content-Security-Policy: sandbox` (no `allow-scripts`, no `allow-same-origin`: another node's page renders with no script at all, in an opaque origin). Any other name — a PDF, an image — gets no CSP, since it cannot script and a browser's built-in PDF viewer can refuse to load inside a sandboxed document. A 200 adds `Content-Type` from the name's extension (the board's artifact mapping) and the bytes verbatim. Not mirror-gated.
+
+### `GET /api/node/transcript?slug=&n=&turns=` (node tier)
+
+`GET /api/job/transcript`'s exact reply (`{"session": string, "blocks": [...]}`, its own 500 included) for a readonly or public job, `n` and `turns` passed through when given. `405` for anything but GET; 404 `no such job` as above. Not mirror-gated.
+
+### `GET /api/node/thread/read?slug=&tid=&n=` (node tier)
+
+`GET /api/thread/read`'s exact reply for one side thread of a readonly or public job, `tid` and `n` passed through when given. `405` for anything but GET; 404 `no such job` as above; then that route's own `400 {"error":"missing tid"}` and `404 {"error":"unknown thread"}` (a `tid` of another job's thread is `unknown thread`). Not mirror-gated.
 
 ### `POST /api/node/announce` (node tier) → `NodeEnvelope`
 
@@ -1908,15 +1923,19 @@ Mirror-gated (plain-text 403).
 
 ### `GET /api/nodes` (node tier) → `{"nodes": [webNode]}`
 
-The registry with each node's stored card list in `jobs`. Node tier so an unpaired phone can fan its pairing out from the registry its seed serves. `nodes` is `[]` when empty, and `{"nodes":[]}` under `KRAKEN_NODES=off`. Each node's `jobs` carries the same stripped cards the board shows (no `feedback`, `tokens`, `account`, `threads`, `doc_questions` or `artifacts`). Online nodes first, then by label.
+The registry with each node's stored card list in `jobs`. Node tier so an unpaired phone can fan its pairing out from the registry its seed serves. `nodes` is `[]` when empty, and `{"nodes":[]}` under `KRAKEN_NODES=off`. Each node's `jobs` is re-encoded card by card as the board shows them: no `owner` or `account`, and every `artifacts[].url` rewritten to this node's `/api/nodes/artifact?node=&slug=&name=`. Online nodes first, then by label.
 
 ### `POST /api/nodes/action` (paired)
 
 Body `{"node": string (node_id), "slug": string, "action": string, "payload": object}`. Forwards to that node's `POST /api/node/action`, setting `from.cell` from the request's `X-Kraken-From-Cell` header (the CLI sets it inside a cell from `KRAKEN_JOB_SLUG`), and relays the sibling's status and JSON body, always as `application/json` with `X-Content-Type-Options: nosniff`. A sibling 401 is relayed as `502 {"error":"<label> did not recognise this node"}` (never as a 401, which a client would read as its own gate) and a non-JSON body as `502 {"error":"<label> answered non-JSON"}`, `<label>` being the node's label or else its id; a transport error is `502 {"error": "<transport error>"}`; 404 `no such node`. Timeout 5 s (60 s for `submit`). Mirror-gated (plain-text 403).
 
-### `GET /api/nodes/job/raw?node=&slug=`, `GET /api/nodes/read?node=&slug=&n=` (paired)
+### `GET /api/nodes/job/raw?node=&slug=`, `GET /api/nodes/read?node=&slug=&n=`, `GET /api/nodes/transcript?node=&slug=&n=&turns=`, `GET /api/nodes/thread/read?node=&slug=&tid=&n=` (paired)
 
-The same relay (JSON-forced, 401/non-JSON → 502) to the sibling's `/api/node/job/raw` and `/api/node/read`.
+The same relay (JSON-forced, 401/non-JSON → 502; `405` for anything but GET; 404 `no such node`) to the sibling's `/api/node/job/raw`, `/api/node/read`, `/api/node/transcript` and `/api/node/thread/read`, forwarding only the listed parameters that are non-empty. Not mirror-gated.
+
+### `GET /api/nodes/artifact?node=&slug=&name=` (paired) → bytes
+
+The URL every remote card's `artifacts[].url` carries. Refusals, in order: `405 {"error":"GET only"}`; `404 {"error":"no such node"}`. Forwards to the sibling's `GET /api/node/artifact?slug=&name=` (timeout 15 s). Every reply carries `X-Content-Type-Options: nosniff` and `Cache-Control: no-store`, the 405/404/502s included, plus `Content-Security-Policy: sandbox` exactly when `name` is html or svg (the `/api/node/artifact` rule above). A sibling 200 is served with status 200, `Content-Type` computed HERE from `name`'s extension (the sibling's header is never read), and the body verbatim; a body over 16 MB is `502 {"error":"<label> answered more than 16 MB"}` (exactly 16 MB passes), and the owner's `/api/node/artifact` refuses such an artifact itself with `413 {"error":"artifact over 16 MB"}`, which is relayed as is. So an artifact larger than that (a big rendered page, a video) is viewable on its owner's own board but not from another node; a sibling 401 is `502 {"error":"<label> did not recognise this node"}`; any other sibling status is relayed as JSON when its body is JSON, else `502 {"error":"<label> answered non-JSON"}`; a transport error is `502 {"error": "<transport error>"}`. Not mirror-gated.
 
 ### `POST /api/pair/password` (owner) → `{"ok": true, "revoked": int}`
 
@@ -2552,7 +2571,8 @@ Response (200):
 Errors: 405 (non-POST), 404 (missing/unknown `slug`), 413 (file exceeds
 10MB, or total body exceeds the 11MB ceiling), 415 (file doesn't sniff as
 PNG/JPEG/GIF/WebP), 400 (malformed multipart form, or missing `file`), 500
-(write failure).
+(write failure), and 403 from the gate for a browser POST with a foreign
+Origin (see Nodes and pairing).
 
 ### `GET /api/upload/<slug>/<name>` (web/serve.go)
 
@@ -2580,7 +2600,8 @@ how a client learns one is set without ever pulling the bytes.
   wired.
 - **POST** — `multipart/form-data` with a single `file` field; same 10MB
   cap, 11MB body ceiling, and content-sniffed PNG/JPEG/GIF/WebP allow-list
-  as `POST /api/upload`, and the same error statuses (413/415/400/500).
+  as `POST /api/upload`, and the same error statuses (413/415/400/500, and
+  403 from the gate for a browser POST with a foreign Origin).
   Replaces any previous background. Response (200): `{"ok": true,
   "updated_at": <unix millis>}`.
 - **DELETE** — removes the background (the plain board is the fallback).

@@ -1,29 +1,35 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
-import {
-  fetchNodeJobRaw,
-  fetchNodeRead,
-  postNodeAction,
-  setJobVisibility,
-} from "../../api/client.ts";
-import type { NodeRead, WebJob } from "../../api/types.ts";
-import { usePoll } from "../../hooks/usePoll.ts";
+import { fetchNodeJobRaw, postNodeAction, setJobVisibility } from "../../api/client.ts";
+import type { WebJob } from "../../api/types.ts";
+import { useHTML, useRenderedMD } from "../../hooks/useRenderedMD.ts";
 import {
   ownerChipText,
+  ownerTurnLabel,
   remoteMode,
+  stripFrontmatter,
   VISIBILITIES,
   type Visibility,
 } from "../../lib/fleet.ts";
+import { loadROI } from "../../lib/format.ts";
+import { jobKey } from "../../lib/jobKey.ts";
+import { renderMD } from "../../lib/markdown.ts";
+import { CrewChips, crewChipsVisible } from "../board/chips/CrewPills.tsx";
+import { FeedbackPanel } from "../board/chips/FeedbackPanel.tsx";
 import { PRChip } from "../board/chips/PRChips.tsx";
 import { QuestionBlock } from "../board/chips/QuestionBlock.tsx";
+import { ThreadChips } from "../board/chips/ThreadChips.tsx";
+import { DocQuestions } from "./DocQuestions.tsx";
 import type { Mutate } from "./Overlay.tsx";
+import { LoadDrill, steerHasTokens, ZeusTranscriptPanel } from "./SteerOverlay.tsx";
 import { SwatchStrip } from "./SwatchStrip.tsx";
+import { TokensPanel } from "./TokensPanel.tsx";
 
 /**
  * The steer modal's fleet halves, kept beside SteerOverlay rather than inside
  * its 1600 lines: the LOCAL modal's three-way visibility control, and the
- * REMOTE body SteerOverlay renders instead of its own when the card it was
- * opened on carries an owner. Both are SteerOverlay's — same overlay, same
+ * REMOTE body SteerOverlay renders instead of its own when the modal was
+ * opened with an owner node (`props.node`). Both are SteerOverlay's — same overlay, same
  * escape priority, same App state — and neither is a second modal.
  */
 
@@ -108,13 +114,14 @@ export interface RemoteEditorBodyProps {
 }
 
 /**
- * EditorOverlay's REMOTE mode: a remote PUBLIC job's whole file as raw text,
+ * EditorOverlay's REMOTE mode: a remote job's whole file as raw text,
  * loaded through `/api/nodes/job/raw` and saved through the proxy's `save`
  * action with the load's mtime as the optimistic lock (the owner 409s a save
  * over a newer edit). The local editor's FORM is deliberately not reused: it
  * is built on `/api/job/form` and `/api/job/saveform`, neither of which the
  * owner exposes to other nodes — the raw text is the one shape both ends
- * speak. A readonly job answers the load with 403, shown as the note.
+ * speak. A readonly job's file loads too, but stays read-only: `ro` follows
+ * `remoteMode`, and saving is offered for a public job only.
  */
 export function RemoteEditorBody({ node, slug, job, mutate, onClose }: RemoteEditorBodyProps) {
   const [content, setContent] = useState<string | null>(null);
@@ -210,9 +217,6 @@ export function RemoteEditorBody({ node, slug, job, mutate, onClose }: RemoteEdi
 
 // ---------------------------------------------------------------- remote
 
-const READ_POLL_MS = 5000;
-const READ_BLOCKS = 5;
-
 export interface RemoteSteerBodyProps {
   /** the owner node's id — the route's `node` */
   node: string;
@@ -223,22 +227,38 @@ export interface RemoteSteerBodyProps {
   onClose: () => void;
   /** opens EditorOverlay in its remote mode on this card */
   onOpenEditor?: (slug: string, node: string) => void;
+  /** opens an artifact chip in the viewer — SteerOverlayProps.onOpenArtifact */
+  onOpenArtifact(url: string, name: string, jobKey: string): void;
+  /** opens one of the job's threads, read through the owner node */
+  onOpenThread(slug: string, tid: string, node: string): void;
+  /**
+   * `board.operator` — the transcript panel's and load drill's label only for
+   * a card with no owner; an owned card uses the owner's (ownerTurnLabel)
+   */
+  operator?: string;
 }
 
 /**
- * A remote card's steer modal. Two modes, decided by lib/fleet.ts remoteMode:
+ * A remote card's steer modal. It shows what the local modal shows — crew,
+ * PRs, threads, zeus' detail and last message, the transcript, the load
+ * estimate, the artifacts, the doc questions, the feedback notes, the token
+ * spend and the spec — and differs only in what it lets you DO, decided by
+ * lib/fleet.ts remoteMode:
  *
- *  - `readonly` (its owner has not opened it to the net): the card's state,
- *    detail and pending question are shown, and EVERY control
- *    is drawn disabled — so the modal says what could be done and that it may
- *    not, rather than hiding the controls and leaving it ambiguous.
- *  - `public`: the same controls, each one posting `/api/nodes/action`
- *    through this node's proxy, which the owner re-checks at request time.
+ *  - `readonly` (its owner has not opened it to the net): no control at all.
+ *    Absent rather than disabled, so nothing on screen offers an action the
+ *    owner would refuse; the one exception is the pending question, drawn
+ *    inside a disabled fieldset so its options stay readable.
+ *  - `public`: the controls (colour, stop, mark done, cancel, submit,
+ *    archive, edit, the composer and the question's options), each posting
+ *    `/api/nodes/action` through this node's proxy, which the owner re-checks
+ *    at request time.
  *
- * What a remote card can NOT offer at all, whatever its mode: the tmux pane
- * (on the owner's Mac), threads, feedback, uploads and the draft autosave
- * (all local stores), and artifacts: artifacts stay on the owner's board — a
- * remote card carries none.
+ * In both modes the panels whose writes are the owner's alone (doc-question
+ * answers, feedback notes, threads) render read-only, and nothing here stamps
+ * a `data-mind-*` source: the mental model is this machine's, and this is
+ * another machine's content. The account binding is not shown — it names the
+ * owner's pool login, and the local panel reads THIS machine's usage.
  *
  * A relayed failure (a 502 such as "did not recognise this node" or
  * "answered non-JSON", or the owner's own 403/404) is an ordinary error: it
@@ -246,8 +266,8 @@ export interface RemoteSteerBodyProps {
  * any refused local action. There is no 401 branch here — the proxy never
  * relays a sibling's 401 as a 401.
  *
- * Remote text (detail, transcript) is rendered as PLAIN TEXT, never through
- * the markdown renderer's innerHTML: it is another machine's content.
+ * Remote markdown (detail, spec) goes through renderMD, which escapes before
+ * it transforms — the same argument the local body makes for agent text.
  */
 export function RemoteSteerBody({
   node,
@@ -256,6 +276,9 @@ export function RemoteSteerBody({
   mutate,
   onClose,
   onOpenEditor,
+  onOpenArtifact,
+  onOpenThread,
+  operator,
 }: RemoteSteerBodyProps) {
   const mode = job ? remoteMode(job) : "readonly";
   const ro = mode !== "public";
@@ -263,6 +286,27 @@ export function RemoteSteerBody({
   const [note, setNote] = useState("");
   const [busy, setBusy] = useState(false);
   const [colorPick, setColorPick] = useState<string | null>(null);
+  const [specOpen, setSpecOpen] = useState(false);
+  // the owner's raw job file, for the spec drawer; null until it lands and
+  // for good when it fails (no drawer at all then)
+  const [spec, setSpec] = useState<string | null>(null);
+
+  // a card that has left the board renders only its note and asks the owner
+  // for nothing
+  const present = !!job;
+  useEffect(() => {
+    if (!present) return;
+    const ac = new AbortController();
+    fetchNodeJobRaw(node, slug, ac.signal)
+      .then((r) => {
+        if (!ac.signal.aborted) setSpec(stripFrontmatter(r.content ?? ""));
+      })
+      .catch(() => {
+        // a 403/404/502 renders no drawer; the status corner is not told,
+        // since nothing the reader did failed
+      });
+    return () => ac.abort();
+  }, [node, slug, present]);
 
   // The local modal's force-close rule, copied: the card changing state under
   // the modal (a done on the owner's board, a kill) makes every control here
@@ -306,13 +350,6 @@ export function RemoteSteerBody({
   const isDraft = !live && job?.state === "draft";
   const settled = !live;
 
-  // the transcript tail, public + live only — readonly answers 403 by design
-  const read = usePoll<NodeRead>(
-    (signal) => fetchNodeRead(node, slug, READ_BLOCKS, signal),
-    READ_POLL_MS,
-    { enabled: mode === "public" && isLive },
-  );
-
   const send = async () => {
     const body = text.trim();
     if (!body) {
@@ -353,9 +390,26 @@ export function RemoteSteerBody({
   const owner = job?.owner;
   const prs = job?.prs ?? [];
   const question = job?.question;
+  const artifacts = job?.artifacts ?? [];
+  const threads = job?.threads ?? [];
+  const detailHTML = useRenderedMD(job?.detail);
+  const specHTML = useHTML(spec !== null ? renderMD(spec) : "");
+  const loadDerived = loadROI(job?.load);
+  const key = job ? jobKey(job) : node + "/" + slug;
+  const label = job ? job.display_slug || job.slug : slug;
+  // who the owner's own turns are labelled as — see ownerTurnLabel
+  const ownerLabel = ownerTurnLabel(job?.owner, operator);
   const disabledTitle = ro
     ? "this cell is readonly — its owner has not opened it to the net"
     : undefined;
+
+  if (!job) {
+    return (
+      <div className="panel-body answer-body remote-steer" data-remote-mode={mode}>
+        <div className="answer-note">this card is no longer on the board</div>
+      </div>
+    );
+  }
 
   return (
     <>
@@ -373,88 +427,84 @@ export function RemoteSteerBody({
           </span>
         ) : null}
         {mode === "public" ? <span className="pub-chip">public</span> : null}
-        {ro ? (
-          <button type="button" className="btn ghost" disabled title={disabledTitle}>
-            colour
-          </button>
-        ) : (
+        {ro ? null : (
           <span className="f-swatches compact" id="steer-swatches" title="job color">
             <SwatchStrip
               name="steer-color"
-              value={colorPick ?? job?.color}
+              value={colorPick ?? job.color}
               onPick={(v) => void chooseColor(v)}
               compact
             />
           </span>
         )}
         <span className="spacer"></span>
-        {working ? (
+        {/* every control below is public-only: a readonly card offers none */}
+        {!ro && working ? (
           <button
             type="button"
             className="btn"
             id="steer-stop"
-            disabled={ro || busy}
-            title={disabledTitle ?? "interrupt zeus' turn"}
+            disabled={busy}
+            title="interrupt zeus' turn"
             onClick={() => void act("stop")}
           >
             ■ stop
           </button>
         ) : null}
-        {isLive ? (
+        {!ro && isLive ? (
           <button
             type="button"
             className="btn steer-done"
             id="steer-markdone"
-            disabled={ro || busy}
-            title={disabledTitle ?? "mark this job done"}
+            disabled={busy}
+            title="mark this job done"
             onClick={() => void act("done").then((ok) => ok && onClose())}
           >
             ✓ mark done
           </button>
         ) : null}
-        {isLive ? (
+        {!ro && isLive ? (
           <button
             type="button"
             className="btn ghost danger"
             id="steer-kill"
-            disabled={ro || busy}
-            title={disabledTitle}
+            disabled={busy}
             onClick={() => void kill()}
           >
             ✕ cancel job
           </button>
         ) : null}
-        {isDraft ? (
+        {!ro && isDraft ? (
           <button
             type="button"
             className="btn"
             id="steer-submit"
-            disabled={ro || busy}
-            title={disabledTitle ?? "start this job's cell on its owner's machine"}
+            disabled={busy}
+            title="start this job's cell on its owner's machine"
             onClick={() => void act("submit").then((ok) => ok && onClose())}
           >
             ▶ submit
           </button>
         ) : null}
-        {settled ? (
+        {!ro && settled ? (
           <button
             type="button"
             className="btn"
             id="steer-archive"
-            disabled={ro || busy}
-            title={disabledTitle ?? "archive this job on its owner's machine"}
+            disabled={busy}
+            title="archive this job on its owner's machine"
             onClick={() => void act("archive").then((ok) => ok && onClose())}
           >
             archive
           </button>
         ) : null}
-        {settled ? (
+        {!ro && settled ? (
           <button
             type="button"
             className="btn"
             id="steer-edit"
-            disabled={ro || busy || !onOpenEditor}
-            title={disabledTitle ?? "edit the job file on its owner's machine"}
+            disabled={busy || !onOpenEditor}
+            title="edit the job file on its owner's machine"
             onClick={() => onOpenEditor?.(slug, node)}
           >
             ✎ edit job
@@ -462,15 +512,15 @@ export function RemoteSteerBody({
         ) : null}
       </div>
       <div className="panel-body answer-body remote-steer" data-remote-mode={mode}>
-        {!job ? (
-          <div className="answer-note">this card is no longer on the board</div>
-        ) : null}
+        {/* The local body's containers, in its order and with its ids and
+            classes, so style.css dresses both alike — but each is MOUNTED
+            only when it has something to show, rather than hidden. */}
         <div className="steer-context" id="steer-context">
-          <div className="remote-idrow">
-            {job?.repo ? <span>{job.repo}</span> : null}
-            {job?.cell ? <span>{job.cell}</span> : null}
-            <span>{liveCol ?? job?.state ?? ""}</span>
-          </div>
+          {crewChipsVisible(job) ? (
+            <div className="crew" id="steer-crew">
+              <CrewChips job={job} />
+            </div>
+          ) : null}
           {prs.length ? (
             <div className="prs" id="steer-prs">
               {prs.map((pr, i) => (
@@ -478,33 +528,96 @@ export function RemoteSteerBody({
               ))}
             </div>
           ) : null}
-          {job?.detail ? (
-            <div className="steer-detail remote-text" id="steer-detail">
-              {job.detail}
+          {threads.length ? (
+            // no ⑂ branch: forking a zeus is its owner's to do
+            <div className="threads" id="steer-threads">
+              <ThreadChips
+                job={job}
+                withBranch={false}
+                onOpenThread={(s, tid) => {
+                  if (tid) onOpenThread(s, tid, node);
+                }}
+              />
             </div>
           ) : null}
-          {job?.last_sent ? (
+          {job.detail ? (
+            <div
+              className="steer-detail"
+              id="steer-detail"
+              // renderMD escapes before transforming, so the owner's text is inert
+              dangerouslySetInnerHTML={detailHTML}
+            />
+          ) : null}
+          {job.last_sent ? (
             <div className="last-sent" id="steer-lastsent">
               {/* the OWNER's last message to its zeus, not this viewer's */}
               owner→zeus: {job.last_sent}
             </div>
           ) : null}
-          {read.data?.blocks?.length ? (
-            <div className="remote-read" id="steer-remote-read">
-              {read.data.blocks.map((b, i) => (
-                <div key={i} className={"remote-block " + b.kind}>
-                  <span className="who">{b.from || b.kind}</span>
-                  <span className="remote-text">{b.text}</span>
-                </div>
-              ))}
+          {/* the prompts in this transcript were typed on the OWNER's machine,
+              so they are labelled with its operator (see ownerLabel) */}
+          <ZeusTranscriptPanel
+            slug={slug}
+            operator={ownerLabel}
+            node={node}
+          />
+          {job.load && loadDerived ? (
+            <LoadDrill
+              load={job.load}
+              roi={loadDerived.roi}
+              band={loadDerived.band}
+              // the owner's operator is who would answer this block
+              operator={ownerLabel}
+            />
+          ) : null}
+          {artifacts.length ? (
+            // the urls are this node's proxy urls (the server rewrote them),
+            // and `key` is the owner-qualified jobKey the pager resolves by
+            <div className="chips" id="steer-chips">
+              {artifacts.map((a) => {
+                const name = `${label}/${a.name}`;
+                return (
+                  <button
+                    key={a.url}
+                    className="chip"
+                    data-url={a.url}
+                    data-key={key}
+                    data-name={name}
+                    onClick={() => onOpenArtifact(a.url, name, key)}
+                  >
+                    ▤ {a.name}
+                  </button>
+                );
+              })}
+            </div>
+          ) : null}
+          {job.doc_questions?.length ? (
+            <div className="steer-docq" id="steer-docq">
+              <DocQuestions job={job} mutate={mutate} readOnly />
+            </div>
+          ) : null}
+          {job.feedback?.length ? (
+            <div className="steer-feedback" id="steer-feedback">
+              <FeedbackPanel
+                job={job}
+                readOnly
+                onSaveFeedback={async () => new Error("read-only")}
+                onDeleteFeedback={() => {}}
+              />
+            </div>
+          ) : null}
+          {steerHasTokens(job) ? (
+            <div className="steer-tokens" id="steer-tokens">
+              <TokensPanel job={job} />
             </div>
           ) : null}
         </div>
 
-        {job && question ? (
+        {question ? (
           // The board's own QuestionBlock, answering through the proxy. A
           // disabled <fieldset> is what disables every option button for a
-          // readonly card without a prop on a shared component.
+          // readonly card without a prop on a shared component — the one
+          // place a readonly card draws a control, so the options stay legible.
           <fieldset
             className="steer-actions remote-question"
             id="steer-actions"
@@ -515,19 +628,34 @@ export function RemoteSteerBody({
           </fieldset>
         ) : null}
 
-        {isLive || ro ? (
+        {/* absent too for a frontmatter-only job: a drawer that unfolds to
+            nothing reads as a failed load */}
+        {spec !== null && spec.trim() !== "" ? (
+          <div className="steer-spec" id="steer-spec">
+            <button
+              className="steer-spec-head"
+              id="steer-spec-toggle"
+              onClick={() => setSpecOpen((v) => !v)}
+            >
+              <span className="tri">{specOpen ? "▾" : "▸"}</span> spec
+            </button>
+            <div
+              className="steer-spec-body"
+              id="steer-spec-body"
+              hidden={!specOpen}
+              dangerouslySetInnerHTML={specHTML}
+            />
+          </div>
+        ) : null}
+
+        {!ro && isLive ? (
           <>
             <textarea
               id="steer-text"
               className="remote-composer"
               rows={4}
               value={text}
-              disabled={ro || !isLive}
-              placeholder={
-                ro
-                  ? "this cell is readonly — its owner has not opened it to the net"
-                  : `message to ${owner ? ownerChipText(owner) : node}'s zeus — arrives tagged with who sent it`
-              }
+              placeholder={`message to ${owner ? ownerChipText(owner) : node}'s zeus — arrives tagged with who sent it`}
               onChange={(e) => setText(e.target.value)}
               onKeyDown={(e) => {
                 if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
@@ -540,17 +668,18 @@ export function RemoteSteerBody({
               type="button"
               className="btn btn-big"
               id="steer-send"
-              disabled={ro || !isLive || busy}
-              title={disabledTitle}
+              disabled={busy}
               onClick={() => void send()}
             >
               send
             </button>
           </>
         ) : null}
-        <div className="answer-note" id="steer-note">
-          {note}
-        </div>
+        {ro ? null : (
+          <div className="answer-note" id="steer-note">
+            {note}
+          </div>
+        )}
       </div>
     </>
   );
