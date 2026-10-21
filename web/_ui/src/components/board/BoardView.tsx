@@ -67,8 +67,14 @@ export interface BoardActions {
   onAnswerQuestion(slug: string, optionIndex: number): void | Promise<Error | null>;
   /** POST /api/retry. */
   onRetry(slug: string): void;
-  /** POST /api/peers/open {slug} — raises zeus' pane in Ghostty. */
-  onOpenTmux(slug: string): void;
+  /**
+   * POST /api/peers/open {slug} — raises zeus' pane in Ghostty. Returning
+   * the mutation's promise (as onAnswerQuestion does) is what lets the card
+   * disable its button while the open is in flight: the server answers only
+   * once the window's tmux client has appeared, and a second click before
+   * then opened a second window that kicked the first.
+   */
+  onOpenTmux(slug: string): void | Promise<Error | null>;
   /** POST /api/feedback {id, feedback}. Resolves to the failure, or null. */
   onSaveFeedback(slug: string, id: number, note: string): Promise<Error | null>;
   /** POST /api/feedback {id, delete:true}. The confirm() already happened. */

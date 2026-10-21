@@ -1,4 +1,4 @@
-import { Fragment, type CSSProperties, type ReactNode } from "react";
+import { Fragment, useState, type CSSProperties, type ReactNode } from "react";
 
 import type { WebJob } from "../../api/types.ts";
 import type { Column } from "../../lib/columns.ts";
@@ -170,6 +170,12 @@ export function JobCard({ job, col, actions, matchReason, matchTerms }: JobCardP
   // it. The card is being drawn in WORKING while the job's own state still
   // says draft — see useDragReorder's Submitting.
   const submitting = useCardSubmitting(key);
+  // True while an "attach tmux" POST is in flight. The server now waits for
+  // the Ghostty window's client to appear before answering (up to a few
+  // seconds on a cold launch), and a button that looks idle for that long
+  // gets clicked again — which is the double open that used to race two
+  // windows and leave the loser showing Ghostty's launch-failure banner.
+  const [attaching, setAttaching] = useState(false);
   // `editable` is only ever read as a data attribute (by the drag/e2e side, and
   // by the editor, to decide read-only) — the click fallback below decides for
   // itself, exactly as the vanilla one did: it matched `.card[data-editable]`,
@@ -495,12 +501,17 @@ export function JobCard({ job, col, actions, matchReason, matchTerms }: JobCardP
               className="btn tmux-open open-tmux"
               data-slug={job.slug}
               title="raise zeus' pane in Ghostty"
+              disabled={attaching}
               onClick={(ev) => {
                 ev.stopPropagation();
-                actions.onOpenTmux(job.slug);
+                if (attaching) return;
+                setAttaching(true);
+                void Promise.resolve(actions.onOpenTmux(job.slug)).finally(() =>
+                  setAttaching(false),
+                );
               }}
             >
-              ⌁ attach tmux
+              {attaching ? "⌁ attaching…" : "⌁ attach tmux"}
             </button>
           ) : null}
           {retryable ? (
