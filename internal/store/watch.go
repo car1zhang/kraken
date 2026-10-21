@@ -98,12 +98,12 @@ func oneLine(s string) string { return strings.Join(strings.Fields(s), " ") }
 // is a two-value closed set carl's UI writes, and "" is a meaningful member of
 // it (clear the judgement).
 //
-// class is deliberately NOT validated, and that is a decision rather than an
-// oversight: nothing queries on it, it is descriptive metadata the sweep
-// attaches for carl to read, and a new kind of observation is exactly the sort
-// of thing the dream loop should be able to name without a schema change and a
-// binary rebuild. The doc comment on WatchItem.Class lists today's classes as
-// guidance, not as a constraint.
+// class is NOT validated here: nothing queries on it, and it is descriptive
+// metadata the sweep attaches for the operator to read. The API layer is where
+// the constraint lives (watchClasses in internal/api/watchlist.go refuses any
+// word outside today's five), so a new kind of observation is a one-list change
+// there rather than a schema change. The doc comment on WatchItem.Class lists
+// the same five.
 var validWatchState = map[string]bool{"watching": true, "shipped": true, "declined": true}
 
 var validWatchVerdict = map[string]bool{"": true, "fine": true, "fix": true}
