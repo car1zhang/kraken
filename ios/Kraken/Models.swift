@@ -4,6 +4,10 @@
 // logic, just shapes; ios/API.md documents them and
 // internal/api/contract_test.go pins them).
 //
+// Foundation is imported explicitly for FleetFilter's JSONSerialization —
+// everything else here is Codable shapes the stdlib already covers.
+import Foundation
+//
 // Rule of thumb applied throughout: a Go struct field tagged `,omitempty`
 // becomes an Optional in Swift (the key may be entirely absent, and for
 // slices Go's nil-vs-empty distinction can even surface as JSON `null`;
@@ -74,6 +78,11 @@ struct WebBoard: Decodable {
     // against a thread's origin node by `threadOriginBadge`, so an ask
     // thread this node opened carries no "from" badge.
     let nodeId: String?
+    // This node's device label (`node_label`, additive and `omitempty`:
+    // absent with the fleet off, and on a server older than the key). Names
+    // the "this Mac" row of Settings' machine filter; absent, that row reads
+    // the bare words.
+    let nodeLabel: String?
 
     enum CodingKeys: String, CodingKey {
         case daemon
@@ -89,6 +98,7 @@ struct WebBoard: Decodable {
         case operatorName = "operator"
         case nodesBox = "nodes"
         case nodeId = "node_id"
+        case nodeLabel = "node_label"
     }
 }
 
@@ -238,10 +248,48 @@ enum FrontmatterText {
     }
 }
 
+/// The board's machine filter — the iOS port of the web board bar's machines
+/// dropdown (job 634). The selection is the list of machine KEYS to show:
+/// `localNode` for this Mac's own cards, a node's tailscale stable id for a
+/// sibling's. Empty is no filter.
 enum FleetFilter {
-    /// `hideOthers` removes exactly the remote (owned) cards, order kept.
-    static func apply(_ jobs: [WebJob], hideOthers: Bool) -> [WebJob] {
-        hideOthers ? jobs.filter { $0.owner == nil } : jobs
+    /// The key of this node's own cards. A sentinel rather than the board's
+    /// `nodeId`: local cards carry no `owner` and are matched by that absence,
+    /// and `nodeId` is absent whenever the server's tailscale is unreadable. A
+    /// tailscale stable id is never the bare word `local`.
+    static let localNode = "local"
+
+    /// The machine a card belongs to, in the selection's vocabulary.
+    static func nodeKey(of job: WebJob) -> String {
+        job.owner?.nodeID ?? localNode
+    }
+
+    /// Empty `selected` returns `jobs` unchanged, order kept; otherwise exactly
+    /// the cards whose machine key is in `selected`, order kept. A machine that
+    /// joins the tailnet while a selection is active is hidden until picked.
+    static func apply(_ jobs: [WebJob], selected: [String]) -> [WebJob] {
+        if selected.isEmpty { return jobs }
+        let shown = Set(selected)
+        return jobs.filter { shown.contains(nodeKey(of: $0)) }
+    }
+
+    /// The persisted form: a JSON array of keys in one UserDefaults string
+    /// (`@AppStorage` takes a String, not an array). Anything unreadable — nil,
+    /// malformed JSON, a non-array — is the empty selection; duplicates and
+    /// empty strings are dropped.
+    static func selection(from raw: String?) -> [String] {
+        guard let raw, let data = raw.data(using: .utf8),
+              let any = try? JSONSerialization.jsonObject(with: data),
+              let list = any as? [Any] else { return [] }
+        var out: [String] = []
+        for case let s as String in list where !s.isEmpty && !out.contains(s) { out.append(s) }
+        return out
+    }
+
+    /// The inverse of `selection(from:)`; an empty selection encodes as `[]`.
+    static func encode(_ selected: [String]) -> String {
+        guard let data = try? JSONSerialization.data(withJSONObject: selected) else { return "[]" }
+        return String(decoding: data, as: UTF8.self)
     }
 }
 
@@ -659,6 +707,72 @@ private struct TolerantWebJobAccount: Decodable {
     }
 }
 
+// WebJobContext mirrors board.go's webJobContext — the cell lead's
+// context-window fill as its statusline last reported it (the kv row
+// `cell_ctx:<id>:<session>` that `kraken ctx-hook` writes on every render and
+// the daemon's auto-handoff pass reads). Nothing here is recomputed: `pct` is
+// Claude Code's own input-only fill over the model's REAL window.
+//
+// "context", never "tokens" or "usage": WebTokens is the job's summed SPEND
+// and usage is account QUOTA; this is how much of one live session's window
+// is occupied right now.
+//
+// Decode-only this pass — nothing on the phone renders it yet (Q6 of job
+// 630). Every field but `handoff` rides on every present object (no omitempty
+// on the Go type); absence is said one level up by `WebJob.context` being
+// nil. Two zeros carry meaning and neither is an empty window: `used` 0 means
+// the reporting hook predates the exact-count field, `window` 0 means the
+// hook sent no size.
+struct WebJobContext: Decodable {
+    /// `context_window.used_percentage` as reported — may carry decimals.
+    let pct: Double
+    /// `context_window_size` in tokens; 0 when the hook sent none.
+    let window: Int64
+    /// `total_input_tokens`, the exact count `pct` came from; 0 when unreported.
+    let used: Int64
+    /// Unix MILLIS of the report (WebJob.mtime's convention).
+    let at: Int64
+    /// The fill at which the daemon types /handoff into the pane — served so
+    /// no client hardcodes it.
+    let handoffPct: Double
+    /// The auto-handoff pass' state for THIS session; nil when it holds none.
+    let handoff: WebJobHandoff?
+
+    enum CodingKeys: String, CodingKey {
+        case pct, window, used, at
+        case handoffPct = "handoff_pct"
+        case handoff
+    }
+}
+
+// WebJobHandoff mirrors board.go's webJobHandoff: fires in the CURRENT streak
+// (the pass resets the count once the last fire is two hours old, so never a
+// lifetime total), the last fire's unix millis (0 when never fired), and
+// whether the streak hit its cap.
+struct WebJobHandoff: Decodable {
+    let fires: Int
+    let lastAt: Int64
+    let exhausted: Bool
+
+    enum CodingKeys: String, CodingKey {
+        case fires
+        case lastAt = "last_at"
+        case exhausted
+    }
+}
+
+// One `context` object, decoded so that it CANNOT throw — TolerantWebJobAccount's
+// twin, for its reason: `WebBoard.jobs` is a strictly decoded `[WebJob]`, so a
+// malformed `context` on one job would take the whole board with it, and a
+// meter nobody renders yet must never cost the board it would be drawn on.
+private struct TolerantWebJobContext: Decodable {
+    let context: WebJobContext?
+
+    init(from decoder: Decoder) throws {
+        context = try? WebJobContext(from: decoder)
+    }
+}
+
 struct WebJob: Decodable, Identifiable {
     let slug: String
     let repo: String
@@ -800,6 +914,19 @@ struct WebJob: Decodable, Identifiable {
     // its decode. Call sites see `WebJobAccount?` either way — the wrapper is
     // the decode's business and nothing else's.
     private let accountBox: TolerantWebJobAccount?
+    // The cell lead's context-window fill (WebJobContext above). nil is the
+    // ONLY spelling of UNREPORTED — no stamped session yet, a cell whose
+    // statusLine kraken left alone, a codex cell — and ARCHIVED, where
+    // api/board.go's `archivedWebJob` withholds the key (`account`'s call); a
+    // done job keeps its last report, since a reactivation resumes the same
+    // session near that fill. Served whatever the display state, so the key
+    // never flickers as a card moves column. Decode-only this pass. Additive
+    // key, absent on older servers, so no contract bump.
+    //
+    // Stored behind TolerantWebJobContext and read through the computed
+    // `context` below, exactly as `account` is, so a MALFORMED object costs
+    // this card its (unrendered) meter rather than the board its decode.
+    private let contextBox: TolerantWebJobContext?
     // The node that owns this card when another kraken served it (v7). Absent
     // on every local card — its presence IS "remote".
     let owner: WebJobOwner?
@@ -833,6 +960,9 @@ struct WebJob: Decodable, Identifiable {
     /// (see accountBox) an object that failed to decode. The stored wrapper is
     /// private precisely so this is the only spelling a reader ever uses.
     var account: WebJobAccount? { accountBox?.account }
+    /// The cell lead's last context-window report, or nil — unreported,
+    /// archived, or (see contextBox) an object that failed to decode.
+    var context: WebJobContext? { contextBox?.context }
 
     enum CodingKeys: String, CodingKey {
         case slug, repo, state, err, outcome, cell, live
@@ -859,6 +989,8 @@ struct WebJob: Decodable, Identifiable {
         // the wire name is `account`; the stored property is the tolerant
         // wrapper, read back through the computed `account` above
         case accountBox = "account"
+        // same arrangement for `context`
+        case contextBox = "context"
         case owner, visibility
     }
 }

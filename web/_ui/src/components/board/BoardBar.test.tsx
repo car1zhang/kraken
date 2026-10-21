@@ -6,7 +6,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { JobSearchModel } from "../../hooks/useJobSearch.ts";
 import { COLUMNS, type Column } from "../../lib/columns.ts";
 import { parseTerms } from "../../lib/jobSearch.ts";
-import { BoardBar } from "./BoardBar.tsx";
+import { BoardBar, type BoardBarProps } from "./BoardBar.tsx";
 
 const noJobs = Object.fromEntries(COLUMNS.map((c) => [c, []])) as Record<Column, []>;
 
@@ -20,10 +20,12 @@ function Harness({
   overlayOpen,
   hidden,
   onQuery,
+  fleet,
 }: {
   overlayOpen?: boolean;
   hidden?: boolean;
   onQuery?: (q: string) => void;
+  fleet?: BoardBarProps["fleet"];
 }) {
   const [query, setQuery] = useState("");
   const terms = parseTerms(query);
@@ -47,7 +49,7 @@ function Harness({
     // QUERY, and the chip is a prop rather than something read off here.
     goalFilter: null,
   };
-  return <BoardBar search={search} overlayOpen={overlayOpen} hidden={hidden} />;
+  return <BoardBar search={search} overlayOpen={overlayOpen} hidden={hidden} fleet={fleet} />;
 }
 
 const input = () => screen.getByRole("textbox", { name: "search jobs" }) as HTMLInputElement;
@@ -172,5 +174,27 @@ describe("BoardBar", () => {
     } finally {
       document.removeEventListener("keydown", listener);
     }
+  });
+});
+
+// job 634: the fleet's machines dropdown rides the bar only when the host
+// wires it, and the old checkbox is gone in both states
+describe("BoardBar machines dropdown", () => {
+  it("renders no picker and no checkbox without a fleet prop", () => {
+    render(<Harness />);
+    expect(document.querySelector("#fleet-filter")).toBeNull();
+    expect(document.querySelector("#hide-others")).toBeNull();
+    expect(document.querySelector("input[type=checkbox]")).toBeNull();
+  });
+
+  it("renders the picker, and still no checkbox, with a fleet prop", () => {
+    render(
+      <Harness
+        fleet={{ nodes: [], selfLabel: "Mac Studio", operator: "carl", jobs: [], selected: ["local"], onChange: () => {} }}
+      />,
+    );
+    expect(screen.getByRole("button", { name: "machines: this Mac" })).toBeTruthy();
+    expect(document.querySelector("#fleet-filter")).not.toBeNull();
+    expect(document.querySelector("input[type=checkbox]")).toBeNull();
   });
 });

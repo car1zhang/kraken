@@ -270,6 +270,53 @@ export interface WebTokens {
 }
 
 /**
+ * The cell lead's context-window fill, mirroring api.webJobContext
+ * (internal/api/board.go): the kv row `cell_ctx:<id>:<session>` that
+ * `kraken ctx-hook` writes on every statusline render and the daemon's
+ * auto-handoff pass reads. Nothing here is recomputed — `pct` is Claude Code's
+ * own input-only fill over the model's REAL window.
+ *
+ * "context", never "tokens" or "usage": WebTokens is the job's summed SPEND
+ * and usage is account QUOTA; this is how much of one live session's window
+ * is occupied right now.
+ *
+ * Absence (`job.context === undefined`) is the only spelling of "unreported";
+ * inside the object every number is present. Two zeros carry meaning: `used`
+ * 0 means the reporting hook predates the exact-count field, so the panel
+ * derives an approximate count from `pct × window` and marks it `~`; `window`
+ * 0 means the hook sent no size, so the panel shows the percentage alone.
+ * Neither ever means an empty window — a session reports only once its first
+ * response has been billed.
+ */
+export interface WebJobContext {
+  /** context_window.used_percentage as reported — may carry decimals */
+  pct: number;
+  /** context_window_size in tokens; 0 when the hook sent none */
+  window: number;
+  /** total_input_tokens, the exact count pct came from; 0 when unreported */
+  used: number;
+  /** unix MILLIS of the report (WebJob.mtime's convention). Age here is time since the last statusline RENDER, not staleness: an idle zeus renders nothing new. */
+  at: number;
+  /** the fill at which the daemon types /handoff into the pane — served so no client hardcodes 75 */
+  handoff_pct: number;
+  /** the auto-handoff pass' state for THIS session; absent when it has recorded none */
+  handoff?: WebJobHandoff;
+}
+
+/**
+ * The daemon's auto-handoff state for one session. `fires` counts the CURRENT
+ * streak only — the pass resets it once the last fire is two hours old — so
+ * it is never a lifetime total and the panel words it that way.
+ */
+export interface WebJobHandoff {
+  fires: number;
+  /** unix MILLIS of the last fire; 0 when never fired */
+  last_at: number;
+  /** the streak hit its cap and the pass stopped typing */
+  exhausted: boolean;
+}
+
+/**
  * Zeus' two 1..10 estimates for a BLOCKED job, and the board's whole triage
  * input: `unblock` is how much of carl's own effort the unblock costs
  * (reading, deciding, explaining), `scope` is how much claude work that reply
@@ -420,6 +467,13 @@ export interface WebJob {
   threads?: WebThread[];
   /** Absent means NEVER MEASURED, which is not a measured zero — see WebTokens. */
   tokens?: WebTokens;
+  /**
+   * The cell lead's context-window fill as its statusline last reported it —
+   * see WebJobContext. Absent means UNREPORTED (no stamped session yet, a
+   * cell whose statusLine kraken left alone, a codex cell) or ARCHIVED; a
+   * done job keeps its last report, since a reactivation resumes near it.
+   */
+  context?: WebJobContext;
   /**
    * Present means "estimated, and the estimate still stands". ABSENT is three
    * different states the wire does not separate, so no client can:
@@ -651,6 +705,13 @@ export interface WebBoard {
    * node's own ask threads unbadged.
    */
   node_id?: string;
+  /**
+   * THIS node's device label (`webBoard.node_label`, `jobs.DeviceLabel`), so
+   * the board bar's machines dropdown can name this Mac without a second poll
+   * of `/api/node`. Absent with the fleet off, and on a server older than the
+   * key — the picker then says the bare words "this Mac".
+   */
+  node_label?: string;
 }
 
 /** `webJobOwner` (internal/api/board.go): the node a remote card runs on. */

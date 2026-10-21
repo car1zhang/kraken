@@ -43,6 +43,9 @@ struct KrakenApp: App {
         // both cookie jars before any artifact page or thumbnail loads —
         // session cookies do not survive a relaunch, the Keychain record does.
         _ = PairingSession.shared
+        // The machine filter's one-time migration off the old hideOthers
+        // switch, before any view reads either key (job 634).
+        BoardViewModel.migrateHideOthers()
         // BGTaskScheduler registration must happen before the app finishes
         // launching, so init() (there's no AppDelegate in this SwiftUI-only
         // app) — not a button/toggle handler — is the only correct place.

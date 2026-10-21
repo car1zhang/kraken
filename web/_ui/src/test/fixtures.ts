@@ -3,6 +3,7 @@ import type {
   WebBoard,
   WebJob,
   WebJobAccount,
+  WebJobContext,
 } from "../api/types.ts";
 
 // Shared test fixtures.
@@ -57,6 +58,24 @@ export function makeAccount(over: Partial<WebJobAccount> = {}): WebJobAccount {
     slug: "dorisexplorer4",
     email: "dorisexplorer4@gmail.com",
     at: 1_700_000_000_000,
+    ...over,
+  };
+}
+
+/**
+ * One job's context-window report (WebJobContext), NOT part of makeJob's
+ * defaults for makeAccount's reason: absence is the wire's whole spelling of
+ * "unreported". The numbers are this feature's real worked example (job 630,
+ * 2026-10-21): 25% of a 1M window, 242,390 input tokens. `handoff` is left
+ * out — a fresh session has no pass state — and attached by overriding.
+ */
+export function makeContext(over: Partial<WebJobContext> = {}): WebJobContext {
+  return {
+    pct: 25,
+    window: 1_000_000,
+    used: 242_390,
+    at: 1_792_599_370_254,
+    handoff_pct: 75,
     ...over,
   };
 }

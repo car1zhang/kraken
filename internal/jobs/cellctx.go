@@ -28,23 +28,37 @@ import (
 // types only into CellZeus' pane.
 
 // CellContext is one context report from a cell's statusline hook.
+//
+// Used is the statusline's `context_window.total_input_tokens` — the exact
+// input-only count the percentage was computed from (input + cache_creation +
+// cache_read). 0 means the reporting hook did not send one (a row written
+// before the field existed), never "an empty window": a session reports only
+// once its first response has been billed, so a real count is never zero. The
+// board's reader derives an approximate count from Pct and Window in that
+// case; the pass below never reads it.
 type CellContext struct {
 	SessionID string  `json:"session_id"`
 	Pct       float64 `json:"pct"`
 	Window    int64   `json:"window"`
+	Used      int64   `json:"used"`
 	At        int64   `json:"at"` // unix millis
 }
 
+// cellCtxKVPrefix is the kv key family every session's report lives under;
+// cellCtxKVKey is one session's key within it.
+const cellCtxKVPrefix = "cell_ctx:"
+
 // cellCtxKVKey is the kv key one session's latest report lives under.
 func cellCtxKVKey(jobID int64, sessionID string) string {
-	return fmt.Sprintf("cell_ctx:%d:%s", jobID, sessionID)
+	return fmt.Sprintf("%s%d:%s", cellCtxKVPrefix, jobID, sessionID)
 }
 
-// RecordCellContext persists one report. Two refusals, both about a number
+// RecordCellContext persists one report. Three refusals, all about a number
 // that would poison the meter: a blank session id makes the report unattributable,
-// and a percentage that is NaN or outside [0,100] is not a fill (NaN is tested
-// separately because every range comparison against it is false).
-func RecordCellContext(st *store.Store, jobID int64, sessionID string, pct float64, window int64) error {
+// a percentage that is NaN or outside [0,100] is not a fill (NaN is tested
+// separately because every range comparison against it is false), and a
+// negative token count is not a count.
+func RecordCellContext(st *store.Store, jobID int64, sessionID string, pct float64, window, used int64) error {
 	if st == nil {
 		return fmt.Errorf("cell context: no store")
 	}
@@ -55,10 +69,14 @@ func RecordCellContext(st *store.Store, jobID int64, sessionID string, pct float
 	if math.IsNaN(pct) || pct < 0 || pct > 100 {
 		return fmt.Errorf("cell context: percentage out of range")
 	}
+	if used < 0 {
+		return fmt.Errorf("cell context: negative token count")
+	}
 	data, err := json.Marshal(CellContext{
 		SessionID: sessionID,
 		Pct:       pct,
 		Window:    window,
+		Used:      used,
 		At:        time.Now().UnixMilli(),
 	})
 	if err != nil {
@@ -81,6 +99,102 @@ func ReadCellContext(st *store.Store, jobID int64, sessionID string) (CellContex
 		return CellContext{}, false
 	}
 	return c, true
+}
+
+// CellContextIndex reads EVERY session's report in one query and keys it by
+// the full kv key, for the board build (api.webContextFor): one query for the
+// whole payload rather than one GetKV per active job (store.ListKVPrefix's
+// reason for existing). A row that does not parse, or names no session, is
+// left out — the same reading ReadCellContext gives it. nil (never an error)
+// when there is no store or the query fails: the board then carries no
+// context key for any job, which is "unreported", the honest degraded answer.
+func CellContextIndex(st *store.Store) map[string]CellContext {
+	if st == nil {
+		return nil
+	}
+	rows, err := st.ListKVPrefix(cellCtxKVPrefix)
+	if err != nil {
+		return nil
+	}
+	index := make(map[string]CellContext, len(rows))
+	for k, raw := range rows {
+		var c CellContext
+		if err := json.Unmarshal([]byte(raw), &c); err != nil || strings.TrimSpace(c.SessionID) == "" {
+			continue
+		}
+		index[k] = c
+	}
+	return index
+}
+
+// CellContextFor is the presence rule for a job's context on the wire: the
+// report under the job's STAMPED session, and nothing else. A job with no
+// stamped session has no key to look under — zeus has not been discovered
+// yet — and a row for any other session (a teammate's, a thread's, a
+// previous run's zeus) is not this job's fill. The index is CellContextIndex's.
+func CellContextFor(index map[string]CellContext, j *Job) (CellContext, bool) {
+	if j == nil || j.Session == "" || index == nil {
+		return CellContext{}, false
+	}
+	c, ok := index[cellCtxKVKey(j.ID, j.Session)]
+	return c, ok
+}
+
+// HandoffThreshold is autoHandoffThreshold for readers outside the package:
+// the board serves it beside each job's fill so no client hardcodes the
+// number the daemon acts on.
+func HandoffThreshold() float64 { return autoHandoffThreshold }
+
+// HandoffSummary is the auto-handoff pass' state for one job as the wire
+// reads it: how many times `/handoff` was typed in the current streak, when
+// the last one was, and whether the streak hit its cap. It is the pass'
+// private state minus the Armed flag, which is scheduling detail.
+type HandoffSummary struct {
+	SessionID  string
+	Fires      int
+	LastFireAt int64 // unix millis, 0 when never fired
+	Exhausted  bool
+}
+
+// HandoffIndex reads every job's auto-handoff state in one query, keyed by
+// job id, for the board build. Unparseable rows are left out; nil when there
+// is no store or the query fails.
+func HandoffIndex(st *store.Store) map[int64]HandoffSummary {
+	if st == nil {
+		return nil
+	}
+	rows, err := st.ListKVPrefix(autoHandoffKVPrefix)
+	if err != nil {
+		return nil
+	}
+	index := make(map[int64]HandoffSummary, len(rows))
+	for k, raw := range rows {
+		var id int64
+		if _, err := fmt.Sscanf(strings.TrimPrefix(k, autoHandoffKVPrefix), "%d", &id); err != nil {
+			continue
+		}
+		var s autoHandoffState
+		if err := json.Unmarshal([]byte(raw), &s); err != nil {
+			continue
+		}
+		index[id] = HandoffSummary{SessionID: s.SessionID, Fires: s.Fires, LastFireAt: s.LastFireAt, Exhausted: s.Exhausted}
+	}
+	return index
+}
+
+// HandoffFor returns the job's auto-handoff state when it belongs to the
+// job's STAMPED session. State for another session is a previous run's
+// streak (autoHandoffDue resets it on the next report) and is not served:
+// a fire count from a session that is gone would read as this session's.
+func HandoffFor(index map[int64]HandoffSummary, j *Job) (HandoffSummary, bool) {
+	if j == nil || j.Session == "" || index == nil {
+		return HandoffSummary{}, false
+	}
+	s, ok := index[j.ID]
+	if !ok || s.SessionID != j.Session {
+		return HandoffSummary{}, false
+	}
+	return s, true
 }
 
 // autoHandoffThreshold is the fill at or above which a handoff is due.
@@ -116,9 +230,13 @@ type autoHandoffState struct {
 	Exhausted  bool   `json:"exhausted"`
 }
 
+// autoHandoffKVPrefix is the kv key family every job's autoHandoffState lives
+// under; autoHandoffKVKey is one job's key within it.
+const autoHandoffKVPrefix = "auto_handoff:"
+
 // autoHandoffKVKey is the kv key a job's autoHandoffState lives under.
 func autoHandoffKVKey(jobID int64) string {
-	return fmt.Sprintf("auto_handoff:%d", jobID)
+	return fmt.Sprintf("%s%d", autoHandoffKVPrefix, jobID)
 }
 
 // autoHandoffDue is the pass' pure core: given zeus' latest report and the

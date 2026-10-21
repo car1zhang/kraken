@@ -206,6 +206,9 @@ var webBoardSpec = map[string]fieldSpec{
 	// This node's tailscale stable id, absent with no tailscale or the fleet
 	// off; clients compare a thread's origin.node_id with it. Additive.
 	"node_id": {kind: wireString, required: false},
+	// This node's device label, for the machines dropdown's self row.
+	// Absent with the fleet off. Additive.
+	"node_label": {kind: wireString, required: false},
 }
 
 // webBackgroundSpec covers background.go's webBackground — webBoard's
@@ -343,6 +346,15 @@ var webJobSpec = map[string]fieldSpec{
 	// through undocumented, which is the whole point of transcribing
 	// ios/API.md.
 	"load": {kind: wireObject, required: false},
+	// the cell lead's context-window fill as its statusline last reported it
+	// (webJobContext; its own spec and shape test are in cellctx_wire_test.go),
+	// omitempty. Absent means UNREPORTED — no stamped session yet, a cell
+	// whose statusLine kraken left alone, a codex cell — and ARCHIVED, where
+	// archivedWebJob withholds it (TestArchivedWebJobWithholdsContext). Served
+	// for done jobs that still hold a row: a reactivation resumes the same
+	// session near that fill. Additive, so it never bumps apiContract;
+	// listed because assertShape rejects any key the spec does not document.
+	"context": {kind: wireObject, required: false},
 	// Every goal this job serves (goals.go), in link order, omitempty — absent
 	// means the job links none, which is every job until carl labels one and
 	// every job whose goals were deleted (schema v27's ON DELETE CASCADE takes
@@ -1235,6 +1247,9 @@ func TestWebJobWireShapePopulated(t *testing.T) {
 		// a fixture that omitted this would leave the registration passing
 		// whether or not it existed.
 		Account: &webJobAccount{Slug: "dorisexplorer4", Email: "dorisexplorer4@gmail.com", At: 1769040000000},
+		// Present for Account's reason: a fixture without it would leave the
+		// "context" registration passing whether or not it existed.
+		Context: &webJobContext{Pct: 25, Window: 1_000_000, Used: 242_390, At: 1_792_599_370_254, HandoffPct: 75},
 	}
 	data, err := json.Marshal(wj)
 	if err != nil {

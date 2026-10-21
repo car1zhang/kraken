@@ -117,12 +117,12 @@ export interface BoardViewProps {
    */
   overlayOpen?: boolean;
   /**
-   * The fleet's hide-others toggle, relayed to the board bar. App owns the
-   * state (and its kraken.hideOthers persistence) because the filter itself
-   * runs in useBoard, above this view.
+   * The fleet's machine selection and its setter, relayed to the board bar's
+   * machines dropdown. App owns the state (and its kraken.fleetNodes
+   * persistence) because the filter itself runs in useBoard, above this view.
    */
-  hideOthers?: boolean;
-  onHideOthers?: (hide: boolean) => void;
+  fleetNodes?: readonly string[];
+  onFleetNodes?: (next: string[]) => void;
   /**
    * @deprecated Dead, and accepted only so App.tsx keeps compiling until the
    * lead drops the call site. Band 2 carries a bare artifact COUNT now
@@ -176,8 +176,8 @@ export function BoardView({
   goalFilter = null,
   onGoalFilter = () => {},
   overlayOpen,
-  hideOthers = false,
-  onHideOthers,
+  fleetNodes = [],
+  onFleetNodes,
 }: BoardViewProps) {
   /**
    * How many jobs link each goal, and every goal's text — both from the ONE
@@ -233,12 +233,19 @@ export function BoardView({
         onClearGoal={() => onGoalFilter(null)}
         overlayOpen={overlayOpen}
         hidden={hidden}
-        hideOthers={hideOthers}
-        // offered only once there IS another kraken (or the toggle is already
-        // on, so it can always be switched back off)
-        onHideOthers={
-          onHideOthers && ((board.board?.nodes?.length ?? 0) > 0 || hideOthers)
-            ? onHideOthers
+        // offered only once there IS another kraken (or a selection is
+        // already persisted, so it can always be cleared); the picker counts
+        // against the UNFILTERED cards, which is why it gets `allJobs`
+        fleet={
+          onFleetNodes && ((board.board?.nodes?.length ?? 0) > 0 || fleetNodes.length > 0)
+            ? {
+                nodes: board.board?.nodes ?? [],
+                selfLabel: board.board?.node_label,
+                operator: board.board?.operator,
+                jobs: allJobs ?? [],
+                selected: fleetNodes,
+                onChange: onFleetNodes,
+              }
             : undefined
         }
       />
