@@ -13,7 +13,8 @@ import (
 )
 
 // skills_embed_test.go verifies the go:embed directive actually captured
-// every kraken-owned skill — the six pipeline skills plus the reference skill
+// every kraken-owned skill — the six pipeline skills (info, aim, do, pr,
+// dream, experiment) plus the reference skill
 // `load` — and that each SKILL.md's renamed frontmatter took: this can only
 // be checked from package main, since the embed.FS
 // itself (skillsFS) lives here, not in jobs (jobs only sees the fs.Sub'd
@@ -29,6 +30,10 @@ func TestSkillsFSContainsExpectedSkills(t *testing.T) {
 		"do":    "do",
 		"pr":    "pr",
 		"dream": "dream",
+		// experiment is a phase skill like the five above: a job whose spec
+		// invokes /experiment runs the task and publishes results instead of
+		// the doc / do / pr ladder, and badges as "experiment" while it does.
+		"experiment": "experiment",
 		// `load` governs no phase — it is the ladders zeus looks a rung up in
 		// mid-phase — so TestSkillsOwnTheCellContract has nothing to say about
 		// it and this is the only test that would notice it failing to embed.
