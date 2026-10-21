@@ -183,8 +183,19 @@ func JobRepoOriginPrefix(j *Job) (prefix string, ok bool) {
 	if !ok {
 		return "", false
 	}
+	return githubPrefix(p)
+}
+
+// githubPrefix reduces a raw origin prefix (originToPrefix's output) to the
+// `github.com/<owner>/<repo>` shape PRURLInRepo compares against, stripping an
+// https userinfo (`user@github.com/o/r`, how a second GitHub account is often
+// cloned) and refusing anything githubRepoPrefix does not match. It is the
+// normalisation JobRepoOriginPrefix applies, split out so a caller that
+// already holds the raw prefix (the restart repair) reaches the same shape
+// without resolving the repo a second time.
+func githubPrefix(p string) (string, bool) {
 	if at := strings.Index(p, "@"); at >= 0 && !strings.Contains(p[:at], "/") {
-		p = p[at+1:] // https userinfo: `user@github.com/o/r` → `github.com/o/r`
+		p = p[at+1:]
 	}
 	if !githubRepoPrefix.MatchString(p) {
 		return "", false
@@ -214,6 +225,83 @@ func PRURLInRepo(url, prefix string) bool {
 		}
 	}
 	return true
+}
+
+// prURLRepo pulls owner and repo out of a GitHub pull request URL — the exact
+// shape prURLShape (api) vouches for, so a URL that reached PRRepoNamedInSpec
+// through the attach route always matches.
+var prURLRepo = regexp.MustCompile(`^https://github\.com/([\w.-]+)/([\w.-]+)/pull/\d+$`)
+
+// PRRepoNamedInSpec reports whether the job's own spec text names the GitHub
+// repo a pull request URL belongs to — `owner/repo` as a whole token, bare or
+// inside a `github.com/owner/repo` reference or a clone URL, matched
+// case-insensitively like PRURLInRepo. It is the one way a job's deliverable
+// may legitimately land outside the checkout its `repo:` names: a job filed
+// against one checkout and told by its spec to open its PR in another ships
+// there, and the attach route's foreign-repo refusal (built for a cell that
+// wandered into a sibling checkout nobody asked it to touch) would otherwise
+// drop the very PR the spec ordered. A repo named in the spec is one the job
+// was told to touch; a repo that merely shares a prefix or a dotted suffix
+// (`owner/repo-ios`, `owner/repo.js` against `owner/repo`) is not named, and
+// neither is a repo that appears only as a link to one of its pull requests or
+// issues (`github.com/owner/repo/pull/7`, `owner/repo#12`), which is a
+// citation rather than a destination. The text is the job's spec body, mid-run
+// log included, so a Linear- or Slack-born job's quoted ticket counts as spec
+// here too. A nil job, an empty body or a URL outside prURLRepo's shape names
+// nothing.
+func PRRepoNamedInSpec(j *Job, url string) bool {
+	if j == nil || strings.TrimSpace(j.Body) == "" {
+		return false
+	}
+	m := prURLRepo.FindStringSubmatch(url)
+	if m == nil {
+		return false
+	}
+	// A whole token: not preceded by a repo-name character (so `other-owner/repo`
+	// does not vouch for `owner/repo`), not followed by one (so `owner/repo-ios`
+	// does not vouch for `owner/repo`); a `.` after the token is a boundary only
+	// when it ends the text or precedes whitespace — a sentence's full stop — so
+	// `owner/repo.js` does not vouch for `owner/repo` either. A trailing `.git`
+	// is the clone spelling.
+	re := regexp.MustCompile(`(?i)(^|[^\w.-])(` + regexp.QuoteMeta(m[1]+"/"+m[2]) + `)(\.git)?($|[^\w.-]|\.($|\s))`)
+	for _, loc := range re.FindAllStringSubmatchIndex(j.Body, -1) {
+		end := loc[5] // the end of the owner/repo token itself
+		if loc[6] >= 0 {
+			end = loc[7] // …or of its `.git` suffix, so `owner/repo.git/pull/7` is a citation too
+		}
+		rest := strings.ToLower(j.Body[end:])
+		if strings.HasPrefix(rest, "/pull/") || strings.HasPrefix(rest, "/issues/") || strings.HasPrefix(rest, "#") {
+			continue
+		}
+		return true
+	}
+	return false
+}
+
+// specNamedPRs is the recorded PR URLs of j that lie OUTSIDE the job's own
+// repo (ownPrefix, JobRepoOriginPrefix's shape; empty admits every URL) and
+// whose repo its spec names (see PRRepoNamedInSpec): the daemon's restart
+// repair vouches for these exactly as it vouches for a create it found in the
+// lead's transcript, because that transcript scan is narrowed to the job's own
+// repo and would otherwise let the repair drop, on the first pass after every
+// restart, the one cross-repo PR the attach route had admitted on purpose.
+// Own-repo PRs are left to the repair's existing evidence: a spec that names
+// the job's own repo (common) must not make every own-repo record immune to
+// the repair that exists to drop mis-attached ones.
+func specNamedPRs(j *Job, ownPrefix string) []string {
+	if j == nil {
+		return nil
+	}
+	var urls []string
+	for _, r := range j.PRs {
+		if ownPrefix != "" && PRURLInRepo(r.URL, ownPrefix) {
+			continue
+		}
+		if PRRepoNamedInSpec(j, r.URL) {
+			urls = append(urls, r.URL)
+		}
+	}
+	return urls
 }
 
 // defaultServeAddr is kraken serve's default bind address (matches

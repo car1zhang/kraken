@@ -430,3 +430,94 @@ func TestServeBaseURL(t *testing.T) {
 		})
 	}
 }
+
+// TestPRRepoNamedInSpec pins the one legitimate way a PR may land outside the
+// job's own checkout: the spec body names the PR's repo as a whole token, in
+// any of the spellings an operator writes it in, and nothing else — a repo
+// that merely shares a prefix or suffix with a named one is not named.
+func TestPRRepoNamedInSpec(t *testing.T) {
+	url := "https://github.com/other-org/mirror-core/pull/1"
+	named := []string{
+		"Open the PR against other-org/mirror-core when the template is ready.",
+		"Re-root the mirror on github.com/other-org/mirror-core.",
+		"Clone https://github.com/other-org/mirror-core.git first.",
+		"(other-org/mirror-core)",
+		"`other-org/mirror-core`",
+		"Other-Org/Mirror-Core is the destination",
+		"other-org/mirror-core",
+	}
+	for _, body := range named {
+		if !PRRepoNamedInSpec(&Job{Body: body}, url) {
+			t.Errorf("body %q should name other-org/mirror-core", body)
+		}
+	}
+	unnamed := []string{
+		"",
+		"   ",
+		"nothing about repos here",
+		"other-org/mirror-core-ios is a different repo",
+		"other-org/mirror-corelib",
+		"other-org/mirror-core.ios is a dotted sibling",
+		"use other-org/mirror-core.js for the web half",
+		"not-other-org/mirror-core",
+		"other-org/mirror",
+		"mirror-core alone, no owner",
+		"other-org/ mirror-core",
+		"see https://github.com/other-org/mirror-core/pull/7 for prior art",
+		"github.com/other-org/mirror-core/issues/3 describes the bug",
+		"see https://github.com/other-org/mirror-core/PULL/7 (uppercase path)",
+		"https://github.com/other-org/mirror-core.git/pull/7 is the clone-spelled citation",
+		"other-org/mirror-core#12 tracks it",
+	}
+	for _, body := range unnamed {
+		if PRRepoNamedInSpec(&Job{Body: body}, url) {
+			t.Errorf("body %q must NOT name other-org/mirror-core", body)
+		}
+	}
+	if !PRRepoNamedInSpec(&Job{Body: "other-org/mirror-core#12 tracks it; open the PR in other-org/mirror-core."}, url) {
+		t.Error("a citation beside a real naming must not hide the naming")
+	}
+	if PRRepoNamedInSpec(nil, url) {
+		t.Error("a nil job names nothing")
+	}
+	if PRRepoNamedInSpec(&Job{Body: "other-org/mirror-core"}, "https://github.com/other-org/mirror-core/pulls") {
+		t.Error("a URL outside the pull-request shape names nothing")
+	}
+	if PRRepoNamedInSpec(&Job{Body: "other-org/mirror-core"}, "https://github.com/other-org/mirror-core/pull/1/files") {
+		t.Error("a URL with a trailing path names nothing")
+	}
+}
+
+// TestSpecNamedPRs pins what the restart repair may vouch for on the spec's
+// word: recorded PRs of OTHER repos the spec names, never the job's own-repo
+// PRs (a spec naming its own repo must not immunise every own-repo record
+// against the repair), and nothing for a nil job.
+func TestSpecNamedPRs(t *testing.T) {
+	foreign := "https://github.com/other-org/mirror-core/pull/1"
+	own := "https://github.com/carl/kraken/pull/5"
+	prs := []JobPR{
+		{URL: foreign, State: "open"},
+		{URL: "https://github.com/other-org/mirror-core-ios/pull/2", State: "open"},
+		{URL: own, State: "open"},
+	}
+	j := &Job{Body: "ship to other-org/mirror-core and carl/kraken", PRs: prs}
+	if got := specNamedPRs(j, "github.com/carl/kraken"); len(got) != 1 || got[0] != foreign {
+		t.Errorf("specNamedPRs = %v, want only the foreign spec-named url", got)
+	}
+	if got := specNamedPRs(j, ""); len(got) != 2 || got[0] != foreign || got[1] != own {
+		t.Errorf("specNamedPRs with no own prefix = %v, want both spec-named urls", got)
+	}
+	if got := specNamedPRs(nil, "github.com/carl/kraken"); got != nil {
+		t.Errorf("specNamedPRs(nil) = %v, want nil", got)
+	}
+	// The repair hands specNamedPRs the raw origin prefix through githubPrefix:
+	// a userinfo origin must still exclude the job's own PRs.
+	if own, ok := githubPrefix("carl@github.com/carl/kraken"); !ok || own != "github.com/carl/kraken" {
+		t.Fatalf("githubPrefix(userinfo) = %q, %v", own, ok)
+	} else if got := specNamedPRs(j, own); len(got) != 1 || got[0] != foreign {
+		t.Errorf("specNamedPRs via a userinfo origin = %v, want only the foreign url", got)
+	}
+	if _, ok := githubPrefix("gitlab.com/carl/kraken"); ok {
+		t.Error("a non-GitHub prefix must not normalise to a GitHub one")
+	}
+}
