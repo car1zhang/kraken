@@ -771,6 +771,14 @@ func TestPrecedingGroupReportsExhaustion(t *testing.T) {
 	// tool_results and this repo records real lines at 8.3 MB.
 	fat := `{"type":"user","message":{"content":"` + strings.Repeat("x", 8<<20) + `"}}`
 	t.Run("past the byte bound", func(t *testing.T) { run(t, 8, fat, true) })
+
+	// The shape that exhausted the old 64-record bound: Claude Code writes an
+	// `api-request-blob` record per message of the outgoing request plus a run
+	// of per-turn bookkeeping records, so a few hundred small non-assistant
+	// records between two assistant ones is an ordinary turn, not a pathology.
+	// The seed must still resolve across it.
+	blob := `{"type":"api-request-blob","sessionId":"sess","hash":"h","message":{"role":"user","content":[{"type":"text","text":"r"}]}}`
+	t.Run("across a request-blob storm", func(t *testing.T) { run(t, 400, blob, false) })
 }
 
 // TestSumTokensDeltaReportsSeedAndScanErrorsTogether pins that a file whose
