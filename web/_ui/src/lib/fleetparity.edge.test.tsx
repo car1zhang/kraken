@@ -312,7 +312,9 @@ describe("RemoteSteerBody context containers", () => {
         "#steer-chips",
         "#steer-docq",
         "#steer-feedback",
+        "#steer-ctxwin",
         "#steer-tokens",
+        ".steer-meters",
         '[data-testid="load-drill"]',
       ]) {
         expect(document.querySelector(sel), sel).toBeNull();

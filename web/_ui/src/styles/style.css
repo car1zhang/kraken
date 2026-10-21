@@ -1926,6 +1926,65 @@ a.stack-chip.stack-down:hover { opacity: 0.9; border-color: var(--ac2); }
 .tok-cell i { font-style: normal; opacity: 0.7; margin-right: 5px; }
 .tok-note { margin-top: 5px; font-size: 9px; opacity: 0.55; }
 
+/* the steer modal's two METERS — the lead's context fill (.cw, ContextPanel)
+   and the job's token spend (.tok) — in one two-up row (job 630, Q1): the two
+   are read in one glance, "how full is zeus now" beside "what has this cost",
+   and the steer .panel's min(1120px, 96vw) gives each ~540px (measured at a
+   1280px viewport: 540px tracks), twice what .tok's four counters need. Below
+   560px the row collapses to a stack,
+   context first. A row with one meter renders that meter full width (the
+   hidden sibling takes no track: `hidden` is display:none, and a 1fr grid
+   with one child is one column wide only when told so — hence the
+   :has() rules, with the two-column default kept for the common case). */
+.steer-meters { display: grid; grid-template-columns: 1fr 1fr; gap: 0 10px; align-items: stretch; }
+.steer-meters:has(> [hidden]) { grid-template-columns: 1fr; }
+@media (max-width: 560px) { .steer-meters { grid-template-columns: 1fr; } }
+/* Both meters are always the same height (carl, 2026-10-21): the grid
+   stretches each CONTAINER to the row, and the container is a flex column so
+   the panel inside it grows to fill — without this the panel sizes to its
+   own four tiers and the two boxes end a line apart, since the context note
+   wraps to two lines and the tokens note to one. Only the panel grows; its
+   rows keep their natural height, so the extra space lands below the note. */
+.steer-meters > * { display: flex; flex-direction: column; }
+.steer-meters > * > .cw, .steer-meters > * > .tok { flex: 1 1 auto; box-sizing: border-box; }
+
+/* the context-window meter (ContextPanel in SteerOverlay.tsx) — .tok's twin
+   in the drilldown family: same raised / border-left box, same four faded
+   tiers (headline / meter / breakdown / provenance). Its left rule takes the
+   band hue, because unlike spend this is a LIVE fact with a threshold the
+   daemon acts on — at .cw-danger kraken is typing /handoff into the pane —
+   and a resting .cw-ok takes the accent rather than the family's neutral
+   grey, so a reader can tell the live meter from the retrospective one at
+   the left edge alone. .cw-dead is a done or cell-gone job's last report:
+   faded one tier further, the number is history rather than state. */
+.cw {
+  margin-top: 10px; padding: 8px 10px;
+  background: var(--raised);
+  border: 1px solid var(--divider);
+  border-left: 2px solid color-mix(in srgb, var(--ac) 55%, transparent);
+  font: 10px var(--mono); line-height: 1.5;
+  color: var(--muted);
+}
+.cw-warn { border-left-color: color-mix(in srgb, var(--warn) 65%, transparent); }
+.cw-danger { border-left-color: color-mix(in srgb, var(--ac2) 65%, transparent); }
+.cw-dead { opacity: 0.72; }
+.cw-head { display: flex; align-items: baseline; gap: 5px; }
+.cw-big { font: 600 15px var(--mono); letter-spacing: 0.04em; color: var(--fg); }
+.cw-unit { font: 600 8px var(--display); text-transform: uppercase; letter-spacing: 0.14em; opacity: 0.65; }
+.cw .u-rows { margin-top: 7px; }
+/* the handoff tick: the one mark on the bar that is not fill. It needs the
+   bar to be a positioning context, which .u-bar is not elsewhere, and it is
+   kept INSIDE the bar's box (full height, no overhang) so .u-bar's
+   overflow:hidden does not clip it. */
+.cw-bar { position: relative; }
+.u-bar-tick { position: absolute; top: 0; bottom: 0; width: 1px; background: var(--fg); opacity: 0.6; }
+.cw-break {
+  display: flex; flex-wrap: wrap; gap: 3px 14px; margin-top: 5px;
+  font-size: 10px; opacity: 0.85;
+}
+.cw-cell i { font-style: normal; opacity: 0.7; margin-right: 5px; }
+.cw-note { margin-top: 5px; font-size: 9px; opacity: 0.55; }
+
 /* zeus' load estimate with its rungs named, in the steer modal's context block
    (LoadDrill in SteerOverlay.tsx).
 

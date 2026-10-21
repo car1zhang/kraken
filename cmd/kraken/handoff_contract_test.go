@@ -270,8 +270,14 @@ func logicAssertCellPost(t *testing.T, rec *logicRecorder) {
 	if p.body["context_window_size"] != float64(1000000) {
 		t.Errorf("body context_window_size = %v, want 1000000", p.body["context_window_size"])
 	}
-	if len(p.body) != 4 {
-		t.Errorf("body = %v, want exactly slug, session_id, used_percentage, context_window_size", p.body)
+	// total_input_tokens joined the body in job 630 (the steer modal's context
+	// panel): the payload carries none, so the hook sends 0 rather than
+	// inventing a count.
+	if p.body["total_input_tokens"] != float64(0) {
+		t.Errorf("body total_input_tokens = %v, want 0 for a payload carrying none", p.body["total_input_tokens"])
+	}
+	if len(p.body) != 5 {
+		t.Errorf("body = %v, want exactly slug, session_id, used_percentage, context_window_size, total_input_tokens", p.body)
 	}
 }
 
