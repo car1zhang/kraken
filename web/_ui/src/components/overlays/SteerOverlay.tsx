@@ -73,6 +73,7 @@ import {
   type RenameControlState,
 } from "./RenameControl.tsx";
 import { TokensPanel } from "./TokensPanel.tsx";
+import { ContextPanel } from "./ContextPanel.tsx";
 import { RemoteSteerBody, VisibilityControl } from "./RemoteSteer.tsx";
 import {
   AttChips,
@@ -183,6 +184,16 @@ export function steerHasTokens(job: WebJob | undefined): boolean {
       tok.sessions
     )
   );
+}
+
+/**
+ * Whether the context panel has anything to say: a presence test on the one
+ * key, since absent IS "unreported" (see WebJobContext) and a present object
+ * always carries a real report. Shared with the remote body like
+ * steerHasTokens, for the same reason — the two drilldowns must not disagree.
+ */
+export function steerHasContext(job: WebJob | undefined): boolean {
+  return !!job?.context;
 }
 
 /**
@@ -681,6 +692,12 @@ function SteerBody({
   // question a reactivation asks. Absent means never measured, which is not a
   // measured zero (see TokensPanel), and keeps the container hidden.
   const hasTokens = steerHasTokens(job);
+  // The lead's context fill shows in EVERY mode for the reason tokens does,
+  // reactivate included: the row survives teardown and a reactivation resumes
+  // the same session near that fill, so "how full was zeus" is exactly the
+  // number a reactivation wants. Absent means unreported (see ContextPanel)
+  // and keeps the container hidden.
+  const hasContext = steerHasContext(job);
   // steerActionsHTML (app.js): the retry button plus the pending
   // AskUserQuestion. steer/unblock only — reactivate targets a dead cell, so
   // there is nothing on it to retry and nothing waiting on an answer.
@@ -719,7 +736,8 @@ function SteerBody({
     hasDocq ||
     hasFeedback ||
     hasAccount ||
-    hasTokens;
+    hasTokens ||
+    hasContext;
 
   // ---- feedback save / delete ---------------------------------------------
   // Deliberately NOT props. FeedbackPanel's two callbacks are pure mutations
@@ -1116,11 +1134,22 @@ function SteerBody({
           <div className="steer-account" id="steer-account" hidden={!hasAccount}>
             {hasAccount ? <AccountPanel job={job} usage={usage} /> : null}
           </div>
-          {/* last because it is ambient: nothing here is actionable, and a
-              job that was never measured leaves this hidden entirely rather
-              than showing a zero — see TokensPanel. */}
-          <div className="steer-tokens" id="steer-tokens" hidden={!hasTokens}>
-            <TokensPanel job={job} />
+          {/* The two METERS, last because both are ambient: nothing here is
+              actionable. One two-up row (Q1 of job 630): the lead's context
+              fill on the left — how full zeus is RIGHT NOW — and the job's
+              token spend on the right — what it has cost so far — read in one
+              glance and collapsing to a stack on narrow widths (style.css
+              .steer-meters). Either alone fills the row. A job that was never
+              measured, or whose lead never reported, leaves its container
+              hidden rather than showing a zero — see TokensPanel and
+              ContextPanel for why each absence is not a zero. */}
+          <div className="steer-meters" hidden={!hasTokens && !hasContext}>
+            <div className="steer-ctxwin" id="steer-ctxwin" hidden={!hasContext}>
+              <ContextPanel job={job} />
+            </div>
+            <div className="steer-tokens" id="steer-tokens" hidden={!hasTokens}>
+              <TokensPanel job={job} />
+            </div>
           </div>
         </div>
 

@@ -128,6 +128,7 @@ function contractFPJob(visibility: string, over: Partial<WebJob> = {}): WebJob {
     ],
     feedback: [{ id: 11, artifact: "10-arch.html", note: "contractfp arrow points wrong", at: 0 }],
     tokens: { in: 10, out: 5, cache_write: 1, cache_read: 2, sessions: 1, updated_at: 1 } as ContractFPLoose,
+    context: { pct: 25, window: 1_000_000, used: 242_390, at: 1, handoff_pct: 75 } as ContractFPLoose,
     question: {
       tool_use_id: "tu_1",
       questions: [
@@ -190,6 +191,7 @@ const contractFPContextOrder = [
   "#steer-chips",
   "#steer-docq",
   "#steer-feedback",
+  "#steer-ctxwin",
   "#steer-tokens",
 ];
 
