@@ -19,7 +19,7 @@ import (
 // an agent writes — a self-reported stage would outlive the phase the same
 // way a session file's "busy" outlives the turn.
 
-// pipelineStageSet names the five phase-governing skills — the only skill
+// pipelineStageSet names the six phase-governing skills — the only skill
 // names that count as a stage. `load`, `handoff` and `direct` are
 // deliberately absent: `load` is a reference skill (no phase, no cell
 // section — see skills.go's SkillsFS comment) consulted mid-phase, so a
@@ -43,9 +43,12 @@ var pipelineStageSet = map[string]bool{
 	"do":    true,
 	"pr":    true,
 	"dream": true,
+	// experiment governs the whole job: run the task, publish 00-results.md,
+	// stop — no doc phase, no /do, no PR — so a job on it badges as such.
+	"experiment": true,
 }
 
-// IsPipelineStage reports whether a skill name is one of the five
+// IsPipelineStage reports whether a skill name is one of the six
 // phase-governing pipeline skills. Exported for the root package's
 // skills-embed test, which holds this set in lockstep with the embedded
 // bundle (every embedded skill except `load` and `handoff` must be a stage,

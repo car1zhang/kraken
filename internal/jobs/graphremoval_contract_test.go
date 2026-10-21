@@ -206,12 +206,13 @@ func TestGraphRemovalZeusLaunchBriefIsBriefPlusGoals(t *testing.T) {
 }
 
 // "`IsPipelineStage("graph") == false`; `PipelineStages()` returns exactly
-// `[aim do dream info pr]`."
+// `[aim do dream experiment info pr]`" (experiment joined the set after the
+// graph removal; graph must stay out).
 func TestGraphRemovalPipelineStagesDropGraph(t *testing.T) {
 	if IsPipelineStage("graph") {
 		t.Error(`IsPipelineStage("graph") = true, want false`)
 	}
-	want := []string{"aim", "do", "dream", "info", "pr"}
+	want := []string{"aim", "do", "dream", "experiment", "info", "pr"}
 	if got := PipelineStages(); !reflect.DeepEqual(got, want) {
 		t.Errorf("PipelineStages() = %v, want %v", got, want)
 	}
