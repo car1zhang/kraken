@@ -208,13 +208,21 @@ already held, because nothing in any brief said what was already known.
 
 **The scouts** are one subagent per transcript, each reading that session's reduced view plus its
 digest. They are read-only exploration — they change nothing in the repo and judge nothing — so they are
-unnamed subagents, not teammates. Give each one a scratch path **outside the repo** (`/tmp/…`, never
-a worktree-relative path) and require its findings there: a scout's report is long, and the reply
-channel truncates. Each brief also names that scout's OWN scratch subdirectory for working files
-(staged reduced views, notes) — two scouts staging into one shared directory have collided mid-run,
-and the collision recovery costs more than the namespace would have. Name those directories with
-SHORT slice handles under one root you create first — a short `/tmp/<handle>` root, never under
-the session-uuid scratchpad, or every path built on it re-carries the identifier — and **never
+unnamed subagents, not teammates. Give each one a scratch path **outside the repo** and require its
+findings there: a scout's report is long, and the reply channel truncates. Inside a cell that path
+is under the CELL DIR, beside `artifacts/` and outside the worktree — `<cell dir>/scratch/` — and
+only outside a cell is it `/tmp/…`; never a worktree-relative path either way. The cell dir rather
+than `/tmp` because an operator's own PreToolUse write hook can deny the `Write` tool everywhere
+but a fixed list of roots, and `~/.kraken/cells` is the one root such a list is likely to carry: on
+one machine `/tmp` was refused for two scouts' reports one night and for the lead's own counting
+script the next (the harness's per-session scratchpad under `/tmp` was refused the same way), each
+costing a heredoc fallback that routes report prose through Bash. Each brief also names that
+scout's OWN scratch subdirectory for working files (staged reduced views, notes) — two scouts
+staging into one shared directory have collided mid-run, and the collision recovery costs more
+than the namespace would have. Name those directories with SHORT slice handles under one root you
+create first — `<cell dir>/scratch/work/<handle>` in a cell, a short `/tmp/<handle>` root outside
+one, never under the session-uuid scratchpad, or every path built on it re-carries the identifier
+— and **never
 hand-transcribe an opaque
 identifier — a session uuid, a 36-char random string — into a brief**: one brief carried five
 successive wrong transcriptions of its work-dir uuid, the attempt labelled "FINAL, copy this
@@ -493,8 +501,10 @@ specific, and it is the only place the cell's real paths appear:
   record that in the report instead. And `--clear` reopens an entry: use it if you closed one in error
   while it is still in front of you, since once the window passes nobody can reach that row again.
 - **Scouts are unnamed subagents**, never teammates: they read and report, and change nothing in the
-  repo — they still write their own findings to the scratch path you give them. The crew rules in
-  the brief govern any agent that changes the repo.
+  repo — they still write their own findings to the scratch path you give them, which in a cell is
+  `<cell dir>/scratch/` (the brief's SET ROOT's parent; outside the worktree and outside
+  `artifacts/`, so nothing there is board-visible or committable). The crew rules in the brief
+  govern any agent that changes the repo.
 - **Never `open`** (there is no browser in a cell).
 - **The phase ends with one line, then you stop.** Say exactly:
 
