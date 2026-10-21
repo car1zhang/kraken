@@ -11,21 +11,27 @@ import (
 // ctxhook_window_test.go — the ctx-hook's restatement of the statusline's
 // used_percentage as a share of the window Claude Code will actually
 // auto-compact at (autoCompactWindow in the user's settings.json), rather
-// than of the model's full window. Measured 2026-10-20: every cell on a
-// machine whose settings set autoCompactWindow below the model window
-// compacted while the hook reported ~46%, so the daemon's 75% handoff
-// threshold was unreachable and the daemon never typed /handoff.
+// than of the model's full window. Measured 2026-10-20 on a machine whose
+// settings set autoCompactWindow below the model window: zeus compacted
+// while the hook reported ~46% and teammates while it reported ~38%, so the
+// daemon's 75% handoff threshold was unreachable and it never typed /handoff.
 //
 // Lead-authored SIGHTED regression pins, not contract tests. Package-level
 // helpers are prefixed `window`; the test server and the POST assertion come
 // from handoff_contract_test.go (logicServe, logicAssertCellPost), so a
 // rename there breaks these too.
 
+// windowIsolateEnv unsets CLAUDE_CODE_AUTO_COMPACT_WINDOW for one test: the
+// variable outranks the file, so every test here runs with it empty whatever
+// the machine's own environment says.
+func windowIsolateEnv(t *testing.T) {
+	t.Helper()
+	t.Setenv(autoCompactWindowEnv, "")
+}
+
 func windowWriteUserSettings(t *testing.T, home, content string) {
 	t.Helper()
-	// The environment variable outranks the file, so every file-reading
-	// test runs with it unset whatever the machine's own environment says.
-	t.Setenv(autoCompactWindowEnv, "")
+	windowIsolateEnv(t)
 	dir := filepath.Join(home, ".claude")
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatalf("mkdir: %v", err)
@@ -38,6 +44,7 @@ func windowWriteUserSettings(t *testing.T, home, content string) {
 // The per-model window wins over the top-level one for that model; any
 // other model takes the top-level one.
 func TestCtxHookAutoCompactWindowPerModelBeatsTopLevel(t *testing.T) {
+	windowIsolateEnv(t)
 	home := t.TempDir()
 	windowWriteUserSettings(t, home, `{"autoCompactWindow":500000,"modelSettings":{"claude-opus-5-5":{"autoCompactWindow":400000},"claude-fable-5-1":{"effort":"high"}}}`)
 	if got := autoCompactWindow(home, "claude-opus-5-5"); got != 400000 {
@@ -54,6 +61,7 @@ func TestCtxHookAutoCompactWindowPerModelBeatsTopLevel(t *testing.T) {
 // No home, no file, an unparseable file, or a file without the key all read
 // as 0 — "no such setting" — and never as an error: the hook never fails.
 func TestCtxHookAutoCompactWindowAbsentIsZero(t *testing.T) {
+	windowIsolateEnv(t)
 	if got := autoCompactWindow("", "claude-opus-5-5"); got != 0 {
 		t.Errorf("empty home = %d, want 0", got)
 	}
@@ -78,6 +86,7 @@ func TestCtxHookAutoCompactWindowAbsentIsZero(t *testing.T) {
 // effectiveFill: scales when the auto-compact window is smaller than the
 // model window, caps at 100, and otherwise returns its inputs unchanged.
 func TestCtxHookEffectiveFill(t *testing.T) {
+	windowIsolateEnv(t)
 	cases := []struct {
 		name       string
 		pct        float64
@@ -104,6 +113,7 @@ func TestCtxHookEffectiveFill(t *testing.T) {
 // End to end: with a settings file naming a 500K window for the session's
 // model, a 42.5%-of-1M statusline reports 85% of 500K to serve and prints it.
 func TestCtxHookReportsFillOfTheAutoCompactWindow(t *testing.T) {
+	windowIsolateEnv(t)
 	rec := logicServe(t)
 	home := t.TempDir()
 	windowWriteUserSettings(t, home, `{"autoCompactWindow":500000}`)
@@ -130,6 +140,7 @@ func TestCtxHookReportsFillOfTheAutoCompactWindow(t *testing.T) {
 // own numbers unchanged — the pre-change behaviour, kept for a machine that
 // never set autoCompactWindow.
 func TestCtxHookWithoutTheSettingReportsTheHarnessNumber(t *testing.T) {
+	windowIsolateEnv(t)
 	rec := logicServe(t)
 	home := t.TempDir()
 	payload := `{"session_id":"sess-1","model":{"id":"claude-fable-5-1"},"context_window":{"used_percentage":42.5,"context_window_size":1000000}}`
@@ -148,6 +159,7 @@ func TestCtxHookWithoutTheSettingReportsTheHarnessNumber(t *testing.T) {
 // own "auto" is its tuned window (0, not the top level), and 500000.0 is
 // 500000.
 func TestCtxHookAutoCompactWindowAutoAndFloatValues(t *testing.T) {
+	windowIsolateEnv(t)
 	home := t.TempDir()
 	windowWriteUserSettings(t, home, `{"autoCompactWindow":500000,"modelSettings":{"claude-opus-5-5":{"autoCompactWindow":"auto"}}}`)
 	if got := autoCompactWindow(home, "claude-fable-5-1"); got != 500000 {
@@ -180,23 +192,46 @@ func TestCtxHookAutoCompactWindowAutoAndFloatValues(t *testing.T) {
 	}
 }
 
-// CLAUDE_CODE_AUTO_COMPACT_WINDOW outranks the file, as it does for Claude
-// Code itself; a value that is not a token count is the tuned window (0),
-// and an empty one reads as unset.
+// CLAUDE_CODE_AUTO_COMPACT_WINDOW outranks the file, read as Claude Code
+// reads it: `k`/`m` suffixes, clamped to 100K-1M, and a value it cannot read
+// (or an empty one) falls through to the file. An empty home reads neither.
 func TestCtxHookAutoCompactWindowEnvOutranksTheFile(t *testing.T) {
+	windowIsolateEnv(t)
 	home := t.TempDir()
 	windowWriteUserSettings(t, home, `{"autoCompactWindow":500000}`)
-	t.Setenv(autoCompactWindowEnv, "300000")
-	if got := autoCompactWindow(home, "claude-fable-5-1"); got != 300000 {
-		t.Errorf("env set = %d, want 300000", got)
+	cases := map[string]int64{
+		"300000":  300000,
+		"200k":    200000,
+		" 200K ":  200000,
+		"1M":      1000000,
+		"0.5m":    500000,
+		"50000":   100000,
+		"5000000": 1000000,
+		"auto":    500000,
+		"0":       500000,
+		"junk":    500000,
+		" ":       500000,
 	}
-	t.Setenv(autoCompactWindowEnv, "auto")
-	if got := autoCompactWindow(home, "claude-fable-5-1"); got != 0 {
-		t.Errorf("env \"auto\" = %d, want 0 rather than the file's 500000", got)
+	for v, want := range cases {
+		t.Setenv(autoCompactWindowEnv, v)
+		if got := autoCompactWindow(home, "claude-fable-5-1"); got != want {
+			t.Errorf("env %q = %d, want %d", v, got, want)
+		}
 	}
-	t.Setenv(autoCompactWindowEnv, " ")
-	if got := autoCompactWindow(home, "claude-fable-5-1"); got != 500000 {
-		t.Errorf("blank env = %d, want the file's 500000", got)
+	t.Setenv(autoCompactWindowEnv, "200k")
+	if got := autoCompactWindow("", "claude-fable-5-1"); got != 0 {
+		t.Errorf("empty home with env set = %d, want 0 (nothing read)", got)
+	}
+}
+
+// A modelSettings that is not an object loses only the per-model lookup; the
+// top level beside it still reads.
+func TestCtxHookAutoCompactWindowBadModelSettingsKeepsTopLevel(t *testing.T) {
+	windowIsolateEnv(t)
+	home := t.TempDir()
+	windowWriteUserSettings(t, home, `{"autoCompactWindow":500000,"modelSettings":[]}`)
+	if got := autoCompactWindow(home, "claude-opus-5-5"); got != 500000 {
+		t.Errorf("array modelSettings = %d, want the top-level 500000", got)
 	}
 }
 
@@ -204,6 +239,7 @@ func TestCtxHookAutoCompactWindowEnvOutranksTheFile(t *testing.T) {
 // exact key wins when both are present, and a payload with no model id takes
 // the top level.
 func TestCtxHookAutoCompactWindowMatchesModelSpellings(t *testing.T) {
+	windowIsolateEnv(t)
 	home := t.TempDir()
 	windowWriteUserSettings(t, home, `{"autoCompactWindow":500000,"modelSettings":{"claude-opus-5-5":{"autoCompactWindow":400000},"claude-opus-5-5[1m]":{"autoCompactWindow":450000}}}`)
 	cases := map[string]int64{
@@ -229,6 +265,7 @@ func TestCtxHookAutoCompactWindowMatchesModelSpellings(t *testing.T) {
 // and the untouched stdin bytes go to the user's command, so a user script
 // that prints the harness' percentage prints the harness' percentage.
 func TestCtxHookWrappedUserLineGetsRawStdinWhileServeGetsTheScaledFill(t *testing.T) {
+	windowIsolateEnv(t)
 	rec := logicServe(t)
 	home := t.TempDir()
 	windowWriteUserSettings(t, home, `{"autoCompactWindow":500000}`)

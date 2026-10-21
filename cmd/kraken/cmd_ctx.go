@@ -6,11 +6,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -77,6 +79,13 @@ type statuslineInput struct {
 // claude, so it inherits the variable.
 const autoCompactWindowEnv = "CLAUDE_CODE_AUTO_COMPACT_WINDOW"
 
+// The bounds Claude Code clamps the environment variable to: its own warning
+// text reads "Set it to a size from 100k to 1M, such as 200k or 200000".
+const (
+	autoCompactWindowMin = 100_000
+	autoCompactWindowMax = 1_000_000
+)
+
 // autoCompactWindow returns the token count at which Claude Code auto-compacts
 // a session running `model`, resolved the way Claude Code resolves it: the
 // CLAUDE_CODE_AUTO_COMPACT_WINDOW environment variable when it is set, else
@@ -100,7 +109,10 @@ const autoCompactWindowEnv = "CLAUDE_CODE_AUTO_COMPACT_WINDOW"
 // canonical one (canonicalModelID: a trailing `[…]` or `-YYYYMMDD` stripped,
 // two of the spellings Claude Code folds onto the canonical key); kraken's
 // own spawns pass exact ids, so the second lookup serves a job whose
-// `model:` carries a suffix.
+// `model:` carries a suffix. The environment variable is read the way Claude
+// Code reads it (envWindowTokens): a `k` or `m` suffix is allowed, the value
+// is clamped to 100K-1M, and one it cannot read is passed over for the
+// settings file rather than treated as a setting.
 //
 // This function exists because the statusline's used_percentage is a share
 // of the MODEL's full window (context_window_size), while Claude Code
@@ -112,33 +124,36 @@ const autoCompactWindowEnv = "CLAUDE_CODE_AUTO_COMPACT_WINDOW"
 // /handoff into any job on that machine. The window is per model because the
 // setting is: an Opus teammate and a Fable lead in one cell can compact at
 // different sizes. With no setting anywhere the harness' own number passes
-// through, which is honest rather than complete: Claude Code can still pick a
-// smaller window from a model default or server data, and this hook has no
-// way to read that.
+// through. That can still be too high: Claude Code may pick a smaller window
+// from a model default or from server data, and this hook cannot read either.
+//
+// An empty home reads nothing at all, the environment variable included: it
+// is the tests' way of sealing the hook off from the machine it runs on, and
+// cmdCtxHook always passes the real home.
 func autoCompactWindow(home, model string) int64 {
-	if v, ok := os.LookupEnv(autoCompactWindowEnv); ok && strings.TrimSpace(v) != "" {
-		// The variable outranks every file, so a value that is not a token
-		// count ("auto", a typo) is Claude Code's tuned window, not a reason
-		// to read the settings it would have ignored.
-		n, _ := windowTokens(json.RawMessage(strings.TrimSpace(v)))
-		return n
-	}
 	if home == "" {
 		return 0
+	}
+	if n, ok := envWindowTokens(os.Getenv(autoCompactWindowEnv)); ok {
+		return n
 	}
 	raw, err := os.ReadFile(filepath.Join(home, ".claude", "settings.json"))
 	if err != nil {
 		return 0
 	}
 	var parsed struct {
-		AutoCompactWindow json.RawMessage            `json:"autoCompactWindow"`
-		ModelSettings     map[string]json.RawMessage `json:"modelSettings"`
+		AutoCompactWindow json.RawMessage `json:"autoCompactWindow"`
+		ModelSettings     json.RawMessage `json:"modelSettings"`
 	}
 	if json.Unmarshal(raw, &parsed) != nil {
 		return 0
 	}
+	// A modelSettings that is not an object costs only the per-model lookup,
+	// never the top level beside it.
+	var models map[string]json.RawMessage
+	_ = json.Unmarshal(parsed.ModelSettings, &models)
 	for _, key := range modelSettingsKeys(model) {
-		entry, ok := parsed.ModelSettings[key]
+		entry, ok := models[key]
 		if !ok {
 			continue
 		}
@@ -154,6 +169,38 @@ func autoCompactWindow(home, model string) int64 {
 	}
 	n, _ := windowTokens(parsed.AutoCompactWindow)
 	return n
+}
+
+// envWindowTokens reads CLAUDE_CODE_AUTO_COMPACT_WINDOW the way Claude Code
+// 2.1.306 does: trimmed, a trailing `k` or `m` (either case) multiplying the
+// number by a thousand or a million, anything else read as a plain number,
+// and the result clamped to autoCompactWindowMin..Max. ok is false for an
+// empty or unreadable value — Claude Code then falls through to its settings
+// files, so the caller must too.
+func envWindowTokens(v string) (int64, bool) {
+	v = strings.TrimSpace(v)
+	if v == "" {
+		return 0, false
+	}
+	mult := 1.0
+	switch v[len(v)-1] {
+	case 'k', 'K':
+		mult, v = 1_000, v[:len(v)-1]
+	case 'm', 'M':
+		mult, v = 1_000_000, v[:len(v)-1]
+	}
+	f, err := strconv.ParseFloat(strings.TrimSpace(v), 64)
+	if err != nil || math.IsNaN(f) || math.IsInf(f, 0) || f < 1 {
+		return 0, false
+	}
+	f = math.Round(f * mult)
+	if f < autoCompactWindowMin {
+		f = autoCompactWindowMin
+	}
+	if f > autoCompactWindowMax {
+		f = autoCompactWindowMax
+	}
+	return int64(f), true
 }
 
 // windowTokens reads one autoCompactWindow value: a JSON number with no
@@ -181,8 +228,8 @@ func windowTokens(raw json.RawMessage) (int64, bool) {
 // modelDateSuffix matches the dated spelling of a model id (`-20260801`).
 var modelDateSuffix = regexp.MustCompile(`-\d{8}$`)
 
-// canonicalModelID strips the two suffixes a model id can carry that Claude
-// Code folds onto the canonical settings key: a trailing bracket group
+// canonicalModelID strips two suffixes a model id can carry that Claude Code
+// folds onto the canonical settings key: a trailing bracket group
 // (`claude-opus-5-5[1m]`) and a trailing `-YYYYMMDD` date.
 func canonicalModelID(model string) string {
 	if i := strings.LastIndex(model, "["); i > 0 && strings.HasSuffix(model, "]") {
@@ -269,8 +316,9 @@ func ctxHookFlags(args []string) string {
 
 // cmdCtxHook is `kraken ctx-hook`: the statusline command. It reads the
 // harness' JSON from stdin, reports the context percentage to kraken serve
-// (which is what the daemon's auto-handoff pass, autoHandoffPass, reads), and prints the one
-// line the pane renders. With --slug it is a cell's statusline, which also
+// (which is what the daemon's auto-handoff pass, autoHandoffPass, reads),
+// and prints the one line the pane renders. With --slug it is a cell's
+// statusline, which also
 // wraps the user's own statusLine command from ~/.claude/settings.json.
 func cmdCtxHook(args []string) {
 	runCtxHook(os.Stdin, os.Stdout, ctxHookFlags(args), userStatusLineCommand(util.Home()), util.Home())
