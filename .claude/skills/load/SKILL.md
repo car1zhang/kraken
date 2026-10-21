@@ -62,7 +62,7 @@ These are looked up, not judged: re-deriving them per cell is exactly what made 
 | /info round, go-deeper pick | u2 s3 | Read a page, pick; the pick buys one artifact round. |
 | /aim spec gate, P0s block /do | u3 s6-8 | Recommendations attached → cheap to answer; scope is the build the answers unlock, sized by the spec. |
 | Credential / secret / auth need | u4, s = the blocked work | The credential is a 4 regardless of what it unblocks; scope carries the real stakes. |
-| Mid-build decision | u3 (u7 if they must build context), s = remaining build | Recommendation attached is the difference between 3 and 7. |
+| Mid-build question round (a P0 filed, the dependent slice held) | u3 (u7 if they must build context), s = remaining build | Recommendation attached is the difference between 3 and 7; the reply also has to prompt the pane, since kraken never wakes a cell for a row. |
 | Two asks at once (e.g. PR open + secret needed) | Price the EXPENSIVE ask; name both in the note | Agents used to price whichever ask they focused on, which spread one state across u2-5. |
 
 ## Writing it

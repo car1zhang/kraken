@@ -50,7 +50,7 @@ Everything else — the first-pass table, one artifact per later round, no open 
 | Step 7's join row in `90-build-report.md` | Reads `nothing delegated (direct)`; say in the same row that test authorship was not split. |
 | Step 10, clean up agents | Nothing to stop unless the review opt-in ran; then stop the reviewers as above. |
 
-Everything else — reading the set in full (every `.md` in the set root, whoever wrote it), resolving P0s, the un-delegated implementation rules (Edit tool never Bash, destructive commands alone, comments assert only what you checked, grep a retired meaning once, never `git stash` or a probe file in the worktree), the CI-scope verification gate, the build report's every row, the PR step (step 8: branch, commit and PR rules, every revision pushed to that same PR), and the manual-test-gate line `manual test ready: …` that follows it — is do's, unchanged.
+Everything else — reading the set in full (every `.md` in the set root, whoever wrote it), resolving P0s, the un-delegated implementation rules (Edit tool never Bash, destructive commands alone, comments assert only what you checked, grep a retired meaning once, never `git stash` or a probe file in the worktree), the CI-scope verification gate, the build report's every row, the mid-build question round (step 5: a direct job files its rows and stops on the P0s exactly as written, since no crew is involved in it), the PR step (step 8: branch, commit and PR rules, every revision pushed to that same PR), and the manual-test-gate line `manual test ready: …` that follows it — is do's, unchanged.
 
 ## Inside A Kraken Cell
 

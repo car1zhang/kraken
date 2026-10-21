@@ -248,6 +248,14 @@ func TestSkillsOwnTheCellContract(t *testing.T) {
 			"never the failing assertion",
 			"a requirement nobody set", "a genuine product decision",
 			"never resolve a contract defect by sending an author to read the implementation",
+			// the mid-build question round (job 629): the trigger, the
+			// P0-only block, the verbs, the exact closing line with its
+			// steer clause, the Monitor ban and the no-wake rule. The brief
+			// carries only the exception sentence (crew_test.go pins that),
+			// so this is the procedure's only home.
+			"is a QUESTION ROUND", "only a P0 blocks", "questions pending:",
+			"then tell me to continue", "kraken questions add", "kraken questions remove",
+			"never arm a watch to poll the rows", "Kraken types nothing into the pane",
 			"ONE new Agent call, not three", "only the flagging variant(s)",
 			"BOTH gates have cleared its slice",
 			"correctness, bugs, and scalability", "edge cases and boundary conditions",
@@ -2101,5 +2109,25 @@ func TestAllowlistMatchesContract(t *testing.T) {
 	} else if declared != len(published) {
 		t.Errorf("hermes-contract.md's Ban List says %d tokens but lists %d — the prose count went stale "+
 			"against its own list", declared, len(published))
+	}
+}
+
+// TestDoRetiresDoNotWaitOnProductDecisions is the absence half of the
+// question-round pins above (job 629): the arbitration table's contract-defect
+// row used to say "do not wait on the answer", which is exactly the default
+// the round replaces for a P0, and the step-2 P0 resolution used to reach for
+// AskUserQuestion, which the board renders as digit buttons no cell ever
+// pressed. Present-token tests cannot catch either phrase coming back, so
+// this one says so explicitly.
+func TestDoRetiresDoNotWaitOnProductDecisions(t *testing.T) {
+	do := readEmbedded(t, "do/SKILL.md")
+	for _, gone := range []string{
+		"do not wait on the answer",
+		"ask the user with `AskUserQuestion`",
+	} {
+		if strings.Contains(do, gone) {
+			t.Errorf("do/SKILL.md still says %q — a P0 product decision mid-build is a question round "+
+				"that blocks on the row, never a default the build runs ahead on", gone)
+		}
 	}
 }
