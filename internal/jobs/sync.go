@@ -220,18 +220,23 @@ func mirrorCellArtifacts(st *store.Store, jobID int64, j *Job, atTeardown bool) 
 	files := make([]store.ArtifactFile, 0, len(cands))
 	unchanged := make(map[string]bool, len(cands))
 	for _, c := range cands {
-		info, err := os.Stat(c.abs)
+		info, err := os.Lstat(c.abs)
 		if err != nil {
 			if atTeardown && !os.IsNotExist(err) {
 				return fmt.Errorf("stat %s: %w", c.rel, err)
 			}
 			continue // vanished between list and stat — absent from files/unchanged, so SyncArtifacts drops it if it stays gone
 		}
-		// Stat FOLLOWS a symlink, and the walk does not: a symlink to a
-		// directory, a FIFO or a device is listed as a file. None of them is
-		// a document — ReadFile fails on a directory and can block forever
-		// on a FIFO or /dev/zero — so it is skipped (logged once per job and
-		// path), never read and never fatal, at teardown too.
+		// The walk lists a symlink, a FIFO or a device as a file. None of
+		// them is a document — ReadFile fails on a directory and can block
+		// forever on a FIFO or /dev/zero — so it is skipped (logged once per
+		// job and path), never read and never fatal, at teardown too. Lstat
+		// rather than Stat, so a symlink is skipped as itself even when it
+		// points at a regular file: following it would store the TARGET's
+		// bytes under the link's name, and the artifacts table is what every
+		// non-live job serves, to other nodes included, so a link to a file
+		// outside artifacts/ would publish that file. A symlinked artifact
+		// is therefore absent from the stored set.
 		if !info.Mode().IsRegular() {
 			logNonRegularOnce(j, c.rel, info.Mode())
 			continue

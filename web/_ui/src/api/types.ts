@@ -655,7 +655,7 @@ export interface NodeEnvelope {
   contract: number;
 }
 
-/** `GET /api/nodes/read` — a remote public cell's last transcript blocks. */
+/** `GET /api/nodes/read` — a remote readonly or public cell's last transcript blocks. */
 export interface NodeRead {
   blocks: { kind: string; text: string; from?: string }[];
   counted?: number;

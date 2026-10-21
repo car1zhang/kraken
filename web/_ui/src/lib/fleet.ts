@@ -119,3 +119,45 @@ export function writeHiddenNodes(ids: readonly string[]): void {
     // see writeHideOthers
   }
 }
+
+/**
+ * Who a remote job's own turns (its transcript, its threads, its load
+ * estimate) are labelled as: the owner's operator, else its node label, else
+ * its node id. This board's `operator` only for a card with no owner at all —
+ * on a remote card it would put this board's name on the owner's words.
+ */
+export function ownerTurnLabel(
+  owner: WebJobOwner | undefined,
+  operator: string | undefined,
+): string | undefined {
+  if (!owner) return operator;
+  return owner.operator?.trim() || owner.label?.trim() || owner.node_id;
+}
+
+/** U+FEFF, spelled by code point so no diff renders it as an empty string. */
+const BOM = String.fromCharCode(0xfeff);
+
+/**
+ * A job file's spec body: the text after its `---` frontmatter block, with the
+ * blank lines between the block and the body dropped. A remote card's spec
+ * drawer renders this from the owner's raw file, since the form route that
+ * splits the two locally is not one the owner serves to other nodes. Text that
+ * does not open with a closed frontmatter block comes back unchanged.
+ */
+export function stripFrontmatter(text: string): string {
+  // A leading UTF-8 BOM is skipped for the fence test only: with frontmatter
+  // the body comes back without it, without frontmatter the text comes back
+  // as given, BOM included.
+  const body = text.startsWith(BOM) ? text.slice(1) : text;
+  if (!body.startsWith("---\n") && !body.startsWith("---\r\n")) return text;
+  const lines = body.split("\n");
+  for (let i = 1; i < lines.length; i++) {
+    if (lines[i] === "---" || lines[i] === "---\r") {
+      return lines
+        .slice(i + 1)
+        .join("\n")
+        .replace(/^(?:\r?\n)+/, "");
+    }
+  }
+  return text;
+}

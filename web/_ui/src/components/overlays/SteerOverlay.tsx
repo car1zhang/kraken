@@ -13,6 +13,7 @@ import {
   fetchDraft,
   fetchJobForm,
   fetchJobTranscriptTurns,
+  fetchNodeTranscript,
   killJob,
   openInEditor,
   reactivateJob,
@@ -168,6 +169,22 @@ export function steerRequiresText(mode: SteerMode, requireText: boolean): boolea
 }
 
 /**
+ * Whether the tokens panel has anything to say: a measured spend or a counted
+ * session. Shared with the remote body so the two drilldowns cannot disagree
+ * on when the panel shows.
+ */
+export function steerHasTokens(job: WebJob | undefined): boolean {
+  const tok = job?.tokens;
+  return (
+    !!tok &&
+    !!(
+      (tok.in || 0) + (tok.out || 0) + (tok.cache_write || 0) + (tok.cache_read || 0) ||
+      tok.sessions
+    )
+  );
+}
+
+/**
  * app.js:2057 liveDisplayColumn — render()'s column bucketing for one job: an
  * unhealthy live cell displays as blocked whatever its file state says. null
  * for a job that is not live, which the caller reads as "not steerable".
@@ -259,8 +276,12 @@ export interface SteerOverlayProps {
    * so one shape serves every entry point.
    */
   onOpenArtifact(url: string, name: string, jobKey: string): void;
-  /** Side-thread overlay. `tid` null opens the ⑂ branch dialog. */
-  onOpenThread(slug: string, tid: string | null): void;
+  /**
+   * Side-thread overlay. `tid` null opens the ⑂ branch dialog. `node` is set
+   * only by the remote body: the thread lives on that node, and the overlay
+   * reads it through the proxy.
+   */
+  onOpenThread(slug: string, tid: string | null, node?: string): void;
   /**
    * The OWNER node of a remote card, when one opened the modal. Its presence
    * — not the job's — is what selects the remote body: a remote card that
@@ -301,8 +322,9 @@ export function SteerOverlay(props: SteerOverlayProps) {
       {...panelDropHandlers(sink)}
     >
       {props.slug && props.node ? (
-        // a REMOTE card (opened with its owner node): the fleet body, whose
-        // every control is disabled (readonly) or proxied (public)
+        // a REMOTE card (opened with its owner node): the fleet body, which
+        // shows every panel and offers no control (readonly) or proxied ones
+        // (public)
         <RemoteSteerBody
           key={props.node + "/" + props.slug}
           node={props.node}
@@ -311,6 +333,9 @@ export function SteerOverlay(props: SteerOverlayProps) {
           mutate={props.mutate}
           onClose={props.onClose}
           onOpenEditor={props.onOpenEditor}
+          onOpenArtifact={props.onOpenArtifact}
+          onOpenThread={props.onOpenThread}
+          operator={props.operator}
         />
       ) : props.slug ? (
         <SteerBody
@@ -467,6 +492,19 @@ function SteerBody({
   );
 
   fileSink.current = addFiles;
+  // Cleared on unmount: the sink is the overlay's and outlives this body, so a
+  // stale one would hand a file dropped on a LATER modal — a remote card's,
+  // which wires none — to this job's upload route. Cleared only while it is
+  // still THIS body's: a body remounted for another job sets its own sink
+  // during its render, before this cleanup runs, and must keep it.
+  const mySink = useRef(addFiles);
+  mySink.current = addFiles;
+  useEffect(
+    () => () => {
+      if (fileSink.current === mySink.current) fileSink.current = null;
+    },
+    [fileSink],
+  );
 
   // steer wins the ⌘V race against the editor — see usePasteLayer.
   const onPaste = useCallback(
@@ -630,13 +668,7 @@ function SteerBody({
   // mode, reactivate included: "what did this already cost" is exactly the
   // question a reactivation asks. Absent means never measured, which is not a
   // measured zero (see TokensPanel), and keeps the container hidden.
-  const tok = job?.tokens;
-  const hasTokens =
-    !!tok &&
-    !!(
-      (tok.in || 0) + (tok.out || 0) + (tok.cache_write || 0) + (tok.cache_read || 0) ||
-      tok.sessions
-    );
+  const hasTokens = steerHasTokens(job);
   // steerActionsHTML (app.js): the retry button plus the pending
   // AskUserQuestion. steer/unblock only — reactivate targets a dead cell, so
   // there is nothing on it to retry and nothing waiting on an answer.
@@ -1217,8 +1249,9 @@ const TRANSCRIPT_POLL_MS = 3000;
 
 /**
  * zeus' last 5 transcript turns, rendered by the thread overlay's block
- * renderer, each block stamped as a `transcript` mind source (zeus' session +
- * the record uuid). Read-only: steering is the composer below.
+ * renderer. For this machine's jobs each block is stamped as a `transcript`
+ * mind source (zeus' session + the record uuid); a remote job's panel (`node`
+ * set) stamps none. Read-only: steering is the composer below.
  *
  * COLLAPSED by default: the modal opens to steer, and the transcript is the
  * thing carl unfolds when he wants to see what zeus is doing — folded, it
@@ -1229,10 +1262,25 @@ const TRANSCRIPT_POLL_MS = 3000;
  * innerHTML every 3s would reset the scroll AND collapse any selection carl
  * is in the middle of making.
  */
-function ZeusTranscriptPanel({ slug, operator }: { slug: string; operator?: string }) {
+export function ZeusTranscriptPanel({
+  slug,
+  operator,
+  node,
+}: {
+  slug: string;
+  operator?: string;
+  /**
+   * The owner node of a remote job: read through `/api/nodes/transcript`, and
+   * stamp no mind source — another node's transcript is never a capture.
+   */
+  node?: string;
+}) {
   const [open, setOpen] = useState(false);
   const read = usePoll<JobTranscript>(
-    (signal) => fetchJobTranscriptTurns(slug, TRANSCRIPT_TURNS, signal),
+    (signal) =>
+      node
+        ? fetchNodeTranscript(node, slug, TRANSCRIPT_TURNS, signal)
+        : fetchJobTranscriptTurns(slug, TRANSCRIPT_TURNS, signal),
     TRANSCRIPT_POLL_MS,
     { enabled: open },
   );
@@ -1245,7 +1293,15 @@ function ZeusTranscriptPanel({ slug, operator }: { slug: string; operator?: stri
     if (!el) return;
     const html = blocks.length
       ? blocks
-          .map((b) => threadBlockHTML(b, false, "", { session, speaker: "zeus" }, operator))
+          .map((b) =>
+            threadBlockHTML(
+              b,
+              false,
+              "",
+              node ? { speaker: "zeus", stamp: false } : { session, speaker: "zeus" },
+              operator,
+            ),
+          )
           .join("")
       : "";
     if (html === last.current) return;
@@ -1254,7 +1310,7 @@ function ZeusTranscriptPanel({ slug, operator }: { slug: string; operator?: stri
     last.current = html;
     el.innerHTML = html;
     el.scrollTop = atBottom ? el.scrollHeight : prevTop;
-  }, [blocks, session, operator]);
+  }, [blocks, session, operator, node]);
   // Unfolding lands on the NEWEST turn: `display: none` forgets the body's
   // scroll position, and the paint above only moves it when the markup
   // changes, so a reopen on unchanged markup would otherwise sit at the top —
@@ -1270,7 +1326,11 @@ function ZeusTranscriptPanel({ slug, operator }: { slug: string; operator?: stri
   // stays empty rather than rendering a blank titled box.
   const empty = read.data !== undefined && blocks.length === 0;
   return (
-    <div className="steer-transcript" id="steer-transcript" data-mind-slug={slug}>
+    <div
+      className="steer-transcript"
+      id="steer-transcript"
+      data-mind-slug={node ? undefined : slug}
+    >
       <button
         className="steer-transcript-head"
         aria-expanded={open}
@@ -1290,7 +1350,7 @@ function ZeusTranscriptPanel({ slug, operator }: { slug: string; operator?: stri
   );
 }
 
-function LoadDrill({
+export function LoadDrill({
   load,
   roi,
   band,

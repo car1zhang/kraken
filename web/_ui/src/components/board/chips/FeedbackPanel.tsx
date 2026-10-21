@@ -7,6 +7,11 @@ export interface FeedbackPanelProps {
   /** Resolves to null on success, or the failure the status bar already has. */
   onSaveFeedback(slug: string, id: number, note: string): Promise<Error | null>;
   onDeleteFeedback(slug: string, id: number): void;
+  /**
+   * Render the rows with no edit, save or delete control: another node's job,
+   * whose notes only its owner may change.
+   */
+  readOnly?: boolean;
 }
 
 /**
@@ -25,8 +30,15 @@ export interface FeedbackPanelProps {
  * machinery existed to survive. React reconciles instead of replacing, so the
  * row keeps its own state across polls and none of that is needed.
  */
-function FeedbackRow({ job, fb, onSaveFeedback, onDeleteFeedback }: FeedbackPanelProps & { fb: WebFeedback }) {
-  const [editing, setEditing] = useState(false);
+function FeedbackRow({
+  job,
+  fb,
+  onSaveFeedback,
+  onDeleteFeedback,
+  readOnly = false,
+}: FeedbackPanelProps & { fb: WebFeedback }) {
+  const [editingState, setEditing] = useState(false);
+  const editing = editingState && !readOnly;
   const [text, setText] = useState(fb.note);
   const [note, setNote] = useState("");
   const [saving, setSaving] = useState(false);
@@ -98,31 +110,33 @@ function FeedbackRow({ job, fb, onSaveFeedback, onDeleteFeedback }: FeedbackPane
     <div className={"fb-row" + (fb.addressed ? " fb-addressed" : "")} data-fb-id={fb.id}>
       <div className="fb-head">
         <span className="fb-artifact">{fb.artifact}</span>
-        <span className="fb-actions">
-          <button
-            className="fb-edit"
-            data-id={fb.id}
-            onClick={(ev) => {
-              ev.stopPropagation();
-              setText(fb.note);
-              setEditing(true);
-            }}
-          >
-            edit
-          </button>
-          <button
-            className="fb-delete"
-            data-slug={job.slug}
-            data-id={fb.id}
-            onClick={(ev) => {
-              ev.stopPropagation();
-              if (!window.confirm("delete this feedback note? this can't be undone.")) return;
-              onDeleteFeedback(job.slug, fb.id);
-            }}
-          >
-            delete
-          </button>
-        </span>
+        {readOnly ? null : (
+          <span className="fb-actions">
+            <button
+              className="fb-edit"
+              data-id={fb.id}
+              onClick={(ev) => {
+                ev.stopPropagation();
+                setText(fb.note);
+                setEditing(true);
+              }}
+            >
+              edit
+            </button>
+            <button
+              className="fb-delete"
+              data-slug={job.slug}
+              data-id={fb.id}
+              onClick={(ev) => {
+                ev.stopPropagation();
+                if (!window.confirm("delete this feedback note? this can't be undone.")) return;
+                onDeleteFeedback(job.slug, fb.id);
+              }}
+            >
+              delete
+            </button>
+          </span>
+        )}
       </div>
       <div className="fb-note">{fb.note}</div>
       {fb.addressed ? (

@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { fetchThreadRead, threadOp } from "../../api/client.ts";
+import { fetchNodeThreadRead, fetchThreadRead, threadOp } from "../../api/client.ts";
 import type { ThreadBlock, ThreadRead, WebJob } from "../../api/types.ts";
 import { ESC_PRIORITY } from "../../hooks/useEscapeStack.ts";
 import { useLocalStorage } from "../../hooks/useLocalStorage.ts";
 import { usePoll } from "../../hooks/usePoll.ts";
+import { ownerTurnLabel } from "../../lib/fleet.ts";
 import { age } from "../../lib/format.ts";
 import { esc, renderMD } from "../../lib/markdown.ts";
 import {
@@ -78,7 +79,7 @@ export function threadBlockHTML(
   };
   const cls = `blk ${spec.cls}${inherited ? " inherited" : ""}`;
   const text = b.text || "";
-  const attrs = mind ? blockMindAttrs(mind, b) : "";
+  const attrs = mind && mind.stamp !== false ? blockMindAttrs(mind, b) : "";
   if (kind === "tool") {
     // tool lines are already terse and mono — no speaker row, no markdown
     return `<div class="${cls}"${attrs}>${spec.icon} ${esc(text)}</div>`;
@@ -103,6 +104,11 @@ export interface BlockMindAttrs {
   tid?: string;
   /** The assistant speaker label, in place of "thread <tid>" (zeus' panel). */
   speaker?: string;
+  /**
+   * `false` keeps `speaker` and stamps NO `data-mind-*` attribute: another
+   * node's transcript, which is never a mind source on this machine.
+   */
+  stamp?: false;
 }
 
 /** ` data-mind-…="…"` for one block; values escaped, empty ones omitted. */
@@ -195,6 +201,11 @@ export interface ThreadOverlayProps {
   mutate: Mutate;
   /** `board.operator` — labels the operator's turns ("you" when absent). */
   operator?: string;
+  /**
+   * The owner node of a REMOTE job's thread: the conversation is read through
+   * `/api/nodes/thread/read` and nothing here can act on it.
+   */
+  node?: string;
 }
 
 export function ThreadOverlay(props: ThreadOverlayProps) {
@@ -205,8 +216,120 @@ export function ThreadOverlay(props: ThreadOverlayProps) {
       priority={ESC_PRIORITY.thread}
       onClose={props.onClose}
     >
-      {props.slug ? <ThreadBody {...props} /> : null}
+      {props.slug && props.node ? (
+        // the branch dialog is the owner's alone, so a remote open with no
+        // tid renders an empty panel inside the overlay shell
+        props.tid ? (
+          <RemoteThreadBody
+            key={props.node + "/" + props.slug + "/" + props.tid}
+            node={props.node}
+            slug={props.slug}
+            tid={props.tid}
+            job={props.job}
+            onClose={props.onClose}
+            // the thread's prompts are the OWNER's — see ownerTurnLabel
+            operator={ownerTurnLabel(props.job?.owner, props.operator)}
+          />
+        ) : null
+      ) : props.slug ? (
+        <ThreadBody {...props} />
+      ) : null}
     </Overlay>
+  );
+}
+
+/**
+ * A remote job's side thread, read-only: the head's title and live/closed
+ * pill, then the conversation — no composer, no rename, no kill/revive, no
+ * tmux and no mind source. Read on the local body's 3s cadence (its 1s
+ * awaiting-a-reply tick exists for a reply THIS reader asked for, which a
+ * read-only view never does).
+ */
+function RemoteThreadBody({
+  node,
+  slug,
+  tid,
+  job,
+  onClose,
+  operator,
+}: {
+  node: string;
+  slug: string;
+  tid: string;
+  job: WebJob | undefined;
+  onClose: () => void;
+  operator?: string;
+}) {
+  const read = usePoll<ThreadRead>(
+    (signal) => fetchNodeThreadRead(node, slug, tid, undefined, signal),
+    3000,
+  );
+  const convoRef = useRef<HTMLDivElement | null>(null);
+  const lastHTML = useRef("");
+  const rec = (job?.threads || []).find((t) => t.tid === tid) || null;
+  const live = read.data ? !!read.data.live : rec ? rec.state === "live" : true;
+
+  // ThreadBody's force-close rule: only the job leaving the board closes this
+  const sawJob = useRef(false);
+  useEffect(() => {
+    if (job) {
+      sawJob.current = true;
+      return;
+    }
+    if (sawJob.current) onClose();
+  }, [job, onClose]);
+
+  // painted imperatively for ThreadBody's scroll-preserving reason; no mind
+  // attrs are passed, so no block carries a `data-mind-*` source
+  useEffect(() => {
+    const el = convoRef.current;
+    if (!el) return;
+    if (!read.data) {
+      if (lastHTML.current === "") {
+        el.innerHTML = '<div class="thread-empty">loading…</div>';
+      }
+      return;
+    }
+    const html = threadConvoRender(read.data, tid, undefined, operator);
+    if (html === lastHTML.current) return;
+    const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 24;
+    const prevTop = el.scrollTop;
+    lastHTML.current = html;
+    el.innerHTML = html;
+    el.scrollTop = atBottom ? el.scrollHeight : prevTop;
+  }, [read.data, tid, operator]);
+
+  const readFailed = !!read.error && read.failStreak > 0;
+  return (
+    <>
+      <div className="panel-head">
+        <span className="panel-title" id="thread-tid">
+          {"⑂ " + tid}
+        </span>
+        {rec?.title ? (
+          <span className="thread-name-label" id="thread-name-label">
+            {rec.title}
+          </span>
+        ) : null}
+        <span className={"thread-pill " + (live ? "live" : "closed")} id="thread-pill">
+          {live ? "live" : "closed"}
+        </span>
+        {rec?.model ? (
+          <span className="thread-pill model" id="thread-model-pill">
+            {rec.model}
+          </span>
+        ) : null}
+        <span className="spacer"></span>
+      </div>
+      <div className="panel-body answer-body">
+        <div className="thread-view" id="thread-view">
+          <div className="convo" id="thread-convo" ref={convoRef} />
+        </div>
+        <div className="answer-note" id="thread-note">
+          {readFailed ? "couldn't read this thread: " + (read.error?.message ?? "") : ""}
+        </div>
+      </div>
+    </>
   );
 }
 

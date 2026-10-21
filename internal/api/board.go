@@ -710,7 +710,7 @@ func webNodeFrom(n *store.NodeRow, withJobs bool) webNode {
 	// applies, never the stored jobs_json verbatim — a sibling that serves
 	// more than it should is not repeated here either
 	if withJobs {
-		if cards, ok := strippedCards(n.JobsJSON); ok {
+		if cards, ok := strippedCards(n.ID, n.JobsJSON); ok {
 			if b, err := json.Marshal(cards); err == nil {
 				w.Jobs = json.RawMessage(b)
 			}
@@ -723,7 +723,14 @@ func webNodeFrom(n *store.NodeRow, withJobs bool) webNode {
 // element drops alone — and passes each card through nodeCard. ok is false
 // when nothing is stored or the stored value is not an array (a stored `[]`
 // is ok with zero cards).
-func strippedCards(jobsJSON string) ([]webJob, bool) {
+//
+// Every artifact URL is then REPLACED with this node's own proxy URL for
+// (nodeID, slug, name): the sibling's URL addresses the sibling's
+// /api/artifact/, which resolved here would read a same-slug job of THIS
+// node, so a stored card's url values are never read at all. An artifact
+// with a blank name has nothing to address and is dropped, as is a repeat of
+// a name already listed on the card.
+func strippedCards(nodeID, jobsJSON string) ([]webJob, bool) {
 	if jobsJSON == "" {
 		return nil, false
 	}
@@ -737,24 +744,52 @@ func strippedCards(jobsJSON string) ([]webJob, bool) {
 		if err := json.Unmarshal(raw, &card); err != nil {
 			continue
 		}
-		cards = append(cards, nodeCard(card))
+		card = nodeCard(card)
+		if card.Artifacts != nil {
+			arts := make([]webArtifact, 0, len(card.Artifacts))
+			seen := map[string]bool{}
+			for _, a := range card.Artifacts {
+				// a repeated name would address the same proxied file twice
+				// and collide as a client list key; the first one wins
+				if strings.TrimSpace(a.Name) == "" || seen[a.Name] {
+					continue
+				}
+				seen[a.Name] = true
+				arts = append(arts, webArtifact{Name: a.Name, URL: remoteArtifactURL(nodeID, card.Slug, a.Name)})
+			}
+			card.Artifacts = arts
+		}
+		cards = append(cards, card)
 	}
 	return cards, true
+}
+
+// remoteArtifactURL is the URL this node serves a sibling's artifact under:
+// GET /api/nodes/artifact, relayed to the owner's /api/node/artifact. name is
+// the LAST parameter because the SPA decides whether to render an artifact as
+// a page by matching the URL's tail against .html, and url.QueryEscape leaves
+// that suffix as written.
+func remoteArtifactURL(nodeID, slug, name string) string {
+	return "/api/nodes/artifact?node=" + url.QueryEscape(nodeID) + "&slug=" + url.QueryEscape(slug) + "&name=" + url.QueryEscape(name)
 }
 
 // remoteCards are the registry's polled cards, each stamped with its owner.
 // A stored list that is not an array contributes nothing; within one, each
 // element decodes on its own, so a single malformed card drops alone. Every
 // card passes through the strip nodeCard applies to outbound cards — a
-// sibling that serves more than it should is not repeated on this board.
+// sibling that serves more than it should is not repeated on this board —
+// and has its artifact URLs rewritten to this node's proxy (strippedCards).
 func remoteCards(rows []*store.NodeRow) []webJob {
 	var out []webJob
 	for _, n := range rows {
-		cards, ok := strippedCards(n.JobsJSON)
+		cards, ok := strippedCards(n.ID, n.JobsJSON)
 		if !ok {
 			continue
 		}
-		owner := webJobOwner{NodeID: n.ID, Label: n.Label, Operator: n.Operator, Online: n.Online}
+		// nodeLabel: a row announced with no label names its node by id, so
+		// the owner chip (and any label fallback a client takes) never reads
+		// blank
+		owner := webJobOwner{NodeID: n.ID, Label: nodeLabel(n), Operator: n.Operator, Online: n.Online}
 		for _, card := range cards {
 			o := owner
 			card.Owner = &o

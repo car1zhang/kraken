@@ -27,6 +27,7 @@
 		25EB80BEC87CEE203A93E8B2 /* PortabilityContractTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9C96E16DB7CFCF4DD6E63C77 /* PortabilityContractTests.swift */; };
 		2C3EE0868D401528E49F016E /* LoadScaleEdgeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = EC262B7E759627F240CDC193 /* LoadScaleEdgeTests.swift */; };
 		2D2FC2B5F260CAC059F9339C /* KronosRemovalContractTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3EC12ECAABAB70DAF5C81B29 /* KronosRemovalContractTests.swift */; };
+		3324181A783527A3A4F85777 /* FleetParityEdgeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8542978AEED063C1F4A42885 /* FleetParityEdgeTests.swift */; };
 		3C38197611F50EC43EE8E30E /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 4FF9D9DA885804C0FEC0248E /* Assets.xcassets */; };
 		3E96D0AC7206FFE89D0113E6 /* JobSearchTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C79D98CB66EE03C874ECC62B /* JobSearchTests.swift */; };
 		44C27A0EC3914943FCF8A6D4 /* DraftStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D58DEA929F5C3CDC02AD93B1 /* DraftStoreTests.swift */; };
@@ -59,6 +60,7 @@
 		A1F01EC43FDA55C4FCF80C26 /* JobColorStrip.swift in Sources */ = {isa = PBXBuildFile; fileRef = E6E02C2D34FE2896351B57CD /* JobColorStrip.swift */; };
 		A63C8AC50BBD395F75BC83CD /* LibraryContractTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 32C984F59DB19C5E8D65FB5F /* LibraryContractTests.swift */; };
 		AA84B65F2A4725367AA2FB93 /* LibraryEdgeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A4542A6CED7B328F369D19F2 /* LibraryEdgeTests.swift */; };
+		AC6BC75C10B8309388E65EC6 /* FleetParityContractTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 657290D3A06CEE0286664E98 /* FleetParityContractTests.swift */; };
 		AD89ABFD8CFA0E618DF31D16 /* BoardDragStateTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D5214B278157C359E0F22C13 /* BoardDragStateTests.swift */; };
 		AE843411A71C79AA470EF992 /* MarkdownParserTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8E7061F559ACFE538CA508B9 /* MarkdownParserTests.swift */; };
 		AED48670C6A618A6C132F636 /* ArtifactOrderTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 94A425929BF278AFEDABE1AB /* ArtifactOrderTests.swift */; };
@@ -127,6 +129,7 @@
 		5117FF8926CD3DAFCE9CC2FE /* KrakenTests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = KrakenTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		632BA67D0FE7BA5AA1E75BB6 /* FeedbackViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FeedbackViews.swift; sourceTree = "<group>"; };
 		64ED7B6BAD72D1BC19A7E5DA /* MMEdgeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MMEdgeTests.swift; sourceTree = "<group>"; };
+		657290D3A06CEE0286664E98 /* FleetParityContractTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FleetParityContractTests.swift; sourceTree = "<group>"; };
 		6790EB0668AC92E70C34E1CB /* SessionsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionsView.swift; sourceTree = "<group>"; };
 		6828266B704A0A112919C779 /* Pairing.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Pairing.swift; sourceTree = "<group>"; };
 		6B012C601FB4C04BCDFD7482 /* ShipIOSDecodeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShipIOSDecodeTests.swift; sourceTree = "<group>"; };
@@ -138,6 +141,7 @@
 		7F80ED1D258C4D24F4AE6965 /* Theme.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Theme.swift; sourceTree = "<group>"; };
 		81598FA6DA813E0B799A489E /* GoalsDecodeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GoalsDecodeTests.swift; sourceTree = "<group>"; };
 		830497A2C99EE12325B9FBD6 /* Kraken.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = Kraken.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		8542978AEED063C1F4A42885 /* FleetParityEdgeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FleetParityEdgeTests.swift; sourceTree = "<group>"; };
 		88C06544957AD8F799F8BAF4 /* MarkdownHTML.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MarkdownHTML.swift; sourceTree = "<group>"; };
 		8E6DA711F2F4A1D3BAADCEBA /* MarkdownText.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MarkdownText.swift; sourceTree = "<group>"; };
 		8E7061F559ACFE538CA508B9 /* MarkdownParserTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MarkdownParserTests.swift; sourceTree = "<group>"; };
@@ -208,6 +212,8 @@
 				EF7F3DC6663B9448C00D785C /* FeedbackTests.swift */,
 				3EF8EADB490DD11442965425 /* FleetContractTests.swift */,
 				0983AD0DE1384F8C3D7450DD /* FleetEdgeTests.swift */,
+				657290D3A06CEE0286664E98 /* FleetParityContractTests.swift */,
+				8542978AEED063C1F4A42885 /* FleetParityEdgeTests.swift */,
 				81598FA6DA813E0B799A489E /* GoalsDecodeTests.swift */,
 				210E2826C55ED204F25EEF0E /* HighlightingTextEditorTests.swift */,
 				0B56817EB4F9A51045F07DF7 /* IsoViewerURLTests.swift */,
@@ -414,6 +420,8 @@
 				09E5F95BB0684A3D285C72AD /* FeedbackTests.swift in Sources */,
 				5BC8F56D3C869855C596BEB2 /* FleetContractTests.swift in Sources */,
 				5FA7830C82CFFCA9A5665A0E /* FleetEdgeTests.swift in Sources */,
+				AC6BC75C10B8309388E65EC6 /* FleetParityContractTests.swift in Sources */,
+				3324181A783527A3A4F85777 /* FleetParityEdgeTests.swift in Sources */,
 				D8598AF0D539F2E57492266A /* GoalsDecodeTests.swift in Sources */,
 				0AD9D02FC047341DB3A85F3D /* HighlightingTextEditorTests.swift in Sources */,
 				7B9AB6E1268B1EEE7912CA3A /* IsoViewerURLTests.swift in Sources */,

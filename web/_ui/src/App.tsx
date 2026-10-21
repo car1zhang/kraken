@@ -205,9 +205,14 @@ export function App() {
     name: string;
     key: string;
   } | null>(null);
-  const [thread, setThread] = useState<{ slug: string; tid: string | null } | null>(
-    null,
-  );
+  // `node` is set only for a remote job's thread, opened from its steer modal:
+  // the overlay then reads it through the owner and resolves the job by
+  // owner+slug, as the steer modal does
+  const [thread, setThread] = useState<{
+    slug: string;
+    tid: string | null;
+    node?: string;
+  } | null>(null);
   const [usageOpen, setUsageOpen] = useState(false);
 
   // Is anything modal open? The board's search bar is the only reader: cmd+K
@@ -485,7 +490,9 @@ export function App() {
         // that shipped silently — required props make the omission a compile
         // error instead.
         onOpenArtifact={(url, name, key) => setArtifact({ url, name, key })}
-        onOpenThread={(slug, tid) => setThread({ slug, tid })}
+        onOpenThread={(slug, tid, node) =>
+          setThread(node ? { slug, tid, node } : { slug, tid })
+        }
         onClose={() => setSteer(null)}
         // The rename's re-point, and the ONE reason it belongs up here: the
         // open overlay's identity is App's state, not the modal's, so a modal
@@ -562,13 +569,14 @@ export function App() {
         open={thread !== null}
         slug={thread?.slug ?? null}
         tid={thread?.tid ?? null}
-        job={jobFor(thread?.slug)}
+        job={jobFor(thread?.slug, thread?.node)}
         onClose={() => setThread(null)}
         onBranched={(tid) =>
           setThread((t) => (t ? { slug: t.slug, tid } : t))
         }
         mutate={mutate}
         operator={board.board?.operator}
+        node={thread?.node}
       />
 
       {/* ◆ mind — once, over every view. A capture lands in a mind thread:

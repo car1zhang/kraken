@@ -2507,11 +2507,6 @@ input[type="password"], .thread-name-label {
 .steer-vis.compact { margin-bottom: 0; flex-wrap: nowrap; gap: 6px; }
 .steer-vis.compact .vis-label { font: inherit; letter-spacing: inherit; text-transform: none; }
 
-.remote-steer .remote-idrow { display: flex; gap: 12px; flex-wrap: wrap; font: 9px var(--mono); color: var(--muted); }
-.remote-text { white-space: pre-wrap; overflow-wrap: anywhere; }
-.remote-read { display: flex; flex-direction: column; gap: 6px; max-height: 30vh; overflow-y: auto;
-  padding: 8px 10px; background: var(--raised); border: 1px solid var(--divider); font-size: 9.5px; }
-.remote-block .who { font: 600 8.5px var(--mono); letter-spacing: 0.1em; text-transform: uppercase; color: var(--muted); margin-right: 8px; }
 .remote-question { border: none; padding: 0; margin: 0; min-width: 0; }
 .remote-question:disabled { opacity: 0.55; }
 .remote-composer, .remote-raw { width: 100%; box-sizing: border-box; margin-top: 10px; font: 10px/1.6 var(--mono); }
