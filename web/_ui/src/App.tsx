@@ -341,7 +341,7 @@ export function App() {
       onOpenThread: (slug, tid) => setThread({ slug, tid }),
       onAnswerQuestion: (slug, i) => void board.mutate(() => answerQuestion(slug, i)),
       onRetry: (slug) => void board.mutate(() => retryJob(slug)),
-      onOpenTmux: (slug) => void board.mutate(() => openTmux({ slug })),
+      onOpenTmux: (slug) => board.mutate(() => openTmux({ slug })),
       onSaveFeedback: (slug, id, note) =>
         board.mutate(() => editFeedback(slug, id, note)),
       onDeleteFeedback: (slug, id) =>
