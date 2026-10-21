@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 
@@ -23,7 +24,8 @@ import (
 //
 // ctx-hook is a cell's statusline command (jobs' mergeCellStatusLine installs
 // it into every cell's settings.json as `ctx-hook --slug <slug>`): it reports
-// the context fill to /api/cell/context keyed on the slug, and prints the
+// the context fill — restated as a share of the auto-compact window
+// (autoCompactWindow) — to /api/cell/context keyed on the slug, and prints the
 // user's own ~/.claude/settings.json statusLine output (run by
 // runUserStatusLine, bounded by ctxHookTimeout) or `<slug> NN%` when there is
 // none or it fails. Without --slug it reports nowhere and prints `ctx NN%`:
@@ -69,25 +71,58 @@ type statuslineInput struct {
 	} `json:"context_window"`
 }
 
-// autoCompactWindow returns the token count Claude Code will auto-compact a
-// session on model at, as the user's own <home>/.claude/settings.json sets
-// it: the per-model `modelSettings.<model>.autoCompactWindow`, else the
-// top-level `autoCompactWindow`, else 0 for "no such setting" (a missing or
-// unparseable file reads the same way — this hook never fails). Only the user
+// autoCompactWindowEnv is the environment variable Claude Code reads ahead of
+// every settings file for the auto-compact window (and refuses to let
+// /autocompact override). A cell's statusline command is a child of that
+// claude, so it inherits the variable.
+const autoCompactWindowEnv = "CLAUDE_CODE_AUTO_COMPACT_WINDOW"
+
+// autoCompactWindow returns the token count at which Claude Code auto-compacts
+// a session running `model`, resolved the way Claude Code resolves it: the
+// CLAUDE_CODE_AUTO_COMPACT_WINDOW environment variable when it is set, else
+// the user's own <home>/.claude/settings.json — the per-model
+// `modelSettings.<model>.autoCompactWindow`, else the top-level
+// `autoCompactWindow` — else 0 for "no such setting" (a missing or
+// unparseable file reads the same way: this hook never fails). Only the user
 // file is read: the per-cell settings.json is kraken-written and never
-// carries the key, and a project or local override is a sighting this hook
-// has not had yet.
+// carries the key, and project and local settings files are not read because
+// no machine has been seen setting the key there yet.
 //
-// The setting exists because the statusline's used_percentage is a share of
-// the MODEL's full window (context_window_size), while Claude Code compacts
-// at roughly 92% of this smaller window when it is set — measured 2026-10-20
-// on four zeus compactions at 460-472K tokens against a 1M window and a
-// 500K setting, and a dozen teammate compactions at 367-376K against a 400K
-// one, every one of them with the daemon's 75% handoff threshold unreachable
-// and auto_handoff fires at 0 for every job the machine had run. The window
-// is per model because the setting is: an Opus teammate and a Fable lead in
-// one cell can compact at different sizes.
+// Each value is parsed on its own (windowTokens) rather than through a typed
+// decode of the whole file, so one entry Claude Code accepts but an int64
+// field would reject costs only that entry and never the lookup: the setting
+// is documented as a token count OR the string "auto", which is exactly what
+// `/autocompact auto` (and `reset`) writes into modelSettings, and a float
+// literal like 500000.0 is an integer to JavaScript. A per-model "auto"
+// returns 0 rather than falling through to the top level, because that is
+// what Claude Code does with it — the model's own tuned window, not the
+// top-level number. The model is looked up by its exact id and then by its
+// canonical one (canonicalModelID: a trailing `[…]` or `-YYYYMMDD` stripped,
+// two of the spellings Claude Code folds onto the canonical key); kraken's
+// own spawns pass exact ids, so the second lookup serves a job whose
+// `model:` carries a suffix.
+//
+// This function exists because the statusline's used_percentage is a share
+// of the MODEL's full window (context_window_size), while Claude Code
+// compacts at roughly 92% of this smaller window when it is set — measured
+// 2026-10-20 on four zeus compactions at 460-472K tokens against a 1M window
+// and a 500K setting, and a dozen teammate compactions at 367-376K against a
+// 400K one. In every one of them the daemon's 75% handoff threshold could
+// never be reached, so autoHandoffPass (internal/jobs/cellctx.go) never typed
+// /handoff into any job on that machine. The window is per model because the
+// setting is: an Opus teammate and a Fable lead in one cell can compact at
+// different sizes. With no setting anywhere the harness' own number passes
+// through, which is honest rather than complete: Claude Code can still pick a
+// smaller window from a model default or server data, and this hook has no
+// way to read that.
 func autoCompactWindow(home, model string) int64 {
+	if v, ok := os.LookupEnv(autoCompactWindowEnv); ok && strings.TrimSpace(v) != "" {
+		// The variable outranks every file, so a value that is not a token
+		// count ("auto", a typo) is Claude Code's tuned window, not a reason
+		// to read the settings it would have ignored.
+		n, _ := windowTokens(json.RawMessage(strings.TrimSpace(v)))
+		return n
+	}
 	if home == "" {
 		return 0
 	}
@@ -96,41 +131,98 @@ func autoCompactWindow(home, model string) int64 {
 		return 0
 	}
 	var parsed struct {
-		AutoCompactWindow int64 `json:"autoCompactWindow"`
-		ModelSettings     map[string]struct {
-			AutoCompactWindow int64 `json:"autoCompactWindow"`
-		} `json:"modelSettings"`
+		AutoCompactWindow json.RawMessage            `json:"autoCompactWindow"`
+		ModelSettings     map[string]json.RawMessage `json:"modelSettings"`
 	}
 	if json.Unmarshal(raw, &parsed) != nil {
 		return 0
 	}
-	if m, ok := parsed.ModelSettings[model]; ok && m.AutoCompactWindow > 0 {
-		return m.AutoCompactWindow
+	for _, key := range modelSettingsKeys(model) {
+		entry, ok := parsed.ModelSettings[key]
+		if !ok {
+			continue
+		}
+		var m struct {
+			AutoCompactWindow json.RawMessage `json:"autoCompactWindow"`
+		}
+		if json.Unmarshal(entry, &m) != nil || len(m.AutoCompactWindow) == 0 {
+			continue
+		}
+		if n, auto := windowTokens(m.AutoCompactWindow); n > 0 || auto {
+			return n
+		}
 	}
-	if parsed.AutoCompactWindow > 0 {
-		return parsed.AutoCompactWindow
+	n, _ := windowTokens(parsed.AutoCompactWindow)
+	return n
+}
+
+// windowTokens reads one autoCompactWindow value: a JSON number with no
+// fractional part and above zero is that many tokens; the string "auto" is
+// Claude Code's own tuned window, reported as (0, true) so a caller can tell
+// it from a value it could not read, which is (0, false).
+func windowTokens(raw json.RawMessage) (int64, bool) {
+	if len(raw) == 0 {
+		return 0, false
 	}
-	return 0
+	var f float64
+	if json.Unmarshal(raw, &f) == nil {
+		if f <= 0 || f != float64(int64(f)) {
+			return 0, false
+		}
+		return int64(f), false
+	}
+	var s string
+	if json.Unmarshal(raw, &s) == nil && strings.EqualFold(strings.TrimSpace(s), "auto") {
+		return 0, true
+	}
+	return 0, false
+}
+
+// modelDateSuffix matches the dated spelling of a model id (`-20260801`).
+var modelDateSuffix = regexp.MustCompile(`-\d{8}$`)
+
+// canonicalModelID strips the two suffixes a model id can carry that Claude
+// Code folds onto the canonical settings key: a trailing bracket group
+// (`claude-opus-5-5[1m]`) and a trailing `-YYYYMMDD` date.
+func canonicalModelID(model string) string {
+	if i := strings.LastIndex(model, "["); i > 0 && strings.HasSuffix(model, "]") {
+		model = model[:i]
+	}
+	return modelDateSuffix.ReplaceAllString(model, "")
+}
+
+// modelSettingsKeys is the lookup order for a model's own settings entry: the
+// exact id, then its canonical spelling when that differs. An empty model
+// (a harness payload without one) looks up nothing and takes the top level.
+func modelSettingsKeys(model string) []string {
+	if model == "" {
+		return nil
+	}
+	keys := []string{model}
+	if c := canonicalModelID(model); c != model {
+		keys = append(keys, c)
+	}
+	return keys
 }
 
 // effectiveFill restates the statusline's used_percentage — a share of size,
 // the model's full window — as a share of the window the session will
-// actually compact at, which is the smaller of size and autoCompact. It
+// actually compact at, which is the smaller of size and compactWindow. It
 // returns that percentage (capped at 100: a session can sit past the
 // compaction point for a moment, and the daemon's threshold compares against
 // 0..100) and the window it is a share of. With no auto-compact window, or
 // one no smaller than size, or no size at all, the inputs come back as they
 // were: this hook only ever restates a number the harness gave it, never
 // invents one.
-func effectiveFill(usedPct float64, size, autoCompact int64) (float64, int64) {
-	if size <= 0 || autoCompact <= 0 || autoCompact >= size {
+func effectiveFill(usedPct float64, size, compactWindow int64) (float64, int64) {
+	if size <= 0 || compactWindow <= 0 || compactWindow >= size {
 		return usedPct, size
 	}
-	pct := usedPct * float64(size) / float64(autoCompact)
+	pct := usedPct * float64(size) / float64(compactWindow)
 	if pct > 100 {
 		pct = 100
 	}
-	return pct, autoCompact
+	return pct, compactWindow
 }
 
 // ctxHookFlags consumes the flag family every installed hook command carries
@@ -177,7 +269,7 @@ func ctxHookFlags(args []string) string {
 
 // cmdCtxHook is `kraken ctx-hook`: the statusline command. It reads the
 // harness' JSON from stdin, reports the context percentage to kraken serve
-// (which is what the daemon's warning pass fires off), and prints the one
+// (which is what the daemon's auto-handoff pass, autoHandoffPass, reads), and prints the one
 // line the pane renders. With --slug it is a cell's statusline, which also
 // wraps the user's own statusLine command from ~/.claude/settings.json.
 func cmdCtxHook(args []string) {
@@ -269,10 +361,10 @@ func (b *cappedBuffer) Write(p []byte) (int, error) {
 // stdin) when there is one and it produced output, else `<slug> NN%`.
 // slug == "" reports nowhere and prints `ctx NN%` (see the file header).
 //
-// settingsHome is the home whose ~/.claude/settings.json names the
+// home is the directory whose <home>/.claude/settings.json names the
 // auto-compact window (autoCompactWindow); "" reads none, and the harness'
 // own percentage is then reported and printed unchanged.
-func runCtxHook(stdin io.Reader, stdout io.Writer, slug string, userStatusLine string, settingsHome string) {
+func runCtxHook(stdin io.Reader, stdout io.Writer, slug string, userStatusLine string, home string) {
 	var in statuslineInput
 	// A read or decode failure is not reported anywhere: there is nowhere to
 	// report it to that is not the pane's chrome. The zero value falls
@@ -287,9 +379,10 @@ func runCtxHook(stdin io.Reader, stdout io.Writer, slug string, userStatusLine s
 	window := in.ContextWindow.ContextWindowSize
 	if pct != nil {
 		// Restated as a share of the window the session will actually
-		// compact at (effectiveFill), since that is the number the daemon's
-		// handoff threshold and the human glancing at the pane both mean.
-		fill, w := effectiveFill(*pct, window, autoCompactWindow(settingsHome, in.Model.ID))
+		// compact at (effectiveFill): the number the daemon's handoff
+		// threshold means, and the one the fallback line below prints. The
+		// wrapped user statusline still gets the untouched stdin bytes.
+		fill, w := effectiveFill(*pct, window, autoCompactWindow(home, in.Model.ID))
 		pct, window = &fill, w
 	}
 	if in.SessionID != "" && pct != nil && slug != "" {
