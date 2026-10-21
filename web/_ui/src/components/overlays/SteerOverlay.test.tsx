@@ -981,6 +981,68 @@ describe("#steer-crew — the crew line", () => {
   });
 });
 
+describe("#steer-stack — the cell's stack links", () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  const stackJob = makeJob({
+    slug: "j",
+    state: "blocked",
+    live: true,
+    stack: [
+      { url: "http://127.0.0.1:7878", label: "board", status: "up", at: 1 },
+      { url: "http://localhost:5173", label: "ui", status: "down", at: 1 },
+    ],
+  });
+
+  it("renders one chip per link from the job alone, under the PR row", () => {
+    render(
+      <Steer open slug="j" mode="steer" job={stackJob} onClose={() => {}} mutate={mutate} />,
+    );
+    const box = document.getElementById("steer-stack") as HTMLElement;
+    expect(box).not.toHaveAttribute("hidden");
+    const chips = [...box.querySelectorAll<HTMLElement>(".stack-chip")];
+    expect(chips.map((c) => c.textContent)).toEqual(["⇱ board :7878", "⇱ ui :5173"]);
+    expect(chips.map((c) => c.className)).toEqual(["stack-chip stack-up", "stack-chip stack-down"]);
+    expect(chips[0]?.tagName).toBe("A");
+    // exactly one .stack box: StackChips' own wrapper would nest a second
+    expect(box.querySelectorAll(".stack")).toHaveLength(0);
+    // directly after the PR row, as on the card
+    expect(document.getElementById("steer-prs")?.nextElementSibling).toBe(box);
+  });
+
+  it("hides the row for a job with no links", () => {
+    render(
+      <Steer
+        open
+        slug="j"
+        mode="steer"
+        job={makeJob({ slug: "j", state: "working", live: true })}
+        onClose={() => {}}
+        mutate={mutate}
+      />,
+    );
+    expect(document.getElementById("steer-stack")).toHaveAttribute("hidden");
+  });
+
+  it("renders spans on a remote card", () => {
+    render(
+      <Steer
+        open
+        slug="j"
+        mode="steer"
+        job={makeJob({
+          ...stackJob,
+          owner: { node_id: "n1", label: "mbp", operator: "m", online: true },
+        })}
+        onClose={() => {}}
+        mutate={mutate}
+      />,
+    );
+    expect(document.querySelector("#steer-stack a")).toBeNull();
+    expect(document.querySelectorAll("#steer-stack .stack-chip.remote")).toHaveLength(2);
+  });
+});
+
 describe("#steer-prs — the PR chips", () => {
   beforeEach(() => vi.clearAllMocks());
 

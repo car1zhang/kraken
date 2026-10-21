@@ -76,6 +76,9 @@ const BAND_OF: Array<[string, number]> = [
   // "card child in no band" and hiding which rule it broke.
   ["question", 4],
   ["prs", 5],
+  // the cell's stack links share band 5 with the PRs: both name an external
+  // thing to go and open (StackChips.tsx).
+  ["stack", 5],
   ["card-actions", 6],
 ];
 

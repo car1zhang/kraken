@@ -177,8 +177,13 @@ func undoV33(t *testing.T, s *Store) {
 
 func downgradeFreshDB(t *testing.T, s *Store, target int) {
 	t.Helper()
-	// Reverse v34: the fleet's two tables and jobs.visibility go. Shape-only,
-	// newest first.
+	// Reverse v35: the stack-links table goes. Shape-only, newest first.
+	if target < 35 {
+		if _, err := s.db.Exec(`DROP TABLE job_stacks`); err != nil {
+			t.Fatalf("downgrade to v%d (undo v35) drop job_stacks: %v", target, err)
+		}
+	}
+	// Reverse v34: the fleet's two tables and jobs.visibility go.
 	if target < 34 {
 		for _, stmt := range []string{
 			`DROP TABLE nodes`,

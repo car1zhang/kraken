@@ -14,6 +14,7 @@ import { DocQuestionChip, docQuestionChipVisible } from "./chips/DocQuestionChip
 import { FeedbackChip, feedbackChipVisible } from "./chips/FeedbackChip.tsx";
 import { LoadChip, loadChipVisible } from "./chips/LoadChip.tsx";
 import { PRChips } from "./chips/PRChips.tsx";
+import { StackChips } from "./chips/StackChips.tsx";
 import { StageChip, stageChipVisible } from "./chips/StageChip.tsx";
 import { ThreadChips, threadChipsVisible } from "./chips/ThreadChips.tsx";
 import { WakeupChip } from "./chips/WakeupChip.tsx";
@@ -484,8 +485,14 @@ export function JobCard({ job, col, actions, matchReason, matchTerms }: JobCardP
            the QuestionBlock is the steer modal's, and band 2's `.chip-question`
            flag is all the board says about it. */}
 
-      {/* ---- band 5: PRS, alone. See the band note above for why not band 2. */}
+      {/* ---- band 5: PRS, and the cell's STACK LINKS under them. Both name a
+           specific external thing to go and open — the PR is what the job
+           produced, the stack link is what to go and try — which is why
+           neither sits among band 2's inventory counts. Its own row rather
+           than a child of .prs so the PR row's test pins and padding stay
+           exactly what they were. */}
       <PRChips prs={job.prs} />
+      <StackChips job={job} />
 
       {/* ---- band 6: ACTIONS. */}
       {hasActions ? (
