@@ -216,6 +216,12 @@ func TestSkillsOwnTheCellContract(t *testing.T) {
 		{"do", []string{
 			"90-build-report.md", "Discrepancies vs. the plan", "Complications",
 			"Deferred", "Verification",
+			// the manual-test gate's stack-link verbs (job 622): the add
+			// before the gate line when a port-backed process is involved,
+			// the clear after the reply passes it. The brief says only "shut
+			// test services down" and names neither verb (crew_test.go's
+			// no-restating rule), so this is their only home.
+			"kraken stack add", "kraken stack clear",
 			// the cell section: the crew, the PR step, the gate behind it
 			"Inside A Kraken Cell", "hephaestus", "athena-logic", "athena-edge", "athena-style",
 			// the crew are TEAMMATES. The ownership line moved on 2026-08-21:

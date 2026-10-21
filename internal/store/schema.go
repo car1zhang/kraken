@@ -107,7 +107,10 @@ import (
 // schemaV33).
 // Version 34 is multiplayer kraken: the nodes registry, the paired-devices
 // table, and jobs.visibility (see schemaV34).
-const schemaVersion = 34
+// Version 35 adds job_stacks: a cell's manual-test URLs, one row per
+// (job, url), registered by the cell through `kraken stack` and deleted with
+// the cell (see schemaV35).
+const schemaVersion = 35
 
 // schemaV1 creates all nine tables plus kv. Exact DDL (types, indexes) was
 // left to this package by the spec; shapes below mirror the spec's Data
@@ -1937,6 +1940,29 @@ func migrateV33MindLayer(tx *sql.Tx) error {
 	return nil
 }
 
+// schemaV35 is the stack-links table (jobstack.go): one row per (job, url)
+// a cell registered as a manual-test URL through `kraken stack add`. label is
+// the cell's short name for it; status is the daemon probe's last verdict
+// (`unknown` until a loopback dial has run, `up`/`down` after); at is the
+// registration time and probed_at the last dial, both unix millis.
+//
+// No FK and no cascade, the house style of prs and job_tokens — but unlike
+// those two the rows are NOT retrospective: a stack dies with its tmux
+// session, so teardownCell deletes them (DeleteStacksForJob) and a
+// reactivated job starts with none. The composite primary key is what makes
+// re-registering a url an UPSERT of its label rather than a second chip.
+const schemaV35 = `
+CREATE TABLE IF NOT EXISTS job_stacks (
+	job_id    INTEGER NOT NULL,
+	url       TEXT    NOT NULL,
+	label     TEXT    NOT NULL DEFAULT '',
+	status    TEXT    NOT NULL DEFAULT 'unknown',
+	at        INTEGER NOT NULL DEFAULT 0,
+	probed_at INTEGER NOT NULL DEFAULT 0,
+	PRIMARY KEY (job_id, url)
+);
+`
+
 // schemaV34 is multiplayer kraken's storage, three independent pieces:
 //
 //   - nodes: one row per sibling `kraken serve` this node has ever seen on
@@ -2121,8 +2147,10 @@ type migrationStep struct {
 // migrations[34] creates nodes and pair_devices (CREATE TABLE IF NOT EXISTS)
 // and adds jobs.visibility through its hook, migrateV34Visibility, which runs
 // the ALTER only when the column is missing (see schemaV34).
+// migrations[35] creates job_stacks (CREATE TABLE IF NOT EXISTS, no hook;
+// see schemaV35).
 // Future schema changes append
-// migrations[35], migrations[36], ... rather than editing an existing
+// migrations[36], migrations[37], ... rather than editing an existing
 // schemaV<N> string (or hook) in place, so a database created under an older
 // binary still migrates forward correctly.
 var migrations = map[int]migrationStep{
@@ -2160,6 +2188,7 @@ var migrations = map[int]migrationStep{
 	32: {sql: schemaV32},
 	33: {sql: schemaV33, hook: migrateV33MindLayer},
 	34: {sql: schemaV34, hook: migrateV34Visibility},
+	35: {sql: schemaV35},
 }
 
 // migrateV5Questions is migrations[5]'s Go hook: schemaV5's SQL has already

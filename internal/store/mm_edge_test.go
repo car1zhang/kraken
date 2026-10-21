@@ -1177,9 +1177,10 @@ func TestEdgeMMMigrationV29CarriesOnlyLiveWatchedEdges(t *testing.T) {
 	// are seeded through raw SQL AFTER the downgrade — the accessors are gone.
 	// v33 rebuilt mm_items and added threads.role and mm_flags; its arm,
 	// undoV33, reverses all three. v34 added nodes, pair_devices and
-	// jobs.visibility; its arm drops all three.)
-	if schemaVersion != 34 {
-		t.Fatalf("schemaVersion = %d, want 34 — this fixture seeds a v28 shape and walks it forward", schemaVersion)
+	// jobs.visibility; its arm drops all three. v35 added job_stacks; its arm
+	// drops it.)
+	if schemaVersion != 35 {
+		t.Fatalf("schemaVersion = %d, want 35 — this fixture seeds a v28 shape and walks it forward", schemaVersion)
 	}
 	s := edgeMMOpen(t)
 

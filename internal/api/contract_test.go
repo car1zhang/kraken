@@ -312,6 +312,12 @@ var webJobSpec = map[string]fieldSpec{
 	"reactivatable": {kind: wireBool, required: false},
 	"last_sent":     {kind: wireString, required: false},
 	"prs":           {kind: wireArray, required: false},
+	// the cell's manual-test URLs (jobstack.go), omitempty: absent means the
+	// cell registered none, and an archived job never carries it (its rows
+	// were deleted with the cell). Elements are webStackLinkSpec. Additive,
+	// so it never bumps apiContract; listed because assertShape rejects any
+	// key the spec does not document.
+	"stack":         {kind: wireArray, required: false},
 	"doc_questions": {kind: wireArray, required: false},
 	"feedback":      {kind: wireArray, required: false},
 	"threads":       {kind: wireArray, required: false},
@@ -1419,6 +1425,104 @@ func TestWebThreadWireShape(t *testing.T) {
 		t.Fatal(err)
 	}
 	assertShape(t, "webThread (populated)", data, webThreadSpec)
+}
+
+// webStackLinkSpec covers jobstack.go's webStackLink, the elements of
+// webJob's "stack" array and of GET /api/job/stack's "stack". Every key is
+// required: the type carries no omitempty, an empty label is a real answer
+// (the chip shows the port alone), and status is always one of the three
+// probe words — "unknown" from birth, "up"/"down" once a loopback dial ran.
+var webStackLinkSpec = map[string]fieldSpec{
+	"url":    {kind: wireString, required: true},
+	"label":  {kind: wireString, required: true},
+	"status": {kind: wireString, required: true},
+	"at":     {kind: wireNumber, required: true},
+}
+
+// jobStackGetSpec is GET /api/job/stack's envelope: "stack" is always an
+// array, EMPTY for a job with no links (never null — `kraken stack get`
+// prints it straight through and a list of zero is the honest answer).
+var jobStackGetSpec = map[string]fieldSpec{
+	"stack": {kind: wireArray, required: true},
+}
+
+// jobStackPostReqSpec covers POST /api/job/stack's per-op body. url and label
+// are optional at the shape level (clear sends neither); the handler decides
+// per op what is required. The response is the shared bare ack.
+var jobStackPostReqSpec = map[string]fieldSpec{
+	"slug":  {kind: wireString, required: true},
+	"op":    {kind: wireString, required: true},
+	"url":   {kind: wireString, required: false},
+	"label": {kind: wireString, required: false},
+}
+
+func TestWebStackLinkWireShape(t *testing.T) {
+	data, err := json.Marshal(webStackLink{URL: "http://127.0.0.1:7878", Label: "", Status: jobs.StackUnknown, At: 0})
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertShape(t, "webStackLink (fresh, unlabelled)", data, webStackLinkSpec)
+	data, err = json.Marshal(webStackLink{URL: "http://localhost:5173", Label: "ui", Status: jobs.StackUp, At: 1769040000000})
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertShape(t, "webStackLink (probed)", data, webStackLinkSpec)
+	for _, s := range []string{jobs.StackUp, jobs.StackDown, jobs.StackUnknown} {
+		if s != "up" && s != "down" && s != "unknown" {
+			t.Errorf("status vocabulary drifted: %q (ios/API.md documents up|down|unknown)", s)
+		}
+	}
+}
+
+// TestJobStackRoundTripShapes drives GET → POST add → GET → POST clear through
+// the handler against a real temp store, asserting each envelope.
+func TestJobStackRoundTripShapes(t *testing.T) {
+	st := useTestStore(t)
+	if _, err := st.CreateJob(&store.Job{Slug: "contract-stack", Repo: "kraken", State: "working"}); err != nil {
+		t.Fatal(err)
+	}
+	get := func(label string) []json.RawMessage {
+		req := httptest.NewRequest(http.MethodGet, "/api/job/stack?slug=contract-stack", nil)
+		rec := httptest.NewRecorder()
+		jobStackHandler(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("%s: GET status %d: %s", label, rec.Code, rec.Body.String())
+		}
+		assertShape(t, label, rec.Body.Bytes(), jobStackGetSpec)
+		var env struct {
+			Stack []json.RawMessage `json:"stack"`
+		}
+		if err := json.Unmarshal(rec.Body.Bytes(), &env); err != nil {
+			t.Fatal(err)
+		}
+		return env.Stack
+	}
+	if items := get("GET /api/job/stack (empty)"); len(items) != 0 {
+		t.Fatalf("fresh job has %d links", len(items))
+	}
+	body := mustJSON(t, map[string]any{"slug": "contract-stack", "op": "add", "url": "http://127.0.0.1:7878", "label": "board"})
+	assertShape(t, "POST /api/job/stack request", body, jobStackPostReqSpec)
+	req := httptest.NewRequest(http.MethodPost, "/api/job/stack", bytes.NewReader(body))
+	rec := httptest.NewRecorder()
+	jobStackHandler(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("POST add: %d %s", rec.Code, rec.Body.String())
+	}
+	assertShape(t, "POST /api/job/stack", rec.Body.Bytes(), jobLoadPostRespSpec)
+	items := get("GET /api/job/stack (one link)")
+	if len(items) != 1 {
+		t.Fatalf("after add: %d links", len(items))
+	}
+	assertShape(t, "GET /api/job/stack element", items[0], webStackLinkSpec)
+	req = httptest.NewRequest(http.MethodPost, "/api/job/stack", bytes.NewReader(mustJSON(t, map[string]any{"slug": "contract-stack", "op": "clear"})))
+	rec = httptest.NewRecorder()
+	jobStackHandler(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("POST clear: %d %s", rec.Code, rec.Body.String())
+	}
+	if items := get("GET /api/job/stack (cleared)"); len(items) != 0 {
+		t.Fatalf("after clear: %d links", len(items))
+	}
 }
 
 func TestJobPRWireShape(t *testing.T) {

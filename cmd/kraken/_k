@@ -18,6 +18,7 @@ _k() {
         'feedback:cell-side verb — read/mark-addressed a job'"'"'s artifact feedback via kraken serve'
         'watchlist:cell-side verb — read/write the dream loop'"'"'s watch items, via kraken serve'
         'load:cell-side verb — record what a blocked job costs carl and buys, via kraken serve'
+        'stack:cell-side verb — register the manual-test URLs a cell spun up, via kraken serve'
         'mm:the mental model — carl'"'"'s mark/drop/note, the drill-down reads, a mind thread'"'"'s commit, contradiction flags'
         'slack:iris-side verb — read/ack the Slack intake inbox via kraken serve'
         'job:iris-side verb — list/read jobs and write a draft via kraken serve'
@@ -186,6 +187,27 @@ _k() {
             # <slug> completion is intentionally not offered, for the reason
             # spelled out under questions) above: job identity lives only in
             # kraken.db, with no cheap store-backed completion source.
+            ;;
+        stack)
+            if (( CURRENT == 3 )); then
+                local -a ops
+                ops=(
+                    'add:register one manual-test url on the job (add <slug> <url> [--label <name>])'
+                    'rm:drop one link by url or label'
+                    'get:print the job'"'"'s stack links as JSON'
+                    'clear:drop every link (after the manual-test gate passes)'
+                )
+                _describe -t ops 'op' ops
+            elif [[ $words[3] == add ]] && (( CURRENT > 5 )); then
+                # words 4 and 5 are the <slug> and <url> positionals; the one
+                # flag is offered only past them, the same rule `load set`
+                # follows for its positional.
+                local -a stackflags
+                stackflags=(
+                    '--label:short name shown on the chip beside the port (capped at 24 runes server-side)'
+                )
+                _describe -t flags 'flag' stackflags
+            fi
             ;;
         mm)
             if (( CURRENT == 3 )); then

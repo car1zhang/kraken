@@ -991,6 +991,13 @@ func (d *daemonState) tick(mirror bool) (int, error) {
 		for _, j := range jobs {
 			autoHandoffPass(ActiveStore(), j, all, live, now)
 		}
+		// stack probe (its own pass, same per-tick cadence): dial each live
+		// cell's loopback stack links and stamp up/down on change
+		// (stackprobe.go). It writes rows a mirror board must not, which is
+		// why it sits in this block; it types into no pane.
+		for _, j := range jobs {
+			stackProbePass(ActiveStore(), j, live, now)
+		}
 		// usage-limit rescue (its own pass, same per-tick cadence): a cell
 		// whose claudes hit their account's usage limit is REBOUND to a
 		// healthier pool slot — one job row, nothing machine-wide — and then,
@@ -1887,6 +1894,19 @@ func (d *daemonState) repairPRs(j *Job, all []*core.Peer) {
 				if _, statErr := os.Stat(transcript); statErr == nil {
 					vouchedOK = true
 					for _, url := range transcriptPRURLs(transcript, prefix) {
+						createVouched[url] = true
+					}
+					// A PR of another repo that the spec names was attached on
+					// purpose (api/prattach.go's carve-out); the transcript scan
+					// above is narrowed to the job's own repo and can never
+					// vouch for it, so it would be dropped here on the first
+					// pass after every restart. The own-repo exclusion needs the
+					// NORMALISED prefix (githubPrefix: userinfo stripped), not the
+					// raw one the transcript scan uses — a `user@github.com/o/r`
+					// origin would otherwise never match its own PRs and the
+					// exclusion would silently admit them.
+					own, _ := githubPrefix(prefix)
+					for _, url := range specNamedPRs(j, own) {
 						createVouched[url] = true
 					}
 				}

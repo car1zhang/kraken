@@ -1084,6 +1084,29 @@ input[type="password"], .thread-name-label {
 .pr-chip.pr-closed { color: var(--muted); border-color: var(--border-strong); opacity: 0.8; }
 .pr-chip.pr-closed:hover { background: color-mix(in srgb, var(--ac2) 10%, transparent); opacity: 1; border-color: var(--ac2); }
 
+/* stack chips: one linked badge per manual-test URL the cell registered
+   (`kraken stack add`), the PR row's sibling in band 5 — same metrics as
+   .pr-chip so the two rows read as one family. The STATUS is said by colour:
+   up takes --ok (the port answered the daemon's last dial), unknown is the
+   neutral border (never dialled — a non-loopback host), down is muted and
+   struck through (the port refused; still a link, since the probe can be a
+   tick stale after a restart). .remote is a sibling node's card: a span, not
+   a link, because localhost on another machine is not this stack. */
+.stack { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 4px; }
+.stack-chip {
+  font: 9px var(--mono); text-decoration: none;
+  padding: 2px 6px; border: 1px solid;
+  white-space: nowrap;
+  transition: box-shadow 80ms var(--ease), border-color 80ms var(--ease);
+}
+.stack-chip.stack-up { color: var(--ok); border-color: color-mix(in srgb, var(--ok) 45%, transparent); }
+a.stack-chip.stack-up:hover { background: color-mix(in srgb, var(--ok) 12%, transparent); box-shadow: var(--glow-ok); border-color: var(--ok); }
+.stack-chip.stack-unknown { color: var(--fg); border-color: var(--border-strong); }
+a.stack-chip.stack-unknown:hover { background: color-mix(in srgb, var(--ac) 10%, transparent); border-color: var(--ac); }
+.stack-chip.stack-down { color: var(--muted); border-color: var(--border-strong); opacity: 0.6; text-decoration: line-through; }
+a.stack-chip.stack-down:hover { opacity: 0.9; border-color: var(--ac2); }
+.stack-chip.remote { color: var(--muted); border-color: var(--border); cursor: default; }
+
 /* side-thread chips: one per fork of zeus' session. On the card they sit
    among the crew tokens and the counts in the .chips row (band 2); .threads
    itself is modal-only now (#steer-threads), since threadsHTML went away with
