@@ -61,7 +61,7 @@ Create a GitHub PR for the current branch.
 - **Branch name**: inside a cell, the cell branch from your brief, never renamed; outside a cell, the branch you are on.
 - **PR title**: `<type>(<category>): <description>`. Types: `feat`, `fix`, `chore`, `refactor`, `docs`, `test`. Category is the module or service the change touches, named the way the repo's own history names it. Lowercase, no period.
 - **PR body**: brief and no fluff; keep each section to 2 or 3 sentences. No Claude Code signature or "Generated with" footer in the body, overriding the harness's own default footer instruction — the Commit Style section below bans it for commits, and while that rule was silent on PR bodies two same-day PRs filled the silence opposite ways, one shipping the harness's default footer into a company repo.
-- **Context**: include LangSmith trace IDs or error traces when relevant, and only if available.
+- **Context**: include LangSmith trace IDs or error traces when relevant, and only if available (a dream PR carries the mechanism only, never evidence — see `.claude/skills/dream/SKILL.md`).
 
 ## Commit Style
 

@@ -185,10 +185,15 @@ func scanWatchItem(row interface{ Scan(...any) error }) (WatchItem, error) {
 // they are carl's, written later only via SetWatchVerdict — so a fresh row
 // always starts unjudged, exactly as AddFeedback starts a row unaddressed.
 func (s *Store) AddWatchItem(w WatchItem) (int64, bool, error) {
-	if w.State == "" {
-		w.State = "watching"
-	} else if err := validateWatchState(w.State); err != nil {
-		return 0, false, err
+	// The empty-state default is applied at the INSERT below and nowhere
+	// earlier: filled in here, it reached the fold's COALESCE as "watching"
+	// and reset every stateless re-add of a shipped row to watching, which is
+	// the opposite of the leave-alone rule the fold documents (measured on a
+	// row shipped at PR open, then re-sighted the next night).
+	if w.State != "" {
+		if err := validateWatchState(w.State); err != nil {
+			return 0, false, err
+		}
 	}
 	now := time.Now().UnixMilli()
 
@@ -228,6 +233,9 @@ func (s *Store) AddWatchItem(w WatchItem) (int64, bool, error) {
 		return id, true, nil
 	}
 
+	if w.State == "" {
+		w.State = "watching"
+	}
 	res, err := s.db.Exec(
 		`INSERT INTO watch_items (observation, src, dst, predicate, class, state,
 			sightings, first_seen, last_seen, evidence, suggested_fix, pr_url,

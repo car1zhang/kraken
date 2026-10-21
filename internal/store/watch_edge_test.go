@@ -439,3 +439,38 @@ func mustListWatch(t *testing.T, s *Store) []WatchItem {
 	}
 	return list
 }
+
+// TestEdgeWatchStatelessFoldKeepsShipped: a re-add that sends no state leaves
+// the row's state alone, as the fold documents. The default "watching" is an
+// INSERT-time default only: applied before the fold, it reset every shipped
+// row that was re-sighted the next night back to watching (the mining window
+// always reaches back past a fix, so a pre-fix sighting of a shipped row is
+// the routine case, not a reopening).
+func TestEdgeWatchStatelessFoldKeepsShipped(t *testing.T) {
+	s := openTest(t)
+	id := edgeWatchAdd(t, s, "edge: shipped rows survive a stateless fold")
+	if err := s.UpdateWatchItem(id, WatchItem{State: "shipped", PRURL: "https://example.test/pull/1"}); err != nil {
+		t.Fatalf("UpdateWatchItem: %v", err)
+	}
+	fid, folded, err := s.AddWatchItem(WatchItem{Observation: "edge: shipped rows survive a stateless fold", Evidence: "seen again"})
+	if err != nil || !folded || fid != id {
+		t.Fatalf("stateless re-add = (%d, %v, %v), want a fold onto %d", fid, folded, err, id)
+	}
+	got := edgeWatchGet(t, s, id)
+	if got.State != "shipped" || got.PRURL != "https://example.test/pull/1" || got.Sightings != 2 || got.Evidence != "seen again" {
+		t.Errorf("after stateless fold: state=%q pr_url=%q sightings=%d evidence=%q; want shipped, url kept, 2, evidence replaced", got.State, got.PRURL, got.Sightings, got.Evidence)
+	}
+	fid, folded, err = s.AddWatchItem(WatchItem{Observation: "edge: shipped rows survive a stateless fold", State: "watching"})
+	if err != nil || !folded || fid != id {
+		t.Fatalf("re-add with state = (%d, %v, %v), want a fold onto %d", fid, folded, err, id)
+	}
+	if got := edgeWatchGet(t, s, id); got.State != "watching" {
+		t.Errorf("a fold that SENDS watching = %q, want watching (reopening is still one send away)", got.State)
+	}
+	if _, _, err := s.AddWatchItem(WatchItem{Observation: "edge: a fresh row with no state", Class: "waste"}); err != nil {
+		t.Fatalf("fresh add without state: %v", err)
+	}
+	if _, _, err := s.AddWatchItem(WatchItem{Observation: "edge: a bad state is still refused", State: "done"}); err == nil {
+		t.Errorf("bad state on add was accepted")
+	}
+}
