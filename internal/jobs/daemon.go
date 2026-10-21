@@ -918,7 +918,7 @@ func (d *daemonState) tick(mirror bool) (int, error) {
 				key := "blocked:" + j.Slug
 				if d.Notified[key] == 0 {
 					if !mirror {
-						notify("kraken ⏸ "+j.Slug, "blocked — see the board")
+						notify("kraken ⏸ "+j.Slug, blockedNotifyBody(jobQuestionRows(j)))
 					}
 					d.Notified[key] = now.Unix()
 				}

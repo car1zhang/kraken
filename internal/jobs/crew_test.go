@@ -663,6 +663,9 @@ func TestZeusBriefLoadEstimate(t *testing.T) {
 			// one anchor per axis, so the 1-10 ruler cannot be dropped silently
 			"1-10 is the effort Ada spends",
 			"a one-message reply",
+			// the question round's state-map entry (job 629), matching the
+			// load skill's row label word for word
+			"mid-build question round 3/remaining build",
 		} {
 			if !strings.Contains(brief, want) {
 				t.Errorf("%s brief missing %q from the load-estimate rule", j.Slug, want)
@@ -957,6 +960,12 @@ func TestZeusBriefNoTerminalQuestions(t *testing.T) {
 			{"pick the most defensible default", "what to do instead"},
 			{"FINAL message", "where an unresolved decision goes"},
 			{"last resort", "AskUserQuestion is not a convenience"},
+			// the one exception (job 629): a mid-build product decision is a
+			// question round, owned by do/SKILL.md — the brief names the
+			// skill and the stop, never the verbs or the importance rules
+			{"question round", "the mid-build exception to the default rule"},
+			{"stop on the P0s until Ada answers on the board", "the round blocks on P0 alone, released by Ada"},
+			{"kraken never wakes you for a row", "no automatic wake — Ada prompts the pane"},
 		} {
 			if !strings.Contains(brief, want.token) {
 				t.Errorf("%s brief missing %q (%s)", j.Slug, want.token, want.why)
