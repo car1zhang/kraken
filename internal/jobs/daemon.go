@@ -1543,7 +1543,7 @@ func mergeBumpWanted(j *Job, live map[string]bool) bool {
 // stopped at a gate for a LATER PR must not read "continue" as that gate
 // opening.
 func mergeBumpMessage(url string) string {
-	return prWatchPrefix() + " " + url + " has MERGED into its base branch. That branch is finished: do not push to it, re-run its checks, or report it as awaiting checks or review. Any further change starts on a fresh branch recycled off origin/main (the pr skill's recycle step). If this PR completed the job's work, say so in your closing message and stop; if not, continue and open the follow-up from the recycled branch. Any gate you are stopped at still holds — this notice does not answer it."
+	return prWatchPrefix() + " " + url + " has MERGED into its base branch. That branch is finished: do not push to it, re-run its checks, or report it as awaiting checks or review. Any further change starts on a fresh branch recycled off origin/main (the recycle step in do/SKILL.md's cell section). If this PR completed the job's work, say so in your closing message and stop; if not, continue and open the follow-up from the recycled branch. Any gate you are stopped at still holds — this notice does not answer it."
 }
 
 // prWatchPrefix opens EVERY message the PR watcher types into a pane. It is

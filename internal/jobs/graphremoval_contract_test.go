@@ -206,12 +206,17 @@ func TestGraphRemovalZeusLaunchBriefIsBriefPlusGoals(t *testing.T) {
 }
 
 // "`IsPipelineStage("graph") == false`; `PipelineStages()` returns exactly
-// `[aim do dream info pr]`."
+// `[aim do dream info pr]`." — amended when the pr skill folded into do
+// (job 624): `pr` left the set the same way `graph` did, so the exact list
+// is now `[aim do dream info]` and `pr` is asserted absent beside `graph`.
 func TestGraphRemovalPipelineStagesDropGraph(t *testing.T) {
 	if IsPipelineStage("graph") {
 		t.Error(`IsPipelineStage("graph") = true, want false`)
 	}
-	want := []string{"aim", "do", "dream", "info", "pr"}
+	if IsPipelineStage("pr") {
+		t.Error(`IsPipelineStage("pr") = true, want false — the pr skill folded into do`)
+	}
+	want := []string{"aim", "do", "dream", "info"}
 	if got := PipelineStages(); !reflect.DeepEqual(got, want) {
 		t.Errorf("PipelineStages() = %v, want %v", got, want)
 	}

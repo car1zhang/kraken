@@ -95,8 +95,8 @@
   --glow-ok: 0 0 8px color-mix(in srgb, var(--ok) 45%, transparent);
   --glow-warn: 0 0 8px color-mix(in srgb, var(--warn) 45%, transparent);
   --text-glow: 0 0 9px color-mix(in srgb, var(--ac) 55%, transparent);
-  /* skill palette: one color per command skill (the five pipeline commands
-     /info /aim /do /pr /dream, plus /handoff below), used by the
+  /* skill palette: one color per command skill (the four pipeline commands
+     /info /aim /do /dream, plus /handoff below), used by the
      command-highlight backdrop and chips (see app.js's
      cmdHighlightHTML/attachCmdChips) — each gets a glow pair mirroring
      --glow/--text-glow above. The chips sit side by side, so dream takes
@@ -108,10 +108,10 @@
   --skill-info: #5EA8FF; --skill-info-soft: #102A45;
   --skill-aim: #FF6B6B; --skill-aim-soft: #3A1414;
   --skill-do: #F5D34D; --skill-do-soft: #332B0E;
-  --skill-pr: #4ADE80; --skill-pr-soft: #0F2E1D;
   --skill-dream: #C084FC; --skill-dream-soft: #2A1440;
-  /* /handoff is the sixth skill hue (dream has a hue but no web chip, so
-     the web row is five chips) and the only command that names no phase: it
+  /* /handoff is the fifth skill hue (dream has a hue but no web chip, so
+     the web row is five chips; the green /pr wore is gone with the pr skill,
+     which folded into do in job 624) and the only command that names no phase: it
      compacts behind a written record and returns the cell to the phase it
      was in. Orange is the wheel's remaining gap between do-yellow and
      aim-red. Its nearest neighbour is job-orange (#D97757), which DOES share
@@ -122,12 +122,12 @@
      near the amber/crimson accents' --ac2, the relationship --skill-do
      already has with them. */
   --skill-handoff: #FB923C; --skill-handoff-soft: #3B1F0A;
-  /* /direct is the seventh skill hue and the other command that names no
+  /* /direct is the sixth skill hue and the other command that names no
      phase: a modifier typed ahead of the phase it modifies (`/direct do`),
      running that phase skill minus its subagents and review rounds, so it
      gets a chip and a colour but never a stage badge. Teal (174°) is the
-     widest gap left on the wheel once the six above and the memory lime
-     (95°) are placed: 32° from pr-green and 39° from info-blue, the chip it
+     widest gap left on the wheel once the five above, the retired pr-green
+     and the memory lime (95°) were placed: 39° from info-blue, the chip it
      sits beside. Its nearest neighbour is --polling cyan (186°), which is a
      status DOT on the board and never a text chip, so the two are told
      apart by shape and position — the same argument --skill-handoff makes
@@ -136,8 +136,9 @@
   /* the MEMORY view's accent — named for the retired /graph chip and GRAPH
      view it was first picked for, and kept because the Library and Model
      panes still wear it. Lime because cyan is --polling's exact value; 95° is
-     the hue with the widest MINIMUM separation (44°) from the six skill
-     hues (info 213°, aim 0°, handoff 27°, do 51°, pr 142°, dream 279°) and
+     the hue with the widest MINIMUM separation (44°) from the skill hues
+     at the time (info 213°, aim 0°, handoff 27°, do 51°, the since-retired
+     pr 142°, dream 279°) and
      the status hues they sit beside (polling 187°, counter 333°, accent
      258°, revealed 40°). */
   --skill-graph: #87DF49;
@@ -147,8 +148,6 @@
   --text-glow-skill-aim: 0 0 1px var(--skill-aim), 0 0 9px var(--skill-aim);
   --glow-skill-do: 0 0 12px rgba(245, 211, 77, 0.30), 0 0 2px rgba(245, 211, 77, 0.7);
   --text-glow-skill-do: 0 0 1px var(--skill-do), 0 0 9px var(--skill-do);
-  --glow-skill-pr: 0 0 12px rgba(74, 222, 128, 0.30), 0 0 2px rgba(74, 222, 128, 0.7);
-  --text-glow-skill-pr: 0 0 1px var(--skill-pr), 0 0 9px var(--skill-pr);
   --glow-skill-dream: 0 0 12px rgba(192, 132, 252, 0.30), 0 0 2px rgba(192, 132, 252, 0.7);
   --text-glow-skill-dream: 0 0 1px var(--skill-dream), 0 0 9px var(--skill-dream);
   --glow-skill-handoff: 0 0 12px rgba(251, 146, 60, 0.30), 0 0 2px rgba(251, 146, 60, 0.7);
@@ -207,19 +206,16 @@
   --text-glow: none;
   /* skill palette, light siblings — same darkened-for-white-contrast pattern
      as the rest of this block; text-glows follow --text-glow: none above,
-     since light mode never glows text. info/do/pr are darkened past the
+     since light mode never glows text. info/do are darkened past the
      naive "same pattern" hex to clear 4.5:1 against both --raised (#E3E9F1)
      and their own -soft fill (WCAG AA, verified with a script — info
-     4.60/4.60, do 4.64/4.96, pr 4.61/4.82); aim's initial pick already
-     cleared both (4.61/4.52) so it's untouched. pr's contrast-driven hex no
-     longer matches --solved's light value, so it stays its own literal
-     rather than aliasing --solved. dream needed no darkening past its naive
-     violet — it measures 5.72 against --raised and 5.92 against its own
-     -soft, the widest margin of the five. */
+     4.60/4.60, do 4.64/4.96); aim's initial pick already
+     cleared both (4.61/4.52) so it's untouched. dream needed no darkening
+     past its naive violet — it measures 5.72 against --raised and 5.92
+     against its own -soft, the widest margin of the four. */
   --skill-info: #1866C4; --skill-info-soft: #DCEAFB;
   --skill-aim: #C42B2B; --skill-aim-soft: #FBE0E0;
   --skill-do: #7B6505; --skill-do-soft: #F7F0D4;
-  --skill-pr: #14773B; --skill-pr-soft: #DCF3E4;
   --skill-dream: #7E22CE; --skill-dream-soft: #F3E8FF;
   /* handoff's light orange is darkened past the naive tailwind orange-700
      (#C2410C, 4.24 against --raised) to clear AA: #B4400E measures 4.67
@@ -229,7 +225,7 @@
      AA: 5.3 against white and a little under that against --raised. */
   --skill-direct: #0F766E; --skill-direct-soft: #D3F4EE;
   /* the memory accent's light sibling is darkened past its naive lime for the
-     same reason info/do/pr are: a 95° hue is at its brightest where white is,
+     same reason info/do are: a 95° hue is at its brightest where white is,
      so the dark hex is unreadable here. #456F0B measures 4.87 against
      --raised (#E3E9F1), clearing WCAG AA. */
   --skill-graph: #456F0B;
@@ -239,8 +235,6 @@
   --text-glow-skill-aim: none;
   --glow-skill-do: 0 1px 6px rgba(123, 101, 5, 0.25);
   --text-glow-skill-do: none;
-  --glow-skill-pr: 0 1px 6px rgba(20, 119, 59, 0.25);
-  --text-glow-skill-pr: none;
   --glow-skill-dream: 0 1px 6px rgba(126, 34, 206, 0.25);
   --text-glow-skill-dream: none;
   --glow-skill-handoff: 0 1px 6px rgba(180, 64, 14, 0.25);
@@ -1575,7 +1569,6 @@ a.stack-chip.stack-down:hover { opacity: 0.9; border-color: var(--ac2); }
 .st-chip-info  { --skill: var(--skill-info);  --skill-soft: var(--skill-info-soft); }
 .st-chip-aim   { --skill: var(--skill-aim);   --skill-soft: var(--skill-aim-soft); }
 .st-chip-do    { --skill: var(--skill-do);    --skill-soft: var(--skill-do-soft); }
-.st-chip-pr    { --skill: var(--skill-pr);    --skill-soft: var(--skill-pr-soft); }
 .st-chip-dream { --skill: var(--skill-dream); --skill-soft: var(--skill-dream-soft); }
 .card:hover .st-chip { border-color: var(--skill); }
 
@@ -2139,8 +2132,8 @@ a.stack-chip.stack-down:hover { opacity: 0.9; border-color: var(--ac2); }
 }
 .btn.steer-done:hover { background: color-mix(in srgb, var(--ok) 14%, transparent); border-color: var(--ok); color: var(--ok); box-shadow: none; }
 /* ---- command highlight: mirrored backdrop behind the steer/editor
-   textareas, so /info /aim /do /pr /handoff each read highlighted inline in
-   their own skill color + glow (info blue, aim red, do yellow, pr green,
+   textareas, so /direct /info /aim /do /handoff each read highlighted inline in
+   their own skill color + glow (direct teal, info blue, aim red, do yellow,
    handoff orange) — a
    <textarea> can't style substrings of its own value. The
    wrapper is position:relative and otherwise unstyled; the textarea stays
@@ -2184,14 +2177,12 @@ a.stack-chip.stack-down:hover { opacity: 0.9; border-color: var(--ac2); }
 .cmd-hl-backdrop .cmd-hl-info { --skill: var(--skill-info); --skill-glow: var(--text-glow-skill-info); }
 .cmd-hl-backdrop .cmd-hl-aim  { --skill: var(--skill-aim);  --skill-glow: var(--text-glow-skill-aim); }
 .cmd-hl-backdrop .cmd-hl-do   { --skill: var(--skill-do);   --skill-glow: var(--text-glow-skill-do); }
-.cmd-hl-backdrop .cmd-hl-pr   { --skill: var(--skill-pr);   --skill-glow: var(--text-glow-skill-pr); }
 .cmd-hl-backdrop .cmd-hl-dream { --skill: var(--skill-dream); --skill-glow: var(--text-glow-skill-dream); }
 .cmd-hl-backdrop .cmd-hl-handoff { --skill: var(--skill-handoff); --skill-glow: var(--text-glow-skill-handoff); }
 .cmd-hl-backdrop .cmd-hl-direct { --skill: var(--skill-direct); --skill-glow: var(--text-glow-skill-direct); }
 .cmd-hl-backdrop .cmd-hl-info,
 .cmd-hl-backdrop .cmd-hl-aim,
 .cmd-hl-backdrop .cmd-hl-do,
-.cmd-hl-backdrop .cmd-hl-pr,
 .cmd-hl-backdrop .cmd-hl-dream,
 .cmd-hl-backdrop .cmd-hl-handoff,
 .cmd-hl-backdrop .cmd-hl-direct {
@@ -2387,9 +2378,9 @@ a.stack-chip.stack-down:hover { opacity: 0.9; border-color: var(--ac2); }
 .answer-body { display: flex; flex-direction: column; gap: 12px; }
 .answer-note { font: 10px var(--mono); color: var(--ac2); min-height: 1em; }
 
-/* command chips: one-tap /info /aim /do /pr /handoff insertion above a
+/* command chips: one-tap /direct /info /aim /do /handoff insertion above a
    composer textarea, colored per skill (direct teal, info blue, aim red, do
-   yellow, pr green, handoff orange; dream violet has a rule but no web chip) —
+   yellow, handoff orange; dream violet has a rule but no web chip) —
    inactive rests in its -soft border, hover/active (command present in the
    textarea, see attachCmdChips) fills with the -soft tint and glows. The
    base rule's own color/border-color is the generic accent fallback for a
@@ -2414,17 +2405,15 @@ a.stack-chip.stack-down:hover { opacity: 0.9; border-color: var(--ac2); }
 .cmd-chip-info { --skill: var(--skill-info); --skill-soft: var(--skill-info-soft); --skill-glow: var(--glow-skill-info); }
 .cmd-chip-aim  { --skill: var(--skill-aim);  --skill-soft: var(--skill-aim-soft);  --skill-glow: var(--glow-skill-aim); }
 .cmd-chip-do   { --skill: var(--skill-do);   --skill-soft: var(--skill-do-soft);   --skill-glow: var(--glow-skill-do); }
-.cmd-chip-pr   { --skill: var(--skill-pr);   --skill-soft: var(--skill-pr-soft);   --skill-glow: var(--glow-skill-pr); }
 .cmd-chip-dream { --skill: var(--skill-dream); --skill-soft: var(--skill-dream-soft); --skill-glow: var(--glow-skill-dream); }
 .cmd-chip-handoff { --skill: var(--skill-handoff); --skill-soft: var(--skill-handoff-soft); --skill-glow: var(--glow-skill-handoff); }
 .cmd-chip-direct { --skill: var(--skill-direct); --skill-soft: var(--skill-direct-soft); --skill-glow: var(--glow-skill-direct); }
-.cmd-chip-info, .cmd-chip-aim, .cmd-chip-do, .cmd-chip-pr, .cmd-chip-dream, .cmd-chip-handoff, .cmd-chip-direct {
+.cmd-chip-info, .cmd-chip-aim, .cmd-chip-do, .cmd-chip-dream, .cmd-chip-handoff, .cmd-chip-direct {
   color: var(--skill); border-color: var(--skill-soft);
 }
 .cmd-chip-info:hover, .cmd-chip-info.active,
 .cmd-chip-aim:hover, .cmd-chip-aim.active,
 .cmd-chip-do:hover, .cmd-chip-do.active,
-.cmd-chip-pr:hover, .cmd-chip-pr.active,
 .cmd-chip-dream:hover, .cmd-chip-dream.active,
 .cmd-chip-handoff:hover, .cmd-chip-handoff.active,
 .cmd-chip-direct:hover, .cmd-chip-direct.active {

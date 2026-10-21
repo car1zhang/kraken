@@ -8,7 +8,7 @@ import {
 } from "react";
 import { esc } from "../lib/markdown.ts";
 
-// The mirrored-backdrop composer: /direct /info /aim /do /pr /handoff rendered in
+// The mirrored-backdrop composer: /direct /info /aim /do /handoff rendered in
 // their own skill colors behind a text-transparent <textarea>. Ported from
 // app.js: 1741-1913, and the ONE mechanism this port does not get to simplify — a
 // <textarea> cannot style substrings of its own value, so the real glyphs live
@@ -48,16 +48,20 @@ import { esc } from "../lib/markdown.ts";
 // out on purpose). /handoff sits LAST for the mirror reason: it writes
 // 80-handoff.md and compacts (or spawns continuation teammates) and returns
 // the cell to the phase it was in, and it is the one carl reaches for on a
-// cell already mid-phase.
-export const CMD_CHIPS = ["/direct", "/info", "/aim", "/do", "/pr", "/handoff"] as const;
+// cell already mid-phase. There is no /pr chip: the pr skill folded into do
+// (job 624) — the PR is do's own last step, opened before the manual-test
+// gate — so kraken ships no pr skill and no phase asks for /pr; a typed /pr
+// would reach only a personal skill of that name, which is not the
+// pipeline's.
+export const CMD_CHIPS = ["/direct", "/info", "/aim", "/do", "/handoff"] as const;
 export type CmdChip = (typeof CMD_CHIPS)[number];
 
 /**
- * Boundary-anchored match for any of the six commands.
+ * Boundary-anchored match for any of the five commands.
  *
  * The leading `(^|\s)` group matters as much as the trailing `\b`: `\b` only
  * guards the END of the match, so without the anchor a mid-word slash run like
- * `web/static/do` or `[image: /Users/x/pr-notes.png]` lights up. Accepted gap,
+ * `web/static/do` or `[image: /Users/x/do-notes.png]` lights up. Accepted gap,
  * carried over verbatim: the anchor guards the start of a run of
  * non-whitespace, not "is actually a command", so `[image: /do/x.png]` still
  * highlights. Harmless — kraken's own upload paths are `~/.kraken/uploads/…`.
@@ -73,7 +77,7 @@ export const CMD_ACTIVE_RE = Object.fromEntries(
 ) as Record<CmdChip, RegExp>;
 
 /**
- * app.js:1771 — escape first, then wrap. None of the six commands contain an
+ * app.js:1771 — escape first, then wrap. None of the five commands contain an
  * HTML-special character, so matching against already-escaped text is safe.
  * The trailing newline is the sentinel described in (1) above.
  */

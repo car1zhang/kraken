@@ -20,18 +20,26 @@ final class HighlightingTextEditorTests: XCTestCase {
         Token(range: NSRange(location: location, length: length), command: command)
     }
 
-    // MARK: - all seven commands
+    // MARK: - all six commands
 
-    func testAllSevenCommandsMatch() {
-        let text = "/direct /info /aim /do /pr /dream /handoff"
+    func testAllSixCommandsMatch() {
+        let text = "/direct /info /aim /do /dream /handoff"
         XCTAssertEqual(matches(text), [
             token(0, 7, "/direct"),
             token(8, 5, "/info"),
             token(14, 4, "/aim"),
             token(19, 3, "/do"),
-            token(23, 3, "/pr"),
-            token(27, 6, "/dream"),
-            token(34, 8, "/handoff"),
+            token(23, 6, "/dream"),
+            token(30, 8, "/handoff"),
+        ])
+    }
+
+    // /pr is not a command any more: the pr skill folded into do (job 624),
+    // so the token finder — built from CmdChipsRow.commands — must not match
+    // it, and a typed /pr stays plain text.
+    func testRetiredPrIsNotAToken() {
+        XCTAssertEqual(matches("/do then /pr it"), [
+            token(0, 3, "/do"),
         ])
     }
 
@@ -89,8 +97,8 @@ final class HighlightingTextEditorTests: XCTestCase {
     }
 
     func testTokenAtEndOfText() {
-        XCTAssertEqual(matches("next job: /pr"), [
-            token(10, 3, "/pr"),
+        XCTAssertEqual(matches("next job: /do"), [
+            token(10, 3, "/do"),
         ])
     }
 
@@ -101,10 +109,10 @@ final class HighlightingTextEditorTests: XCTestCase {
     // MARK: - multiline / repeated
 
     func testMultilineTextMatchesAcrossLines() {
-        let text = "steer notes:\n/do the doc\nthen /pr it"
+        let text = "steer notes:\n/do the doc\nthen /aim it"
         XCTAssertEqual(matches(text), [
             token(13, 3, "/do"),
-            token(30, 3, "/pr"),
+            token(30, 4, "/aim"),
         ])
     }
 

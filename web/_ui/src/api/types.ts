@@ -360,8 +360,8 @@ export interface WebJob {
   question?: WebQuestion;
   zeus_status?: ZeusStatus;
   /**
-   * The pipeline skill zeus most recently used — one of the five
-   * phase-governing skill names (info/aim/do/pr/dream), read off zeus'
+   * The pipeline skill zeus most recently used — one of the four
+   * phase-governing skill names (info/aim/do/dream), read off zeus'
    * transcript server-side. Absent when no transcript resolves or no pipeline
    * skill has been used yet; the card renders its one stage chip when a
    * non-empty value is present. Typed as bare string rather than a union: the

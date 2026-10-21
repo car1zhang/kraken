@@ -19,11 +19,11 @@ export function stageChipVisible(job: WebJob): boolean {
  * palette the steer modal's cmd-chips wear) so a
  * column of stage badges sorts by eye — the argument LoadChip's colour bands
  * make for the blocked column. The iOS StageChip carries the SF Symbol
- * sibling of each glyph; the two lists move together. `⑂` is the board's
- * existing branch glyph, reused for /pr because a PR is the branch leaving
- * the cell — the thread count chip beside it wears the same glyph, and the
- * skill-pr green is what separates them. `⚙` carries
- * VARIATION SELECTOR-15: U+2699 is the one emoji-capable glyph of the five,
+ * sibling of each glyph; the two lists move together. There is no `pr`
+ * entry: the pr skill folded into do (job 624) — the PR is do's own last
+ * step, opened before the manual-test gate — so the server never sends that
+ * stage any more. `⚙` carries
+ * VARIATION SELECTOR-15: U+2699 is the one emoji-capable glyph of the four,
  * and only Menlo's cmap currently keeps it in text presentation — the
  * selector pins that so a `--mono` stack edit cannot flip the badge to a
  * colour emoji that ignores its skill hue.
@@ -41,13 +41,12 @@ const STAGE_GLYPHS: Record<string, string> = {
   info: "ⓘ",
   aim: "⌖",
   do: "⚙︎",
-  pr: "⑂",
   dream: "☾",
 };
 
 /**
  * The card's stage badge: which pipeline skill zeus most recently used
- * (`info` / `aim` / `do` / `pr` / `dream`), rendered as the
+ * (`info` / `aim` / `do` / `dream`), rendered as the
  * skill's glyph plus its bare name in the skill's own colour — the name IS
  * the phase vocabulary carl steers with (`/aim`, `/do`), so it stays even
  * with the glyph carrying the colour code. The glyph is aria-hidden so a

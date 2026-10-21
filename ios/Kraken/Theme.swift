@@ -352,14 +352,16 @@ enum KTheme {
     static let stoppedUI = dyn(light: 0xC22A2A, dark: 0xFF5C5C)
     static let stopped = Color(uiColor: stoppedUI)
 
-    // Per-skill colors: /info /aim /do /pr each get their own hue so a spec
+    // Per-skill colors: /info /aim /do each get their own hue so a spec
     // full of pipeline commands reads as a colored pipeline, both in the
     // iOS composer inline highlight (HighlightingTextEditor) and in
     // CmdChipsRow. aim-red is a true red, kept distinct from the pink
     // `counter` above; do-yellow is yellower than the amber `revealed` above
-    // so "do" doesn't read as "question pending"; pr-green mirrors `solved`
-    // via its own token so the two can diverge later; info-blue is a new
+    // so "do" doesn't read as "question pending"; info-blue is a new
     // hue (the palette otherwise has no true blue — `polling` is cyan).
+    // The green that /pr wore is gone with the pr skill, which folded into
+    // do (job 624): the PR is do's own last step, so there is no chip, no
+    // highlight token and no stage badge to colour.
     // These are MEANING colors: they do not follow the theme tint.
     static let skillInfoUI = dyn(light: 0x1A6FD4, dark: 0x5EA8FF)
     static let skillInfo = Color(uiColor: skillInfoUI)
@@ -373,13 +375,10 @@ enum KTheme {
     static let skillDo = Color(uiColor: skillDoUI)
     static let skillDoSoftUI = dyn(light: 0xF7F0D4, dark: 0x332B0E)
     static let skillDoSoft = Color(uiColor: skillDoSoftUI)
-    static let skillPrUI = dyn(light: 0x178A44, dark: 0x4ADE80)
-    static let skillPr = Color(uiColor: skillPrUI)
-    static let skillPrSoftUI = dyn(light: 0xDCF3E4, dark: 0x0F2E1D)
-    static let skillPrSoft = Color(uiColor: skillPrSoftUI)
-    // /dream is the fifth skill hue, and violet is the pick because the four
-    // above are blue/red/yellow/green — the chips sit side by side in
-    // CmdChipsRow, so separation from all four at once is what matters. Its
+    // /dream is the fourth skill hue, and violet is the pick because the three
+    // above are blue/red/yellow (and the retired pr-green sat between them) —
+    // the chips sit side by side in
+    // CmdChipsRow, so separation from all of them at once is what matters. Its
     // nearest neighbour is the generic `accent` purple, which never appears
     // IN the chip row, so that collision is cosmetic rather than confusing.
     // Doubles as the DREAM surface's own accent (DreamView, the feedback
@@ -388,7 +387,7 @@ enum KTheme {
     static let skillDream = Color(uiColor: skillDreamUI)
     static let skillDreamSoftUI = dyn(light: 0xF3E8FF, dark: 0x2A1440)
     static let skillDreamSoft = Color(uiColor: skillDreamSoftUI)
-    // /handoff is the sixth skill hue and the one chip that names no phase:
+    // /handoff is the fifth skill hue and the one chip that names no phase:
     // it writes the handoff doc and compacts (or spawns continuation
     // teammates), then returns the cell to the phase it was in, so it gets a
     // chip and a colour but never a stage badge. Orange is the wheel's
@@ -404,12 +403,12 @@ enum KTheme {
     static let skillHandoff = Color(uiColor: skillHandoffUI)
     static let skillHandoffSoftUI = dyn(light: 0xFDE8D8, dark: 0x3B1F0A)
     static let skillHandoffSoft = Color(uiColor: skillHandoffSoftUI)
-    // /direct is the seventh skill hue and the other chip that names no
+    // /direct is the sixth skill hue and the other chip that names no
     // phase: a modifier typed ahead of the phase it modifies (`/direct do`)
     // that runs that phase skill minus its subagents and review rounds, so
     // it gets a chip and a colour but never a stage badge. Teal is the widest
-    // gap left on the wheel once the six above are placed — 32° from
-    // pr-green and 39° from info-blue, the chip it sits beside in
+    // gap left on the wheel once the five above (and the retired pr-green)
+    // were placed — 39° from info-blue, the chip it sits beside in
     // CmdChipsRow. Its nearest neighbour is `polling` cyan, a status dot and
     // never a text chip, so the two are told apart by shape and position,
     // the handoff/jobOrange argument above. Chosen to match --skill-direct in
