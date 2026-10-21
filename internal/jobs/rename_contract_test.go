@@ -210,8 +210,10 @@ func TestContractRenameJobProjectDirsNeverShrinks(t *testing.T) {
 	if err != nil {
 		t.Fatalf("JobProjectDirs(before): %v", err)
 	}
-	if len(beforeDirs) != 4 {
-		t.Fatalf("fixture: pre-rename dirs = %v, want the four current bases", beforeDirs)
+	// moved from 4 by the ask-thread job: the four bases, then the two cell
+	// dirs (current, legacy) a remote ask thread writes under
+	if len(beforeDirs) != 6 {
+		t.Fatalf("fixture: pre-rename dirs = %v, want the four current bases and two cell dirs", beforeDirs)
 	}
 
 	after := &Job{Slug: "omega", ID: 7, FormerSlugs: []string{"alpha"}}
@@ -225,8 +227,10 @@ func TestContractRenameJobProjectDirsNeverShrinks(t *testing.T) {
 			t.Errorf("the rename DROPPED %q from the scan set — token watermarks are lost silently", d)
 		}
 	}
-	if len(afterDirs) != 8 {
-		t.Errorf("dirs = %v (%d), want the current slug's four bases plus the former slug's four", afterDirs, len(afterDirs))
+	// moved from 8 by the ask-thread job: plus four cell dirs (current and
+	// former, each under both namings)
+	if len(afterDirs) != 12 {
+		t.Errorf("dirs = %v (%d), want the current slug's four bases plus the former slug's four, then four cell dirs", afterDirs, len(afterDirs))
 	}
 
 	root := filepath.Join(util.Home(), ".claude", "projects")

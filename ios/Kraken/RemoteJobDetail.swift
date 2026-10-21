@@ -87,9 +87,12 @@ struct JobVisibilityPicker: View {
 /// all, not even disabled. `.publicCell` adds the controls — steer,
 /// question answers, lifecycle actions, colour — each one posting
 /// `POST /api/nodes/action` on the PAIRED node, which forwards it to the owner
-/// tagged with who sent it. Writes only the owner may make (doc-question
-/// answers, feedback, threads) stay read-only in both modes. Nothing here ever
-/// calls a local job route: the slug names a job on another machine.
+/// tagged with who sent it. Threads are the one write both modes get: on a
+/// live card, `Ask a question` opens an ask thread on the owner's Mac
+/// (`thread-ask`), and each thread chip opens RemoteThreadView. Writes only
+/// the owner may make (doc-question answers, feedback) stay read-only in both
+/// modes. Nothing here ever calls a local job route: the slug names a job on
+/// another machine.
 struct RemoteJobDetailView: View {
     let job: WebJob
     let baseURL: String
@@ -102,6 +105,7 @@ struct RemoteJobDetailView: View {
     @State private var sentToast = false
     @State private var showingKillConfirm = false
     @State private var showingArtifact: WebArtifact?
+    @State private var showingAsk = false
     /// The spec text with its frontmatter dropped; nil until the relay
     /// answers, and for good when it refuses (no Spec section then).
     @State private var spec: String?
@@ -157,8 +161,8 @@ struct RemoteJobDetailView: View {
                     JobSectionCard("Outcome") { Text(outcome).font(.voice(13)).foregroundStyle(KTheme.solved) }
                 }
                 JobRosterSection(job: job)
-                if let threads = job.threads, !threads.isEmpty {
-                    JobSectionCard("Threads") { threadChips(threads) }
+                if !(job.threads ?? []).isEmpty || job.live {
+                    JobSectionCard("Threads") { threadsContent(job.threads ?? []) }
                 }
                 if let spec, !spec.isEmpty {
                     JobSectionCard {
@@ -265,6 +269,19 @@ struct RemoteJobDetailView: View {
                 }
             }
         }
+        .sheet(isPresented: $showingAsk) {
+            if let node = owner?.nodeID {
+                NavigationStack {
+                    RemoteAskThreadView(
+                        slug: job.slug, node: node, ownerLabel: owner?.label ?? "its Mac",
+                        baseURL: baseURL
+                    ) {
+                        showingAsk = false
+                        onUpdate()
+                    }
+                }
+            }
+        }
         .task(id: job.boardKey) { await loadSpec() }
     }
 
@@ -287,20 +304,42 @@ struct RemoteJobDetailView: View {
         return nil
     }
 
-    /// Another Mac's threads, drawn as the local sheet draws them but inert:
-    /// opening, branching or reviving a thread happens on its owner's board.
-    private func threadChips(_ threads: [WebThread]) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 6) {
-                    ForEach(threads) { thread in
-                        ThreadChip(thread: thread)
+    /// Another Mac's threads, drawn as the local sheet draws them; each chip
+    /// opens RemoteThreadView. On a live card (readonly or public) the
+    /// `Ask a question` button opens an ask thread on the owner's Mac —
+    /// disabled while the owner is offline. Killing, reviving and renaming
+    /// stay on the owner's board.
+    private func threadsContent(_ threads: [WebThread]) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            if !threads.isEmpty, let node = owner?.nodeID {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 6) {
+                        ForEach(threads) { thread in
+                            NavigationLink {
+                                RemoteThreadView(
+                                    thread: thread, slug: job.slug, node: node,
+                                    baseURL: baseURL, ownerOnline: owner?.online == true
+                                )
+                            } label: {
+                                ThreadChip(thread: thread)
+                            }
+                            .buttonStyle(.plain)
+                        }
                     }
                 }
             }
-            Text("threads open on their owner's board")
-                .font(.voice(11))
-                .foregroundStyle(KTheme.text2)
+            if job.live {
+                Button {
+                    showingAsk = true
+                } label: {
+                    Label("Ask a question", systemImage: "arrow.triangle.branch")
+                }
+                .buttonStyle(.plain)
+                .font(.data(12))
+                .foregroundStyle(KTheme.accent)
+                .disabled(owner?.online != true)
+                .opacity(owner?.online == true ? 1 : 0.45)
+            }
         }
     }
 
@@ -446,6 +485,89 @@ struct RemoteJobDetailView: View {
         Task {
             try? await Task.sleep(for: .seconds(2))
             sentToast = false
+        }
+    }
+}
+
+/// Opening an ask thread on a REMOTE card: a name and a question, both
+/// required, posted as `thread-ask` through the paired node's action proxy.
+/// No model picker — the owner's server picks the tier when none is sent.
+struct RemoteAskThreadView: View {
+    let slug: String
+    let node: String
+    let ownerLabel: String
+    let baseURL: String
+    /// Called once the owner accepted the ask; the caller dismisses the sheet.
+    var onAsked: () -> Void
+
+    @Environment(\.dismiss) private var dismiss
+    @FocusState private var questionFocused: Bool
+    @State private var title = ""
+    @State private var question = ""
+    @State private var isBusy = false
+    @State private var errorMessage: String?
+
+    private var trimmedTitle: String { title.trimmingCharacters(in: .whitespacesAndNewlines) }
+    private var trimmedQuestion: String { question.trimmingCharacters(in: .whitespacesAndNewlines) }
+    private var canAsk: Bool { !trimmedTitle.isEmpty && !trimmedQuestion.isEmpty }
+
+    var body: some View {
+        Form {
+            kSection {
+                Text("The thread runs on \(ownerLabel), as a fork of its zeus' conversation with no tools: it answers from that history alone. Your question arrives tagged with this phone's Mac and you as the sender.")
+                    .font(.voice(12))
+                    .foregroundStyle(KTheme.text2)
+            }
+            kSection("Name") {
+                TextField("what this thread is for", text: $title)
+                    .kField()
+            }
+            kSection("Question") {
+                TextField("what to ask", text: $question, axis: .vertical)
+                    .focused($questionFocused)
+                    .kField(focused: questionFocused, minHeight: 100)
+            }
+            if let errorMessage {
+                kSection { Text(errorMessage).font(.voice(12)).foregroundStyle(KTheme.counter) }
+            }
+        }
+        .kListStyle()
+        .navigationTitle("Ask \(ownerLabel)")
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .cancellationAction) {
+                SheetCloseButton(label: "Cancel") { dismiss() }
+            }
+            ToolbarItem(placement: .confirmationAction) {
+                Button {
+                    ask()
+                } label: {
+                    Label("Ask", systemImage: "arrow.triangle.branch")
+                }
+                .labelStyle(.iconOnly)
+                .accessibilityLabel("Ask")
+                .buttonStyle(.glassProminent)
+                .disabled(isBusy || !canAsk)
+            }
+        }
+        .disabled(isBusy)
+    }
+
+    private func ask() {
+        guard canAsk else { return }
+        let payload = NodeActionPayload(text: trimmedQuestion, title: trimmedTitle)
+        isBusy = true
+        errorMessage = nil
+        Task {
+            do {
+                try await APIClient.shared.nodeAction(
+                    baseURL: baseURL, node: node, slug: slug, action: "thread-ask", payload: payload)
+                isBusy = false
+                onAsked()
+            } catch {
+                isBusy = false
+                errorMessage = (error as? KrakenError)?.errorDescription ?? error.localizedDescription
+            }
         }
     }
 }

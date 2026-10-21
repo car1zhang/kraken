@@ -1,4 +1,5 @@
 import type { WebJob } from "../../../api/types.ts";
+import { threadOriginBadge } from "../../../lib/threadquick.ts";
 import { BranchButton } from "./BranchButton.tsx";
 
 export interface ThreadChipsProps {
@@ -24,6 +25,13 @@ export interface ThreadChipsProps {
    * whole affordance is "click the card".
    */
   compact?: boolean;
+  /**
+   * `board.node_id` — this node's own id. A headless (ask) thread opened from
+   * any OTHER node wears a `from <node>` badge in its chip (threadOriginBadge).
+   */
+  boardNodeID?: string;
+  /** The branch affordance's text, passed to BranchButton (its default when absent). */
+  branchLabel?: string;
 }
 
 /** Whether band 2 gets any thread chips at all (the branch button aside). */
@@ -52,6 +60,8 @@ export function ThreadChips({
   onOpenThread,
   withBranch = true,
   compact = false,
+  boardNodeID,
+  branchLabel,
 }: ThreadChipsProps) {
   const list = job.threads ?? [];
   if (compact) {
@@ -86,9 +96,11 @@ export function ThreadChips({
         // name is renamable to any length, and the tooltip is where the tail it
         // cuts stays readable — the same job `title` does for every count chip
         // in the row.
+        const badge = threadOriginBadge(t, boardNodeID);
         const title =
           (t.title ? `${t.tid} · ${t.title}\n` : "") +
-          (closed ? `${t.tid} — closed thread; open it to revive` : `${t.tid} — live thread`);
+          (closed ? `${t.tid} — closed thread; open it to revive` : `${t.tid} — live thread`) +
+          (badge ? `\nopened from ${badge}` : "");
         return (
           <button
             key={t.tid}
@@ -108,10 +120,13 @@ export function ThreadChips({
                 mind
               </span>
             ) : null}
+            {badge ? <span className="thread-origin">from {badge}</span> : null}
           </button>
         );
       })}
-      {withBranch && job.live ? <BranchButton job={job} onOpenThread={onOpenThread} /> : null}
+      {withBranch && job.live ? (
+        <BranchButton job={job} onOpenThread={onOpenThread} label={branchLabel} />
+      ) : null}
     </>
   );
 }

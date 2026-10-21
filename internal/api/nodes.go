@@ -33,9 +33,11 @@ import (
 // owner and account binding), and, each per-job route gated by visibleJob,
 // its job text, its artifacts, its zeus transcript and its side threads. Only
 // WRITES tell them apart: POST /api/node/action drives a public job and
-// refuses a readonly one 403 (publicJob), and the owner-only writes
-// (feedback, doc-question answers, threads, goals, rename, visibility,
-// uploads, the mental model) have no node route at all, on any visibility.
+// refuses a readonly one 403 (publicJob) — except its three ask-thread
+// actions (nodeThreadActions), admitted on both — and the owner-only writes
+// (feedback, doc-question answers, every other thread op, goals, rename,
+// visibility, uploads, the mental model) have no node route at all, on any
+// visibility.
 // Every gate reads the job's visibility from the store at request time —
 // never from a cached card — so a flip to private refuses every remote read
 // or action that arrives after the flip. GET /api/nodes (node tier too)
@@ -177,7 +179,8 @@ func rowCard(j *jobs.Job) webJob {
 	}
 }
 
-// visibleJob is every node-tier READ's gate: slug resolved among the ACTIVE
+// visibleJob is every node-tier READ's gate, and the ask-thread actions'
+// gate on POST /api/node/action: slug resolved among the ACTIVE
 // jobs (LoadJobs holds no archived one), and anything a sibling may not see —
 // fleet off, an empty or unknown slug, a private job — answers the one
 // noSuchJob 404, so the four cannot be told apart. A readonly or public job
@@ -197,7 +200,8 @@ func visibleJob(w http.ResponseWriter, slug string) *jobs.Job {
 
 // publicJob is the WRITE gate, nodeActionHandler's alone: visibleJob's 404s,
 // then readonly → 403. A readonly job is read like a public one and driven
-// like no one's.
+// like no one's — bar the ask-thread actions (nodeThreadActions), which
+// nodeActionHandler gates with visibleJob instead.
 func publicJob(w http.ResponseWriter, slug string) *jobs.Job {
 	j := visibleJob(w, slug)
 	if j == nil {
@@ -591,11 +595,20 @@ type nodeActionReq struct {
 
 // nodeActions are the moves a public cell admits from another node (Q16,
 // Q21). Everything else — retry, reactivate, rename, load, goals, feedback,
-// threads, uploads, the mental model — stays with the owner.
+// pane threads, uploads, the mental model — stays with the owner.
 var nodeActions = map[string]bool{
 	"steer": true, "question": true, "kill": true, "done": true, "submit": true,
 	"archive": true, "color": true, "save": true, "stop": true,
 }
+
+// nodeThreadActions are the ask-thread moves another node may make on a
+// readonly OR public cell: open a headless ask thread, ask in one, close one
+// it opened. A readonly card already serves zeus' whole transcript to every
+// node (nodeTranscriptHandler), so an ask thread — no tools for a remote
+// origin, jobs/askthread.go — reveals nothing new; what it adds is compute
+// on the cell's account, which jobs bounds with MaxAskThreads and
+// AskThreadTimeout.
+var nodeThreadActions = map[string]bool{"thread-ask": true, "thread-send": true, "thread-kill": true}
 
 // nodeActionPayload is the union of what each action reads from payload.
 type nodeActionPayload struct {
@@ -603,6 +616,9 @@ type nodeActionPayload struct {
 	Content string     `json:"content"`
 	Color   string     `json:"color"`
 	MTime   mtimeToken `json:"mtime"`
+	Title   string     `json:"title"`
+	TID     string     `json:"tid"`
+	Model   string     `json:"model"`
 }
 
 // senderLabel names a remote caller for the steer prefix: the label of the
@@ -640,7 +656,8 @@ func serveLocal(w http.ResponseWriter, r *http.Request, path string, h http.Hand
 }
 
 // nodeActionHandler is POST /api/node/action: another node driving one of
-// this node's PUBLIC cells. Each action dispatches to the handler the local
+// this node's PUBLIC cells, or asking in a readonly or public one
+// (nodeThreadActions). Each action dispatches to the handler the local
 // route runs; the only thing added is the sender prefix on a steer, built from
 // who the tailnet says is calling rather than anything the body claims.
 func nodeActionHandler(w http.ResponseWriter, r *http.Request) {
@@ -651,11 +668,20 @@ func nodeActionHandler(w http.ResponseWriter, r *http.Request) {
 	if !decodeStrictBody(w, r, &req, "this route takes slug, action, payload and from") {
 		return
 	}
-	j := publicJob(w, req.Slug)
+	// the thread actions pass on a readonly job as well (visibleJob's 404s
+	// only); every other action keeps publicJob's 404 → 403, then the
+	// unknown-action 400
+	thread := nodeThreadActions[req.Action]
+	var j *jobs.Job
+	if thread {
+		j = visibleJob(w, req.Slug)
+	} else {
+		j = publicJob(w, req.Slug)
+	}
 	if j == nil {
 		return
 	}
-	if !nodeActions[req.Action] {
+	if !thread && !nodeActions[req.Action] {
 		webJSON(w, http.StatusBadRequest, map[string]string{"error": "unknown action " + core.TruncateOneLine(req.Action, 24)})
 		return
 	}
@@ -665,6 +691,10 @@ func nodeActionHandler(w http.ResponseWriter, r *http.Request) {
 			webJSON(w, http.StatusBadRequest, map[string]string{"error": "bad payload"})
 			return
 		}
+	}
+	if thread {
+		nodeThreadAction(w, r, j, req.Action, p)
+		return
 	}
 	from := senderLabel(r)
 	util.LogEvent("nodes", "info", "node-action", req.Action+" "+j.Slug+" from "+core.TruncateOneLine(from, 80))
@@ -692,6 +722,86 @@ func nodeActionHandler(w http.ResponseWriter, r *http.Request) {
 	case "save":
 		serveLocal(w, r, "/api/job/save", webJobSave, map[string]any{"slug": j.Slug, "content": p.Content, "mtime": int64(p.MTime)})
 	}
+}
+
+// nodeThreadAction serves the three nodeThreadActions. The origin is the
+// caller's verified tailnet identity, never anything in the body, so a
+// thread's origin, its `[from …]` stamps and the kill check below all name
+// the node that actually called.
+func nodeThreadAction(w http.ResponseWriter, r *http.Request, j *jobs.Job, action string, p nodeActionPayload) {
+	id := identityOf(r)
+	from := senderLabel(r)
+	origin := jobs.ThreadOrigin{Node: id.ID, Label: from, Login: id.Login}
+	resp := map[string]any{"ok": true}
+	bad := func(msg string) { webJSON(w, http.StatusBadRequest, map[string]string{"error": msg}) }
+	tid := strings.TrimSpace(p.TID)
+	switch action {
+	case "thread-ask":
+		title := strings.TrimSpace(p.Title)
+		if title == "" {
+			bad("missing title")
+			return
+		}
+		if strings.TrimSpace(p.Text) == "" {
+			bad("missing text")
+			return
+		}
+		if p.Model != "" {
+			if _, ok := core.ThreadModels[p.Model]; !ok {
+				bad("bad model — want haiku, sonnet, opus or fable")
+				return
+			}
+		}
+		t, err := jobs.AskThread(j, origin, title, p.Text, p.Model)
+		if err != nil {
+			threadErr(w, "node-"+action, j.Slug, err)
+			return
+		}
+		resp["tid"] = t.TID
+	case "thread-send":
+		if tid == "" {
+			bad("missing tid")
+			return
+		}
+		if strings.TrimSpace(p.Text) == "" {
+			bad("missing text")
+			return
+		}
+		if err := jobs.AskThreadSend(j, tid, p.Text, origin); err != nil {
+			threadErr(w, "node-"+action, j.Slug, err)
+			return
+		}
+	case "thread-kill":
+		if tid == "" {
+			bad("missing tid")
+			return
+		}
+		st := jobs.ActiveStore()
+		if st == nil {
+			webJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "no store"})
+			return
+		}
+		t, err := st.GetThread(j.ID, tid)
+		if err != nil {
+			threadErr(w, "node-"+action, j.Slug, err)
+			return
+		}
+		if t.Kind != "headless" {
+			webJSON(w, http.StatusConflict, map[string]string{"error": "thread " + tid + " of " + j.Slug + " is a pane thread — only its owner can close it"})
+			return
+		}
+		if t.OriginNode != id.ID {
+			webJSON(w, http.StatusForbidden, map[string]string{"error": "not your thread"})
+			return
+		}
+		if err := jobs.KillThread(j, tid); err != nil {
+			threadErr(w, "node-"+action, j.Slug, err)
+			return
+		}
+	}
+	util.LogEvent("nodes", "info", "node-action", action+" "+j.Slug+" from "+core.TruncateOneLine(from, 80))
+	webBoardCache.invalidate()
+	webJSON(w, http.StatusOK, resp)
 }
 
 // nodesHandler is GET /api/nodes: the registry, each node with its stored
@@ -730,10 +840,13 @@ func findNode(id string) *store.NodeRow {
 }
 
 // Proxy timeouts: a steer or recolour is one tmux send on the far side; a
-// submit starts a cell synchronously (worktree, tmux session, account bind).
+// submit starts a cell synchronously (worktree, tmux session, account bind);
+// a thread-ask runs a discovery pass and starts a claude process before the
+// far side answers.
 const (
 	nodesProxyTimeout       = 5 * time.Second
 	nodesProxySubmitTimeout = 60 * time.Second
+	nodesProxyAskTimeout    = 30 * time.Second
 )
 
 // nodesProxyDo sends one proxied request; a seam for tests.
@@ -820,8 +933,11 @@ func nodesActionHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	out.Header.Set("Content-Type", "application/json")
 	timeout := nodesProxyTimeout
-	if req.Action == "submit" {
+	switch req.Action {
+	case "submit":
 		timeout = nodesProxySubmitTimeout
+	case "thread-ask":
+		timeout = nodesProxyAskTimeout
 	}
 	relay(w, n, out, timeout)
 }

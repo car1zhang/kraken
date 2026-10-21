@@ -177,6 +177,15 @@ func undoV33(t *testing.T, s *Store) {
 
 func downgradeFreshDB(t *testing.T, s *Store, target int) {
 	t.Helper()
+	// Reverse v36: the six ask-thread columns leave threads, newest first.
+	if target < 36 {
+		for i := len(schemaV36Columns) - 1; i >= 0; i-- {
+			stmt := `ALTER TABLE threads DROP COLUMN ` + schemaV36Columns[i].column
+			if _, err := s.db.Exec(stmt); err != nil {
+				t.Fatalf("downgrade to v%d (undo v36) %q: %v", target, stmt, err)
+			}
+		}
+	}
 	// Reverse v35: the stack-links table goes. Shape-only, newest first.
 	if target < 35 {
 		if _, err := s.db.Exec(`DROP TABLE job_stacks`); err != nil {

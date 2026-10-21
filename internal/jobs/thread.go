@@ -47,6 +47,12 @@ import (
 // spawned. Two concurrent revives of one tid — a double-tapped button, the
 // board and the phone, an iOS retry — both pass the scan; only one can win the
 // claim, and the loser spawns nothing at all.
+//
+// All of the above is the PANE thread (row Kind "pane", in either Role). A
+// headless thread (Kind "headless", an ask thread, askthread.go) has no
+// window: it runs one `claude -p` process per question. Kill, revive and send
+// below dispatch on the row's kind, and the reconcile and teardown passes
+// handle both.
 
 // ThreadNamePrefix is the --name prefix every one of a job's threads carries,
 // and the single string three separate exclusions key off: the roll call, the
@@ -412,6 +418,12 @@ func staleThreadTIDs(j *Job, threads []store.Thread, all []*core.Peer, now time.
 		if t.State != "live" {
 			continue
 		}
+		// a headless thread never has a pane or a claude between questions,
+		// so none of the evidence below applies to it; only kill or teardown
+		// closes one
+		if t.Kind == "headless" {
+			continue
+		}
 		if anyThreadPeer(all, t.Pane, prefixes, t.TID) != nil {
 			continue
 		}
@@ -556,7 +568,9 @@ func liveThreadPanesForOK(j *Job) (panes map[string]bool, ok bool) {
 		return out, false
 	}
 	for _, t := range threads {
-		if t.State == "live" && t.Pane != "" {
+		// a headless row never holds a pane (the store refuses one); the kind
+		// test keeps that true here even for a hand-edited row
+		if t.State == "live" && t.Pane != "" && t.Kind != "headless" {
 			out[t.Pane] = true
 		}
 	}
@@ -856,6 +870,20 @@ func KillThread(j *Job, tid string) error {
 	if err != nil {
 		return err
 	}
+	// a headless thread has no window: ending it is closing the row and
+	// stopping any run in flight, in THAT order. Killed first, the row would
+	// sit live and not answering until the close, and a send landing in that
+	// gap could claim it and start a run on a session about to be closed;
+	// closed first, a racing claim meets ErrThreadClosed instead. KillAskRun
+	// still writes the cancelled run's note onto the closed row.
+	if t.Kind == "headless" {
+		if err := st.CloseThread(j.ID, tid, 0); err != nil {
+			return err
+		}
+		KillAskRun(j.ID, tid)
+		util.LogEvent("jobs", "info", "thread-kill", fmt.Sprintf("%s: closed ask thread %s", j.Slug, tid))
+		return nil
+	}
 	all, _ := core.OrderAll(core.DiscoverAll())
 	if _, err := threadTarget(j, *t, all, "refusing to kill it"); err != nil {
 		return err
@@ -902,6 +930,9 @@ func ReviveThread(j *Job, tid string) (store.Thread, error) {
 	t, err := st.GetThread(j.ID, tid)
 	if err != nil {
 		return store.Thread{}, err
+	}
+	if t.Kind == "headless" {
+		return reviveAskThread(st, j, *t)
 	}
 	if t.SessionID == "" {
 		return store.Thread{}, fmt.Errorf("thread %s of %s has no recorded session — nothing to resume", tid, j.Slug)
@@ -990,6 +1021,41 @@ func reviveClaimed(st *store.Store, j *Job, t store.Thread, sess, wt string, ope
 	return t, nil
 }
 
+// reviveAskThread reopens a closed headless thread. Nothing is spawned — a
+// headless thread runs only while answering — so reviving is the row flipping
+// back to live, through the same compare-and-set a pane revive claims with.
+func reviveAskThread(st *store.Store, j *Job, t store.Thread) (store.Thread, error) {
+	if t.State == "live" {
+		return store.Thread{}, fmt.Errorf("thread %s of %s is already live", t.TID, j.Slug)
+	}
+	// a thread another node opened counts toward MaxAskThreads, so reopening
+	// one is held to the cap the way opening it was; the check and the claim
+	// share askCapMu with AskThread's recount and insert
+	askCapMu.Lock()
+	defer askCapMu.Unlock()
+	if !rowOrigin(t).IsSelf() {
+		n, err := countRemoteAskThreads(st, j)
+		if err != nil {
+			return store.Thread{}, err
+		}
+		if n >= MaxAskThreads {
+			return store.Thread{}, ErrAskThreadCap
+		}
+	}
+	if err := st.ClaimClosedThread(j.ID, t.TID); err != nil {
+		if errors.Is(err, store.ErrThreadNotClosed) {
+			return store.Thread{}, fmt.Errorf("thread %s of %s is already live", t.TID, j.Slug)
+		}
+		return store.Thread{}, err
+	}
+	got, err := st.GetThread(j.ID, t.TID)
+	if err != nil {
+		return store.Thread{}, err
+	}
+	util.LogEvent("jobs", "info", "thread-revive", fmt.Sprintf("%s: reopened ask thread %s", j.Slug, t.TID))
+	return *got, nil
+}
+
 // RenameThread retitles a thread. Threads are named by carl, and the title is
 // the only field he edits after the fork — it never touches the live pane, so
 // it works on closed threads too.
@@ -1010,6 +1076,9 @@ func RenameThread(j *Job, tid, title string) error {
 // checkSendTarget, which re-resolves the pane's process tree immediately before
 // typing) — a message sent at a recycled pane would be typed at, and run by,
 // whatever shell inherited it.
+//
+// A headless row has no pane: the message is asked as this node's operator
+// through AskThreadSend instead.
 func SendToThread(j *Job, tid, text string) error {
 	st, err := threadStore(j)
 	if err != nil {
@@ -1018,6 +1087,9 @@ func SendToThread(j *Job, tid, text string) error {
 	t, err := st.GetThread(j.ID, tid)
 	if err != nil {
 		return err
+	}
+	if t.Kind == "headless" {
+		return AskThreadSend(j, tid, text, SelfThreadOrigin())
 	}
 	all, _ := core.OrderAll(core.DiscoverAll())
 	p, err := threadTarget(j, *t, all, "revive it first")
@@ -1041,6 +1113,19 @@ func ReconcileThreads(j *Job, all []*core.Peer, live map[string]bool) error {
 	st := ActiveStore()
 	if st == nil || j.ID == 0 {
 		return nil
+	}
+	// Headless rows first, and regardless of the snapshot below: their
+	// answering flag is checked against this process' run registry, not
+	// against tmux. Exclusive askStartMu keeps a run that is between its
+	// claim and its registration from being read as lost.
+	askStartMu.Lock()
+	rows, err := st.ListThreads(j.ID)
+	if err == nil {
+		err = sweepInterruptedAsks(st, j, rows)
+	}
+	askStartMu.Unlock()
+	if err != nil {
+		return err
 	}
 	emptyFor := noteEmptySnapshot(len(all) == 0 && len(live) == 0, time.Now())
 	// the session the cell is ACTUALLY live under, which after a rename whose
@@ -1076,6 +1161,14 @@ func ReconcileThreads(j *Job, all []*core.Peer, live map[string]bool) error {
 // everything down"). Each row keeps its session id, and claude's own transcript
 // keeps the conversation — a torn-down job's threads stay readable, they just
 // have no pane any more.
+//
+// A headless thread's run is a kraken serve child, not a window of the
+// session, so killing the session does not reach it: every live headless
+// row's run is killed here first, then the rows are closed, then the same
+// tids' runs are killed once more. The second pass is for a send that claimed
+// a row and registered a run between the first kill and that row's close (a
+// closed row refuses any later claim with ErrThreadClosed, so after the
+// close nothing new can start); KillAskRun is a no-op on a tid with no run.
 func CloseThreadsForTeardown(j *Job) error {
 	st := ActiveStore()
 	if st == nil || j.ID == 0 {
@@ -1085,6 +1178,13 @@ func CloseThreadsForTeardown(j *Job) error {
 	if err != nil {
 		return err
 	}
+	var headless []string
+	for _, t := range threads {
+		if t.State == "live" && t.Kind == "headless" {
+			headless = append(headless, t.TID)
+			KillAskRun(j.ID, t.TID)
+		}
+	}
 	for _, t := range threads {
 		if t.State != "live" {
 			continue
@@ -1092,6 +1192,9 @@ func CloseThreadsForTeardown(j *Job) error {
 		if err := st.CloseThread(j.ID, t.TID, 0); err != nil {
 			return err
 		}
+	}
+	for _, tid := range headless {
+		KillAskRun(j.ID, tid)
 	}
 	return nil
 }
