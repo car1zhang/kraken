@@ -909,6 +909,12 @@ type webBoard struct {
 	// headless thread this node opened (origin.node_id equal) from one
 	// another node opened. Absent with no tailscale or with the fleet off.
 	NodeID string `json:"node_id,omitempty"`
+	// NodeLabel is this node's device label (jobs.DeviceLabel), read off the
+	// same cached envelope NodeID is, so the board bar's machines dropdown
+	// can name this Mac without a second poll of /api/node. Absent with the
+	// fleet off; a server older than the key makes the picker say the bare
+	// words "this Mac". Additive, no contract bump.
+	NodeLabel string `json:"node_label,omitempty"`
 }
 
 // jobArtifacts collects a job's viewable artifacts from exactly one source.
@@ -1394,7 +1400,9 @@ func buildWebBoard() webBoard {
 	// nodeSelf is cachedNodeSelf outside tests (pair.go): one tailscale read
 	// per ~30 s, not one per board build
 	if jobs.FleetEnabled() {
-		board.NodeID = nodeSelf().ID
+		self := nodeSelf()
+		board.NodeID = self.ID
+		board.NodeLabel = self.Label
 	}
 	return board
 }

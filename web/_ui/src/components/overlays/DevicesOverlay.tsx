@@ -50,9 +50,6 @@ export interface DevicesOverlayProps {
   onClose: () => void;
   /** the board payload — its `nodes` registry and the owned cards per node */
   board: WebBoard | undefined;
-  /** node ids hidden from this browser's board (kraken.hiddenNodes) */
-  hiddenNodes: readonly string[];
-  onToggleNode: (nodeId: string, hidden: boolean) => void;
 }
 
 /**
@@ -63,9 +60,10 @@ export interface DevicesOverlayProps {
  * Five sections: this node's identity; the pairing password (set / change /
  * clear — any of which logs every phone out); the pairing QR plus the same
  * address as text; the paired phones with a Revoke each; and the registry's
- * nodes with a per-node HIDE checkbox, a finer cut than the board bar's
- * hide-everyone toggle. Every pairing route behind it is owner tier, so the
- * overlay is only useful on the Mac itself — which is the point.
+ * nodes — identity and poll state only, since the board bar's machines
+ * dropdown is the filter's one owner now (it used to carry a per-node hide
+ * column; Q2 of job 634 dropped it). Every pairing route behind it is owner
+ * tier, so the overlay is only useful on the Mac itself — which is the point.
  */
 export function DevicesOverlay(props: DevicesOverlayProps) {
   return (
@@ -75,7 +73,7 @@ export function DevicesOverlay(props: DevicesOverlayProps) {
   );
 }
 
-function DevicesBody({ board, hiddenNodes, onToggleNode }: DevicesOverlayProps) {
+function DevicesBody({ board }: DevicesOverlayProps) {
   const self = usePoll<NodeEnvelope>((s) => fetchNodeSelf(s), SELF_POLL_MS);
   const devices = usePoll<PairDevicesResponse>((s) => fetchPairDevices(s), DEVICES_POLL_MS);
 
@@ -267,40 +265,28 @@ function DevicesBody({ board, hiddenNodes, onToggleNode }: DevicesOverlayProps) 
                 <th>dns</th>
                 <th>last poll</th>
                 <th>jobs</th>
-                <th>hide</th>
               </tr>
             </thead>
             <tbody>
-              {nodes.map((n) => {
-                const hidden = hiddenNodes.includes(n.node_id);
-                return (
-                  <tr key={n.node_id} data-node-id={n.node_id} title={n.last_err || undefined}>
-                    <td>
-                      <span className={"dv-dot" + (n.online ? " on" : "")} aria-label={n.online ? "online" : "offline"} />
-                    </td>
-                    <td>{n.label || n.node_id}</td>
-                    <td>{n.operator || "—"}</td>
-                    <td>{n.dns_name || n.ip}</td>
-                    <td>{n.online ? ago(n.last_ok) : `offline · ${ago(n.last_ok)}`}</td>
-                    <td>{jobsByNode.get(n.node_id) ?? 0}</td>
-                    <td>
-                      <input
-                        type="checkbox"
-                        aria-label={`hide ${n.label || n.node_id}'s jobs`}
-                        checked={hidden}
-                        onChange={(e) => onToggleNode(n.node_id, e.target.checked)}
-                      />
-                    </td>
-                  </tr>
-                );
-              })}
+              {nodes.map((n) => (
+                <tr key={n.node_id} data-node-id={n.node_id} title={n.last_err || undefined}>
+                  <td>
+                    <span className={"dv-dot" + (n.online ? " on" : "")} aria-label={n.online ? "online" : "offline"} />
+                  </td>
+                  <td>{n.label || n.node_id}</td>
+                  <td>{n.operator || "—"}</td>
+                  <td>{n.dns_name || n.ip}</td>
+                  <td>{n.online ? ago(n.last_ok) : `offline · ${ago(n.last_ok)}`}</td>
+                  <td>{jobsByNode.get(n.node_id) ?? 0}</td>
+                </tr>
+              ))}
             </tbody>
           </table>
         ) : (
           <div className="empty">no other krakens on the tailnet</div>
         )}
         <div className="dim dv-foot">
-          reachable from this Mac only. the hide column is this browser's preference — finer than the board bar's toggle.
+          reachable from this Mac only. filter the board by machine from the board bar's machines menu.
         </div>
       </div>
     </>

@@ -21,12 +21,7 @@ import { ThreadOverlay } from "./components/overlays/ThreadOverlay.tsx";
 import { showToast, Toast } from "./components/overlays/Toast.tsx";
 import { UsageOverlay } from "./components/overlays/UsageOverlay.tsx";
 import { DevicesOverlay } from "./components/overlays/DevicesOverlay.tsx";
-import {
-  readHiddenNodes,
-  readHideOthers,
-  writeHiddenNodes,
-  writeHideOthers,
-} from "./lib/fleet.ts";
+import { readFleetNodes, writeFleetNodes } from "./lib/fleet.ts";
 import { useBoard } from "./hooks/useBoard.ts";
 import { useBoardEvents } from "./hooks/useBoardEvents.ts";
 import { useHashRoute } from "./hooks/useHashRoute.ts";
@@ -77,29 +72,17 @@ const USAGE_POLL_MS = 60000;
  * board and back, which unmounting would throw away on every tab switch.
  */
 export function App() {
-  // The fleet filter's two per-browser preferences. Up here because three
-  // surfaces share them — the board bar's hide-others toggle, the Devices
-  // overlay's per-node hide column, and useBoard, which applies them to the
-  // columns — and persisted in localStorage (lib/fleet.ts, try/catch-wrapped:
-  // a private window simply forgets them).
-  const [hideOthers, setHideOthersState] = useState<boolean>(readHideOthers);
-  const [hiddenNodes, setHiddenNodes] = useState<string[]>(readHiddenNodes);
-  const setHideOthers = useCallback((v: boolean) => {
-    setHideOthersState(v);
-    writeHideOthers(v);
+  // The fleet filter's one per-browser preference: the machines whose cells
+  // the board shows (empty is every machine). Up here because two surfaces
+  // share it — the board bar's machines dropdown, which sets it, and useBoard,
+  // which applies it to the columns — and persisted in localStorage
+  // (lib/fleet.ts, try/catch-wrapped: a private window simply forgets it).
+  const [fleetNodes, setFleetNodesState] = useState<string[]>(readFleetNodes);
+  const setFleetNodes = useCallback((next: string[]) => {
+    setFleetNodesState(next);
+    writeFleetNodes(next);
   }, []);
-  const toggleNode = useCallback((id: string, hide: boolean) => {
-    setHiddenNodes((prev) => {
-      const next = hide
-        ? prev.includes(id)
-          ? prev
-          : [...prev, id]
-        : prev.filter((n) => n !== id);
-      writeHiddenNodes(next);
-      return next;
-    });
-  }, []);
-  const fleet = useMemo(() => ({ hideOthers, hiddenNodes }), [hideOthers, hiddenNodes]);
+  const fleet = useMemo(() => ({ nodes: fleetNodes }), [fleetNodes]);
   const board = useBoard(fleet);
   const [view, navigate] = useHashRoute();
   // the sfx module's document-level capture listeners; the returned
@@ -429,8 +412,8 @@ export function App() {
           hidden={view !== "board"}
           overlayOpen={overlayOpen}
           expanded={expanded}
-          hideOthers={hideOthers}
-          onHideOthers={setHideOthers}
+          fleetNodes={fleetNodes}
+          onFleetNodes={setFleetNodes}
         />
       </DragProvider>
 
@@ -604,8 +587,6 @@ export function App() {
         open={devicesOpen}
         onClose={() => setDevicesOpen(false)}
         board={board.board}
-        hiddenNodes={hiddenNodes}
-        onToggleNode={toggleNode}
       />
 
       <Toast />

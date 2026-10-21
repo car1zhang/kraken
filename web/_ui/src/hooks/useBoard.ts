@@ -84,18 +84,17 @@ export interface BoardModel {
 }
 
 /**
- * The fleet filter's two per-browser preferences (lib/fleet.ts filterFleet).
- * Applied to the COLUMNS and the drawer only: `board` stays the raw payload
- * (the event differ and the chrome's nodes stat read every card), and `byKey`
- * keeps every card so an overlay already open on a card that just got hidden
- * still resolves it.
+ * The fleet filter's one per-browser preference: the machine keys to show
+ * (lib/fleet.ts filterFleet; empty is no filter). Applied to the COLUMNS and
+ * the drawer only: `board` stays the raw payload (the event differ and the
+ * chrome's nodes stat read every card), and `byKey` keeps every card so an
+ * overlay already open on a card that just got hidden still resolves it.
  */
 export interface FleetFilter {
-  hideOthers: boolean;
-  hiddenNodes: readonly string[];
+  nodes: readonly string[];
 }
 
-const NO_FLEET_FILTER: FleetFilter = { hideOthers: false, hiddenNodes: [] };
+const NO_FLEET_FILTER: FleetFilter = { nodes: [] };
 
 export function useBoard(fleet: FleetFilter = NO_FLEET_FILTER): BoardModel {
   const draggingRef = useRef(false);
@@ -195,10 +194,10 @@ export function useBoard(fleet: FleetFilter = NO_FLEET_FILTER): BoardModel {
     // attribute back (app.js:964), so `from` was by construction the column
     // the user could see the card in. Keeping one function here restores that
     // property structurally instead of by agreement.
-    const shown = filterFleet(data?.jobs ?? [], fleet.hideOthers, fleet.hiddenNodes);
+    const shown = filterFleet(data?.jobs ?? [], fleet.nodes);
     const { byColumn: cols, archived: arch } = bucketJobs(shown);
     return { byKey: key, byColumn: cols, archived: arch };
-  }, [data, fleet.hideOthers, fleet.hiddenNodes]);
+  }, [data, fleet.nodes]);
 
   return {
     board: data,

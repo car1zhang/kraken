@@ -261,17 +261,30 @@ final class FleetEdgeTests: XCTestCase {
         XCTAssertEqual(o.chipText, "studio-mini")
     }
 
-    // "`hideOthers` removes exactly the owned cards, order preserved." — with
-    // nothing owned, and with hideOthers off.
+    // `FleetFilter.apply` (job 634) with nothing owned: `["local"]` keeps
+    // everything in order, an unknown node id keeps nothing, an empty board
+    // stays empty, and a local card whose SLUG equals a selected node id is
+    // not matched by it.
     func testEdgeFleetFilterNoOwnedCards() throws {
         let jobs = """
         [{"slug": "b", "repo": "kraken", "state": "draft", "live": false, "mtime": 1},
-         {"slug": "a", "repo": "kraken", "state": "draft", "live": false, "mtime": 1}]
+         {"slug": "nZ", "repo": "kraken", "state": "draft", "live": false, "mtime": 1}]
         """
         let list = try JSONDecoder().decode([WebJob].self, from: Data(jobs.utf8))
-        XCTAssertEqual(FleetFilter.apply(list, hideOthers: true).map(\.slug), ["b", "a"])
-        XCTAssertEqual(FleetFilter.apply(list, hideOthers: false).map(\.slug), ["b", "a"])
-        XCTAssertEqual(FleetFilter.apply([], hideOthers: true).count, 0)
+        XCTAssertEqual(FleetFilter.apply(list, selected: ["local"]).map(\.slug), ["b", "nZ"])
+        XCTAssertEqual(FleetFilter.apply(list, selected: ["nZ"]).count, 0)
+        XCTAssertEqual(FleetFilter.apply(list, selected: []).map(\.slug), ["b", "nZ"])
+        XCTAssertEqual(FleetFilter.apply([], selected: ["local"]).count, 0)
+    }
+
+    // `FleetFilter.selection(from:)` on unreadable input is the empty
+    // selection, never a throw.
+    func testEdgeFleetSelectionUnreadable() {
+        XCTAssertEqual(FleetFilter.selection(from: nil), [])
+        XCTAssertEqual(FleetFilter.selection(from: ""), [])
+        XCTAssertEqual(FleetFilter.selection(from: "not json"), [])
+        XCTAssertEqual(FleetFilter.selection(from: #"{"local": true}"#), [])
+        XCTAssertEqual(FleetFilter.selection(from: #"[1, null, "nB"]"#), ["nB"])
     }
 
     // MARK: - APIClient.authorize
