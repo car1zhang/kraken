@@ -297,7 +297,7 @@ var webJobSpec = map[string]fieldSpec{
 	"detail":      {kind: wireString, required: false},
 	"question":    {kind: wireObject, required: false},
 	"zeus_status": {kind: wireString, required: false},
-	// the pipeline skill zeus most recently used (info/aim/do/pr/dream),
+	// the pipeline skill zeus most recently used (info/aim/do/dream),
 	// read off zeus' transcript; started non-done jobs with a
 	// resolvable transcript only, and omitted until a pipeline skill has
 	// actually been used. Additive, no contract bump.

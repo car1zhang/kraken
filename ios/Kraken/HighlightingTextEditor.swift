@@ -2,7 +2,7 @@ import SwiftUI
 import UIKit
 
 /// UITextView-backed drop-in replacement for SwiftUI's `TextEditor`, adding
-/// inline per-skill coloring of `/info /aim /do /pr` command tokens as you
+/// inline per-skill coloring of `/info /aim /do` command tokens as you
 /// type — something plain `TextEditor` cannot do (no attributed-string
 /// support), and the iOS 26 attributed-`TextEditor` API isn't available
 /// since this app targets iOS 17. Drops into SteerView, ReactivateView, and
@@ -272,7 +272,7 @@ struct HighlightingTextEditor: UIViewRepresentable {
         let command: String
     }
 
-    /// Finds every `CmdChipsRow.commands` token (`/direct /info /aim /do /pr
+    /// Finds every `CmdChipsRow.commands` token (`/direct /info /aim /do
     /// /dream /handoff`) in `text`, anchored the same way as `CmdChipsRow.isPresent`
     /// / web's `CMD_HL_RE`: a
     /// leading `(^|\s)` boundary (consumed by the match but NOT part of the

@@ -518,8 +518,10 @@ type webJob struct {
 	// Question mirrors an unanswered AskUserQuestion call in zeus'
 	// transcript; the board renders it as header + option buttons.
 	Question *webQuestion `json:"question,omitempty"`
-	// Stage is the pipeline skill zeus most recently used — one of the five
-	// phase-governing skill names (info, aim, do, pr, dream) — read
+	// Stage is the pipeline skill zeus most recently used — one of the four
+	// phase-governing skill names (info, aim, do, dream; `pr` folded into do
+	// in job 624, and a client renders an unknown stage with its generic
+	// fallback) — read
 	// off zeus' transcript (jobs.FindStage), never declared by any agent.
 	// Set only where a transcript already resolves (live started cells, the
 	// cell-gone branch and done jobs — exactly the branches that read Detail).

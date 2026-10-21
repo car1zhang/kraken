@@ -9,8 +9,9 @@ import (
 	"path/filepath"
 )
 
-// SkillsFS holds kraken's kraken-owned skill bundle — the five pipeline skills
-// (info, aim, do, pr, dream), each governing a phase, plus three that
+// SkillsFS holds kraken's kraken-owned skill bundle — the four pipeline skills
+// (info, aim, do, dream), each governing a phase (do's last step is the PR;
+// the pr skill folded into it in job 624), plus three that
 // govern none: load, a reference consulted mid-phase; handoff, typed into
 // a pane by the operator or by the daemon's auto-handoff pass to compact an agent
 // behind a written record; and direct, the one-agent override a quick job's
