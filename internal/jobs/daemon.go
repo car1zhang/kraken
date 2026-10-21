@@ -1889,6 +1889,19 @@ func (d *daemonState) repairPRs(j *Job, all []*core.Peer) {
 					for _, url := range transcriptPRURLs(transcript, prefix) {
 						createVouched[url] = true
 					}
+					// A PR of another repo that the spec names was attached on
+					// purpose (api/prattach.go's carve-out); the transcript scan
+					// above is narrowed to the job's own repo and can never
+					// vouch for it, so it would be dropped here on the first
+					// pass after every restart. The own-repo exclusion needs the
+					// NORMALISED prefix (githubPrefix: userinfo stripped), not the
+					// raw one the transcript scan uses — a `user@github.com/o/r`
+					// origin would otherwise never match its own PRs and the
+					// exclusion would silently admit them.
+					own, _ := githubPrefix(prefix)
+					for _, url := range specNamedPRs(j, own) {
+						createVouched[url] = true
+					}
 				}
 			}
 		}
