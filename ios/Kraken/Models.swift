@@ -669,7 +669,7 @@ struct WebJob: Decodable, Identifiable {
     // zeus' own refined status (running/polling/waiting/question), distinct
     // from `state` — absent when zeus isn't resolvable yet.
     let zeusStatus: String?
-    // The pipeline skill zeus most recently used (info/aim/do/pr/dream),
+    // The pipeline skill zeus most recently used (info/aim/do/dream),
     // read off zeus' transcript server-side — see webJob.Stage
     // (internal/api/board.go) for what absence covers. Additive key, no
     // contract bump.

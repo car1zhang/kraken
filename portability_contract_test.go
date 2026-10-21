@@ -27,14 +27,14 @@ import (
 
 var contractPortCarlWord = regexp.MustCompile(`(?i)\bcarl\b`)
 
-// contractPortSkillFiles are the eight files Slice S's skills row names,
-// plus direct/SKILL.md, which joined the bundle after that slice and names
-// the operator the same way.
+// contractPortSkillFiles are the files Slice S's skills row names, plus
+// direct/SKILL.md, which joined the bundle after that slice and names the
+// operator the same way, minus pr/SKILL.md, which folded into do/SKILL.md
+// in job 624 (its operator mentions travelled with it).
 var contractPortSkillFiles = []string{
 	".claude/skills/aim/SKILL.md",
 	".claude/skills/do/SKILL.md",
 	".claude/skills/info/SKILL.md",
-	".claude/skills/pr/SKILL.md",
 	".claude/skills/dream/SKILL.md",
 	".claude/skills/load/SKILL.md",
 	".claude/skills/handoff/SKILL.md",
@@ -94,19 +94,21 @@ func TestContractPortSkillsCarryOperatorPlaceholder(t *testing.T) {
 
 // Contract (Slice S): "pr/SKILL.md: no branch-rename step, no carl/ prefix, no
 // monolith category list (Q13); it says a cell never renames its branch".
+// The PR rules now live in do/SKILL.md's step 8 (the pr skill folded into
+// it in job 624), so the same four assertions hold against do.
 func TestContractPortPRSkillNeverRenames(t *testing.T) {
-	src := contractPortEmbedded(t, ".claude/skills/pr/SKILL.md")
+	src := contractPortEmbedded(t, ".claude/skills/do/SKILL.md")
 	if strings.Contains(src, "carl/") {
-		t.Error("pr/SKILL.md still carries the carl/ prefix")
+		t.Error("do/SKILL.md still carries the carl/ prefix")
 	}
 	if strings.Contains(strings.ToLower(src), "monolith") {
-		t.Error("pr/SKILL.md still names monolith (the category list must be gone)")
+		t.Error("do/SKILL.md still names monolith (the category list must be gone)")
 	}
 	if !strings.Contains(strings.ToLower(src), "never rename") {
-		t.Error("pr/SKILL.md does not say a cell never renames its branch")
+		t.Error("do/SKILL.md does not say a cell never renames its branch")
 	}
 	if regexp.MustCompile(`git branch -m\b|git branch --move\b`).MatchString(src) {
-		t.Error("pr/SKILL.md still carries a branch-rename command")
+		t.Error("do/SKILL.md still carries a branch-rename command")
 	}
 }
 

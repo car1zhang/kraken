@@ -14,7 +14,7 @@ Your brief already carries the two rules and a one-line state map, and between t
 ## The two rules
 
 1. **`unblock` prices {{operator}}'s ACTUAL move, never the nominal ask.** {{operator}} ships PRs on trust: a "review the diff and reply" gate costs them a one-word reply (1), not a review (6). Only three things genuinely cost them: driving a live environment, creating credentials/secrets, and decisions they must actually think about. Never price the ask you'd feel comfortable receiving; price what they will actually do.
-2. **`scope` prices only the claude work the reply BUYS — strictly the work still ahead.** Never the size of the work under review: at a manual-test gate the reply buys opening a PR (1-2), however large the feature behind the gate. The one state where scope is legitimately big is a spec gate, where the answers unlock the whole build.
+2. **`scope` prices only the claude work the reply BUYS — strictly the work still ahead.** Never the size of the work under review: at a manual-test gate the PR is already open, so a passing reply buys only shutting test services down and stopping (1), and a change request buys one revision round pushed to that PR (1-2), however large the feature behind the gate. The one state where scope is legitimately big is a spec gate, where the answers unlock the whole build.
 
 And the clear rule, which has teeth: **an estimate exists only when {{operator}} is the blocker.** Teammates rendering, reviews running, "nothing needed from you yet" — that is `kraken load clear <slug>`, not a low-unblock estimate. An estimate on a working cell is a false blocked signal.
 
@@ -56,8 +56,8 @@ These are looked up, not judged: re-deriving them per cell is exactly what made 
 |---|---|---|
 | Working; teammates running; "nothing needed yet" | `kraken load clear` | {{operator}} is not the blocker. An estimate here is a false signal. |
 | PR awaiting checks, nothing else needed | u1 s1 | Merge is the only ask; the daemon watches CI. |
-| Manual-test gate, review-only | u1 s1 | {{operator}} ships on trust; the reply buys opening the PR. |
-| Manual-test gate, local install + drive | u4 s1 | The install/drive is their real cost; the reply still just buys the PR. |
+| Manual-test gate, review-only | u1 s1 | {{operator}} ships on trust; the PR is already open, so the reply buys only a stop or a small revision round pushed to it. |
+| Manual-test gate, local install + drive | u4 s1 | The install/drive is their real cost; the reply still buys only a stop or a revision pushed to the open PR. |
 | Manual-test gate, live E2E environment | u5 s2 | Test server / phone / real transaction — the one gate that genuinely costs them. |
 | /info round, go-deeper pick | u2 s3 | Read a page, pick; the pick buys one artifact round. |
 | /aim spec gate, P0s block /do | u3 s6-8 | Recommendations attached → cheap to answer; scope is the build the answers unlock, sized by the spec. |

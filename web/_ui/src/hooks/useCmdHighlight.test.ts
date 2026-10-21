@@ -27,21 +27,26 @@ describe("cmdHighlightHTML", () => {
 
   it("highlights at start-of-text and after whitespace", () => {
     expect(cmdHighlightHTML("/do it")).toContain('cmd-hl-do">/do</span>');
-    expect(cmdHighlightHTML("please /pr now")).toContain('cmd-hl-pr">/pr</span>');
+    expect(cmdHighlightHTML("please /aim now")).toContain('cmd-hl-aim">/aim</span>');
     expect(cmdHighlightHTML("line\n/aim")).toContain('cmd-hl-aim">/aim</span>');
   });
 
   it("does NOT highlight a mid-word slash run", () => {
     // the (^|\s) anchor exists for exactly this: \b alone only guards the END
-    for (const s of ["web/static/do", "a/pr", "x/info"]) {
+    for (const s of ["web/static/do", "a/aim", "x/info"]) {
       expect(cmdHighlightHTML(s)).not.toContain("cmd-hl-");
     }
   });
 
   it("does not highlight a longer word that merely starts with a command", () => {
     expect(cmdHighlightHTML("/document this")).not.toContain("cmd-hl-do");
-    expect(cmdHighlightHTML("/prs")).not.toContain("cmd-hl-pr");
+    expect(cmdHighlightHTML("/aims")).not.toContain("cmd-hl-aim");
     expect(cmdHighlightHTML("/handoffs")).not.toContain("cmd-hl-handoff");
+  });
+
+  it("does not highlight /pr — the pr skill folded into do, so it is not a chip", () => {
+    expect(cmdHighlightHTML("please /pr now")).not.toContain("cmd-hl-");
+    expect(CMD_CHIPS).not.toContain("/pr");
   });
 
   it("highlights /direct and the phase it modifies as two chips", () => {
@@ -65,7 +70,7 @@ describe("cmdHighlightHTML", () => {
     const html = cmdHighlightHTML("<b>/do</b>");
     expect(html).not.toContain("<b>");
     expect(html).toContain("&lt;b&gt;");
-    // Escape-then-match is safe because none of the six commands contain an
+    // Escape-then-match is safe because none of the five commands contain an
     // HTML-special character. It does mean the ESCAPED text is what the anchor
     // sees: `/do` here follows the ";" of "&gt;", not whitespace, so it does
     // not light up. Carried over verbatim — a command glued to a tag is not a
@@ -89,7 +94,7 @@ describe("CMD_ACTIVE_RE", () => {
   it("matches only its own command, not another's substring", () => {
     expect(CMD_ACTIVE_RE["/do"]?.test("/do it")).toBe(true);
     expect(CMD_ACTIVE_RE["/do"]?.test("/document it")).toBe(false);
-    expect(CMD_ACTIVE_RE["/pr"]?.test("/do it")).toBe(false);
+    expect(CMD_ACTIVE_RE["/aim"]?.test("/do it")).toBe(false);
     expect(CMD_ACTIVE_RE["/info"]?.test("run /info first")).toBe(true);
     expect(CMD_ACTIVE_RE["/info"]?.test("web/info")).toBe(false);
   });
