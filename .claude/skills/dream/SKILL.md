@@ -200,7 +200,17 @@ cross-check the parent session's `SendMessage`/`Agent` calls before attributing 
 the agent's own judgment. Two more lines the brief owes every scout. A reduced view's LINES are
 unbounded — a single line can be an entire inlined skill body — so a page size that worked on page
 one can blow the Read tool's token ceiling on page two: say to page large views in modest chunks
-(a few hundred lines) and to shrink the page on a ceiling error rather than switching to grep. And
+(a few hundred lines) and to shrink the page on a ceiling error rather than switching to grep — and
+that the bash-first harness steer named below governs READING too: under it a scout pages through
+Bash, meets Bash's output cap, and shrinks its LINES with `cut -c`, `grep -v` or `awk substr`
+instead of its page. A page is a Read call, or a plain `cat`/`sed -n` range whose output arrived in
+full — a `<persisted-output>` preview is not a page until the persisted file itself is Read, and on
+a truncated output the scout shrinks the RANGE, never the lines. A filter is anything that drops
+characters (`cut -c` keeping one range, `grep -v`, `awk substr`), and a line too long for any page
+is re-flowed whole into a scratch file (`fold -w 3000 <view> > <scratch>`) and that file paged with
+Read, never cut, citing the view's own line numbers rather than the scratch file's (one night the scouts that paged with Read held every one of their forty READ rows
+between them, and every scout that paged through a Bash filter failed some, delivering 37–94% of a
+view's characters). And
 the brief carries a short **already-established list** — the known cross-cutting costs and facts
 from the watch store and {{operator}}'s mental model (`kraken mm get --q "<subject>"`, then `kraken mm show <id>`) that touch this scout's assignment — marked "measure, don't
 re-derive": six scouts in one night each independently re-derived from raw a cost kraken's memory
@@ -272,7 +282,14 @@ the scratch path above.* When the brief mentions the heredoc report fallback, it
 scouts with a working `Write` tool have shipped 20 KB reports through `cat <<EOF` (three of five in
 one measured wave), and a heredoc routes report PROSE through Bash, where a text-matching guardrail
 hook can block the whole write because the findings quote a banned command. `do/SKILL.md` names the
-same failure for review fleets; it applies to scout briefs identically. And the brief says what to
+same failure for review fleets; it applies to scout briefs identically. Name the real cause while
+you are at it: a cell in bypass mode carries a harness steer that favours Bash for file work (its
+wording varies by harness version, and some versions name heredocs as a write route), and under it
+agents open their report with `cat <<'EOF'` as a first move — measured on teammates whose brief
+carried no fallback clause at all — so the brief states the `Write` tool as a CARVE-OUT from that
+steer ("the report is the one file you write with `Write`, whatever else goes through Bash; a
+heredoc only when `Write` is missing or refused"), not as a preference the steer can outrank. And
+the brief says what to
 do when BOTH paths are closed — `Write` refused and the heredoc blocked by a hook: report the
 refusal in the reply and stop, never trim or reword the findings until the hook passes. One more
 brief clause, and it binds you as much as any scout: `kraken.db` is read through the verbs —
@@ -366,23 +383,33 @@ alone prove contiguity, not completion — a lead extracted both scouts' offset 
 either file's length, and certified "coverage spot-checks passed" on an instrument structurally
 unable to tell a scout that finished from one that stopped a page short (both happened to have
 finished; the check could not have known). Two axes decide a row's label, and they answer
-different questions. PAGE COVERAGE — not tool choice — separates READ from SAMPLED: READ means
-the reads collectively reach the staged file's LAST line, so a `Read` capped
+different questions. PAGE COVERAGE — not tool choice — separates READ from SAMPLED, and it is
+measured in CHARACTERS delivered, not lines reached: READ means the reads collectively reach the
+staged file's LAST line with every line whole, so a `Read` capped
 at `limit=60` on a 202-line file and a `head -20` are SAMPLED whatever the row says — a brief
 that banned "a capped grep" while blessing "paged reads" was violated twice in one night by
 capped Reads and a `head`, forms that sentence literally permits, one row even stating the true
-line count its reads never reached. Write that rule into scout briefs as coverage ("a row claiming
-full means your pages reached the last line"), never as a list of banned tools. And give the
+line count its reads never reached — and a page piped through a filter that drops characters
+(`cut -c`, `grep -v`, `awk substr`) fails this axis too, whatever its line range says, since the
+row's own words ("all 202 lines") are then true on the line axis while a third of the characters
+never arrived; by the delivery axis below such a row is RAW (targeted), unless the same lines
+already arrived whole in an unfiltered page, in which case the filtered re-read changes nothing;
+and a Bash page that arrived only as a persisted preview whose file was never Read is SAMPLED,
+naming the range the preview skipped. Write that rule into scout briefs as coverage ("a row
+claiming full means your pages reached the last line, whole"), never as a list of banned tools.
+And give the
 Coverage format a THIRD label, because the binary one manufactures false rows: a scout that did its
 real work in the raw JSONL — exactly what the brief encourages — has nothing honest to write in a
 format that only certifies the reduced view, and two such scouts (three nights running) resolved
 the tension by writing "READ in full" about reduced files they never opened, one enumerating its
 own 82-line hole inside the sentence claiming completeness. The labels are: READ (reduced pages
-reached the last line), SAMPLED (say what was skipped), and RAW (targeted) — covered primarily by
+reached the last line, unfiltered), SAMPLED (say what was skipped), and RAW (targeted) — covered
+primarily by
 raw-JSONL queries, saying which queries; a RAW row is honest coverage, not a downgrade, but like
 SAMPLED it cannot carry a "clean, nothing found" verdict on its own. DELIVERY MECHANISM is the
 second axis, and it separates READ from RAW: a READ row's pages entered your context through
-`Read` or a plain `cat` of the staged view itself — content you met only as extraction-script
+`Read` or a plain `cat` of the staged view itself (or a `fold -w` re-flow of it paged with Read,
+which adds newlines and drops nothing) — content you met only as extraction-script
 output or filtered greps is RAW whatever file the script opened, however completely it covered
 it (an honest, often better way to work; just not that label). This axis goes into scout briefs
 too, as its own coverage sentence — "a row claiming READ means the staged view's own pages
