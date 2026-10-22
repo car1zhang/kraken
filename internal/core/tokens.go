@@ -11,6 +11,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
+	"time"
 )
 
 // tokens.go — the four token counters Claude Code stamps on every assistant
@@ -110,9 +112,13 @@ type tokenRecord struct {
 	// the API call this record reports. It is NOT `sessionId` (camel case),
 	// which names the file the record currently lives in and is REWRITTEN on
 	// every record when a session is forked. The snake-case one survives the
-	// rewrite, which is the only thing that makes a replayed record
+	// rewrite, which is what makes a record written by another session
 	// identifiable. See tokenRecordOwned.
 	SessionID string `json:"session_id"`
+	// Timestamp is when the record was written. tokenRecordOwned compares it
+	// with the file's creation time to tell a record COPIED in from another
+	// session apart from one another session's process wrote here itself.
+	Timestamp string `json:"timestamp"`
 	Message   struct {
 		// ID is the API message id. One assistant message is written as one
 		// JSONL record PER CONTENT BLOCK (thinking / text / each tool_use),
@@ -387,29 +393,93 @@ func (g *tokenGroup) commit(id string, u tokenUsage, eligible bool) tokenUsage {
 // investigated, and so exactly the jobs the nightly pass should look hardest
 // at.
 //
-// The rule: a record is owned when it names no session at all, or names THIS
-// file's own session.
+// The rule: a record is owned when it names no session at all, names THIS
+// file's own session, or names another session but was written AFTER this
+// file was created.
 //
 //   - Absent is owned. Subagent sidecars (`subagents/agent-*.jsonl`) carry no
 //     `session_id` whatsoever — verified, 159 of 159 records on a real cell —
 //     and they hold ~24% of a cell's work, so treating absent as foreign
 //     would throw away more than the double-count it fixed.
-//   - Present and equal to `own` is owned.
-//   - Present and different is a replay: skip it.
+//   - Present and equal to `own.ID` is owned.
+//   - Present, different, and dated at or after `own.Born` is owned. The
+//     snake `session_id` names the PROCESS that wrote the record, not the
+//     file: a `/clear` starts a new file whose every record still carries the
+//     process' original session, and an interactive resume from a fresh
+//     process appends records under that process' session. Neither is a
+//     copy — the API call exists in no other file — and both are written
+//     after the file they land in was created.
+//   - Present, different, and dated BEFORE `own.Born` is a replay: skip it. A
+//     fork copies its parent's history, so every copied record predates the
+//     fork's own file.
+//   - Present and different with no usable date, or with `own.Born` unknown,
+//     is treated as a replay. That is this rule before it learned the
+//     creation time, so a file whose creation time cannot be read — or was
+//     reset by a copy — counts exactly what it counted then.
 //
-// `own` is the file's own session id, which for a root transcript is its
+// The third arm can only ADD records to what the first two own, never drop
+// one, so the failure directions are asymmetric by construction: a lost
+// creation time under-counts back to the old rule, and an over-count needs a
+// copied record dated after the file it was copied into.
+//
+// `own.ID` is the file's own session id, which for a root transcript is its
 // filename stem. A sidecar's stem is `agent-<id>` and never matches anything,
 // but its records have no `session_id` to compare, so it is carried by the
 // absent rule rather than by the stem.
 //
 // Verified against an independent whole-corpus dedupe by globally-unique
-// message id: this rule reproduces that number EXACTLY on 118 of 119 real
-// cell project dirs, and to within 0.001% across the corpus as a whole. The
-// single divergence is a synthetic fixture whose records predate
-// `session_id` entirely — which is the honest limit of the rule and is
-// stated on SumTokensDelta.
-func tokenRecordOwned(rec tokenRecord, own string) bool {
-	return rec.SessionID == "" || rec.SessionID == own
+// message id: the two-arm rule reproduced that number EXACTLY on 118 of 119
+// real cell project dirs, and to within 0.001% across the corpus as a whole,
+// the single divergence being a synthetic fixture whose records predate
+// `session_id` entirely — which is the honest limit of the rule and is stated
+// on SumTokensDelta. The three-arm rule was re-run against the same dedupe
+// over every project dir present on the machine at the re-run, cell or not:
+// it matched in every one, every cell dir's total was unchanged (each
+// cell-dir file naming another session is a fork), and the only totals that
+// moved belonged to directories holding no cell.
+func tokenRecordOwned(rec tokenRecord, own fileOwner) bool {
+	if rec.SessionID == "" || rec.SessionID == own.ID {
+		return true
+	}
+	if own.Born <= 0 {
+		return false
+	}
+	ts := isoMillis(rec.Timestamp)
+	return ts > 0 && ts >= own.Born
+}
+
+// fileOwner is what tokenRecordOwned judges a record against: the transcript
+// file's own session, and when that file came into existence.
+type fileOwner struct {
+	// ID is the file's own session id — see fileSessionID.
+	ID string
+	// Born is the file's creation time in unix millis, 0 when unknown.
+	Born int64
+}
+
+// fileBorn is the creation time of an open transcript, in unix millis, or 0
+// when it cannot be read.
+//
+// It is the file's BIRTH time rather than its modification time: a transcript
+// is appended to for as long as its session lives, and only the moment it
+// first existed separates history copied into it from work done in it. The
+// rule assumes the file exists before its first record is dated, which every
+// transcript measured here satisfies. kraken is macOS-only and reads the field
+// directly. A file copied or restored gets a new birth time later than its
+// records, which tokenRecordOwned degrades on in the under-count direction.
+func fileBorn(f *os.File) int64 {
+	if f == nil {
+		return 0
+	}
+	fi, err := f.Stat()
+	if err != nil {
+		return 0
+	}
+	st, ok := fi.Sys().(*syscall.Stat_t)
+	if !ok {
+		return 0
+	}
+	return time.Unix(st.Birthtimespec.Sec, st.Birthtimespec.Nsec).UnixMilli()
 }
 
 // fileSessionID is the session a transcript file belongs to — the value
@@ -721,7 +791,10 @@ func ProjectDirName(cwd string) string { return projectDirName(cwd) }
 //     taken from the last. See tokenGroup for the measurement.
 //   - A record replayed into a forked session's file is not that file's
 //     spend — see tokenRecordOwned. Measured inflation without this: a
-//     further 1.43x on a cell that used side threads.
+//     further 1.43x on a cell that used side threads. A record another
+//     session's process WROTE here — after a `/clear`, or on an interactive
+//     resume — is this file's spend, and the file's creation time is what
+//     tells the two apart.
 //
 // THE ZEUS SPLIT. Alongside the four counters, the result carries the ZEUS
 // half of each: the part spent by the cell's lead agent rather than by
@@ -758,9 +831,13 @@ func ProjectDirName(cwd string) string { return projectDirName(cwd) }
 // there pins the two together.
 //
 // Together they reproduce a whole-corpus dedupe by globally-unique message id
-// exactly on 118 of 119 real cell project dirs. Two cases they cannot see,
-// both documented rather than claimed away:
+// exactly on 118 of 119 real cell project dirs. Three cases they cannot see,
+// all documented rather than claimed away:
 //
+//   - A transcript whose creation time was reset — copied, or restored from a
+//     backup — reads every record naming another session as replayed, the
+//     genuine ones included. An under-count, and only of the records the
+//     creation time was needed for.
 //   - A fork whose replayed records carry no `session_id` at all (a transcript
 //     format predating that field) still counts twice. Corpus-wide that is
 //     0.001% of the total, all of it in one synthetic fixture.
@@ -943,13 +1020,20 @@ func SumTokensDelta(projectDir string, priorOffsets map[string]int64) (Tokens, m
 // offset is left at the last counted line rather than skipped past the
 // offending one: re-reading it next pass is a bounded cost, whereas jumping
 // the gap would under-count permanently and silently.
-func sumTokensFrom(path string, from, limit int64, own string) (Tokens, int64, error) {
+func sumTokensFrom(path string, from, limit int64, ownID string) (Tokens, int64, error) {
 	var tk Tokens
 	f, err := os.Open(path)
 	if err != nil {
 		return tk, from, nil
 	}
 	defer f.Close()
+
+	// The ownership test needs the file's creation time beside its session
+	// id. It is read from the handle this function already holds, on every
+	// pass rather than persisted: a birth time never changes, so the seed at
+	// a resume boundary and the forward scan after it judge every record by
+	// the same value whichever pass reads it.
+	own := fileOwner{ID: ownID, Born: fileBorn(f)}
 
 	// Which half of the split this file's spend belongs to. Decided HERE
 	// rather than by the caller because the probe costs no extra open — this
@@ -1057,7 +1141,7 @@ func sumTokensFrom(path string, from, limit int64, own string) (Tokens, int64, e
 // fills in every field it could and reports the type error at the end, so
 // throwing the record away would lose three good counters to one bad one.
 // Same treatment, and the same reasoning, as mineInputSummary's in mine.go.
-func addTokenLine(tk *Tokens, line []byte, own string, g *tokenGroup) {
+func addTokenLine(tk *Tokens, line []byte, own fileOwner, g *tokenGroup) {
 	if len(bytes.TrimSpace(line)) == 0 {
 		return
 	}
@@ -1191,7 +1275,7 @@ const groupLookbackBytes = 64 << 20
 // the truth. Any future claim about this penalty should be simulated against
 // each rule's OWN correct total, never compared across rules in absolute
 // tokens.
-func precedingGroup(f *os.File, from int64, own string) (tokenGroup, bool) {
+func precedingGroup(f *os.File, from int64, own fileOwner) (tokenGroup, bool) {
 	end := from
 	var scanned int64
 	for i := 0; i < groupLookbackRecords; i++ {
@@ -1296,7 +1380,7 @@ func lineBefore(f *os.File, end int64) ([]byte, int64, bool) {
 // gate flips within a group, and that caller's author is the reader this
 // paragraph is addressed to: seeding across a boundary would then need the
 // previous record's identity too, not just this one's.
-func assistantGroup(line []byte, own string) (tokenGroup, bool) {
+func assistantGroup(line []byte, own fileOwner) (tokenGroup, bool) {
 	var rec tokenRecord
 	if err := json.Unmarshal(line, &rec); err != nil {
 		var typeErr *json.UnmarshalTypeError

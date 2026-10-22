@@ -516,16 +516,20 @@ func TestSumTokensDeltaGroupSurvivesToolResults(t *testing.T) {
 func TestSumTokensDeltaSkipsForkReplay(t *testing.T) {
 	projects := mineHome(t)
 	now := time.Now().UnixMilli()
+	// A replayed record is the parent's HISTORY: it was written before the
+	// fork's file existed, which is what the ownership rule reads. Dating it
+	// at `now` would race the file's creation by a millisecond.
+	before := now - int64(time.Hour/time.Millisecond)
 	dir := filepath.Join(projects, "-proj")
 	parent := tokUsage{out: 1000, cr: 90000}
 	own := tokUsage{out: 7, cr: 11}
 
 	mineWrite(t, projects, "-proj", "parent.jsonl",
-		tokAssistantFull(t, now, parent, "msg_P", "parent"),
+		tokAssistantFull(t, before, parent, "msg_P", "parent"),
 	)
 	// the fork: the parent's record replayed in, then its own work
 	mineWrite(t, projects, "-proj", "fork.jsonl",
-		tokAssistantFull(t, now, parent, "msg_P", "parent"),
+		tokAssistantFull(t, before, parent, "msg_P", "parent"),
 		tokAssistantFull(t, now, own, "msg_F", "fork"),
 	)
 	got, _, err := SumTokensDelta(dir, nil)
@@ -661,11 +665,13 @@ func TestDigestAppliesTheSameDedupeRules(t *testing.T) {
 	u := tokUsage{out: 100, cr: 9000}
 
 	// three records of one message, plus one replayed in from another session
+	// — dated inside the window but before this file existed, as a copied
+	// record is
 	mineWrite(t, projects, "-proj", "sess.jsonl",
 		tokAssistantFull(t, now, u, "msg_A", "sess"),
 		tokAssistantFull(t, now, u, "msg_A", "sess"),
 		tokAssistantFull(t, now, u, "msg_A", "sess"),
-		tokAssistantFull(t, now, tokUsage{out: 999, cr: 999}, "msg_X", "somebody-else"),
+		tokAssistantFull(t, now-int64(time.Hour/time.Millisecond), tokUsage{out: 999, cr: 999}, "msg_X", "somebody-else"),
 	)
 	res, err := MineTranscripts(since)
 	if err != nil {
@@ -919,13 +925,15 @@ func TestSumTokensDeltaCountsASideThreadAsZeus(t *testing.T) {
 	dir := filepath.Join(projects, "-proj")
 	parent := tokUsage{out: 1000, cr: 90000}
 
+	// the parent's turn predates the thread's file: a fork copies history
+	before := now - int64(time.Hour/time.Millisecond)
 	mineWrite(t, projects, "-proj", "zeus.jsonl",
 		tokAgentName(t, "zeus-demo"),
-		tokAssistantFull(t, now, parent, "msg_P", "zeus"),
+		tokAssistantFull(t, before, parent, "msg_P", "zeus"),
 	)
 	mineWrite(t, projects, "-proj", "thread-t1.jsonl",
 		tokAgentName(t, "thread-demo-t1"),
-		tokAssistantFull(t, now, parent, "msg_P", "zeus"), // replayed in by the fork
+		tokAssistantFull(t, before, parent, "msg_P", "zeus"), // replayed in by the fork
 		tokAssistantFull(t, now, tokUsage{out: 7, cr: 11}, "msg_T", "thread-t1"),
 	)
 	got, _, err := SumTokensDelta(dir, nil)
@@ -1373,8 +1381,9 @@ func TestSumTokensDeltaBoundarySeedIgnoresAReplayedRecord(t *testing.T) {
 	dir := filepath.Join(projects, "-proj")
 
 	path := mineWrite(t, projects, "-proj", "fork.jsonl",
-		// a big replayed record from the parent: counted nowhere in this file
-		tokAssistantFull(t, now, tokUsage{out: 9000, cr: 90000}, "msg_P", "parent"),
+		// a big replayed record from the parent: counted nowhere in this file,
+		// and dated before the file existed, as a copied record always is
+		tokAssistantFull(t, now-int64(time.Hour/time.Millisecond), tokUsage{out: 9000, cr: 90000}, "msg_P", "parent"),
 	)
 	first, offs, err := SumTokensDelta(dir, nil)
 	if err != nil {

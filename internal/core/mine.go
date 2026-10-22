@@ -358,10 +358,10 @@ func digestTranscript(path, project string, since int64) (SessionDigest, bool) {
 	var group tokenGroup
 
 	// own is the session this FILE belongs to, which for a sidecar is its
-	// parent's rather than its `agent-<id>` stem — the same derivation
-	// SumTokensDelta uses, so the two readers cannot disagree about which
-	// records are replayed.
-	own := fileSessionID(path, filepath.Base(path))
+	// parent's rather than its `agent-<id>` stem, together with the file's
+	// creation time — the same derivation SumTokensDelta uses, so the two
+	// readers cannot disagree about which records are replayed.
+	own := fileOwner{ID: fileSessionID(path, filepath.Base(path)), Born: fileBorn(f)}
 
 	// lastMaxTokID dedupes MaxTokensStops to one count per message: every
 	// record of a ceiling-stopped group carries the same stop_reason, and
@@ -378,9 +378,11 @@ func digestTranscript(path, project string, since int64) (SessionDigest, bool) {
 	// record's own field left exactly those signals ungated on a fork, while
 	// the fixture that "covered" them stamped a session_id real records never
 	// have. A record with no session_id inherits its neighborhood's owner.
-	// Replay regions are contiguous runs of foreign-session_id records
-	// (though not always a prefix — both FFF…OOO and OOO…FFF occur), so
-	// positional inheritance assigns each undated-owner record correctly;
+	// Records naming another session come in contiguous runs — a fork's
+	// copied history before its own records, a resuming process' records
+	// after them — so positional inheritance assigns each record that names
+	// no session to the run it sits in, and its OWN timestamp then decides
+	// whether that run was copied in or written here (tokenRecordOwned);
 	// a sidecar carries no session_id anywhere, lastSID stays "", and
 	// tokenRecordOwned treats absent as own — unchanged.
 	var lastSID string
@@ -446,7 +448,7 @@ func digestTranscript(path, project string, since int64) (SessionDigest, bool) {
 		} else {
 			lastSID = sid
 		}
-		counted := inWindow && tokenRecordOwned(tokenRecord{SessionID: sid}, own)
+		counted := inWindow && tokenRecordOwned(tokenRecord{SessionID: sid, Timestamp: rec.Timestamp}, own)
 		if ts > 0 && inWindow {
 			dg.Lines++
 			if dg.FirstTS == 0 || ts < dg.FirstTS {
