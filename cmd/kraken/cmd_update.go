@@ -1,3 +1,9 @@
+// Protocol parity: this file is part of the UPDATE protocol (CLAUDE.md
+// § Protocol parity). The protocol is kraken-core's and identical in every
+// fork; a change here lands in kraken-core first, carries "protocol:" in its
+// PR title, and is named to the operator as a protocol change before it is
+// pushed.
+
 package main
 
 import (
@@ -443,8 +449,8 @@ func runUpdate(opts updateOpts, out io.Writer) error {
 	setPhase(jobs.UpdateRestarting)
 	util.LogEvent("update", "info", "update-restart", "launchd job kickstarted onto the new binary")
 	// Brief settle before announcing done: the board reloads itself the
-	// moment it sees `done` (web/static is embedded in the binary, so the
-	// open SPA belongs to the old build), and reloading into the gap between
+	// moment it sees `done` (the SPA is embedded in the binary, so the open
+	// one belongs to the old build), and reloading into the gap between
 	// kickstart killing serve and the new one binding just shows a
 	// connection error.
 	updateSleep(updateRestartSettle)

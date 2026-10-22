@@ -1,3 +1,9 @@
+// Protocol parity: this file is part of the MULTIPLAYER protocol (CLAUDE.md
+// § Protocol parity). The protocol is kraken-core's and identical in every
+// fork; a change here lands in kraken-core first, carries "protocol:" in its
+// PR title, and is named to the operator as a protocol change before it is
+// pushed.
+
 package main
 
 import (
