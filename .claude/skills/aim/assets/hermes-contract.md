@@ -1331,6 +1331,33 @@ second copy of this vocabulary (edit both together). Do not do them even once:
   through either passes the linter and fails the eye.
 - Keep at least 24px of gap between unrelated elements (grid cells may abut within a grid).
 - Escape `<` and `>` in label text as `&lt;` and `&gt;`.
+- **"By eye" means a RENDER of the real stylesheet, never arithmetic over your own
+  coordinates.** The two checks the linter never runs — the 24px gap above and label/box
+  overlap — are yours, and a renderer has no eye until it renders. The harness sits beside
+  this contract: wrap the fragment in `diagram-card.html` (the host page whose stylesheet the
+  Parts Catalog assumes) and screenshot it with headless Chrome, then `Read` the PNG — an
+  image costs about two thousand context tokens:
+
+  ```sh
+  A=<ABSOLUTE path of the directory this contract lives in>; P=/tmp/<slug>-<diagram-id>-preview
+  rm -f "$P.html" "$P.png" && python3 -c "import pathlib, html, sys; t = pathlib.Path(sys.argv[1]).read_text(); t = t.replace('{{CARD_TITLE}}', html.escape(sys.argv[2])).replace('{{CAPTION}}', html.escape(sys.argv[3])).replace('<!-- DIAGRAM: {{DIAGRAM_ID}} -->', pathlib.Path(sys.argv[4]).read_text()); pathlib.Path(sys.argv[5]).write_text(t)" "$A/diagram-card.html" "preview" "preview" <ABSOLUTE fragment path> "$P.html" && "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" --headless=new --disable-gpu --hide-scrollbars --window-size=1100,1900 --screenshot="$P.png" "file://$P.html" 2>/dev/null && ls -l "$P.png"
+  ```
+
+  The three commands are one `&&` chain behind an `rm -f` on purpose: a wrap that fails on a
+  bad path must leave NO png, or the screenshot silently shows the previous round's figure and
+  a fix gets "checked" against the file it was meant to replace. Chrome prints a wall of
+  `ERROR:` lines to stderr on every successful run, which the `2>/dev/null` hides — the `ls`
+  line is the success signal. The screenshot is the viewport only: the `preview` caption must
+  be visible at the bottom of the PNG, and if the figure runs off the edge, re-run with a larger
+  second `--window-size` number. The card scales the SVG to its own width (roughly 880 CSS px
+  whatever the `viewBox` says), so judge gaps against neighbouring box sizes, never by counting
+  screenshot pixels against "24px". Both wrong readings of "by eye" have shipped: a
+  hand-written stand-in `<style>` block fed to `rsvg-convert` is a render of a different
+  stylesheet, and a report section headed "by-eye checks" over numbers derived from the
+  coordinates just written is no render at all (measured: two renderers in one night, one
+  each). The preview title and caption are throwaway; only the lead's wrap, which runs the same
+  substitution, carries the real ones. Say in the report which check you ran; if Chrome is
+  absent, say so and head the section "by arithmetic" instead.
 
 ## Animation Rules — RETIRED
 
