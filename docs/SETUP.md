@@ -48,7 +48,7 @@ mkdir -p ~/Developer
 git clone https://github.com/car1zhang/kraken ~/Developer/kraken
 ```
 
-Keep it as a standalone clone on `main`, named `kraken`, directly under your repos directory: self-update and the TestFlight ship resolve kraken's own source by that name under `KRAKEN_REPOS_DIR`, and a copy nested inside another repo cannot update itself.
+Keep it as a standalone clone on `main`, named `kraken`, directly under your repos directory: self-update and the TestFlight ship resolve kraken's own source by that name under `KRAKEN_REPOS_DIR` (or at the checkout `KRAKEN_SELF_REPO` names, an absolute path or a repo name under the repos dir), and a copy nested inside another repo cannot update itself.
 
 ## 3. Write your env file
 

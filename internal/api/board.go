@@ -673,8 +673,8 @@ type webJob struct {
 	// archived one. Archived entries are appended last (see the loop at the
 	// bottom of buildWebBoard), so a client that keys anything by bare slug
 	// silently loses the ACTIVE job to the archived one — which is exactly
-	// how a live job stopped being steerable from the board (web/static/
-	// app.js' jobKey). Pair slug with `archived` to get a unique key.
+	// how a live job stopped being steerable from the board (the retired
+	// static board's jobKey). Pair slug with `archived` to get a unique key.
 	// DisplaySlug carries the original slug for rendering.
 	Archived    bool   `json:"archived,omitempty"`
 	DisplaySlug string `json:"display_slug,omitempty"`

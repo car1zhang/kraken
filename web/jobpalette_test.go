@@ -11,15 +11,14 @@ import (
 
 // jobpalette_test.go — the eight job colours are spelled out in THREE
 // places: jobs.Palette (Go, the only one that reaches tmux and the TUI),
-// web/static/style.css's two --job-* blocks, and ios/Kraken/Theme.swift's
+// web/_ui/src/styles/style.css's two --job-* blocks, and ios/Kraken/Theme.swift's
 // jobXxxUI pairs. They must agree to the byte, because the whole promise of
 // the feature is that a board swatch is the same pixel colour as the prompt
 // bar of the pane that job opens.
 //
 // Nothing but this test keeps them agreeing, and the failure is silent —
 // exactly how --skill-info/--skill-do already drifted in this repo. Package
-// web is the home because it is the only package that both reads the
-// embedded static assets and imports jobs.
+// web is the home because it owns the board's stylesheet and imports jobs.
 
 // cssJobVars extracts every `--job-<name>: #HEX` declaration in src, in
 // source order, as (name, uppercase hex) pairs. Two blocks exist (dark in
@@ -35,10 +34,7 @@ func cssJobVars(t *testing.T) []cssVar {
 	// the embed. The embed now holds _ui/dist — vite's hashed, minified
 	// bundle — so locating the CSS in it would mean globbing a content-hashed
 	// filename and parsing minified output; the source file is the same bytes
-	// and is what a human edits. web/static/style.css is still on disk during
-	// the React port and is kept byte-identical to this one, so either would
-	// pass today; this is deliberately the copy that SHIPS, so the guard keeps
-	// meaning what it says once web/static/ is deleted.
+	// and is what a human edits.
 	data, err := os.ReadFile("_ui/src/styles/style.css")
 	if err != nil {
 		t.Fatalf("read _ui/src/styles/style.css: %v", err)

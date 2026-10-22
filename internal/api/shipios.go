@@ -30,7 +30,7 @@ import (
 // an UPDATE is in flight: that run's `launchctl kickstart -k` really does
 // take serve down for a couple of seconds, and spawnShipIOS's Setsid exists
 // so a ship survives it — so the poller must not paint the one outage the
-// run is engineered to live through as a failure (see web/static/app.js's
+// run is engineered to live through as a failure (see the web board's
 // shipFailCeiling and BoardViewModel.shipFailureCeilingNow). The refusal
 // direction is handled a layer down, in the two preflights: neither run may
 // start while the other is live, since they share one git checkout.
