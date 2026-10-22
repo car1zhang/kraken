@@ -3355,6 +3355,12 @@ a.stack-chip.stack-down:hover { opacity: 0.9; border-color: var(--ac2); }
 .mm-act:disabled { opacity: 0.35; }
 .mm-row .mm-rm { width: auto; font-size: 8.5px; }
 .mm-row .mm-rm:hover:not(:disabled) { color: var(--ac2); }
+/* A nightly mind-pass item awaiting confirm: .mm-dead's type scale in the
+   accent, and the confirm action beside drop. */
+.mm-proposed {
+  margin-left: 6px; font: 8.5px var(--mono); letter-spacing: 0.04em; color: var(--accent);
+}
+.mm-row .mm-confirm { color: var(--accent); }
 .mm-quote { font: 9.5px/1.5 var(--mono); color: var(--body); overflow-wrap: anywhere; }
 .mm-ctxlbl { color: var(--muted); margin-right: 4px; }
 .mm-filter { width: 150px; }

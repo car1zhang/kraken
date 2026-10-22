@@ -60,6 +60,10 @@ type Job struct {
 	// reads as readonly. A job loaded from the store carries its column
 	// (schema v34), which is readonly for every row that predates the field.
 	Visibility string `json:"visibility,omitempty"`
+	// Author is the store row's jobs.author (schema v37) — who wrote the job,
+	// carried here only so the board can serve it as webJob.author. It has no
+	// frontmatter spelling and is never parsed from or written into job text.
+	Author string `json:"-"`
 	// State is kraken-managed ("" = never started); the human-authored spec
 	// body below the frontmatter is never rewritten.
 	State   string `json:"state,omitempty"`

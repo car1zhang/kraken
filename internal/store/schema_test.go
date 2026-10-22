@@ -133,6 +133,8 @@ func undoV32(t *testing.T, s *Store) {
 // when mm_flags is already gone, so undoV32 can call it unconditionally.
 func undoV33(t *testing.T, s *Store) {
 	t.Helper()
+	// Walking back past v33 means walking back past v37 first.
+	undoV37(t, s)
 	var n int
 	if err := s.db.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'mm_flags'`).Scan(&n); err != nil {
 		t.Fatalf("undo v33 probe: %v", err)
@@ -175,8 +177,57 @@ func undoV33(t *testing.T, s *Store) {
 	}
 }
 
+// undoV37 reverses migration 37: jobs.author is dropped, and mm_items is
+// rebuilt in its exact v33 shape (the seven-value source CHECK, no state
+// column), its non-nightly rows carried back — a nightly row has no place in
+// a v33 table's CHECK. Each half is a no-op when already undone, so undoV33
+// can call it unconditionally.
+func undoV37(t *testing.T, s *Store) {
+	t.Helper()
+	var n int
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('jobs') WHERE name = 'author'`).Scan(&n); err != nil {
+		t.Fatalf("undo v37 probe jobs.author: %v", err)
+	}
+	if n > 0 {
+		if _, err := s.db.Exec(`ALTER TABLE jobs DROP COLUMN author`); err != nil {
+			t.Fatalf("undo v37 drop jobs.author: %v", err)
+		}
+	}
+	var ddl string
+	if err := s.db.QueryRow(`SELECT COALESCE(sql,'') FROM sqlite_master WHERE type='table' AND name='mm_items'`).Scan(&ddl); err != nil {
+		t.Fatalf("undo v37 probe mm_items: %v", err)
+	}
+	if !strings.Contains(ddl, "'nightly'") {
+		return
+	}
+	cols := `id, kind, source, job_id, slug, source_ref, content, context,
+		content_sha, snapshot, snapshot_ext, episode_id, created_at, invalidated_at,
+		invalid_reason, invalid_detail, title, scope, repo, dir, quote, source_json,
+		thread_session, revised_at`
+	// v33's CREATE TABLE alone (schemaV33MMItems up to its INSERT), then the
+	// carry — reusing the constant keeps the undone shape byte-identical to a
+	// real v33 database's.
+	create := schemaV33MMItems[:strings.Index(schemaV33MMItems, "INSERT INTO")]
+	create = strings.Replace(create, "mm_items_new", "mm_items_old", 1)
+	for _, stmt := range []string{
+		create,
+		`INSERT INTO mm_items_old (` + cols + `) SELECT ` + cols + ` FROM mm_items WHERE source <> 'nightly'`,
+		`DROP TABLE mm_items`,
+		`ALTER TABLE mm_items_old RENAME TO mm_items`,
+		`CREATE INDEX mm_items_ref ON mm_items(source, job_id, source_ref)`,
+	} {
+		if _, err := s.db.Exec(stmt); err != nil {
+			t.Fatalf("undo v37 %q: %v", stmt, err)
+		}
+	}
+}
+
 func downgradeFreshDB(t *testing.T, s *Store, target int) {
 	t.Helper()
+	// Reverse v37: jobs.author and the mind-pass mm_items shape go.
+	if target < 37 {
+		undoV37(t, s)
+	}
 	// Reverse v36: the six ask-thread columns leave threads, newest first.
 	if target < 36 {
 		for i := len(schemaV36Columns) - 1; i >= 0; i-- {

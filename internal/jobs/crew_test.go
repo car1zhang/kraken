@@ -237,6 +237,11 @@ func TestZeusBriefDoesNotRestateSkills(t *testing.T) {
 			{"Under Direct", "direct"},
 			{"Review is off by default", "direct"},
 			{"review skipped", "direct"},
+			// the nightly mental-model pass' closing line and its report —
+			// mind/SKILL.md. The brief may name the skill; the procedure and
+			// its stop line are the skill's.
+			{"mind swept", "mind"},
+			{"00-mind-report.md", "mind"},
 		} {
 			if strings.Contains(brief, owned.token) {
 				t.Errorf("%s brief restates %q, which .claude/skills/%s/SKILL.md owns — "+

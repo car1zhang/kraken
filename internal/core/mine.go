@@ -791,7 +791,30 @@ type reducer struct {
 	delivered map[string]struct{}
 }
 
-func (r *reducer) line(out *bytes.Buffer, line []byte, since int64) {
+// reduceSink receives the reducer's output one labelled SECTION at a time:
+// the label line and its body (empty for a [tool] line). bufSink renders it
+// as the byte layout ReduceTranscript has always produced; the operator
+// reader (operator.go) collects the same sections as a list, which is the
+// only way to say "the N sections before this record" without re-parsing
+// the rendered text.
+type reduceSink interface {
+	section(label, body string)
+}
+
+// bufSink is the byte rendering: `label\n`, then `body\n` when there is a
+// body, then a blank line — byte-for-byte what the reducer wrote directly
+// into a buffer before the seam existed.
+type bufSink struct{ buf *bytes.Buffer }
+
+func (s bufSink) section(label, body string) {
+	s.buf.WriteString(label + "\n")
+	if body != "" {
+		s.buf.WriteString(body + "\n")
+	}
+	s.buf.WriteString("\n")
+}
+
+func (r *reducer) line(out reduceSink, line []byte, since int64) {
 	if len(bytes.TrimSpace(line)) == 0 {
 		return
 	}
@@ -868,7 +891,7 @@ func (r *reducer) line(out *bytes.Buffer, line []byte, since int64) {
 			writeReduced(out, "[assistant]", b.Text)
 		case "tool_use":
 			if b.Name != "" {
-				out.WriteString("[tool] " + callSignature(b.Name, b.Input) + "\n\n")
+				out.section("[tool] "+callSignature(b.Name, b.Input), "")
 			}
 		}
 		// "thinking" falls through: dropped.
@@ -922,7 +945,7 @@ func (r *reducer) queuedAlready(text string) bool {
 // exists to drop), the harness's stopped-agents notice, and ANY text
 // already emitted (the enqueue/attachment double-write of one message —
 // see midTurnSeen for why a set rather than adjacency).
-func (r *reducer) midTurn(out *bytes.Buffer, text string) {
+func (r *reducer) midTurn(out reduceSink, text string) {
 	t := strings.TrimSpace(text)
 	if t == "" || strings.HasPrefix(t, "<task-notification>") || backgroundAgentsNoticeRE.MatchString(t) {
 		return
@@ -949,7 +972,7 @@ func ReduceJSONLBytes(data []byte) []byte {
 	var out bytes.Buffer
 	var r reducer
 	for _, line := range bytes.Split(data, []byte("\n")) {
-		r.line(&out, line, 0)
+		r.line(bufSink{&out}, line, 0)
 	}
 	return bytes.TrimSpace(out.Bytes())
 }
@@ -1014,7 +1037,7 @@ func ReduceTranscript(path string, since int64) ([]byte, error) {
 	sc := bufio.NewScanner(f)
 	sc.Buffer(make([]byte, 0, mineScanBufInit), mineScanBufMax)
 	for sc.Scan() {
-		r.line(&out, sc.Bytes(), since)
+		r.line(bufSink{&out}, sc.Bytes(), since)
 	}
 	// Fail closed on a truncated scan. A scout handed the first 3% of a
 	// session with no error would reason about it as if it were the whole
@@ -1031,7 +1054,7 @@ func ReduceTranscript(path string, since int64) ([]byte, error) {
 // message envelope, [user] — meaning carl — otherwise. This is userBlocks'
 // full treatment, both halves of it: the <system-reminder> drop AND the
 // teammate routing, via the same teammateBlock read.go's own reader uses.
-func writeUserish(out *bytes.Buffer, text string) {
+func writeUserish(out reduceSink, text string) {
 	if b, ok := teammateBlock(text); ok {
 		writeReduced(out, "[teammate "+b.From+"]", b.Text)
 		return
@@ -1098,17 +1121,13 @@ func redactSecrets(s string) string {
 // writeReduced appends one labelled section, skipping blanks and the
 // harness-injected <system-reminder> parts that ride along in user records
 // but are not the user speaking.
-func writeReduced(out *bytes.Buffer, label, text string) {
+func writeReduced(out reduceSink, label, text string) {
 	t := redactSecrets(strings.TrimSpace(text))
 	if t == "" || strings.HasPrefix(t, "<system-reminder>") {
 		return
 	}
-	out.WriteString(label + "\n")
 	if r := []rune(t); len(r) > mineTextCap {
-		out.WriteString(string(r[:mineTextCap]))
-		fmt.Fprintf(out, "\n… [%d more characters elided]", len(r)-mineTextCap)
-	} else {
-		out.WriteString(t)
+		t = string(r[:mineTextCap]) + fmt.Sprintf("\n… [%d more characters elided]", len(r)-mineTextCap)
 	}
-	out.WriteString("\n\n")
+	out.section(label, t)
 }

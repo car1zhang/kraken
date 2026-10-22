@@ -112,7 +112,10 @@ import (
 // the cell (see schemaV35).
 // Version 36 adds ask threads' six columns to threads: kind (pane |
 // headless), the three origin columns, answering and note (see schemaV36).
-const schemaVersion = 36
+// Version 37 is the nightly mind pass: jobs gains author, and mm_items is
+// rebuilt to admit the `nightly` source and carry a proposed|live state (see
+// schemaV37).
+const schemaVersion = 37
 
 // schemaV1 creates all nine tables plus kv. Exact DDL (types, indexes) was
 // left to this package by the spec; shapes below mirror the spec's Data
@@ -2088,6 +2091,122 @@ func migrateV36AskThreads(tx *sql.Tx) error {
 	return nil
 }
 
+// schemaV37 is the nightly mind pass' storage, and like v36 its SQL half is
+// empty: both changes need a probe, so both run in the hook,
+// migrateV37MindPass.
+//
+//   - jobs.author says who wrote a job — the operator, an agent drafting
+//     through `kraken job draft`, the Linear intake, or kraken itself (the
+//     dream and mind creators). The mind pass reads it to tell carl's own
+//     specs from machine-written ones. Every pre-v37 row reads 'unknown'
+//     rather than a guess: nothing recorded authorship before this column.
+//   - mm_items is REBUILT a second time, for v33's reason: its `source` CHECK
+//     must admit `nightly` (an item the mind pass proposed from the day's
+//     evidence), and SQLite cannot alter a CHECK in place. The same rebuild
+//     adds `state` — 'proposed' for a nightly item carl has not confirmed,
+//     'live' for everything else, which is every row that exists today.
+//     State lives on the item row rather than in a proposals table so a
+//     proposal and the item it becomes are one row keyed by one id: confirm
+//     flips the column, and every consumer that must not see an unconfirmed
+//     item (the rules-file render, the verify pass, `kraken mm get`) excludes
+//     it by one predicate on the table it already reads.
+const schemaV37 = ``
+
+// schemaV37Author is v37's jobs.author, run by migrateV37MindPass only when
+// jobs lacks the column (ADD COLUMN has no IF NOT EXISTS; see schemaV34Visibility).
+const schemaV37Author = `ALTER TABLE jobs ADD COLUMN author TEXT NOT NULL DEFAULT 'unknown' CHECK(author IN ('operator','agent','linear','kraken','unknown'));`
+
+// schemaV37MMItems is v37's mm_items rebuild, run by migrateV37MindPass only
+// when the table's DDL does not already admit 'nightly'. It is
+// schemaV33MMItems' shape exactly — create, copy every column by name, carry
+// the AUTOINCREMENT high-water mark, drop, rename, recreate the index — with
+// the widened source CHECK and the new state column, which every copied row
+// takes from its DEFAULT ('live'), since no row before v37 was a proposal.
+const schemaV37MMItems = `
+CREATE TABLE mm_items_new (
+	id             INTEGER PRIMARY KEY AUTOINCREMENT,
+	kind           TEXT    NOT NULL CHECK(kind IN ('decision','reading','note')),
+	source         TEXT    NOT NULL CHECK(source IN ('question','artifact','artifact-element','code','agent-output','manual','capture','nightly')),
+	job_id         INTEGER NOT NULL DEFAULT 0,   -- no FK, no cascade: the item outlives its job
+	slug           TEXT    NOT NULL DEFAULT '',  -- display slug at capture time; identity is job_id
+	source_ref     TEXT    NOT NULL DEFAULT '',  -- qid, artifact name, repo/path:range, content hash
+	content        TEXT    NOT NULL,             -- the item's body: the frozen thing carl knows
+	context        TEXT    NOT NULL DEFAULT '',
+	content_sha    TEXT    NOT NULL DEFAULT '',  -- hex sha256 of the frozen payload (see schemaV29)
+	snapshot       BLOB    NULL,                 -- frozen artifact bytes; NULL = this item has none
+	snapshot_ext   TEXT    NOT NULL DEFAULT '',  -- the snapshot's extension, for its MIME on the way out
+	episode_id     INTEGER NOT NULL DEFAULT 0,   -- vestigial: written by nothing, still served
+	created_at     INTEGER NOT NULL DEFAULT 0,   -- unix millis
+	invalidated_at INTEGER NULL,                 -- unix millis; NULL means live
+	invalid_reason TEXT    NOT NULL DEFAULT '',
+	invalid_detail TEXT    NOT NULL DEFAULT '',
+	title          TEXT    NOT NULL DEFAULT '',  -- the one line the rules files render
+	scope          TEXT    NOT NULL DEFAULT 'repo' CHECK(scope IN ('universal','repo')),
+	repo           TEXT    NOT NULL DEFAULT '',  -- checkout basename a repo-scoped item belongs to
+	dir            TEXT    NOT NULL DEFAULT '',  -- repo-relative directory; '' = the whole repo
+	quote          TEXT    NOT NULL DEFAULT '',  -- the verbatim text carl highlighted
+	source_json    TEXT    NOT NULL DEFAULT '',  -- where the capture came from, as JSON
+	thread_session TEXT    NOT NULL DEFAULT '',  -- the mind thread session that committed it
+	revised_at     INTEGER NOT NULL DEFAULT 0,   -- unix millis of the last revise; 0 = never
+	state          TEXT    NOT NULL DEFAULT 'live' CHECK(state IN ('proposed','live'))  -- proposed = a nightly item carl has not confirmed
+);
+INSERT INTO mm_items_new (id, kind, source, job_id, slug, source_ref, content, context,
+	content_sha, snapshot, snapshot_ext, episode_id, created_at, invalidated_at,
+	invalid_reason, invalid_detail, title, scope, repo, dir, quote, source_json,
+	thread_session, revised_at)
+	SELECT id, kind, source, job_id, slug, source_ref, content, context,
+	content_sha, snapshot, snapshot_ext, episode_id, created_at, invalidated_at,
+	invalid_reason, invalid_detail, title, scope, repo, dir, quote, source_json,
+	thread_session, revised_at
+	FROM mm_items;
+INSERT INTO sqlite_sequence (name, seq)
+	SELECT 'mm_items_new', seq FROM sqlite_sequence
+	WHERE name = 'mm_items'
+	AND NOT EXISTS (SELECT 1 FROM sqlite_sequence WHERE name = 'mm_items_new');
+UPDATE sqlite_sequence
+	SET seq = (SELECT seq FROM sqlite_sequence WHERE name = 'mm_items')
+	WHERE name = 'mm_items_new'
+	AND seq < COALESCE((SELECT seq FROM sqlite_sequence WHERE name = 'mm_items'), 0);
+DROP TABLE mm_items;
+ALTER TABLE mm_items_new RENAME TO mm_items;
+CREATE INDEX mm_items_ref ON mm_items(source, job_id, source_ref);
+`
+
+// migrateV37MindPass is migrations[37]'s hook: add jobs.author unless it is
+// there, then rebuild mm_items unless its DDL already admits 'nightly'.
+//
+// The rebuild's probe reads the table's DDL rather than probing for the state
+// column because the CHECK is what forces the rebuild — the state column
+// rides along. A replay over an already-rebuilt table would NOT be harmless:
+// the INSERT…SELECT names v33's columns only, so every row would re-default
+// to state 'live' and every unconfirmed proposal would go live — the probe is
+// what prevents it. Both probes keep the
+// step replayable over a database whose user_version was reset without its
+// shape being reversed, which is how this package's migration tests age a
+// fresh database (see migrateV33MindLayer).
+func migrateV37MindPass(tx *sql.Tx) error {
+	var n int
+	if err := tx.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('jobs') WHERE name = 'author'`).Scan(&n); err != nil {
+		return fmt.Errorf("probe jobs.author: %w", err)
+	}
+	if n == 0 {
+		if _, err := tx.Exec(schemaV37Author); err != nil {
+			return fmt.Errorf("add jobs.author: %w", err)
+		}
+	}
+	var ddl string
+	if err := tx.QueryRow(`SELECT sql FROM sqlite_master WHERE type='table' AND name='mm_items'`).Scan(&ddl); err != nil {
+		return fmt.Errorf("probe mm_items ddl: %w", err)
+	}
+	if strings.Contains(ddl, "'nightly'") {
+		return nil
+	}
+	if _, err := tx.Exec(schemaV37MMItems); err != nil {
+		return fmt.Errorf("rebuild mm_items: %w", err)
+	}
+	return nil
+}
+
 // migrationStep is one migration: SQL applied first, then an optional Go
 // hook run afterward inside the SAME transaction. Every migration before
 // v5 was a pure SQL string — DDL can't parse questions.yaml's hand-rolled
@@ -2210,8 +2329,12 @@ type migrationStep struct {
 // origin_node, origin_label, origin_login, answering, note); its SQL is empty
 // and the hook, migrateV36AskThreads, runs each ALTER only when the column is
 // missing (see schemaV36).
+// migrations[37] adds jobs.author and rebuilds mm_items with the `nightly`
+// source and the state column; its SQL is empty and the hook,
+// migrateV37MindPass, runs each step only when its probe says it is missing
+// (see schemaV37).
 // Future schema changes append
-// migrations[37], migrations[38], ... rather than editing an existing
+// migrations[38], migrations[39], ... rather than editing an existing
 // schemaV<N> string (or hook) in place, so a database created under an older
 // binary still migrates forward correctly.
 var migrations = map[int]migrationStep{
@@ -2251,6 +2374,7 @@ var migrations = map[int]migrationStep{
 	34: {sql: schemaV34, hook: migrateV34Visibility},
 	35: {sql: schemaV35},
 	36: {sql: schemaV36, hook: migrateV36AskThreads},
+	37: {sql: schemaV37, hook: migrateV37MindPass},
 }
 
 // migrateV5Questions is migrations[5]'s Go hook: schemaV5's SQL has already

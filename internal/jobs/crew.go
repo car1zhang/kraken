@@ -148,7 +148,7 @@ func LintSvgPath() string {
 // diagram pipeline, the questions verbs, the build report, the PR
 // conventions, the crew's dispatch/join/arbitration/review choreography —
 // lives in the repo-owned skills that installSkills materializes into the
-// worktree (the four pipeline skills, .claude/skills/{info,aim,do,dream};
+// worktree (the five pipeline skills, .claude/skills/{info,aim,do,dream,mind};
 // load rides along as a procedure-free reference), and the brief
 // points at them by path rather than restating them.
 //

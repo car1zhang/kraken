@@ -33,7 +33,14 @@ type Job struct {
 	// readonly, which is what every row that predates it reads. It is in
 	// jobFieldColumns, exactly as color is: hand-authorable in the job text
 	// and landed by the raw editor's parse.
-	Visibility   string
+	Visibility string
+	// Author is who wrote this job (schema v37): "operator", "agent",
+	// "linear", "kraken" or "unknown" — the last being every row that
+	// predates the column, since nothing recorded authorship before it.
+	// CreateJob stores an empty Author as "unknown". It is set once at
+	// creation and deliberately absent from jobFieldColumns: provenance is not
+	// a property of the job text, so no form or raw save may rewrite it.
+	Author       string
 	Body         string
 	State        string
 	Outcome      string
@@ -141,7 +148,8 @@ var jobColumns = `id, slug, COALESCE(repo,''), COALESCE(base,''), solo,
 	COALESCE(updated_at,0), archived_at, archived_name, COALESCE(err,''),
 	COALESCE(load_unblock,0), COALESCE(load_scope,0), COALESCE(load_note,''),
 	COALESCE(load_at,0), COALESCE(account_slug,''), COALESCE(account_email,''),
-	COALESCE(account_at,0), COALESCE(agent,''), COALESCE(visibility,'readonly')`
+	COALESCE(account_at,0), COALESCE(agent,''), COALESCE(visibility,'readonly'),
+	COALESCE(author,'unknown')`
 
 func scanJob(row interface{ Scan(...any) error }) (*Job, error) {
 	var j Job
@@ -153,6 +161,7 @@ func scanJob(row interface{ Scan(...any) error }) (*Job, error) {
 		&j.Run, &j.Rev, &j.CreatedAt, &j.UpdatedAt, &archivedAt, &archivedName, &j.Err,
 		&j.Load.Unblock, &j.Load.Scope, &j.Load.Note, &j.Load.At,
 		&j.AccountSlug, &j.AccountEmail, &j.AccountAt, &j.Agent, &j.Visibility,
+		&j.Author,
 	)
 	if err != nil {
 		return nil, err
@@ -201,11 +210,12 @@ func (s *Store) CreateJob(j *Job) (int64, error) {
 	res, err := s.db.Exec(
 		`INSERT INTO jobs (slug, repo, base, solo, model, color, agent,
 			body, state, outcome, session, teardown, run, rev, created_at, updated_at, err,
-			visibility)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, COALESCE(NULLIF(?, ''), 'readonly'))`,
+			visibility, author)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, COALESCE(NULLIF(?, ''), 'readonly'),
+			COALESCE(NULLIF(?, ''), 'unknown'))`,
 		j.Slug, j.Repo, j.Base, j.Solo, j.Model, j.Color, j.Agent,
 		j.Body, j.State, j.Outcome, j.Session, j.Teardown, j.Run, j.Rev,
-		j.CreatedAt, j.UpdatedAt, j.Err, j.Visibility,
+		j.CreatedAt, j.UpdatedAt, j.Err, j.Visibility, j.Author,
 	)
 	if err != nil {
 		return 0, fmt.Errorf("create job %s: %w", j.Slug, err)
@@ -273,6 +283,41 @@ func (s *Store) ListJobs() ([]*Job, error) {
 // same ordering LoadArchivedJobs uses today.
 func (s *Store) ListArchivedJobs() ([]*Job, error) {
 	return s.queryJobs(`SELECT ` + jobColumns + ` FROM jobs WHERE archived_at IS NOT NULL ORDER BY archived_name`)
+}
+
+// ListJobsTouchedSince returns every job, active AND archived, created or
+// updated inside the inclusive window [sinceMS, untilMS] (untilMS 0 = no
+// ceiling), oldest first by created_at then id.
+//
+// Archived rows are included on purpose: the mind pass reads the day's job
+// specs as evidence of what carl asked for, and a job he wrote and archived
+// the same afternoon is exactly as much evidence as one still on the board.
+func (s *Store) ListJobsTouchedSince(sinceMS, untilMS int64) ([]*Job, error) {
+	query, args := jobsTouchedWhere(sinceMS, untilMS)
+	return s.queryJobs(`SELECT `+jobColumns+` FROM jobs WHERE `+query+` ORDER BY created_at ASC, id ASC`, args...)
+}
+
+// CountJobsTouchedSince is the row count ListJobsTouchedSince(sinceMS, 0)
+// would return. The mind pass' gate no longer uses it (it reads
+// CollectMMEvidence, which filters out kraken's own rows); it is kept as
+// the list's cheap sibling.
+func (s *Store) CountJobsTouchedSince(sinceMS int64) (int, error) {
+	query, args := jobsTouchedWhere(sinceMS, 0)
+	var n int
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM jobs WHERE `+query, args...).Scan(&n); err != nil {
+		return 0, fmt.Errorf("count jobs touched since %d: %w", sinceMS, err)
+	}
+	return n, nil
+}
+
+// jobsTouchedWhere is the one window predicate both readers above share, so
+// the count can never disagree with the list it stands in for.
+func jobsTouchedWhere(sinceMS, untilMS int64) (string, []any) {
+	if untilMS == 0 {
+		return `(COALESCE(created_at,0) >= ? OR COALESCE(updated_at,0) >= ?)`, []any{sinceMS, sinceMS}
+	}
+	return `((COALESCE(created_at,0) >= ? AND COALESCE(created_at,0) <= ?) OR (COALESCE(updated_at,0) >= ? AND COALESCE(updated_at,0) <= ?))`,
+		[]any{sinceMS, untilMS, sinceMS, untilMS}
 }
 
 func (s *Store) queryJobs(query string, args ...any) ([]*Job, error) {
@@ -505,6 +550,44 @@ func (s *Store) SetJobLoad(jobID int64, l JobLoad) error {
 	}
 	if n == 0 {
 		return fmt.Errorf("set job load for job %d: %w", jobID, ErrNotFound)
+	}
+	return nil
+}
+
+// validJobAuthor is the closed set for jobs.author, the schema-v37 CHECK
+// spelled again so a bad value is refused with a sentence naming the set
+// rather than a constraint violation.
+var validJobAuthor = map[string]bool{"operator": true, "agent": true, "linear": true, "kraken": true, "unknown": true}
+
+// SetJobAuthor rewrites job id's author (schema v37), the one writer of the
+// column after CreateJob. Its caller is the agent edit arm of the job-draft
+// route: a job an agent rewrote is no longer the operator's document, and
+// the mind pass must not read it as one.
+//
+// A direct UPDATE outside UpdateJobFields, bumping NEITHER `rev` NOR
+// `updated_at` — SetJobLoad's rule, for its reasons. Authorship is
+// bookkeeping about the job rather than part of its authored text, and the
+// body write this follows has already stamped both: stamping updated_at a
+// second time adds nothing, and bumping rev again would leave whoever holds
+// the rev that body write returned one behind, so their next save would 409
+// over a column no form shows or sends.
+//
+// ErrNotFound (wrapped) when id names no row, SetJobLoad's reasoning: a
+// silent no-op would report a write that never happened.
+func (s *Store) SetJobAuthor(id int64, author string) error {
+	if !validJobAuthor[author] {
+		return fmt.Errorf("bad job author %q: want operator, agent, linear, kraken, or unknown", author)
+	}
+	res, err := s.db.Exec(`UPDATE jobs SET author = ? WHERE id = ?`, author, id)
+	if err != nil {
+		return fmt.Errorf("set job author for job %d: %w", id, err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("set job author for job %d: %w", id, err)
+	}
+	if n == 0 {
+		return fmt.Errorf("set job author for job %d: %w", id, ErrNotFound)
 	}
 	return nil
 }

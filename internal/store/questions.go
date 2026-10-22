@@ -64,14 +64,34 @@ func validateImportance(importance string) error {
 // ListQuestions returns jobID's questions ordered by position — the same
 // top-to-bottom order questions.yaml was always read in.
 func (s *Store) ListQuestions(jobID int64) ([]DocQuestion, error) {
-	rows, err := s.db.Query(
-		`SELECT job_id, qid, COALESCE(text,''), COALESCE(context,''), COALESCE(importance,''),
-			COALESCE(recommendation,''), COALESCE(answer,''), COALESCE(answered_at,''), COALESCE(position,0)
-			FROM questions WHERE job_id = ? ORDER BY position, qid`,
-		jobID,
-	)
+	out, err := s.scanQuestions(questionColumns+` WHERE job_id = ? ORDER BY position, qid`, jobID)
 	if err != nil {
 		return nil, fmt.Errorf("list questions for job %d: %w", jobID, err)
+	}
+	return out, nil
+}
+
+// ListQuestionsAll returns every question of every job, ordered by job then
+// position — the mind pass' cross-job sweep of carl's answers, which are
+// decisions he already made in words and so the strongest evidence it gets.
+// Same scan as ListQuestions, so the two can never read a row differently.
+func (s *Store) ListQuestionsAll() ([]DocQuestion, error) {
+	out, err := s.scanQuestions(questionColumns + ` ORDER BY job_id, position, qid`)
+	if err != nil {
+		return nil, fmt.Errorf("list all questions: %w", err)
+	}
+	return out, nil
+}
+
+// questionColumns is the one SELECT both question listings read through.
+const questionColumns = `SELECT job_id, qid, COALESCE(text,''), COALESCE(context,''), COALESCE(importance,''),
+	COALESCE(recommendation,''), COALESCE(answer,''), COALESCE(answered_at,''), COALESCE(position,0)
+	FROM questions`
+
+func (s *Store) scanQuestions(query string, args ...any) ([]DocQuestion, error) {
+	rows, err := s.db.Query(query, args...)
+	if err != nil {
+		return nil, err
 	}
 	defer rows.Close()
 	var out []DocQuestion
@@ -79,7 +99,7 @@ func (s *Store) ListQuestions(jobID int64) ([]DocQuestion, error) {
 		var q DocQuestion
 		if err := rows.Scan(&q.JobID, &q.QID, &q.Text, &q.Context, &q.Importance,
 			&q.Recommendation, &q.Answer, &q.AnsweredAt, &q.Position); err != nil {
-			return nil, fmt.Errorf("list questions for job %d: %w", jobID, err)
+			return nil, err
 		}
 		out = append(out, q)
 	}

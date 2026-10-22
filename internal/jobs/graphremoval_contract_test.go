@@ -216,7 +216,7 @@ func TestGraphRemovalPipelineStagesDropGraph(t *testing.T) {
 	if IsPipelineStage("pr") {
 		t.Error(`IsPipelineStage("pr") = true, want false — the pr skill folded into do`)
 	}
-	want := []string{"aim", "do", "dream", "info"}
+	want := []string{"aim", "do", "dream", "info", "mind"}
 	if got := PipelineStages(); !reflect.DeepEqual(got, want) {
 		t.Errorf("PipelineStages() = %v, want %v", got, want)
 	}
