@@ -645,16 +645,17 @@ const mineIdentityWindow = 1000
 // short `description` precedes `prompt` — so a cluster on those tools says
 // "same key", not "same call".
 func callIdentity(name string, input json.RawMessage) string {
-	return name + "(" + mineInputSummaryN(input, mineIdentityWindow) + ")"
+	return name + "(" + mineInputSummaryN(input, mineIdentityWindow, false) + ")"
 }
 
 // mineSummaryKeys are the input keys that identify a call, in the priority
 // order summarizeInput uses — same list, same order, so a signature that
 // lands on one of these keys reads identically to the tool line `k r`
 // prints, with one deliberate exception: Bash, where mineInputSummary
-// strips leading shell boilerplate that `k r` shows as typed (the comment
-// inside it says why). The key-less raw fallback can also differ — raw
-// transcript bytes here, a re-marshalled map there.
+// strips leading shell boilerplate that `k r` shows as typed and elides
+// heredoc bodies that `k r` shows whole (the comments inside it say why).
+// The key-less raw fallback can also differ — raw transcript bytes here, a
+// re-marshalled map there.
 type mineSummaryKeys struct {
 	Command     string `json:"command"`
 	FilePath    string `json:"file_path"`
@@ -684,6 +685,99 @@ type mineSummaryKeys struct {
 // values stay distinct, so nothing collapses.
 var shellBoilerplateRE = regexp.MustCompile(`^(?:[ \t]*(?:[A-Za-z_][A-Za-z0-9_]*=[^\s;&|]*[ \t]*(?:;|\n)|cd[ \t]+[^\s;&|]+[ \t]*(?:;|&&|\n))\s*)+`)
 
+// heredocOpenRE matches a heredoc opener and captures its terminator word in
+// exactly one of three groups: `<<'word'` (any non-quote run), `<<"word"`
+// (likewise), or a bare `<<word` identifier, each with optional `-` and
+// optional space before the word. The leading `(?:^|[^<])` is what keeps a
+// `<<<` here-string out: the regexp is unanchored, so without it a
+// here-string whose operand starts with a letter (`grep x <<< hello`)
+// matched from its second `<` and elided everything after it. A `<<2` shift
+// fails the identifier class; `a << b` does not and is the comment-stated
+// limit on elideHeredocBodies.
+var heredocOpenRE = regexp.MustCompile(`(?:^|[^<])<<-?[ \t]*(?:'([^'\n]+)'|"([^"\n]+)"|([A-Za-z_][A-Za-z0-9_]*))`)
+
+// heredocElision stands in for an elided heredoc body in a summary line.
+const heredocElision = "…"
+
+// elideHeredocBodies drops the BODY of every heredoc in a shell command that
+// is FOLLOWED by a command — the lines after an opener's line up to and
+// including its terminator — and leaves everything else, so a display
+// signature shows the opener, then the elision mark, then WHATEVER RAN AFTER
+// the terminator. That tail is what the display used to lose: a scout's
+// `cat >> notes.md <<'EOF' … EOF` followed by `cat <view>` is a notes append
+// and then the view read that is the whole point of the call, and with the
+// body kept the 100-rune display window filled with notes prose and never
+// reached the `cat`, so the reduced view showed the append alone and a
+// sibling auditing coverage from the view saw no read. Measured on two
+// nights' scouts: three of twelve, then five of one wave's view reads were
+// invisible in the view for exactly this shape.
+//
+// Display only: callIdentity never calls this (see mineInputSummary), so
+// RepeatedCalls still groups on the body, which it must. And a heredoc with
+// NOTHING after its terminator is left whole — a `python3 - <<'EOF'` script
+// or a `git commit -m "$(cat <<'EOF' …)"` has no tail to rescue, and its
+// body's first 80 runes were the only thing distinguishing it in the view.
+//
+// Only lines strictly BETWEEN the opener's line and the terminator line are
+// body; the opener's line is kept whole and the terminator line becomes the
+// elision mark. A `<<-` terminator may carry leading tabs (shells strip
+// them), so the match trims them. An unterminated body runs to the end and
+// so has no tail: left whole. The fix reaches a tail only when the opener
+// line plus the mark plus the tail fit the display window — a notes path
+// that is itself ~100 runes still pushes the tail out — and a `<<` inside a
+// quoted string reads as an opener, which can elide real command text until
+// a lone line equal to its word: a shorter summary, never a wrong read of
+// what ran after a real heredoc.
+func elideHeredocBodies(cmd string) string {
+	if !strings.Contains(cmd, "<<") {
+		return cmd
+	}
+	lines := strings.Split(cmd, "\n")
+	out := make([]string, 0, len(lines))
+	for i := 0; i < len(lines); i++ {
+		out = append(out, lines[i])
+		m := heredocOpenRE.FindStringSubmatch(lines[i])
+		if m == nil {
+			continue
+		}
+		term := m[1] + m[2] + m[3] // exactly one group is non-empty
+		j := i + 1
+		for ; j < len(lines); j++ {
+			if strings.TrimLeft(lines[j], "\t") == term {
+				break
+			}
+		}
+		if j >= len(lines) || !tailFollows(lines[j+1:]) {
+			// Unterminated, or nothing ran after it: keep THIS heredoc as
+			// typed, body and all, but keep the elisions already made for
+			// earlier heredocs in the same command — returning the original
+			// here put a notes body back in front of the view read it had
+			// just rescued whenever a second notes append closed the call.
+			out = append(out, lines[i+1:]...)
+			break
+		}
+		out = append(out, heredocElision)
+		i = j // the terminator line itself is consumed; the loop's i++ moves past it
+	}
+	return strings.Join(out, "\n")
+}
+
+// tailFollows reports whether a command actually ran after a heredoc's
+// terminator: some remaining line carries more than whitespace and closing
+// punctuation. A line that is only `)"`, `)`, `'`, `;` or a backtick is
+// closing punctuation — the close of a command substitution, as in
+// `git commit -m "$(cat <<'EOF' … EOF\n)"`, Claude Code's standard commit
+// form — and counting it as a tail elided every commit message down to the
+// same opener.
+func tailFollows(rest []string) bool {
+	for _, l := range rest {
+		if strings.Trim(l, " \t\r)\"';`") != "" {
+			return true
+		}
+	}
+	return false
+}
+
 // mineRawSummaryCap bounds the bytes a key-less input contributes to a
 // signature, so converting the raw never copies a multi-megabyte input to
 // keep a window of it. It must stay comfortably above the WIDEST caller's
@@ -695,22 +789,28 @@ var shellBoilerplateRE = regexp.MustCompile(`^(?:[ \t]*(?:[A-Za-z_][A-Za-z0-9_]*
 const mineRawSummaryCap = 8192
 
 // mineInputSummary is the display-window form of mineInputSummaryN — the
-// one callers use for anything a person reads.
+// one callers use for anything a person reads. It elides heredoc bodies
+// (elideHeredocBodies) where the identity form must not: a person reading a
+// tool line wants to see what RAN, and the command after a heredoc is part
+// of that, while RepeatedCalls' grouping key has to keep two heredocs that
+// differ only in their bodies — two analysis scripts behind one import
+// preamble — as two distinct calls.
 func mineInputSummary(input json.RawMessage) string {
-	return mineInputSummaryN(input, mineDisplayWindow)
+	return mineInputSummaryN(input, mineDisplayWindow, true)
 }
 
 // mineInputSummaryN is summarizeInput's rule applied to a still-encoded tool
 // input, deliberately WITHOUT materialising it, with the truncation window
 // as a parameter (mineDisplayWindow for display, mineIdentityWindow for
 // RepeatedCalls grouping — one rule, two windows, so the display form and
-// the grouping identity cannot drift apart in WHAT they summarize, only in
-// how much of it they keep). summarizeInput takes a map[string]any, and the
-// digest is the one caller that would have to build one per tool call: a
-// single Write carries its whole file body in `content`, so decoding into a
-// map allocates megabytes to read a `file_path` beside it — ~11.7k times
-// over a night's corpus, the digest's dominant cost. Decoding into a narrow
-// struct skips every unrecognised key without allocating it.
+// the grouping identity cannot drift apart in WHAT they summarize beyond the
+// one named switch, elideHeredocs, only in how much of it they keep).
+// summarizeInput takes a map[string]any, and the digest is the one caller
+// that would have to build one per tool call: a single Write carries its
+// whole file body in `content`, so decoding into a map allocates megabytes
+// to read a `file_path` beside it — ~11.7k times over a night's corpus, the
+// digest's dominant cost. Decoding into a narrow struct skips every
+// unrecognised key without allocating it.
 //
 // A key present with a non-string value yields an UnmarshalTypeError, which
 // encoding/json returns only AFTER decoding the rest — so the error is
@@ -721,7 +821,11 @@ func mineInputSummary(input json.RawMessage) string {
 // can cut a credential to a fragment below its shape's minimum length, and
 // the fragment then walks through the redactor — the exact case is a Slack
 // cookie sitting past rune 100 of a `printf … >> slack.env` command.
-func mineInputSummaryN(input json.RawMessage, window int) string {
+//
+// elideHeredocs is the display form's switch (see mineInputSummary): the
+// elision runs before redaction, which is safe in that direction — it only
+// removes bytes, so nothing a redactor would have caught is created by it.
+func mineInputSummaryN(input json.RawMessage, window int, elideHeredocs bool) string {
 	if len(input) == 0 {
 		return ""
 	}
@@ -742,10 +846,14 @@ func mineInputSummaryN(input json.RawMessage, window int) string {
 		// distinct commands distinct). Stripping reveals the command; if the
 		// command WAS only boilerplate, keep the original rather than an
 		// empty signature.
-		if cmd := shellBoilerplateRE.ReplaceAllString(k.Command, ""); strings.TrimSpace(cmd) != "" {
-			return TruncateOneLine(redactSecrets(cmd), window)
+		cmd := shellBoilerplateRE.ReplaceAllString(k.Command, "")
+		if strings.TrimSpace(cmd) == "" {
+			cmd = k.Command
 		}
-		return TruncateOneLine(redactSecrets(k.Command), window)
+		if elideHeredocs {
+			cmd = elideHeredocBodies(cmd)
+		}
+		return TruncateOneLine(redactSecrets(cmd), window)
 	}
 	for _, s := range []string{k.FilePath, k.Path, k.Pattern, k.Description, k.Prompt, k.Query, k.URL, k.Skill} {
 		if s != "" {
