@@ -365,7 +365,8 @@ assignment's transcripts summed per assignment — not transcript count, not whi
 busiest, and counted whether or not the scout itself staged a view (a scout that worked from raw
 JSONL still has an assignment of that size). The sidecar is `<your session>/subagents/agent-<id>.jsonl`,
 the file that records the pages the scout actually took — every sidecar of that assignment, since a
-respawned scout (`-B`, `-C`) has an agent id of its own — and never the transcripts the scout was
+scout respawned under the fresh-report-path rule above (`-B`, `-C`) has an agent id of its own — and
+never the transcripts the scout was
 reading: a pass read "their own transcripts" as the SCOUTED ones, grep'd two record uuids there,
 picked two scouts that were not the largest, and certified a check that never touched a single read
 offset. The spot-check needs a DENOMINATOR: compare the scout's
@@ -493,13 +494,15 @@ Write `00-dream-report.md` into the artifacts dir. Like every md artifact, it op
 
 | Section | Content |
 |---|---|
-| Shipped | Each change, the evidence behind it, and its PR — and, per PR, the sha each athena verdict was given on (per dimension, so a round ended by a reviewer's death reads "dimension X unreviewed, reviewer died") and every commit pushed after the last verdict, labelled one of three ways: `carve-out` (a reviewer's own non-blocking text applied verbatim under the do skill's rule 4 carve-out, named with the finding it applies), `base merge` (a merge of the base branch with no hand-resolved conflict), or `unreviewed` (everything else). "Stopped on acceptance" is a claim only a CLEAR verdict supports, on the final sha or on the last sha before commits that are all carve-out or base merge. A PR that had no review round says so with the reason, and under `solo: true` every PR reads "no review (solo)" and the claim is never made. |
+| Shipped | Each change, the evidence behind it, and its PR — and, per PR, the sha each athena verdict was given on (per dimension, so a round ended by a reviewer's death reads "dimension X unreviewed, reviewer died") and every commit pushed after the last verdict, labelled one of three ways: `carve-out` (a reviewer's own non-blocking text applied verbatim under the do skill's rule 4 carve-out, named with the finding it applies), `base merge` (a merge of the base branch with no hand-resolved conflict), or `unreviewed` (everything else). "Stopped on acceptance" is a claim only a CLEAR verdict from every dimension supports, on the final sha or on the last sha before commits that are all carve-out or base merge. A PR that had no review round says so with the reason, and under `solo: true` every PR reads "no review (solo)" and the claim is never made. |
 | Judgment calls | Everything shipped below the two-sighting default, and why. An empty section on a night that shipped several changes means you are not naming your own judgment. |
 | Watching | Newly watched facts, and what changed on existing ones — the watch overlay is not committed, so this is the only place its movement is visible. |
 | Owed human actions | Every action only {{operator}} can take — a credential rotation, an external revoke — still outstanding, each with its watch row id, re-raised EVERY night until it is done. Done means {{operator}}'s `fine` verdict on that row, or the row's evidence recording who performed the action — then unwatch it; never unwatch a row while its action is still owed, and never write the verdict yourself. The watch row is what makes an owed action durable; this report and the closing line are the only channel that re-SURFACES it, and one live credential's rotation, named in a closing line but not re-raised by the next pass, ceased to exist for two nights while the value stayed live. |
 | Your prompting | The prompting feedback, quoted. |
 | Seen, not actionable | One line each, capped around ten. It is what distinguishes a quiet night from a blind one. |
 | Coverage | Transcripts read, feedback notes swept, and anything skipped — including the aggregate READ vs SAMPLED split from the scouts' own coverage tables ("272/272 digested" over a 30%-sampled corpus reads as full coverage and is not), and the per-report READ IN FULL / PARTIAL list from Evidence 2. Also the pass's OWN stalls: limit banners, dead stretches, and operator interventions in your own pane tonight — your session is tomorrow's sweep evidence, so tonight's report is the only one that can carry them, and one pass reported four cells' outages while omitting its own 10h37m, 2.5× the four combined. |
+
+Then the closing line, verbatim, as the last line.
 
 ## Inside A Kraken Cell
 
