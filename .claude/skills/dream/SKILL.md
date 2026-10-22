@@ -30,7 +30,7 @@ change; the machine keeps the reasoning. This is structural rather than a redact
 why it is reliable: a commit contains a diff, and that is all it ever contains.
 
 The do skill's PR-body template (`.claude/skills/do/SKILL.md`, the PR step) asks for a `## Context` section with
-"error logs, or motivation"; in a dream PR that section carries the MECHANISM in a sentence — what
+trace ids, error traces or motivation; in a dream PR that section carries the MECHANISM in a sentence — what
 was wrong, why the change fixes it, the measured numbers of the mechanism itself — and never the
 evidence: no session id, cell or job name, operator name or quoted remark, and no log line from a
 real run, because the body is what the diff travels with. Three PR bodies in one night each carried

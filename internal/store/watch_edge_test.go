@@ -442,15 +442,25 @@ func mustListWatch(t *testing.T, s *Store) []WatchItem {
 
 // TestEdgeWatchStatelessFoldKeepsShipped: a re-add that sends no state leaves
 // the row's state alone, as the fold documents. The default "watching" is an
-// INSERT-time default only: applied before the fold, it reset every shipped
-// row that was re-sighted the next night back to watching (the mining window
-// always reaches back past a fix, so a pre-fix sighting of a shipped row is
-// the routine case, not a reopening).
+// INSERT-time default only: applied before the fold, it reset every STATELESS
+// re-add of a shipped row — the routine next-night re-sighting, since the
+// mining window can reach back past a fix — to watching, and a declined row
+// the same way.
 func TestEdgeWatchStatelessFoldKeepsShipped(t *testing.T) {
 	s := openTest(t)
 	id := edgeWatchAdd(t, s, "edge: shipped rows survive a stateless fold")
 	if err := s.UpdateWatchItem(id, WatchItem{State: "shipped", PRURL: "https://example.test/pull/1"}); err != nil {
 		t.Fatalf("UpdateWatchItem: %v", err)
+	}
+	did := edgeWatchAdd(t, s, "edge: declined rows survive a stateless fold")
+	if err := s.UpdateWatchItem(did, WatchItem{State: "declined"}); err != nil {
+		t.Fatalf("UpdateWatchItem declined: %v", err)
+	}
+	if _, folded, err := s.AddWatchItem(WatchItem{Observation: "edge: declined rows survive a stateless fold"}); err != nil || !folded {
+		t.Fatalf("stateless re-add of a declined row = (%v, %v), want a fold", folded, err)
+	}
+	if got := edgeWatchGet(t, s, did); got.State != "declined" {
+		t.Errorf("after stateless fold onto declined: state=%q, want declined", got.State)
 	}
 	fid, folded, err := s.AddWatchItem(WatchItem{Observation: "edge: shipped rows survive a stateless fold", Evidence: "seen again"})
 	if err != nil || !folded || fid != id {
