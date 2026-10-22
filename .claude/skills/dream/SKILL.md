@@ -320,7 +320,16 @@ pre-authorised the raw-JSONL fallback on it, and steered that scout into filing 
 over staged views it never opened — the exact mislabeling that pass then diagnosed as the scout's
 own drift, with the fabricated mechanism appearing nowhere in its report. A number in a brief at
 least names a source a scout can go check; an invented mechanism has no referent at all, and the
-scout has no move against it.
+scout has no move against it. And the hypothesis rule covers YOUR OWN raw-derived claims, which
+are the ones that actually fail: nothing in a scout brief is "verified", and no brief section is
+headed as what you have already established from the raw. Every figure you measured from a
+transcript before the scout started goes in as *"I measured X; check it"*, with the same standing
+as a digest counter; the already-established list's "measure, don't re-derive" covers only facts
+cited to a watch row or graph entity, never a figure you measured tonight. The split was measured
+clean on one night: of nine briefs, the four framed as hypotheses carried no wrong claim and the
+five that stated the lead's own figures as fact — four under a "verified" heading, one bare — each
+carried one, and every scout handed a settled figure spent output refuting its own brief before it
+could start, because the framing told it which sentences not to check.
 
 **Require a per-transcript coverage line, as a filled slot rather than a habit — and Coverage is
 the report's FINAL section**, which is what makes "a finished report ends with its Coverage
