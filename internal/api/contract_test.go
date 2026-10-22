@@ -292,6 +292,7 @@ var webJobSpec = map[string]fieldSpec{
 	"outcome": {kind: wireString, required: false},
 	"color":   {kind: wireString, required: false},
 	"agent":   {kind: wireString, required: false},
+	"author":  {kind: wireString, required: false},
 	"cell":    {kind: wireString, required: false},
 	"live":    {kind: wireBool, required: true},
 	// no "prereqs" and no "start_error": both left this shape in v6, and this
@@ -3140,6 +3141,8 @@ var webMMItemSpec = map[string]fieldSpec{
 	"thread_session": {kind: wireString, required: true},
 	"revised_at":     {kind: wireNumber, required: true},
 	"capture_source": {kind: wireObject, required: true, nullable: true},
+	// schema v37: "live" or "proposed", always present.
+	"state": {kind: wireString, required: true},
 }
 
 // webMMShowSpec is GET /api/mm/show: the whole item plus the next rung of the
@@ -3166,6 +3169,9 @@ var webCaptureSourceSpec = map[string]fieldSpec{
 	"repo":    {kind: wireString, required: false},
 	"dir":     {kind: wireString, required: false},
 	"item_id": {kind: wireNumber, required: false},
+	// schema v37's mind-pass pointers
+	"qid":         {kind: wireString, required: false},
+	"feedback_id": {kind: wireNumber, required: false},
 }
 
 // webMMFlagSpec covers GET /api/mm/flags' elements: every store.MMFlag field,

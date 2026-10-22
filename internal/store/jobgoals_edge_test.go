@@ -837,9 +837,11 @@ func TestEdgeJGMigrationV26ToV27LeavesNoRowForANullGoalID(t *testing.T) {
 	// undoV33, reverses the mm_items rebuild, threads.role and mm_flags), then
 	// to 34 with the fleet (v34's arm drops nodes, pair_devices and
 	// jobs.visibility), then to 35 with job_stacks (v35's arm drops it), then
-	// to 36 with the ask-thread columns (v36's arm drops all six).
-	if schemaVersion != 36 {
-		t.Fatalf("schemaVersion = %d, want 36 — this fixture seeds a v26 shape and walks it forward to the current version", schemaVersion)
+	// to 36 with the ask-thread columns (v36's arm drops all six), then to 37
+	// with the mind pass (v37's arm, undoV37, drops jobs.author and undoes the
+	// mm_items rebuild).
+	if schemaVersion != 37 {
+		t.Fatalf("schemaVersion = %d, want 37 — this fixture seeds a v26 shape and walks it forward to the current version", schemaVersion)
 	}
 	labelled := edgeJGJob(t, s, "jg-mig-labelled")
 	unlabelled := edgeJGJob(t, s, "jg-mig-unlabelled")

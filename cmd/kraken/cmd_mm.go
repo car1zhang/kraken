@@ -137,6 +137,32 @@ func cmdMM(args []string) {
 			util.Die("%v", err)
 		}
 		writeStdout(out)
+	case "propose":
+		if len(rest) != 0 {
+			util.Die("%s", mmProposeUsage)
+		}
+		out, line, err := runMMPropose(os.Stdin, mmCallerSession)
+		if err != nil {
+			util.Die("%v", err)
+		}
+		writeStdout(out)
+		fmt.Fprintln(os.Stderr, line)
+	case "confirm":
+		id, err := parseMMID(rest, mmConfirmUsage)
+		if err != nil {
+			util.Die("%v", err)
+		}
+		line, err := runMMConfirm(id)
+		if err != nil {
+			util.Die("%v", err)
+		}
+		fmt.Fprintln(os.Stderr, line)
+	case "evidence":
+		out, err := runMMEvidence(rest)
+		if err != nil {
+			util.Die("%v", err)
+		}
+		writeStdout(out)
 	case "lsp":
 		// The one verb here that is a SERVER rather than a round trip: it
 		// holds stdio for as long as Zed keeps it alive, so it takes no
@@ -469,7 +495,8 @@ const mmGetUsage = "usage: kraken mm get [--all] [--file <path>] [--q <text>] [-
 // {"items": [...]} straight through, newest first.
 //
 // The DEFAULT is live items only, and `--all` is what widens it to include
-// the invalidated ones. That way round because the common read is "what do I
+// the invalidated ones — and, since schema v37, the unconfirmed nightly
+// proposals. That way round because the common read is "what do I
 // currently know", while the invalidated rows are a retrospective view — what
 // carl knew that has since stopped being true — and putting them in the
 // default answer would make every read carry claims the model has already
@@ -581,7 +608,7 @@ func mmWriteLine(raw []byte, created, already string) string {
 // ===========================================================================
 
 // mmOps is the op list every usage line names.
-const mmOps = "mark|drop|note|get|show|source|commit|revise|flag|flags|lsp"
+const mmOps = "mark|drop|note|get|show|source|commit|revise|flag|flags|propose|confirm|evidence|lsp"
 
 const (
 	mmShowUsage   = "usage: kraken mm show <id>"
@@ -590,6 +617,10 @@ const (
 	mmReviseUsage = "usage: kraken mm revise <id>  (item JSON on stdin, same shape as commit)"
 	mmFlagUsage   = "usage: kraken mm flag [--item <id>] [--against <id>] --note \"<text>\" [--slug <slug>]  |  kraken mm flag raise|dismiss <id> --note \"<text>\""
 	mmFlagsUsage  = "usage: kraken mm flags [--state pending|raised|dismissed|resolved]"
+	// The mind pass' three verbs (schema v37).
+	mmProposeUsage  = "usage: kraken mm propose  (a JSON array of proposals {title, scope, repo, dir, kind, body, quote, rung, source} on stdin, or one object)"
+	mmConfirmUsage  = "usage: kraken mm confirm <id>"
+	mmEvidenceUsage = "usage: kraken mm evidence --since <ms> [--until <ms>]"
 )
 
 // mmThreadSessionEnv is the variable a mind thread's spawn command stages
@@ -869,4 +900,108 @@ func cellSlugFromPath(dir string) string {
 		return ""
 	}
 	return strings.SplitN(filepath.ToSlash(rel), "/", 2)[0]
+}
+
+// --- the mind pass' verbs (schema v37) ---
+
+// mmProposeMaxBody is the client-side cap for `kraken mm propose` — keep
+// equal to internal/api's mmProposeMaxBody (the route's decode cap), which
+// this package cannot import.
+const mmProposeMaxBody = 8 << 20
+
+// runMMPropose posts the night's proposals as the caller's session. stdin is
+// a JSON array of proposals or one object (wrapped into a one-item array);
+// each item is forwarded raw so the server's strict decode is the only judge
+// of its keys. Returns the server JSON verbatim for stdout and the summary
+// line for stderr.
+func runMMPropose(stdin io.Reader, session func() (string, bool)) ([]byte, string, error) {
+	sid, ok := session()
+	if !ok || strings.TrimSpace(sid) == "" {
+		return nil, "", fmt.Errorf("no session: $%s is unset and no claude/codex session was found above this process — only the mind job's zeus may propose", mmThreadSessionEnv)
+	}
+	if stdinIsInteractiveTTY(stdin) {
+		return nil, "", fmt.Errorf("%s (refusing to wait on an interactive terminal — pipe the JSON in)", mmProposeUsage)
+	}
+	data, err := io.ReadAll(stdin)
+	if err != nil {
+		return nil, "", fmt.Errorf("read stdin: %w", err)
+	}
+	data = []byte(strings.TrimSpace(string(data)))
+	if len(data) == 0 {
+		return nil, "", fmt.Errorf("%s (stdin was empty)", mmProposeUsage)
+	}
+	if !json.Valid(data) {
+		return nil, "", fmt.Errorf("%s (stdin is not JSON)", mmProposeUsage)
+	}
+	var items []json.RawMessage
+	switch data[0] {
+	case '[':
+		if err := json.Unmarshal(data, &items); err != nil {
+			return nil, "", fmt.Errorf("%s (stdin is not a JSON array of objects): %v", mmProposeUsage, err)
+		}
+	case '{':
+		items = []json.RawMessage{json.RawMessage(data)}
+	default:
+		return nil, "", fmt.Errorf("%s (stdin is neither an array nor an object)", mmProposeUsage)
+	}
+	// The route's own cap: a legal 20-item batch can exceed the 1 MB every
+	// other verb is held to.
+	raw, err := qfPostLimit("/api/mm/propose", map[string]any{"session": strings.TrimSpace(sid), "items": items}, nil, qfHTTPTimeout, mmProposeMaxBody)
+	if err != nil {
+		return nil, "", err
+	}
+	var sum struct {
+		Added, Folded, Suppressed, Refused int
+	}
+	_ = json.Unmarshal(raw, &sum)
+	line := fmt.Sprintf("proposed %d (%d folded, %d suppressed, %d refused)", sum.Added, sum.Folded, sum.Suppressed, sum.Refused)
+	return raw, line, nil
+}
+
+// runMMConfirm flips one proposed item live and returns `confirmed mm <id>`.
+func runMMConfirm(id int64) (string, error) {
+	if _, err := qfPost("/api/mm/confirm", map[string]any{"id": id}); err != nil {
+		return "", err
+	}
+	return "confirmed mm " + strconv.FormatInt(id, 10), nil
+}
+
+// runMMEvidence is `evidence --since <ms> [--until <ms>]`: one GET, the
+// server JSON verbatim. The flags are checked locally only for shape; the
+// server owns the window rules.
+func runMMEvidence(args []string) ([]byte, error) {
+	var since, until string
+	for i := 0; i < len(args); i++ {
+		a := args[i]
+		key, val, hasEq := strings.Cut(a, "=")
+		switch key {
+		case "--since", "--until":
+		default:
+			return nil, fmt.Errorf("unknown argument %q (%s)", a, mmEvidenceUsage)
+		}
+		if !hasEq {
+			if i+1 >= len(args) {
+				return nil, fmt.Errorf("%s needs a value (%s)", key, mmEvidenceUsage)
+			}
+			i++
+			val = args[i]
+		}
+		if _, err := strconv.ParseInt(strings.TrimSpace(val), 10, 64); err != nil {
+			return nil, fmt.Errorf("%s %q: want unix millis (%s)", key, val, mmEvidenceUsage)
+		}
+		if key == "--since" {
+			since = strings.TrimSpace(val)
+		} else {
+			until = strings.TrimSpace(val)
+		}
+	}
+	if since == "" {
+		return nil, fmt.Errorf("--since is required (%s)", mmEvidenceUsage)
+	}
+	q := url.Values{}
+	q.Set("since", since)
+	if until != "" {
+		q.Set("until", until)
+	}
+	return qfGet("/api/mm/evidence?" + q.Encode())
 }

@@ -19,8 +19,10 @@ import (
 // an agent writes — a self-reported stage would outlive the phase the same
 // way a session file's "busy" outlives the turn.
 
-// pipelineStageSet names the four phase-governing skills — the only skill
-// names that count as a stage. `pr` was a fifth until its PR step folded
+// pipelineStageSet names the five phase-governing skills — the only skill
+// names that count as a stage. `mind` (the nightly mental-model pass) is the
+// fifth, a sibling of `dream` with its own job and its own badge. `pr` was a
+// stage too until its PR step folded
 // into `do` (job 624: every /do now ends with the PR, opened BEFORE the
 // manual-test gate, and revisions are pushed to it), so a Read of a
 // `pr/SKILL.md` in an older transcript no longer matches and the badge
@@ -47,9 +49,10 @@ var pipelineStageSet = map[string]bool{
 	"aim":   true,
 	"do":    true,
 	"dream": true,
+	"mind":  true,
 }
 
-// IsPipelineStage reports whether a skill name is one of the four
+// IsPipelineStage reports whether a skill name is one of the five
 // phase-governing pipeline skills. Exported for the root package's
 // skills-embed test, which holds this set in lockstep with the embedded
 // bundle (every embedded skill except `load`, `handoff` and `direct` must

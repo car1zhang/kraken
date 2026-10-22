@@ -280,7 +280,8 @@ func jobDraftCreate(w http.ResponseWriter, st *store.Store, slug string, parsed 
 	if _, err := st.CreateJob(&store.Job{
 		Slug: slug, Repo: parsed.Repo, Base: parsed.Base,
 		Solo: parsed.Solo, Model: parsed.Model, Agent: parsed.Agent,
-		Body: parsed.Body,
+		Body:   parsed.Body,
+		Author: "agent",
 	}); err != nil {
 		if errors.Is(err, store.ErrSlugTaken) {
 			// lost a race with another writer between the lookup above and
@@ -374,6 +375,14 @@ func jobDraftEdit(w http.ResponseWriter, st *store.Store, j *jobs.Job, parsed *j
 	if err != nil {
 		webJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
+	}
+	// An agent rewrote the spec, so the row is no longer the operator's
+	// document (schema v37's jobs.author; the mind pass excludes agent-authored
+	// specs from its evidence). After the body write, outside the rev lock:
+	// SetJobAuthor bumps neither rev nor updated_at. A failure here is logged,
+	// not answered — the body write the caller asked for has landed.
+	if err := st.SetJobAuthor(j.ID, "agent"); err != nil {
+		util.LogEvent("web", "error", "job-draft-author", "job draft "+j.Slug+": author stamp failed: "+err.Error())
 	}
 	webBoardCache.invalidate()
 	webJSON(w, http.StatusOK, map[string]any{"ok": true, "slug": j.Slug, "mtime": newRev})

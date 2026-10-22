@@ -43,6 +43,7 @@ import {
   openTmux,
   removeFromLibrary,
   removeMM,
+  confirmMM,
   retryJob,
   saveToLibrary,
   unarchiveJob,
@@ -296,6 +297,12 @@ export function App() {
     (id: number) => afterMM(() => removeMM(id)),
     [afterMM],
   );
+  // Confirms a nightly `proposed` item so it goes live — the same mutate +
+  // refetch the drop rides.
+  const confirmMark = useCallback(
+    (id: number) => afterMM(() => confirmMM(id)),
+    [afterMM],
+  );
 
   // The job editor autosaves on a 600ms debounce, and a self-update reload
   // drops whatever is still in flight. EditorOverlay registers its flusher
@@ -438,6 +445,7 @@ export function App() {
         mm={mm}
         onAddNote={addNote}
         onRemoveMM={dropMark}
+        onConfirmMM={confirmMark}
         // a raised flag's `open job` — the steer modal of the job whose zeus
         // raised it, which stacks over the memory view like any overlay
         onOpenJob={(slug) => openSteer(slug, "steer")}

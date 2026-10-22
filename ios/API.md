@@ -194,6 +194,7 @@ payload, so a client sees exactly what it has always seen.
 | `feedback` | array (`webFeedback`) | omitempty | per-job feedback entries (open + addressed), served straight from `feedback` rows in `kraken.db`; unlike `doc_questions`, IS populated for archived jobs (rows outlive the cell). Additive, no contract bump |
 | `color` | string | omitempty | the job's color, one of `red` \| `blue` \| `green` \| `yellow` \| `purple` \| `orange` \| `pink` \| `cyan` (the names Claude Code's `/color` accepts, in that order); absent or `""` means the job has NO color and must render exactly as an uncolored job always has — no swatch, no reserved space. Clients degrade an unrecognized name to "no color" rather than failing. Additive, no contract bump |
 | `agent` | string | omitempty | which coding agent the cell's zeus runs — `codex` for a codex cell, absent for the claude default so a card without the key renders exactly as it always has. Set from the job's `agent:` frontmatter (`claude` \| `codex`). Additive, no contract bump |
+| `author` | string | omitempty | who wrote the job (schema v37's `jobs.author`): `operator` (the board's create) \| `agent` (`kraken job draft`) \| `linear` (the Linear intake) \| `kraken` (the dream and mind creators) \| `unknown` (every row that predates the column), served verbatim; set once at creation and never changed by a save. Additive, no contract bump |
 | `threads` | array (`webThread`) | omitempty | this job's side threads — every fork of zeus' session, live or closed, served straight from `threads` rows in `kraken.db`; a closed thread outlives its cell (its transcript is still readable), so the array survives teardown. Additive, no contract bump |
 | `tokens` | object (`webTokens`) | omitempty | this job's summed token spend, straight from its `job_tokens` row. **Absent means NEVER MEASURED, which is not the same as zero** — a job that was measured and cost nothing serves the object with all-zero counters. Present for done and archived jobs too (the row outlives the cell). Additive, no contract bump |
 | `load` | object (`webJobLoad`) | omitempty | zeus' two 1–10 triage estimates for this job — how expensive the operator's unblock is, and how big the claude work it buys. **Absent means "no estimate to act on", which is not the same as an estimate of zero**, and unlike `tokens` it covers THREE cases: never estimated, cleared (a clear zeroes `at`, and a zero `at` serves no object), and archived. **Withheld on archived jobs regardless of whether one exists** — the four columns survive archival and the key returns on unarchive; the archived loop drops it because a card that cannot be blocked cannot pose the question the badge answers. Served on every active job whatever its display state, so the key never flickers as a card moves column — the blocked-only rule is a RENDERING rule the clients apply, not a payload rule. The ROI the badge renders is DERIVED by the client (`scope / unblock`) and deliberately never on the wire. Additive, no contract bump |
@@ -1245,7 +1246,9 @@ Schema v33 (the mind layer) adds ten more — `mm/show`, `mm/source`,
 `mm/flag/raise`, `mm/flag/dismiss`, `mm/flag/resolve` (writes) — plus
 `GET /api/job/transcript`, and ADDS keys to the `GET /api/mm` item (`title`,
 `scope`, `repo`, `dir`, `quote`, `thread_session`, `revised_at`,
-`capture_source`). Also additive, so still `apiContract` 6. They are
+`capture_source`). Also additive, so still `apiContract` 6. Schema v37 (the
+mind pass) adds `mm/propose`, `mm/confirm` (writes) and `mm/evidence` (a read),
+and the item's `state` key — additive again. They are
 documented under "The mind layer" below. A client reaches only `capture`,
 `flags`, `flag/resolve`, `source` and `job/transcript`; `commit`, `revise`,
 `flag`, `flag/raise` and `flag/dismiss` are agent-side (`kraken mm …`).
@@ -1306,7 +1309,7 @@ view and its own poll, exactly the artifact library's posture.
 ### `GET /api/mm[?live=1][&file=<path>[&worktree=<abs>]]` → `{"items": [MMItem]}` (api/mm.go)
 
 The whole model, newest first — `created_at` descending, `id` descending as
-the tiebreak. `?live=1` narrows to items that have not been invalidated;
+the tiebreak. `?live=1` narrows to items that have not been invalidated and are not nightly proposals (`state: "proposed"`);
 anything else means EVERYTHING, invalidated included, because those are half
 the point. `items` is always present and never `null`.
 
@@ -1338,7 +1341,7 @@ verbatim; the web Model pane binds its filter box to `q`.
 |---|---|---|---|
 | `id` | number | always | the row id — what `POST /api/mm/remove` and `GET /api/mm/snapshot` address |
 | `kind` | string | always | `decision`\|`reading`\|`note` |
-| `source` | string | always | `question`\|`artifact`\|`artifact-element`\|`code`\|`agent-output`\|`manual`\|`capture` (`capture` = committed by a mind thread, schema v33). Stays a STRING: the capture's source pointer rides `capture_source` below, because retyping this key would break every shipped build that decodes it as `String` |
+| `source` | string | always | `question`\|`artifact`\|`artifact-element`\|`code`\|`agent-output`\|`manual`\|`capture` (`capture` = committed by a mind thread, schema v33)\|`nightly` (proposed by the nightly mind pass, schema v37). Stays a STRING: the capture's source pointer rides `capture_source` below, because retyping this key would break every shipped build that decodes it as `String` |
 | `slug` | string | always | the job's DISPLAY slug at mark time, or `""` for the two sources that belong to no job (`code`, `manual`). Display only — the job may since have been renamed, archived or deleted |
 | `source_ref` | string | always | what was marked, per source: a `Q<n>` for a question, the artifact name for an artifact or element, `<repo>/<path>:<start>-<end>` for code, the first 16 hex of the text's sha256 for an agent detail, `""` for a note |
 | `content` | string | always | served WHOLE, never cut — it is what the operator read, and the invalidated view exists to show it back in full. For an artifact mark it is the source ref: an artifact's content is its snapshot, which rides its own route |
@@ -1357,16 +1360,18 @@ verbatim; the web Model pane binds its filter box to `q`.
 | `thread_session` | string | always | the mind thread's claude session that committed the item; `""` on legacy rows |
 | `revised_at` | number | always | unix millis of the last `POST /api/mm/revise`; `0` = never revised |
 | `capture_source` | object \| null | always | the parsed source pointer (`CaptureSource`, table below), or `null` when the row has none — every legacy row. Decode as optional |
+| `state` | string | always | schema v37: `live` \| `proposed`. A `proposed` item is a nightly mind-pass proposal (`source: "nightly"`) that no rules file, verify pass or live `kraken mm get` sees until `POST /api/mm/confirm` makes it `live`. iOS decodes `state` and renders no distinction yet (a proposed item reads as an ordinary one on the phone, and cannot be confirmed there) |
 
 `CaptureSource` (the same object `POST /api/mm/capture` takes as `source`):
 
 | key | type | optionality | notes |
 |---|---|---|---|
-| `kind` | string | always | `artifact` \| `transcript` \| `dir` \| `item` \| `manual` |
+| `kind` | string | always | `artifact` \| `transcript` \| `dir` \| `item` \| `manual`, plus the mind pass' `job` \| `feedback` \| `question` (schema v37) |
 | `slug` / `home` / `name` / `sha` | string | omitempty | `artifact`: the job, artifact home (`cell`\|`pluto`\|`archive`), artifact name (required for this kind) and the sha256 hex of the bytes the viewer had loaded |
 | `session` / `uuid` / `tid` | string | omitempty | `transcript`: the claude session (required), the record uuid, and the side thread's tid when the text came from a thread |
 | `repo` / `dir` | string | omitempty | `dir`: the repo (required) and repo-relative directory |
 | `item_id` | number | omitempty | `item`: the mental-model item the text was highlighted in |
+| `qid` / `feedback_id` | string / number | omitempty | `question`: the question's qid (with `slug`, both required); `feedback`: the feedback row id (required). A `job` pointer carries `slug` (required) and optionally `sha`, the sha256 hex of the spec text it was read from |
 
 `anchor`:
 
@@ -1497,6 +1502,39 @@ Request `{id, resolution}` with `resolution` `drop` \| `keep` (400 otherwise)
 `state` becomes `resolved`. 404 unknown flag; 409 a flag that is not `raised`.
 This is the Flags section's `drop item` / `keep` buttons.
 
+#### `POST /api/mm/propose` → `{"results": [...], "added": n, "folded": n, "suppressed": n, "refused": n}`
+
+Request `{"session": string, "items": [{title, scope, repo, dir, kind, body, quote, rung, source}]}`.
+Agent-side only (`kraken mm propose`, run by the nightly mind job's zeus); no
+client UI sends it. 403 `{"error":"not the mind job's lead session"}` unless
+`session` is the stamped lead session of the active job `mind_last_run`
+names. Every item is validated before any is stored (400 with the reason and
+the item index): commit's rules, plus `kind` `decision`\|`note`, `source.kind`
+`transcript`\|`job`\|`feedback`\|`question`, a non-empty `quote` (≤ 32,000
+runes) and `rung` ≤ 200 runes. Each result is `{index, id?, outcome, reason?}`
+with `outcome` `added` (a new `proposed` row, `source: "nightly"`) \|
+`folded` (a non-invalidated row with the same quote exists; `id` is it) \|
+`suppressed` (the quote was dropped or contradicted before) \| `refused`
+(`reason: "cap"` — at most 20 adds per call). One macOS notification when any
+were added.
+
+#### `POST /api/mm/confirm` → `{"ok": true, "id": number, "state": "live"}`
+
+Request `{"id": number}` — the operator's yes on a proposed item, which makes
+it `live`; an already-live item answers the same 200. 400 `missing id`; 404
+unknown item; 409 `{"error":"mm item is invalidated"}`.
+
+#### `GET /api/mm/evidence?since=<ms>[&until=<ms>]` → `MMEvidence`
+
+The operator-authored rows inside the inclusive window (`until` defaults to
+now; 400 when `since` is missing, non-numeric or ≤ 0):
+`{since, until, jobs: [{slug, id, author, created_at, updated_at, body_sha, body}], feedback: [{id, slug, artifact, ts, note}], answers: [{slug, qid, text, answer, answered_at, accepted_rec}]}`
+— jobs touched in the window (active and archived) minus those an agent,
+Linear or kraken wrote, `dream-*`/`mind-*` jobs and Linear-created jobs, with
+the `## Mid-run log` section stripped from `body`; every feedback note; every
+answered question whose `answered_at` falls in the window (`accepted_rec`:
+the answer is equal to its recommendation, whitespace-trimmed). Agent-side (`kraken mm evidence`).
+
 #### `GET /api/mm/flags[?state=pending|raised|dismissed|resolved]` → `{"flags": [MMFlag]}`
 
 Newest first; always an array. 400 for a `state` outside the four. The Flags
@@ -1533,7 +1571,10 @@ a missing source is always a 200.
 | `transcript` | ±10 blocks around the record `uuid` in the session's transcript (a forward scan of the whole file), one per paragraph as `[kind] text` (`[kind from] text` for a block with a sender), the captured record's blocks prefixed `▶ `. Unavailable when the session is not uuid-shaped, or the transcript or the uuid is not found |
 | `dir` | a one-level listing of the directory in the repo's primary checkout, one name per line, directories suffixed `/` |
 | `code` | a legacy code mark's anchored text; `ext` is the file's language extension |
-| anything else (`item`, `manual`, `question`, `agent-output`) | none — `available: false` |
+| `job` | the job's spec (body up to `## Mid-run log`), by `slug`, active then most recently archived; `changed` is true when its sha differs from the pointer's `sha` (when one was recorded) |
+| `feedback` | the feedback note by `feedback_id` |
+| `question` | `<question text>\n\nanswer: <answer>` by `slug` + `qid`; a legacy `question` item with no qid is `available: false` |
+| anything else (`item`, `manual`, `agent-output`) | none — `available: false` |
 
 `ext` is the artifact's extension (`md`, `html`, …) or `""`. 400 bad id; 404
 unknown item.

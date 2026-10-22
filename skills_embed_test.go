@@ -13,7 +13,7 @@ import (
 )
 
 // skills_embed_test.go verifies the go:embed directive actually captured
-// every kraken-owned skill — the four pipeline skills plus the three
+// every kraken-owned skill — the five pipeline skills plus the three
 // phase-less ones (`load`, `handoff`, `direct`) — and that each SKILL.md's
 // renamed frontmatter took: this can only
 // be checked from package main, since the embed.FS
@@ -31,6 +31,9 @@ func TestSkillsFSContainsExpectedSkills(t *testing.T) {
 		// so a `pr` dir here would be a stale copy nothing points at.
 		"do":    "do",
 		"dream": "dream",
+		// `mind` is the fifth pipeline skill: the nightly mental-model pass,
+		// dream's sibling with its own job and its own closing line.
+		"mind": "mind",
 		// `load` governs no phase — it is the ladders zeus looks a rung up in
 		// mid-phase — so TestSkillsOwnTheCellContract has nothing to say about
 		// it and this is the only test that would notice it failing to embed.
@@ -348,6 +351,19 @@ func TestSkillsOwnTheCellContract(t *testing.T) {
 			// the never-hard-wrap rule; see the same token on aim above
 			"ONE source line",
 		}},
+		// mind owns the nightly mental-model pass end to end: the two
+		// evidence readers and the context widener, the one propose call,
+		// the report, and its own closing line. Zeus' brief names none of
+		// it (TestZeusBriefDoesNotRestateSkills bans the closing line and
+		// the report's filename there).
+		{"mind", []string{
+			"Inside A Kraken Cell", "<cellDir>/artifacts/", "mind swept:",
+			"00-mind-report.md", "kraken mm propose",
+			"kraken mine operator", "kraken mine around", "kraken mm evidence",
+			"Never declare the job done", "Use `0` where a count is zero",
+			// the never-hard-wrap rule; see the same token on aim above
+			"ONE source line",
+		}},
 		// handoff owns the self/spawn/resume procedure and the two queued
 		// commands that make a self-handoff land after the turn ends. The
 		// brief says nothing about any of it (carl or the daemon types the
@@ -460,7 +476,7 @@ func TestSkillsOwnTheCellContract(t *testing.T) {
 // appears in no non-dream skill today, so the looser match costs nothing.
 func TestOnlyDreamNamesTheFeedbackWriteVerb(t *testing.T) {
 	const verb = "feedback addressed"
-	for _, skill := range []string{"aim", "info", "do", "handoff", "direct"} {
+	for _, skill := range []string{"aim", "info", "do", "handoff", "direct", "mind"} {
 		if strings.Contains(readEmbedded(t, skill+"/SKILL.md"), verb) {
 			t.Errorf(".claude/skills/%s/SKILL.md names %q — only dream/SKILL.md may. "+
 				"That column is the nightly pass' alone; a skill an ordinary cell reads "+
@@ -501,7 +517,7 @@ func TestWaitProtocolPointersResolve(t *testing.T) {
 				"agent improvises the wait instead", anchor)
 		}
 	}
-	for _, skill := range []string{"aim", "info", "dream"} {
+	for _, skill := range []string{"aim", "info", "dream", "mind"} {
 		src := readEmbedded(t, skill+"/SKILL.md")
 		if !strings.Contains(src, ".claude/skills/do/SKILL.md") {
 			t.Errorf(".claude/skills/%s/SKILL.md no longer points at do/SKILL.md for the wait protocol "+
@@ -602,7 +618,7 @@ func TestJobsSkillsFSWiredByInit(t *testing.T) {
 	for _, e := range entries {
 		names[e.Name()] = true
 	}
-	for _, want := range []string{"info", "aim", "do", "dream", "load", "handoff", "direct"} {
+	for _, want := range []string{"info", "aim", "do", "dream", "mind", "load", "handoff", "direct"} {
 		if !names[want] {
 			t.Errorf("jobs.SkillsFS root missing skill dir %q, got %v", want, names)
 		}

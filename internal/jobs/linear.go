@@ -483,7 +483,8 @@ func linearCreateJob(st *store.Store, src linearSource, cfg core.LinearConfig, i
 	if _, err := st.CreateJob(&store.Job{
 		Slug: slug, Repo: parsed.Repo, Base: parsed.Base,
 		Solo: parsed.Solo, Model: parsed.Model,
-		Body: parsed.Body,
+		Body:   parsed.Body,
+		Author: "linear",
 	}); err != nil {
 		if linearSlugTaken(err) {
 			return linearSkip(st, iss, now, "slug "+slug+" is taken by an active job")

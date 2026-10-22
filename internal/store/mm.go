@@ -83,6 +83,12 @@ type MMItem struct {
 	// (0 = never revised).
 	Title, Scope, Repo, Dir, Quote, SourceJSON, ThreadSession string
 	RevisedAt                                                 int64
+
+	// State is the schema-v37 column: "proposed" for an item the nightly mind
+	// pass wrote and carl has not confirmed, "live" for everything else (empty
+	// is stored as "live"). A proposed row is invisible to every consumer that
+	// lists live items — see ListMMItems — until ConfirmMMItem flips it.
+	State string
 }
 
 // MMCodeAnchor is the 1:1 companion of a source=code item: where the lines
@@ -124,10 +130,23 @@ type MMCodeAnchor struct {
 // accepted set.
 var (
 	validMMKind       = map[string]bool{"decision": true, "reading": true, "note": true}
-	validMMSource     = map[string]bool{"question": true, "artifact": true, "artifact-element": true, "code": true, "agent-output": true, "manual": true, "capture": true}
+	validMMSource     = map[string]bool{"question": true, "artifact": true, "artifact-element": true, "code": true, "agent-output": true, "manual": true, "capture": true, "nightly": true}
 	validMMAnchorKind = map[string]bool{"origin-main": true, "merge-base": true, "head": true, "dirty": true}
 	validMMScope      = map[string]bool{"universal": true, "repo": true}
 )
+
+// validMMState is the closed set for MMItem.State (schema v37). It is policed
+// for the same invisible-row reason as the three above, sharpened: ListMMItems
+// excludes on `state = 'live'`, so a misspelt state would be a row that no
+// live view ever shows and that ConfirmMMItem (which matches 'proposed') can
+// never reach.
+var validMMState = map[string]bool{"proposed": true, "live": true}
+
+// ErrMMItemInvalidated is ConfirmMMItem's refusal for a dead row: a proposal
+// that was dropped before carl confirmed it (his drop on the Model pane, or a
+// contradiction flag resolved as drop) stays dead, one-way invalidation's
+// rule.
+var ErrMMItemInvalidated = errors.New("mm item is invalidated")
 
 // normalizeMMScope applies the one default both writers share — an empty
 // scope is "repo", the column's DEFAULT — and refuses anything else outside
@@ -168,7 +187,7 @@ const mmItemColumns = `SELECT id, COALESCE(kind,''), COALESCE(source,''), COALES
 	COALESCE(invalidated_at,0), COALESCE(invalid_reason,''), COALESCE(invalid_detail,''),
 	COALESCE(title,''), COALESCE(scope,'repo'), COALESCE(repo,''), COALESCE(dir,''),
 	COALESCE(quote,''), COALESCE(source_json,''), COALESCE(thread_session,''),
-	COALESCE(revised_at,0)
+	COALESCE(revised_at,0), COALESCE(state,'live')
 	FROM mm_items`
 
 func scanMMItem(row interface{ Scan(...any) error }) (MMItem, error) {
@@ -177,7 +196,7 @@ func scanMMItem(row interface{ Scan(...any) error }) (MMItem, error) {
 		&it.Content, &it.Context, &it.SnapshotExt, &it.EpisodeID, &it.CreatedAt,
 		&it.InvalidatedAt, &it.InvalidReason, &it.InvalidDetail,
 		&it.Title, &it.Scope, &it.Repo, &it.Dir, &it.Quote, &it.SourceJSON,
-		&it.ThreadSession, &it.RevisedAt)
+		&it.ThreadSession, &it.RevisedAt, &it.State)
 	return it, err
 }
 
@@ -208,7 +227,13 @@ func (s *Store) AddMMItem(it MMItem) (int64, error) {
 		return 0, fmt.Errorf("bad mm kind %q: want decision, reading, or note", it.Kind)
 	}
 	if !validMMSource[it.Source] {
-		return 0, fmt.Errorf("bad mm source %q: want question, artifact, artifact-element, code, agent-output, manual, or capture", it.Source)
+		return 0, fmt.Errorf("bad mm source %q: want question, artifact, artifact-element, code, agent-output, manual, capture, or nightly", it.Source)
+	}
+	if it.State == "" {
+		it.State = "live"
+	}
+	if !validMMState[it.State] {
+		return 0, fmt.Errorf("bad mm state %q: want proposed or live", it.State)
 	}
 	scope, err := normalizeMMScope(it.Scope)
 	if err != nil {
@@ -229,12 +254,13 @@ func (s *Store) AddMMItem(it MMItem) (int64, error) {
 		`INSERT INTO mm_items (kind, source, job_id, slug, source_ref, content, context,
 			content_sha, snapshot_ext, episode_id, created_at, invalidated_at,
 			invalid_reason, invalid_detail, title, scope, repo, dir, quote,
-			source_json, thread_session, revised_at)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			source_json, thread_session, revised_at, state)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		it.Kind, it.Source, it.JobID, it.Slug, it.SourceRef, it.Content, it.Context,
 		SHA256Hex([]byte(it.Content)), it.SnapshotExt, it.EpisodeID, it.CreatedAt,
 		invalidatedAt, it.InvalidReason, it.InvalidDetail, it.Title, it.Scope,
 		it.Repo, it.Dir, it.Quote, it.SourceJSON, it.ThreadSession, it.RevisedAt,
+		it.State,
 	)
 	if err != nil {
 		return 0, fmt.Errorf("add mm item (%s/%s): %w", it.Kind, it.Source, err)
@@ -308,16 +334,20 @@ func (s *Store) GetMMSnapshot(id int64) ([]byte, string, error) {
 // tiebreak, so two items marked in the same millisecond still come back in a
 // stable order rather than in whatever order SQLite chose today.
 //
-// includeInvalidated false returns LIVE items only, which is the memory pane's
-// default view; true returns everything, which is what makes a dead item's
-// frozen content readable long after its source moved on.
+// includeInvalidated false returns LIVE items only — not invalidated AND not
+// a proposal — which is the memory pane's default view and what the
+// rules-file render and the verify pass read, so excluding proposals HERE is
+// what keeps an unconfirmed nightly item out of every agent's context and
+// out of the verify pass. true returns everything, proposals and dead items
+// included, which is what makes a dead item's frozen content readable long
+// after its source moved on.
 //
 // An empty result is not an error: it is the state every database is in before
 // carl marks his first thing.
 func (s *Store) ListMMItems(includeInvalidated bool) ([]MMItem, error) {
 	query := mmItemColumns
 	if !includeInvalidated {
-		query += ` WHERE invalidated_at IS NULL`
+		query += ` WHERE invalidated_at IS NULL AND state = 'live'`
 	}
 	query += ` ORDER BY created_at DESC, id DESC`
 	rows, err := s.db.Query(query)
@@ -359,9 +389,14 @@ func (s *Store) GetMMItem(id int64) (MMItem, error) {
 // Dir is the one field that is not an exact match: an item placed at a
 // directory applies to everything beneath it, so asking about `a/b` must also
 // return the items placed at `a` and at the repo root (the empty dir).
+//
+// Live means ListMMItems(false)'s predicate — not invalidated and not a
+// proposal. State is an exact match on the state column ("" = any). No route
+// exposes it today — the board's `proposed` chip filters the full list
+// client-side — so it is a store-level filter only.
 type MMFilter struct {
-	Live                bool
-	Repo, Dir, Q, Scope string
+	Live                       bool
+	Repo, Dir, Q, Scope, State string
 }
 
 // mmDirAncestors returns dir and every ancestor of it, ending at "" (the repo
@@ -397,7 +432,11 @@ func (s *Store) ListMMItemsFiltered(f MMFilter) ([]MMItem, error) {
 	var where []string
 	var args []any
 	if f.Live {
-		where = append(where, `invalidated_at IS NULL`)
+		where = append(where, `invalidated_at IS NULL AND state = 'live'`)
+	}
+	if f.State != "" {
+		where = append(where, `state = ?`)
+		args = append(args, f.State)
 	}
 	if f.Repo != "" {
 		where = append(where, `repo = ?`)
@@ -578,6 +617,76 @@ func (s *Store) SupersedeLiveMMItems(source string, jobID int64, sourceRef strin
 		return 0, fmt.Errorf("supersede mm items (%s %d %q): %w", source, jobID, sourceRef, err)
 	}
 	return int(n), nil
+}
+
+// FindMMItemsByQuote returns every item whose quote equals quote byte for
+// byte, newest first — live, proposed and dead rows alike, any source.
+//
+// It is the nightly pass' fold-and-suppress probe, and it deliberately
+// returns the whole history rather than a yes/no: a live or proposed match
+// means the thing is already in carl's head (fold), while a match that carl
+// himself killed means he rejected it (suppress), and only the caller knows
+// which reasons count as rejection. An empty quote matches nothing by
+// definition — most pre-v37 rows carry one — so it answers without a query.
+func (s *Store) FindMMItemsByQuote(quote string) ([]MMItem, error) {
+	out := []MMItem{}
+	if quote == "" {
+		return out, nil
+	}
+	rows, err := s.db.Query(mmItemColumns+` WHERE quote = ? ORDER BY created_at DESC, id DESC`, quote)
+	if err != nil {
+		return nil, fmt.Errorf("find mm items by quote: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		it, err := scanMMItem(rows)
+		if err != nil {
+			return nil, fmt.Errorf("find mm items by quote: %w", err)
+		}
+		out = append(out, it)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("find mm items by quote: %w", err)
+	}
+	return out, nil
+}
+
+// ConfirmMMItem promotes a proposal to a live item: carl's yes on the board.
+//
+// Confirming flips state in place rather than copying the row to a new id, so
+// the id the board showed carl is the id agents later cite. An already-live
+// row is a silent success (a double click, or two boards confirming at once);
+// an unknown id is ErrNotFound; a dead row is ErrMMItemInvalidated, because a
+// proposal that died before carl saw it — dropped on a contradiction, or
+// killed by the verify pass — must not come back to life through confirm.
+func (s *Store) ConfirmMMItem(id int64) error {
+	res, err := s.db.Exec(
+		`UPDATE mm_items SET state = 'live'
+			WHERE id = ? AND state = 'proposed' AND invalidated_at IS NULL`, id)
+	if err != nil {
+		return fmt.Errorf("confirm mm item %d: %w", id, err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("confirm mm item %d: %w", id, err)
+	}
+	if n > 0 {
+		return nil
+	}
+	// Zero rows: unknown, dead, or already live — the probe tells them apart
+	// only on the miss, InvalidateMMItem's shape.
+	var invalidatedAt int64
+	err = s.db.QueryRow(`SELECT COALESCE(invalidated_at,0) FROM mm_items WHERE id = ?`, id).Scan(&invalidatedAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return fmt.Errorf("confirm mm item %d: %w", id, ErrNotFound)
+	}
+	if err != nil {
+		return fmt.Errorf("confirm mm item %d: %w", id, err)
+	}
+	if invalidatedAt > 0 {
+		return fmt.Errorf("confirm mm item %d: %w", id, ErrMMItemInvalidated)
+	}
+	return nil
 }
 
 // InvalidateMMItem closes an item: one-way, terminal, and idempotent.

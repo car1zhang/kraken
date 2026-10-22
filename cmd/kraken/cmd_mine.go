@@ -9,11 +9,14 @@ import (
 	"time"
 
 	"kraken/internal/core"
+	"kraken/internal/jobs"
 	"kraken/internal/util"
 )
 
-// cmd_mine.go — `k mine digest|reduce`: the nightly dream pass' mechanical
-// read of claude's own transcripts, which is the ONE step of
+// cmd_mine.go — `k mine digest|reduce|operator|around`. operator and around
+// serve the nightly mind pass (core.OperatorProse, core.AroundRecord). The
+// rest of this comment is about digest and reduce, the nightly dream pass'
+// mechanical read of claude's own transcripts, which is the ONE step of
 // .claude/skills/dream/SKILL.md that no other verb could stand in for.
 //
 // core.MineTranscripts and core.ReduceTranscript (internal/core/mine.go) were
@@ -35,7 +38,7 @@ import (
 // corrupt it.
 func cmdMine(args []string) {
 	if len(args) == 0 {
-		util.Die("usage: k mine digest|reduce ...")
+		util.Die(mineUsage)
 	}
 	op, rest := args[0], args[1:]
 	switch op {
@@ -47,9 +50,171 @@ func cmdMine(args []string) {
 		if err := runMineReduce(rest, os.Stdout, os.Stderr); err != nil {
 			util.Die("%v", err)
 		}
+	case "operator":
+		if err := runMineOperator(rest, os.Stdout, os.Stderr); err != nil {
+			util.Die("%v", err)
+		}
+	case "around":
+		if err := runMineAround(rest, os.Stdout, os.Stderr); err != nil {
+			util.Die("%v", err)
+		}
 	default:
-		util.Die("usage: k mine digest|reduce ... (unknown op %q)", op)
+		util.Die("%s (unknown op %q)", mineUsage, op)
 	}
+}
+
+const (
+	mineUsage         = "usage: k mine digest|reduce|operator|around ..."
+	mineOperatorUsage = "usage: k mine operator --since <unix-millis> [--until <unix-millis>] [--login <name>] [--before N] [--after N]"
+	mineAroundUsage   = "usage: k mine around <transcript path> <uuid> [--radius N] [--raw]"
+)
+
+// mineFlag reads one `--name value` / `--name=value` flag at args[i],
+// returning its name, value and how many arguments it consumed. ok=false
+// means args[i] is not a flag at all.
+func mineFlag(args []string, i int) (name, value string, n int, ok bool, err error) {
+	a := args[i]
+	if !strings.HasPrefix(a, "--") {
+		return "", "", 0, false, nil
+	}
+	if k, v, eq := strings.Cut(a, "="); eq {
+		return k, v, 1, true, nil
+	}
+	if i+1 >= len(args) {
+		return a, "", 0, true, fmt.Errorf("%s needs a value", a)
+	}
+	return a, args[i+1], 2, true, nil
+}
+
+// runMineOperator is `k mine operator`: the operator's own prompts in a
+// window, each with the reduced context around it, as JSON.
+//
+// --since is REQUIRED rather than defaulted like digest's: this verb feeds a
+// pass that writes into the operator's mental model, and a silently defaulted
+// window would propose from a night nobody asked about.
+func runMineOperator(args []string, stdout, stderr *os.File) error {
+	if mineHelpRequested(args) {
+		fmt.Fprintln(stdout, mineOperatorUsage)
+		return nil
+	}
+	opts := core.OperatorOptions{Login: jobs.Operator(), Before: 6, After: 2}
+	haveSince := false
+	for i := 0; i < len(args); {
+		name, value, n, ok, err := mineFlag(args, i)
+		if !ok {
+			return fmt.Errorf("%s (unexpected argument %q)", mineOperatorUsage, args[i])
+		}
+		if err != nil {
+			return fmt.Errorf("%v\n%s", err, mineOperatorUsage)
+		}
+		switch name {
+		case "--since", "--until":
+			v, perr := strconv.ParseInt(strings.TrimSpace(value), 10, 64)
+			if perr != nil || v < 0 {
+				return fmt.Errorf("%s must be unix millis, got %q", name, value)
+			}
+			if name == "--since" {
+				opts.Since, haveSince = v, true
+			} else {
+				opts.Until = v
+			}
+		case "--login":
+			opts.Login = value
+		case "--before", "--after":
+			v, perr := strconv.Atoi(strings.TrimSpace(value))
+			if perr != nil {
+				return fmt.Errorf("%s must be an integer, got %q", name, value)
+			}
+			if name == "--before" {
+				opts.Before = v
+			} else {
+				opts.After = v
+			}
+		default:
+			return fmt.Errorf("%s (unknown flag %q)", mineOperatorUsage, name)
+		}
+		i += n
+	}
+	if !haveSince {
+		return fmt.Errorf("%s (--since is required)", mineOperatorUsage)
+	}
+
+	res, err := core.OperatorProse(opts)
+	if err != nil {
+		return err
+	}
+	enc := json.NewEncoder(stdout)
+	enc.SetIndent("", "  ")
+	if err := enc.Encode(res); err != nil {
+		return fmt.Errorf("write stdout: %v", err)
+	}
+	fmt.Fprintf(stderr, "%d operator records in %d transcripts since %s (%d skipped, %d truncated)\n",
+		len(res.Records), res.Scanned, time.UnixMilli(opts.Since).Format(time.RFC3339), res.Skipped, res.Truncated)
+	return nil
+}
+
+// runMineAround is `k mine around <path> <uuid>`: the blocks around one
+// record, in `k mine reduce`'s layout, the record's own label marked `▶ `.
+// It is the drill-down for an operator record whose six blocks of context
+// did not say what "that" referred to.
+func runMineAround(args []string, stdout, stderr *os.File) error {
+	if mineHelpRequested(args) {
+		fmt.Fprintln(stdout, mineAroundUsage)
+		return nil
+	}
+	radius, raw := 20, false
+	var pos []string
+	for i := 0; i < len(args); {
+		if args[i] == "--raw" {
+			raw = true
+			i++
+			continue
+		}
+		name, value, n, ok, err := mineFlag(args, i)
+		if !ok {
+			pos = append(pos, args[i])
+			i++
+			continue
+		}
+		if err != nil {
+			return fmt.Errorf("%v\n%s", err, mineAroundUsage)
+		}
+		if name != "--radius" {
+			return fmt.Errorf("%s (unknown flag %q)", mineAroundUsage, name)
+		}
+		v, perr := strconv.Atoi(strings.TrimSpace(value))
+		if perr != nil {
+			return fmt.Errorf("--radius must be an integer, got %q", value)
+		}
+		radius = v
+		i += n
+	}
+	if len(pos) != 2 || strings.TrimSpace(pos[0]) == "" || strings.TrimSpace(pos[1]) == "" {
+		return fmt.Errorf("%s", mineAroundUsage)
+	}
+	path, uuid := strings.TrimSpace(pos[0]), strings.TrimSpace(pos[1])
+	blocks, hit, found, err := core.AroundRecord(path, uuid, radius, raw)
+	if err != nil {
+		return err
+	}
+	if !found {
+		return fmt.Errorf("no record with uuid %s in %s", uuid, path)
+	}
+	var b strings.Builder
+	for i, blk := range blocks {
+		if i == hit {
+			b.WriteString("▶ ")
+		}
+		b.WriteString(blk.Label + "\n")
+		if blk.Text != "" {
+			b.WriteString(blk.Text + "\n")
+		}
+		b.WriteString("\n")
+	}
+	if _, err := stdout.WriteString(b.String()); err != nil {
+		return fmt.Errorf("write stdout: %v", err)
+	}
+	return nil
 }
 
 // runMineDigest is `k mine digest [--since <unix-millis>]`: one digest per

@@ -26,10 +26,18 @@ import { useRenderedMD } from "../../hooks/useRenderedMD.ts";
 import { shortDate } from "../../lib/dates.ts";
 
 /**
- * The kind chips. Four are a KIND (every item has exactly one) and the fifth
- * cuts across them — an invalidated reading is still a reading.
+ * The kind chips. Four are a KIND (every item has exactly one) and the rest
+ * cut across them — an invalidated reading is still a reading, and a nightly
+ * or proposed item is still a decision or a note.
  */
-type MMKindFilter = "all" | "decision" | "reading" | "note" | "invalidated";
+export type MMKindFilter =
+  | "all"
+  | "decision"
+  | "reading"
+  | "note"
+  | "invalidated"
+  | "nightly"
+  | "proposed";
 
 const FILTERS: { key: MMKindFilter; label: string }[] = [
   { key: "all", label: "all" },
@@ -37,6 +45,8 @@ const FILTERS: { key: MMKindFilter; label: string }[] = [
   { key: "reading", label: "readings" },
   { key: "note", label: "notes" },
   { key: "invalidated", label: "invalidated" },
+  { key: "nightly", label: "nightly" },
+  { key: "proposed", label: "proposed" },
 ];
 
 /** How long the filter box waits after the last keystroke before it asks. */
@@ -45,8 +55,26 @@ const FILTER_DEBOUNCE_MS = 250;
 /** Live is the ABSENCE of the key — the wire has no boolean to read. */
 const isLive = (it: MMItem) => !it.invalidated_at;
 
-const matchesFilter = (it: MMItem, f: MMKindFilter) =>
-  f === "all" ? true : f === "invalidated" ? !isLive(it) : it.kind === f;
+/**
+ * A nightly mind-pass item still waiting for carl's confirm. Held out of the
+ * rules files and `kraken mm get` until then; an absent `state` is live.
+ */
+export const isProposed = (it: MMItem) => it.state === "proposed";
+
+export function matchesFilter(it: MMItem, f: MMKindFilter): boolean {
+  switch (f) {
+    case "all":
+      return true;
+    case "invalidated":
+      return !isLive(it);
+    case "nightly":
+      return it.source === "nightly";
+    case "proposed":
+      return isProposed(it);
+    default:
+      return it.kind === f;
+  }
+}
 
 /** The row's badge. `reading` reads as READ — it is what carl did, not a genre. */
 const KIND_LABEL: Record<string, string> = {
@@ -141,16 +169,21 @@ const SOURCE_LABEL: Record<string, string> = {
   "agent-output": "agent",
   manual: "manual",
   capture: "mind",
+  nightly: "nightly",
 };
 
 function MMRow({
   it,
   removing,
   onRemove,
+  confirming,
+  onConfirm,
 }: {
   it: MMItem;
   removing: boolean;
   onRemove: (id: number) => void;
+  confirming: boolean;
+  onConfirm: (id: number) => void;
 }) {
   const [open, setOpen] = useState(false);
   // The `source` drill-down: null = not asked, "loading" while in flight.
@@ -158,17 +191,22 @@ function MMRow({
     null,
   );
   const live = isLive(it);
+  const proposed = isProposed(it);
   const title = itemTitle(it);
   const scope = scopeLabel(it);
   const capSrc = captureSource(it);
   /**
    * A legacy marked SELECTION expands as markdown (its content is a span of an
    * artifact's markdown source); a committed item's body is prose the mind
-   * thread wrote, which is markdown too. A code reading's content is source
-   * in some other language and stays verbatim.
+   * thread wrote, which is markdown too, and so is a nightly item's body,
+   * written by the mind pass. A code reading's content is source in some
+   * other language and stays verbatim.
    */
   const asMD =
-    (it.source === "artifact-element" || it.source === "capture") && it.content !== "";
+    (it.source === "artifact-element" ||
+      it.source === "capture" ||
+      it.source === "nightly") &&
+    it.content !== "";
   const bodyHTML = useRenderedMD(asMD ? it.content : undefined);
   // A note's headline IS its content; repeating it would be an empty gesture.
   const bodyText = asMD ? it.content : title === it.content.trim() ? "" : it.content;
@@ -205,6 +243,7 @@ function MMRow({
               {KIND_LABEL[it.kind] ?? it.kind}
             </span>
             <span className="mm-headline">{title}</span>
+            {proposed ? <span className="mm-proposed">proposed</span> : null}
           </span>
           {live ? null : (
             <span className="mm-dead">
@@ -235,6 +274,17 @@ function MMRow({
         >
           source
         </button>
+        {proposed ? (
+          <button
+            className="mm-act mm-confirm"
+            title="confirm this proposed item — it goes live in the mental model"
+            aria-label={`confirm ${title}`}
+            disabled={confirming || !live}
+            onClick={() => onConfirm(it.id)}
+          >
+            confirm
+          </button>
+        ) : null}
         <button
           className="mm-act mm-rm"
           title="drop this item — the row stays, invalidated"
@@ -388,6 +438,11 @@ export interface MentalModelPaneProps {
   onAddNote: (text: string) => Promise<void>;
   /** Drop one item by id (invalidates it — nothing here deletes). */
   onRemove: (id: number) => Promise<void>;
+  /**
+   * Confirm one `proposed` item (the nightly mind pass') so it goes live.
+   * Routed through the same mutate + refetch as `onRemove`.
+   */
+  onConfirm: (id: number) => Promise<void>;
   /** Open the steer modal of a flag's job. Absent hides `open job`. */
   onOpenJob?: (slug: string) => void;
 }
@@ -397,6 +452,7 @@ export function MentalModelPane({
   mm,
   onAddNote,
   onRemove,
+  onConfirm,
   onOpenJob,
 }: MentalModelPaneProps) {
   const [filter, setFilter] = useState<MMKindFilter>("all");
@@ -407,6 +463,9 @@ export function MentalModelPane({
   const [note, setNote] = useState("");
   const [adding, setAdding] = useState(false);
   const [removing, setRemoving] = useState<ReadonlySet<number>>(
+    () => new Set<number>(),
+  );
+  const [confirming, setConfirming] = useState<ReadonlySet<number>>(
     () => new Set<number>(),
   );
   const [resolving, setResolving] = useState<ReadonlySet<number>>(
@@ -439,12 +498,16 @@ export function MentalModelPane({
       reading: 0,
       note: 0,
       invalidated: 0,
+      nightly: 0,
+      proposed: 0,
     };
     for (const it of source.items) {
       if (it.kind === "decision" || it.kind === "reading" || it.kind === "note") {
         c[it.kind]++;
       }
       if (!isLive(it)) c.invalidated++;
+      if (it.source === "nightly") c.nightly++;
+      if (isProposed(it)) c.proposed++;
     }
     return c;
   }, [source.items]);
@@ -473,6 +536,25 @@ export function MentalModelPane({
       next.delete(id);
       return next;
     });
+  };
+
+  const confirm = async (id: number) => {
+    if (confirming.has(id)) return;
+    setConfirming((prev) => new Set(prev).add(id));
+    // the integrator routes this through the shared mutate `remove` rides,
+    // which parks a refusal in the clock corner rather than rejecting; the
+    // refetch here is what moves the row whatever the caller did
+    try {
+      await onConfirm(id);
+      await refetchBoth();
+    } finally {
+      // a rejection must not leave the button disabled until remount
+      setConfirming((prev) => {
+        const next = new Set(prev);
+        next.delete(id);
+        return next;
+      });
+    }
   };
 
   const resolve = async (id: number, resolution: "drop" | "keep") => {
@@ -513,7 +595,7 @@ export function MentalModelPane({
         ? `nothing matches “${askedQ}”`
         : mm.items.length
           ? "nothing in that filter"
-          : "nothing captured yet — highlight text anywhere and press ◆ mind, or + note here";
+          : "nothing captured yet — highlight text anywhere and press ◆ mind, or + note here; the nightly pass proposes items for you to confirm";
 
   return (
     <section className="graph-lib mm-pane" hidden={hidden}>
@@ -602,6 +684,8 @@ export function MentalModelPane({
               it={it}
               removing={removing.has(it.id)}
               onRemove={(id) => void remove(id)}
+              confirming={confirming.has(it.id)}
+              onConfirm={(id) => void confirm(id)}
             />
           ))
         ) : (

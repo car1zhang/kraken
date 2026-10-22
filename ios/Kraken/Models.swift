@@ -876,6 +876,9 @@ struct WebJob: Decodable, Identifiable {
     // absent for the claude default. Additive key, absent on older servers, so
     // no contract bump; a client that ignores it renders as it always has.
     let agent: String?
+    // Who wrote the job (schema v37): operator | agent | linear | kraken |
+    // unknown. Additive key, absent on older servers; decoded, not rendered.
+    let author: String?
     // The PRIMARY goal this job is linked to: the head of `goals` below,
     // present under exactly the same condition and never on its own. From
     // ANY period and done or not, so a job carried over from last week
@@ -984,6 +987,7 @@ struct WebJob: Decodable, Identifiable {
         case load
         case color
         case agent
+        case author
         case goal
         case goals
         // the wire name is `account`; the stored property is the tolerant
@@ -2479,6 +2483,9 @@ struct WebMMItem: Decodable, Identifiable {
     /// `source` above is already the string provenance — `capture` for an
     /// item a mind thread committed.
     let captureSource: WebCaptureSource?
+    /// "live" or "proposed" (schema v37): a proposed item is a nightly mind
+    /// pass proposal awaiting confirm. Absent on older servers.
+    let state: String?
 
     /// Live is the ABSENCE of `invalidated_at`, per the paragraph above. Every
     /// predicate in the app tests this rather than a stamp's value, so a
@@ -2499,6 +2506,7 @@ struct WebMMItem: Decodable, Identifiable {
         case threadSession = "thread_session"
         case revisedAt = "revised_at"
         case captureSource = "capture_source"
+        case state
     }
 }
 
@@ -2507,7 +2515,9 @@ struct WebMMItem: Decodable, Identifiable {
 // ◆ mind sends one; JSONEncoder omits every nil, so an artifact capture goes
 // out as exactly `{kind, slug, home, name}`.
 struct WebCaptureSource: Codable, Equatable {
-    /// artifact | transcript | dir | item | manual.
+    /// artifact | transcript | dir | item | manual, plus the nightly mind
+    /// pass' job | feedback | question (schema v37; their `qid` /
+    /// `feedback_id` keys are not decoded here).
     let kind: String
     var slug: String? = nil
     var home: String? = nil

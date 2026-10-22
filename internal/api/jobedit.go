@@ -200,6 +200,7 @@ func webJobCreate(w http.ResponseWriter, r *http.Request) {
 		Solo: parsed.Solo, Model: parsed.Model,
 		Color: parsed.Color, Agent: parsed.Agent, Body: parsed.Body,
 		Visibility: parsed.Visibility,
+		Author:     "operator",
 	}); err != nil {
 		// ErrSlugTaken is a name clash the caller can fix by typing a
 		// different one, so it is a 409 like the pre-check above and never

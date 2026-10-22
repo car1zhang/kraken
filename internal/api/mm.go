@@ -212,6 +212,9 @@ type webMMItem struct {
 	// shipped iOS builds; serving an object there would be a retype, i.e. a
 	// breaking change, which apiContract 6 rules out.
 	CaptureSource *jobs.CaptureSource `json:"capture_source"`
+	// State is "live" or "proposed" (schema v37), always present: a proposed
+	// item is a mind-pass proposal awaiting POST /api/mm/confirm.
+	State string `json:"state"`
 }
 
 func webMMAnchorFrom(a store.MMCodeAnchor) *webMMAnchor {
@@ -234,6 +237,10 @@ func webMMItemFrom(it store.MMItem, anchor *store.MMCodeAnchor) webMMItem {
 		Title:         it.Title, Scope: it.Scope, Repo: it.Repo, Dir: it.Dir,
 		Quote: it.Quote, ThreadSession: it.ThreadSession, RevisedAt: it.RevisedAt,
 		CaptureSource: mmParseSource(it.SourceJSON),
+		State:         it.State,
+	}
+	if out.State == "" {
+		out.State = "live"
 	}
 	if anchor != nil {
 		out.Anchor = webMMAnchorFrom(*anchor)
@@ -323,7 +330,13 @@ type mmRemoveReq struct {
 // spelling that lands on the right field with the right meaning is a request
 // that meant what it said.
 func mmDecode(w http.ResponseWriter, r *http.Request, into any, fields string) bool {
-	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20))
+	return mmDecodeLimit(w, r, into, fields, 1<<20)
+}
+
+// mmDecodeLimit is mmDecode with its own body cap — for POST /api/mm/propose,
+// whose legal 20-item batch can exceed the 1 MB every other mm route takes.
+func mmDecodeLimit(w http.ResponseWriter, r *http.Request, into any, fields string, limit int64) bool {
+	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, limit))
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(into); err != nil {
 		var mbe *http.MaxBytesError
@@ -1878,6 +1891,12 @@ func mmSourceHandler(w http.ResponseWriter, r *http.Request) {
 		resp = mmDirSource(*src)
 	case "code":
 		resp = mmCodeSource(st, it.ID)
+	case "job":
+		resp = mmJobSource(st, *src)
+	case "feedback":
+		resp = mmFeedbackSource(st, *src)
+	case "question":
+		resp = mmQuestionSource(st, *src)
 	default:
 		resp = mmSourceResp{Kind: src.Kind}
 	}
@@ -1896,6 +1915,84 @@ func mmLegacySource(it store.MMItem) *jobs.CaptureSource {
 	default:
 		return &jobs.CaptureSource{Kind: it.Source}
 	}
+}
+
+// The mind pass' three pointer kinds (schema v37). Each resolves by slug,
+// active first then archived, and answers available:false when the row is
+// gone — a 200 like every other arm.
+
+// mmJobBySlugAnyHome is the store row for slug, active first, else the most
+// recently archived row that carried it; nil when neither exists.
+func mmJobBySlugAnyHome(st *store.Store, slug string) *store.Job {
+	slug = strings.TrimSpace(slug)
+	if slug == "" {
+		return nil
+	}
+	if j, err := st.GetJobBySlug(slug); err == nil && j != nil {
+		return j
+	}
+	archived, err := st.ListArchivedJobs()
+	if err != nil {
+		return nil
+	}
+	var best *store.Job
+	for _, j := range archived {
+		if j.Slug == slug && (best == nil || j.ArchivedAt > best.ArchivedAt) {
+			best = j
+		}
+	}
+	return best
+}
+
+// mmJobSource serves the job's spec as zeus was prompted with it;
+// `changed` compares it to the sha the proposal recorded, when it recorded one.
+func mmJobSource(st *store.Store, src jobs.CaptureSource) mmSourceResp {
+	resp := mmSourceResp{Kind: "job"}
+	j := mmJobBySlugAnyHome(st, src.Slug)
+	if j == nil {
+		return resp
+	}
+	resp.Available = true
+	resp.Text = jobs.JobSpecText(j.Body)
+	if ref := strings.TrimSpace(src.SHA); ref != "" {
+		resp.Changed = store.SHA256Hex([]byte(resp.Text)) != ref
+	}
+	return resp
+}
+
+// mmFeedbackSource serves one feedback note by id.
+func mmFeedbackSource(st *store.Store, src jobs.CaptureSource) mmSourceResp {
+	resp := mmSourceResp{Kind: "feedback"}
+	if src.FeedbackID <= 0 {
+		return resp
+	}
+	f, err := st.GetFeedback(src.FeedbackID)
+	if err != nil || f == nil {
+		return resp
+	}
+	resp.Available, resp.Text = true, f.Note
+	return resp
+}
+
+// mmQuestionSource serves one question and its answer.
+func mmQuestionSource(st *store.Store, src jobs.CaptureSource) mmSourceResp {
+	resp := mmSourceResp{Kind: "question"}
+	j := mmJobBySlugAnyHome(st, src.Slug)
+	if j == nil || strings.TrimSpace(src.QID) == "" {
+		return resp
+	}
+	qs, err := st.ListQuestions(j.ID)
+	if err != nil {
+		return resp
+	}
+	for _, q := range qs {
+		if q.QID == src.QID {
+			resp.Available = true
+			resp.Text = q.Text + "\n\nanswer: " + q.Answer
+			return resp
+		}
+	}
+	return resp
 }
 
 // mmJobByIDAnyHome finds a capture's owning job by its immutable id, active
