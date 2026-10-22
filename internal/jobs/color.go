@@ -31,7 +31,7 @@ type JobColor struct {
 // The Term256 slots are the nearest neighbours of Hex in the xterm 216-colour
 // cube + grey ramp (TestPaletteTerm256MatchesItsHex recomputes them, so a
 // hand-typo here fails the build rather than shipping a subtly-off pane
-// label). The same sixteen hexes are spelled out in web/static/style.css's
+// label). The same sixteen hexes are spelled out in web/_ui/src/styles/style.css's
 // two --job-* blocks and in ios/Kraken/Theme.swift; TestJobPaletteMatchesCSS
 // and TestJobPaletteMatchesSwift (package web) are what keep all three in
 // step. HexLight is the

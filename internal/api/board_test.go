@@ -27,6 +27,9 @@ func writeTestJob(t *testing.T, slug, extraFrontmatter string) {
 	src := "---\njob: " + slug + "\ntype: build\nrepo: monolith\n" +
 		extraFrontmatter + "---\n\n# Spec\n"
 	seedJobText(t, slug, src)
+	// a board an earlier test built inside the cache TTL would otherwise be
+	// served without this job
+	webBoardCache.invalidate()
 }
 
 // mustJSON marshals v for use as an httptest request body.

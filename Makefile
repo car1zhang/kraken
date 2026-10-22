@@ -22,6 +22,10 @@ ifneq ($(KRAKEN_ENV_LABEL),)
 KRAKEN_LABEL ?= $(KRAKEN_ENV_LABEL)
 endif
 KRAKEN_LABEL ?= dev.carl.kraken
+# The codesign --identifier: the code identity TCC grants are keyed on. Defaults
+# to the launchd label, which on this install is the identifier every existing
+# grant was made under; set it explicitly to keep grants across a label change.
+KRAKEN_SIGN_IDENT ?= $(KRAKEN_LABEL)
 # The quote rule, applied to the RESOLVED label whatever its origin (make line,
 # environment, or the file): a value wrapped in matching ' or " quotes is
 # refused with a note and falls through to the default. The env loader keeps
@@ -143,9 +147,10 @@ install: build install-completion install-serve
 	# identity plus a stable --identifier makes the requirement name WHO signed
 	# it instead of WHAT the bytes are, so a grant survives rebuilds.
 	#
-	# The --identifier is deliberately NOT $(KRAKEN_LABEL): it is the code
-	# identity existing grants are keyed on, not the launchd job name, and
-	# moving it would re-prompt every grant once.
+	# The --identifier is $(KRAKEN_SIGN_IDENT), its own knob rather than the
+	# label itself: it is the code identity existing grants are keyed on, not
+	# the launchd job name, and moving it re-prompts every grant once — so a
+	# label change is made with the identifier pinned to the old value.
 	#
 	# Identity: $(KRAKEN_SIGN_ID) if set, else the first codesigning identity in
 	# the keychain (swapping to a self-signed cert later is config, not code).
@@ -161,8 +166,8 @@ install: build install-completion install-serve
 	fi; \
 	if [ -z "$$id" ]; then \
 	  echo "warning: no codesigning identity found (set KRAKEN_SIGN_ID) — leaving the binary ad-hoc signed; expect a TCC re-prompt"; \
-	elif codesign --force --sign "$$id" --identifier dev.carl.kraken ./kraken; then \
-	  echo "signed kraken → identifier dev.carl.kraken ($$id)"; \
+	elif codesign --force --sign "$$id" --identifier "$(KRAKEN_SIGN_IDENT)" ./kraken; then \
+	  echo "signed kraken → identifier $(KRAKEN_SIGN_IDENT) ($$id)"; \
 	else \
 	  echo "warning: codesign failed — continuing with the ad-hoc signature"; \
 	fi
