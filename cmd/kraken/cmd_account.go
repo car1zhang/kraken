@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -58,7 +59,22 @@ func cmdAccount(args []string) {
 // snapshot prints a note and does not suppress the codex table.
 func cmdAccountStatus() {
 	printRotationLine()
-	snap, ok := jobs.ReadUsageSnapshot()
+	// Ask the running serve first: only serve wires the store, so in THIS
+	// process jobs.ReadUsageSnapshot falls back to ~/.kraken/usage.json — a
+	// file serve stopped writing once the snapshot moved into kraken.db —
+	// and read that way `k account` said "no usage data yet" forever on any
+	// install with no leftover file. Serve's answer wins outright, even a
+	// "nothing yet": a leftover file is stale by definition. The local reads
+	// run only when serve cannot be reached (down, or on a non-default port
+	// with KRAKEN_SERVE_ADDR unset — set it in ~/.kraken/env for that case).
+	served, servedOK := fetchServeUsage()
+	var snap core.UsageSnapshot
+	var ok bool
+	if servedOK {
+		snap, ok = core.UsageSnapshot{FetchedAt: served.FetchedAt, Accounts: served.Accounts}, served.Available
+	} else {
+		snap, ok = jobs.ReadUsageSnapshot()
+	}
 	if !ok {
 		fmt.Println("no usage data yet (daemon hasn't run a usage pass) — try again shortly")
 	} else {
@@ -72,10 +88,39 @@ func cmdAccountStatus() {
 	// pool sees exactly what it saw before. Its own read, after the claude
 	// half, so a missing claude snapshot never hides it: a codex-only setup
 	// still gets its table.
-	if codex, ok := jobs.ReadCodexUsageSnapshot(); ok && len(codex.Accounts) > 0 {
+	var codex core.UsageSnapshot
+	if servedOK {
+		codex, ok = core.UsageSnapshot{FetchedAt: served.CodexFetchedAt, Accounts: served.CodexAccounts}, true
+	} else {
+		codex, ok = jobs.ReadCodexUsageSnapshot()
+	}
+	if ok && len(codex.Accounts) > 0 {
 		fmt.Println()
 		printCodexAccountTable(codex)
 	}
+}
+
+// servedUsage is the subset of GET /api/usage (internal/api/usage.go's
+// webUsage) that `k account` prints.
+type servedUsage struct {
+	Available      bool                `json:"available"`
+	FetchedAt      int64               `json:"fetched_at"`
+	Accounts       []core.AccountUsage `json:"accounts"`
+	CodexFetchedAt int64               `json:"codex_fetched_at"`
+	CodexAccounts  []core.AccountUsage `json:"codex_accounts"`
+}
+
+// fetchServeUsage asks the running kraken serve (qfGet, the same client and
+// address every cell-side verb uses) for its usage snapshots. ok is false
+// when serve is unreachable or answers anything but a decodable 2xx; the
+// caller then falls back to the local reads.
+func fetchServeUsage() (servedUsage, bool) {
+	var u servedUsage
+	body, err := qfGet("/api/usage")
+	if err != nil {
+		return u, false
+	}
+	return u, json.Unmarshal(body, &u) == nil
 }
 
 // printCodexAccountTable renders the ~/.codex-pool slots the codex binder
