@@ -31,7 +31,13 @@ import type {
   WatchVerdict,
   WebBoard,
   WebUsage,
+  NodeEnvelope,
+  NodeRead,
+  PairDevicesResponse,
+  RawJob,
+  WebNode,
 } from "./types.ts";
+import type { Visibility } from "../lib/fleet.ts";
 // The mental model's wire types live in lib/mm.ts and not in api/types.ts,
 // which is the one inversion in this file's imports: the contract froze
 // `MMItem` as a lib/mm.ts export because its two pure consumers there are
@@ -420,6 +426,12 @@ export const removeMM = (id: number) => postJSON("/api/mm/remove", { id });
  * rename or a send never restates (or accidentally rewrites) the thread's
  * model. It carries a THREAD_MODELS alias, and the server 400s anything else by
  * name, which is why the picker is the only thing that sets it.
+ *
+ * `headless` is read by BRANCH alone too: true (or absent, for an `ask` role)
+ * asks for a headless ask thread, false for a pane thread. It is orthogonal to
+ * `role` — a mind thread is always a pane, and the server refuses `role: "mind"`
+ * with `headless: true`. It rides the body only when the caller passes it,
+ * since the spread copies only the keys `extra` holds.
  */
 export const threadOp = (
   slug: string,
@@ -431,6 +443,8 @@ export const threadOp = (
     model?: string;
     /** branch only: `ask` (default) or `mind`. */
     role?: "ask" | "mind";
+    /** branch only: headless (an ask thread, no pane) or a pane thread. */
+    headless?: boolean;
   } = {},
 ) => postJSON<{ ok: true; tid?: string }>("/api/threads", { slug, op, ...extra });
 
@@ -532,6 +546,117 @@ export const setRotationMode = (mode: "auto" | "manual") =>
  */
 export const setJobColor = (slug: string, color: string) =>
   postJSON("/api/job/color", { slug, color });
+
+// ------------------------------------------------------------ fleet
+
+/**
+ * Set a LOCAL job's visibility — `private` (never leaves this machine),
+ * `readonly` (the default), `public` (other krakens may drive it). A
+ * one-field route like colour, usable on a live cell for the same reason.
+ */
+export async function setJobVisibility(slug: string, visibility: Visibility): Promise<void> {
+  await postJSON("/api/job/visibility", { slug, visibility });
+}
+
+/** The registry, with each node's polled job list (`jobs`) filled. */
+export function fetchNodes(signal?: AbortSignal): Promise<{ nodes: WebNode[] }> {
+  return getJSON<{ nodes: WebNode[] }>("/api/nodes", signal);
+}
+
+/** This node's own envelope — the Devices overlay's identity row. */
+export const fetchNodeSelf = (signal?: AbortSignal) =>
+  getJSON<NodeEnvelope>("/api/node", signal);
+
+/**
+ * Drive a remote cell through this node's proxy. Most actions need a PUBLIC
+ * card; the three thread actions (`thread-ask`, `thread-send`, `thread-kill`)
+ * are admitted on readonly cards too. The owner node re-checks the job's
+ * visibility at request time, so a card that went readonly between polls
+ * refuses a public-only action with a 403 rather than acting. Resolves to
+ * whatever the owner replied (`{ok:true}` for most actions, plus `tid` for
+ * `thread-ask`).
+ */
+export function postNodeAction(
+  node: string,
+  slug: string,
+  action: string,
+  payload: Record<string, unknown> = {},
+): Promise<unknown> {
+  return postJSON<unknown>("/api/nodes/action", { node, slug, action, payload });
+}
+
+/** A remote readonly or public job's raw text, same body as `GET /api/job/raw`. */
+export function fetchNodeJobRaw(node: string, slug: string, signal?: AbortSignal) {
+  return getJSON<RawJob>(
+    `/api/nodes/job/raw?node=${encodeURIComponent(node)}&slug=${encodeURIComponent(slug)}`,
+    signal,
+  );
+}
+
+/**
+ * A remote readonly or public cell's last `n` zeus transcript blocks. Kept as
+ * the `/api/nodes/read` client, but no SPA view calls it now — the remote
+ * steer modal reads `fetchNodeTranscript` instead.
+ */
+export function fetchNodeRead(node: string, slug: string, n: number, signal?: AbortSignal) {
+  return getJSON<NodeRead>(
+    `/api/nodes/read?node=${encodeURIComponent(node)}&slug=${encodeURIComponent(slug)}&n=${n}`,
+    signal,
+  );
+}
+
+/**
+ * A remote job's zeus transcript, proxied to its owner's `/api/job/transcript`
+ * — the same body `fetchJobTranscriptTurns` reads locally.
+ */
+export function fetchNodeTranscript(
+  node: string,
+  slug: string,
+  turns: number,
+  signal?: AbortSignal,
+): Promise<JobTranscript> {
+  return getJSON<JobTranscript>(
+    `/api/nodes/transcript?node=${encodeURIComponent(node)}&slug=${encodeURIComponent(slug)}&turns=${turns}`,
+    signal,
+  );
+}
+
+/**
+ * One side thread of a remote job, proxied to its owner's `/api/thread/read`.
+ * `n` rides only when given, so the owner's own default applies otherwise.
+ */
+export function fetchNodeThreadRead(
+  node: string,
+  slug: string,
+  tid: string,
+  n?: number,
+  signal?: AbortSignal,
+): Promise<ThreadRead> {
+  return getJSON<ThreadRead>(
+    `/api/nodes/thread/read?node=${encodeURIComponent(node)}&slug=${encodeURIComponent(slug)}&tid=${encodeURIComponent(tid)}` +
+      (n !== undefined ? `&n=${n}` : ""),
+    signal,
+  );
+}
+
+// ------------------------------------------------------------ pairing
+
+export function fetchPairDevices(signal?: AbortSignal): Promise<PairDevicesResponse> {
+  return getJSON<PairDevicesResponse>("/api/pair/devices", signal);
+}
+
+/**
+ * Set (non-empty) or clear (empty) the pairing password. Either revokes every
+ * paired phone — `revoked` is how many. The 12-character floor is enforced
+ * server-side too; the form's own check only saves a round trip.
+ */
+export function setPairPassword(password: string): Promise<{ ok: true; revoked: number }> {
+  return postJSON<{ ok: true; revoked: number }>("/api/pair/password", { password });
+}
+
+export async function revokePairDevice(id: number): Promise<void> {
+  await postJSON("/api/pair/revoke", { id });
+}
 
 // ------------------------------------------------------------ goals
 

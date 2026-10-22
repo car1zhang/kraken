@@ -755,6 +755,32 @@ func spawnCommand(j *Job, argv []string, brief, prompt string) (string, error) {
 	return accountEnvPrefix(j) + cmd, nil
 }
 
+// withJobSlugEnv adds the job-slug assignment (jobSlugEnvPrefix) to a claude
+// zeus command spawnCommand built, right after its account prefix so every
+// HasPrefix reading of a bound command keeps holding. The claude zeus spawns —
+// StartCell and ReactivateJob through zeusLaunch, and the limit rescue's
+// respawn — apply it, so a `kraken s <node>/<slug>` typed by zeus or any
+// teammate it starts (they inherit its process env) can say which cell sent
+// it. It is applied by those callers rather than inside spawnCommand because
+// spawnCommand's unbound output is pinned byte-identical to the pre-binding
+// command, and that pin is about the account seam, not this one.
+func withJobSlugEnv(j *Job, cmd string) string {
+	p := accountEnvPrefix(j)
+	return p + jobSlugEnvPrefix(j) + strings.TrimPrefix(cmd, p)
+}
+
+// jobSlugEnvPrefix exports KRAKEN_JOB_SLUG='<slug>' for a cell's zeus. The CLI
+// reads it (cmdSend, as the X-Kraken-From-Cell header of a cross-node steer)
+// to name the sending cell; outside a cell the variable is absent. On the
+// command string, never exec.Cmd.Env, for accountEnvPrefix's reason: tmux
+// respawn-pane builds no env from the issuing client.
+func jobSlugEnvPrefix(j *Job) string {
+	if j == nil || j.Slug == "" {
+		return ""
+	}
+	return "KRAKEN_JOB_SLUG='" + shellSingleQuote(j.Slug) + "' "
+}
+
 // codexZeusModel is zeusModel's codex arm: the model a codex cell's zeus runs
 // on — the job's own model: when it pins one, else core.CodexZeusModel. One
 // resolver for the same reason zeusModel is one: codexModelArgs puts it on the
@@ -898,7 +924,11 @@ func zeusLaunch(j *Job, wt, prompt, resumeSession string) (string, error) {
 	if resumeSession != "" {
 		resume = []string{"-r", resumeSession}
 	}
-	return spawnCommand(j, zeusSpawnArgv(j, resume...), brief, prompt)
+	cmd, err := spawnCommand(j, zeusSpawnArgv(j, resume...), brief, prompt)
+	if err != nil {
+		return "", err
+	}
+	return withJobSlugEnv(j, cmd), nil
 }
 
 // zeusLaunchBrief is the staged brief every zeus spawn carries — zeusLaunch
@@ -1893,6 +1923,13 @@ func teardownCell(j *Job, repo string, live map[string]bool, force bool) error {
 	if err := CloseThreadsForTeardown(j); err != nil {
 		fmt.Fprintf(os.Stderr, "kraken: closing %s's thread rows failed: %v\n", j.Slug, err)
 	}
+	// the cell's stack links (its manual-test URLs, jobstack.go) died with
+	// the session too — unlike threads they have no transcript to point at,
+	// so the rows are deleted outright and a reactivated job starts with
+	// none. Same never-fatal posture as the thread close above.
+	if err := DeleteStacksForTeardown(j); err != nil {
+		fmt.Fprintf(os.Stderr, "kraken: deleting %s's stack links failed: %v\n", j.Slug, err)
+	}
 	// the cell dir (doc source, artifacts) goes too: the final sync above
 	// mirrored the artifacts into the store, which is their durable home.
 	//
@@ -1921,12 +1958,98 @@ func teardownCell(j *Job, repo string, live map[string]bool, force bool) error {
 // broken.
 // isTrustPrompt reports whether a pane's rendered text is a folder-trust
 // dialog blocking startup — claude's ("Is this a project you created or one you
-// trust") or codex's ("Do you trust the contents of this directory"). Both
-// pre-select the trust/yes option, so acceptTrustPrompts' single `send-keys
-// Enter` clears either.
+// trust") or codex's ("Do you trust the contents of this directory").
+// trustAcceptKeys decides which keys clear it.
 func isTrustPrompt(text string) bool {
 	return strings.Contains(text, "Is this a project you created or one you trust") ||
 		strings.Contains(text, "Do you trust the contents of this directory")
+}
+
+// trustCursorMarkers are the glyphs claude and codex draw in front of the
+// option their dialog cursor sits on (claude `❯`, codex `›`, with `>` for a
+// terminal that renders neither).
+var trustCursorMarkers = []string{"❯", "›", ">"}
+
+// trustOptionLine reports whether a dialog line is one of its options, with
+// the cursor marker stripped: claude's "Yes, I trust this folder" / "No, exit",
+// codex's "1. Yes, continue" / "2. No, quit".
+func trustOptionLine(line string) (text string, ok bool) {
+	t := strings.TrimSpace(line)
+	for _, m := range trustCursorMarkers {
+		t = strings.TrimSpace(strings.TrimPrefix(t, m))
+	}
+	// a numbered option: "1. Yes, continue"
+	if i := strings.Index(t, ". "); i > 0 && i <= 2 {
+		if _, err := strconv.Atoi(t[:i]); err == nil {
+			t = strings.TrimSpace(t[i+2:])
+		}
+	}
+	if trustAnswerWord(t) != "" {
+		return t, true
+	}
+	return "", false
+}
+
+// trustAnswerWord is the whole first word of an option line when it is the
+// dialog's yes or no — "Yes, I trust this folder", "No, quit" — and "" for
+// anything else, including a word that merely starts with one ("Nothing").
+func trustAnswerWord(opt string) string {
+	for _, w := range []string{"Yes", "No"} {
+		rest := strings.TrimPrefix(opt, w)
+		if len(rest) == len(opt) {
+			continue
+		}
+		if rest == "" || rest[0] == ',' || rest[0] == ' ' || rest[0] == '.' {
+			return w
+		}
+	}
+	return ""
+}
+
+// trustAcceptKeys is the `tmux send-keys` sequence that picks the trust/yes
+// option of a rendered folder-trust dialog: the Down (or Up) presses that move
+// the cursor from the option it sits on to the yes option, then Enter.
+//
+// It reads the cursor rather than assuming it, because the assumption broke
+// silently: claude pre-selected "Yes, I trust this folder" until 2.1.304
+// (measured 2026-10-20), which draws the cursor on "No, exit" — so the bare
+// Enter this used to send EXITED claude, the pane died inside acceptTrustPrompts'
+// own 12s window, and the daemon's next tick logged `cell-gone` for a cell
+// whose only output was that dialog. Every cell on a repo the bound account's
+// own config dir had never trusted came up dead that way, while a cell on an
+// already-trusted repo saw no dialog at all, which is what kept it from showing
+// on every job. A dialog whose cursor already sits on yes, or whose shape this
+// cannot read (no cursor line, no yes line), gets the bare Enter it always got.
+func trustAcceptKeys(text string) []string {
+	cursor, yes := -1, -1
+	for i, line := range strings.Split(text, "\n") {
+		opt, ok := trustOptionLine(line)
+		if !ok {
+			continue
+		}
+		t := strings.TrimSpace(line)
+		for _, m := range trustCursorMarkers {
+			if strings.HasPrefix(t, m) {
+				cursor = i
+				break
+			}
+		}
+		if trustAnswerWord(opt) == "Yes" {
+			yes = i
+		}
+	}
+	if cursor < 0 || yes < 0 || cursor == yes {
+		return []string{"Enter"}
+	}
+	step, n := "Down", yes-cursor
+	if n < 0 {
+		step, n = "Up", -n
+	}
+	var keys []string
+	for i := 0; i < n; i++ {
+		keys = append(keys, step)
+	}
+	return append(keys, "Enter")
 }
 
 func acceptTrustPrompts(sess string) {
@@ -1942,10 +2065,11 @@ func acceptTrustPrompts(sess string) {
 			text := core.PaneTail(pane, 30)
 			if isTrustPrompt(text) {
 				sawDialog = true
-				// the trust/yes option is pre-selected either way: claude
-				// pre-selects "Yes, I trust this folder", codex "1. Yes,
-				// continue" — Enter accepts both.
-				_ = exec.Command("tmux", "send-keys", "-t", pane, "Enter").Run()
+				// move the cursor onto the trust/yes option, then Enter —
+				// never a bare Enter, which picks whatever the dialog
+				// pre-selected (trustAcceptKeys has the measurement)
+				args := append([]string{"send-keys", "-t", pane}, trustAcceptKeys(text)...)
+				_ = exec.Command("tmux", args...).Run()
 			} else if strings.TrimSpace(text) != "" {
 				rendered++
 			}

@@ -48,7 +48,7 @@ mkdir -p ~/Developer
 git clone https://github.com/car1zhang/kraken ~/Developer/kraken
 ```
 
-Keep it as a standalone clone on `main`, named `kraken`, directly under your repos directory: self-update and the TestFlight ship resolve kraken's own source by that name under `KRAKEN_REPOS_DIR`, and a copy nested inside another repo cannot update itself.
+Keep it as a standalone clone on `main`, named `kraken`, directly under your repos directory: self-update and the TestFlight ship resolve kraken's own source by that name under `KRAKEN_REPOS_DIR` (or at the checkout `KRAKEN_SELF_REPO` names, an absolute path or a repo name under the repos dir), and a copy nested inside another repo cannot update itself.
 
 ## 3. Write your env file
 
@@ -120,7 +120,9 @@ An empty board with the top bar rendered is success. `kraken ls` in a tmux pane 
 | Slack intake (iris drafts jobs from your Slack inbox) | `printf 'SLACK_USER_TOKEN=…\n' >> ~/.kraken/slack.env && chmod 600 ~/.kraken/slack.env`; absent means off |
 | Linear intake | `~/.kraken/linear.env` with `LINEAR_API_KEY`, optional `LINEAR_DEFAULT_REPO`, `LINEAR_STATES`; absent means off |
 | Account pools (`~/.claude-pool`, `~/.codex-pool`) | created by the separate `ccp` helper; without a pool every cell runs on your own login and nothing complains |
-| iOS app | open `ios/Kraken.xcodeproj` in Xcode, select your own team for signing (a local change; do not commit it), run on your phone; on first launch the app asks for a server — enter `http://<your-mac>.<tailnet>.ts.net:7777` on the Settings screen. TestFlight uploads: `ios/TESTFLIGHT.md` |
+| iOS app | open `ios/Kraken.xcodeproj` in Xcode, select your own team for signing (a local change; do not commit it), run on your phone; first launch opens the pair screen, whose seed field takes `http://<your-mac>.<tailnet>.ts.net:7777` — see "Pair the phone" below. TestFlight uploads: `ios/TESTFLIGHT.md` |
+| Pair the phone | on the Mac's board open ◉ Devices, set a pairing password (12+ characters), and either scan the QR it shows from the app's pair screen or type the Mac's `http://<your-mac>.<tailnet>.ts.net:7777` there, then the password; the app binds to the one kraken whose password matches. Log out is on the app's Settings screen, Revoke on the Devices overlay; changing the password logs every phone out |
+| Several Macs | nothing to configure: every `kraken serve` on the tailnet finds the others through `tailscale status` and shows their `readonly`/`public` jobs on its own board with an owner chip. Per job, `visibility: private \| readonly \| public` in the job file or the steer modal; `KRAKEN_NODES=off` in `~/.kraken/env` keeps a machine out of the fleet entirely |
 | macOS board app | `make install-mac` (needs `brew install xcodegen` and an Apple team) |
 | Zed editor marks | `docs/zed-mental-model.md` (Rust toolchain) |
 | Updating | the board's **UPDATE** button, or `kraken update` from any shell (the checkout must be clean and on `main`): fetch, ff-only merge, build, install, restart the daemon; the mac-app phase runs only if `/Applications/Kraken.app` is installed |

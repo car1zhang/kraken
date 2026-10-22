@@ -971,7 +971,7 @@ func TestEdgeLibMirrorModeGatesBothPostsAndLeavesTheReadsOpen(t *testing.T) {
 // currently is — this assertion moves only when a DIFFERENT, genuinely breaking
 // change moves it, and never on the library's account.
 func TestEdgeLibDoesNotBumpTheAPIContract(t *testing.T) {
-	if apiContract != 6 {
-		t.Errorf("apiContract = %d, want 6 — the library routes are additive", apiContract)
+	if apiContract != 7 {
+		t.Errorf("apiContract = %d, want 7 (bumped by the fleet gate) — the library routes are additive", apiContract)
 	}
 }

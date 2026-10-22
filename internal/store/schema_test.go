@@ -177,6 +177,33 @@ func undoV33(t *testing.T, s *Store) {
 
 func downgradeFreshDB(t *testing.T, s *Store, target int) {
 	t.Helper()
+	// Reverse v36: the six ask-thread columns leave threads, newest first.
+	if target < 36 {
+		for i := len(schemaV36Columns) - 1; i >= 0; i-- {
+			stmt := `ALTER TABLE threads DROP COLUMN ` + schemaV36Columns[i].column
+			if _, err := s.db.Exec(stmt); err != nil {
+				t.Fatalf("downgrade to v%d (undo v36) %q: %v", target, stmt, err)
+			}
+		}
+	}
+	// Reverse v35: the stack-links table goes. Shape-only, newest first.
+	if target < 35 {
+		if _, err := s.db.Exec(`DROP TABLE job_stacks`); err != nil {
+			t.Fatalf("downgrade to v%d (undo v35) drop job_stacks: %v", target, err)
+		}
+	}
+	// Reverse v34: the fleet's two tables and jobs.visibility go.
+	if target < 34 {
+		for _, stmt := range []string{
+			`DROP TABLE nodes`,
+			`DROP TABLE pair_devices`,
+			`ALTER TABLE jobs DROP COLUMN visibility`,
+		} {
+			if _, err := s.db.Exec(stmt); err != nil {
+				t.Fatalf("downgrade to v%d (undo v34) %q: %v", target, stmt, err)
+			}
+		}
+	}
 	// Reverse v33: the mind-layer columns, threads.role and mm_flags go.
 	if target < 33 {
 		undoV33(t, s)

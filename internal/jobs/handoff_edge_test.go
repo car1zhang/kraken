@@ -325,7 +325,7 @@ func TestEdgeHandoffMergeKeepsForeignStatusLine(t *testing.T) {
 // --- RecordCellContext / ReadCellContext -----------------------------------
 
 func TestEdgeRecordCellContextNilStore(t *testing.T) {
-	if err := RecordCellContext(nil, 1, "s-1", 50, 200000); err == nil {
+	if err := RecordCellContext(nil, 1, "s-1", 50, 200000, 0); err == nil {
 		t.Fatalf("nil store accepted")
 	}
 }
@@ -347,7 +347,7 @@ func TestEdgeRecordCellContextRefusals(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			if err := RecordCellContext(st, 7, c.session, c.pct, 200000); err == nil {
+			if err := RecordCellContext(st, 7, c.session, c.pct, 200000, 0); err == nil {
 				t.Fatalf("RecordCellContext(%q, %v) accepted", c.session, c.pct)
 			}
 			if raw, _ := st.GetKV(cellCtxKVKey(7, c.session)); raw != "" {
@@ -364,7 +364,7 @@ func TestEdgeRecordCellContextAcceptsBounds(t *testing.T) {
 	st := useTestStore(t)
 	for _, pct := range []float64{0, 100} {
 		sess := "s-bound"
-		if err := RecordCellContext(st, 8, sess, pct, 1000); err != nil {
+		if err := RecordCellContext(st, 8, sess, pct, 1000, 0); err != nil {
 			t.Fatalf("RecordCellContext(pct=%v) = %v, want accepted", pct, err)
 		}
 		got, ok := ReadCellContext(st, 8, sess)
@@ -407,7 +407,7 @@ func TestEdgeReadCellContextBadValues(t *testing.T) {
 // A report for one job/session is not read under another (keying edge).
 func TestEdgeReadCellContextKeyedPerJobAndSession(t *testing.T) {
 	st := useTestStore(t)
-	if err := RecordCellContext(st, 10, "zeus-s", 80, 1000); err != nil {
+	if err := RecordCellContext(st, 10, "zeus-s", 80, 1000, 0); err != nil {
 		t.Fatal(err)
 	}
 	if _, ok := ReadCellContext(st, 11, "zeus-s"); ok {
@@ -557,7 +557,7 @@ func edgeHoPassJob(t *testing.T, st *store.Store, slug string, pct float64) *Job
 	if j == nil {
 		t.Fatalf("LoadJobBySlug(%s) = nil", slug)
 	}
-	if err := RecordCellContext(st, j.ID, j.Session, pct, 200000); err != nil {
+	if err := RecordCellContext(st, j.ID, j.Session, pct, 200000, 0); err != nil {
 		t.Fatalf("seed context under %q: %v", j.Session, err)
 	}
 	return j
@@ -577,7 +577,7 @@ func TestEdgeAutoHandoffPassEmptySessionIsNoop(t *testing.T) {
 	if j.Session != "" {
 		t.Fatalf("fixture job carries a session %q", j.Session)
 	}
-	if err := RecordCellContext(st, j.ID, CellSession(j), 95, 200000); err != nil {
+	if err := RecordCellContext(st, j.ID, CellSession(j), 95, 200000, 0); err != nil {
 		t.Fatal(err)
 	}
 	autoHandoffPass(st, j, nil, map[string]bool{CellSession(j): true}, edgeHoNow)

@@ -134,6 +134,14 @@ func qfGet(path string) ([]byte, error) {
 // serve's base URL plus path — same success/failure contract as qfGet, plus
 // a local qfMaxBodyBytes check before the request is ever sent.
 func qfPost(path string, reqBody any) ([]byte, error) {
+	return qfPostWith(path, reqBody, nil, qfHTTPTimeout)
+}
+
+// qfPostWith is qfPost with extra request headers and its own client timeout
+// — for the cross-node proxy, whose request waits on a SECOND hop (this
+// serve to a sibling's) that has a timeout of its own, so the CLI must
+// outlast it to print the sibling's answer rather than its own timeout.
+func qfPostWith(path string, reqBody any, headers map[string]string, timeout time.Duration) ([]byte, error) {
 	buf, err := json.Marshal(reqBody)
 	if err != nil {
 		return nil, fmt.Errorf("encode request: %w", err)
@@ -141,8 +149,16 @@ func qfPost(path string, reqBody any) ([]byte, error) {
 	if len(buf) > qfMaxBodyBytes {
 		return nil, fmt.Errorf("request body is %d bytes, over kraken serve's %d-byte limit — split it into smaller ops (e.g. multiple `add` calls instead of one big `set`) rather than resending the same body", len(buf), qfMaxBodyBytes)
 	}
-	client := http.Client{Timeout: qfHTTPTimeout}
-	resp, err := client.Post(jobs.ServeBaseURL()+path, "application/json", bytes.NewReader(buf))
+	req, err := http.NewRequest(http.MethodPost, jobs.ServeBaseURL()+path, bytes.NewReader(buf))
+	if err != nil {
+		return nil, fmt.Errorf("build request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	for k, v := range headers {
+		req.Header.Set(k, v)
+	}
+	client := http.Client{Timeout: timeout}
+	resp, err := client.Do(req)
 	if err != nil {
 		if qfIsTimeout(err) {
 			return nil, qfTimeoutError(err)

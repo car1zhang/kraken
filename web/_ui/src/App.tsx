@@ -20,6 +20,8 @@ import {
 import { ThreadOverlay } from "./components/overlays/ThreadOverlay.tsx";
 import { showToast, Toast } from "./components/overlays/Toast.tsx";
 import { UsageOverlay } from "./components/overlays/UsageOverlay.tsx";
+import { DevicesOverlay } from "./components/overlays/DevicesOverlay.tsx";
+import { readFleetNodes, writeFleetNodes } from "./lib/fleet.ts";
 import { useBoard } from "./hooks/useBoard.ts";
 import { useBoardEvents } from "./hooks/useBoardEvents.ts";
 import { useHashRoute } from "./hooks/useHashRoute.ts";
@@ -70,7 +72,18 @@ const USAGE_POLL_MS = 60000;
  * board and back, which unmounting would throw away on every tab switch.
  */
 export function App() {
-  const board = useBoard();
+  // The fleet filter's one per-browser preference: the machines whose cells
+  // the board shows (empty is every machine). Up here because two surfaces
+  // share it — the board bar's machines dropdown, which sets it, and useBoard,
+  // which applies it to the columns — and persisted in localStorage
+  // (lib/fleet.ts, try/catch-wrapped: a private window simply forgets it).
+  const [fleetNodes, setFleetNodesState] = useState<string[]>(readFleetNodes);
+  const setFleetNodes = useCallback((next: string[]) => {
+    setFleetNodesState(next);
+    writeFleetNodes(next);
+  }, []);
+  const fleet = useMemo(() => ({ nodes: fleetNodes }), [fleetNodes]);
+  const board = useBoard(fleet);
   const [view, navigate] = useHashRoute();
   // the sfx module's document-level capture listeners; the returned
   // uninstaller keeps strict-mode's double mount from stacking a second set
@@ -154,12 +167,17 @@ export function App() {
   // "the open overlay". They genuinely stack: the artifact viewer opens on
   // top of the steer modal (a chip in the steer context block), and the
   // thread overlay outlives the job-state change that force-closes steer.
+  // `node` is set only when a REMOTE card opened the overlay: it is half that
+  // card's identity (lib/jobKey.ts), so the overlay is looked up by owner plus
+  // slug and never lands on a local job sharing the slug.
   const [steer, setSteer] = useState<{
     slug: string;
     mode: SteerMode;
     requireText: boolean;
+    node?: string;
   } | null>(null);
-  const [editor, setEditor] = useState<{ slug: string | null } | null>(null);
+  const [editor, setEditor] = useState<{ slug: string | null; node?: string } | null>(null);
+  const [devicesOpen, setDevicesOpen] = useState(false);
   // `key` is the jobKey the artifact was opened with, NOT a bare slug: the
   // pager rebuilds the job's ordered artifact list from it, and an archived
   // job plus a live one that reused its freed slug would otherwise page
@@ -170,9 +188,14 @@ export function App() {
     name: string;
     key: string;
   } | null>(null);
-  const [thread, setThread] = useState<{ slug: string; tid: string | null } | null>(
-    null,
-  );
+  // `node` is set only for a remote job's thread, opened from its steer modal:
+  // the overlay then reads it through the owner and resolves the job by
+  // owner+slug, as the steer modal does
+  const [thread, setThread] = useState<{
+    slug: string;
+    tid: string | null;
+    node?: string;
+  } | null>(null);
   const [usageOpen, setUsageOpen] = useState(false);
 
   // Is anything modal open? The board's search bar is the only reader: cmd+K
@@ -185,7 +208,8 @@ export function App() {
     editor !== null ||
     artifact !== null ||
     thread !== null ||
-    usageOpen;
+    usageOpen ||
+    devicesOpen;
 
   /**
    * The one place the board-refresh policy lives (see Overlay.tsx's Mutate).
@@ -282,8 +306,13 @@ export function App() {
   }, []);
 
   const openSteer = useCallback(
-    (slug: string, mode: SteerMode, opts?: { requireText?: boolean }) =>
-      setSteer({ slug, mode, requireText: opts?.requireText ?? false }),
+    (slug: string, mode: SteerMode, opts?: { requireText?: boolean; node?: string }) =>
+      setSteer({
+        slug,
+        mode,
+        requireText: opts?.requireText ?? false,
+        ...(opts?.node ? { node: opts.node } : {}),
+      }),
     [],
   );
 
@@ -295,7 +324,7 @@ export function App() {
       onOpenThread: (slug, tid) => setThread({ slug, tid }),
       onAnswerQuestion: (slug, i) => void board.mutate(() => answerQuestion(slug, i)),
       onRetry: (slug) => void board.mutate(() => retryJob(slug)),
-      onOpenTmux: (slug) => void board.mutate(() => openTmux({ slug })),
+      onOpenTmux: (slug) => board.mutate(() => openTmux({ slug })),
       onSaveFeedback: (slug, id, note) =>
         board.mutate(() => editFeedback(slug, id, note)),
       onDeleteFeedback: (slug, id) =>
@@ -308,8 +337,18 @@ export function App() {
     [board, openSteer],
   );
 
-  const jobFor = (slug: string | null | undefined) =>
-    slug == null ? undefined : board.byKey.get(jobKey({ slug }));
+  // A remote card resolves by owner plus slug; a local one by its bare slug.
+  // A fake owner object is enough for jobKey, which reads only `node_id`.
+  const jobFor = (slug: string | null | undefined, node?: string) =>
+    slug == null
+      ? undefined
+      : board.byKey.get(
+          jobKey(
+            node
+              ? { slug, owner: { node_id: node, label: "", operator: "", online: false } }
+              : { slug },
+          ),
+        );
 
   return (
     <>
@@ -321,6 +360,7 @@ export function App() {
         onOpenUsage={() => setUsageOpen(true)}
         onToast={showToast}
         onBeforeReload={onBeforeReload}
+        onOpenDevices={() => setDevicesOpen(true)}
       />
 
       {/*
@@ -356,6 +396,7 @@ export function App() {
               // lose a line the instant it lifts off the column.
               matchReason={search.reasonByKey.get(jobKey(job))}
               matchTerms={search.terms}
+              boardNodeID={board.board?.node_id}
               expanded={expandedKeys.has(jobKey(job))}
               onToggleExpanded={toggleExpanded}
             />
@@ -371,6 +412,8 @@ export function App() {
           hidden={view !== "board"}
           overlayOpen={overlayOpen}
           expanded={expanded}
+          fleetNodes={fleetNodes}
+          onFleetNodes={setFleetNodes}
         />
       </DragProvider>
 
@@ -405,7 +448,14 @@ export function App() {
         slug={steer?.slug ?? null}
         mode={steer?.mode ?? "steer"}
         requireText={steer?.requireText ?? false}
-        job={jobFor(steer?.slug)}
+        job={jobFor(steer?.slug, steer?.node)}
+        // a remote card's owner — selects the modal's remote body
+        node={steer?.node}
+        // a remote public card's ✎ edit: the editor's raw remote mode
+        onOpenEditor={(slug, node) => {
+          setSteer(null);
+          setEditor({ slug, node });
+        }}
         // The same poll the chrome's usage corner and the usage drilldown read
         // — a THIRD reader of one request, never a second request. The modal's
         // account section joins it to the job's binding by slot slug and draws
@@ -413,6 +463,11 @@ export function App() {
         // server, daemon down) simply draws none.
         usage={usage.data}
         operator={board.board?.operator}
+        boardNodeID={board.board?.node_id}
+        // view mode's ↺: re-point the SAME overlay at the same job in
+        // reactivate mode. The body is keyed on slug+mode, so this is a fresh
+        // mount of the composer, exactly as the card's own ↺ button gives.
+        onReactivate={(slug) => openSteer(slug, "reactivate")}
         // Both REQUIRED, deliberately: these replaced optional `artifactChips`
         // / `threadChips` slots that App never filled, which left the modal's
         // artifact list and its branch button rendering nothing at all. An
@@ -420,7 +475,9 @@ export function App() {
         // that shipped silently — required props make the omission a compile
         // error instead.
         onOpenArtifact={(url, name, key) => setArtifact({ url, name, key })}
-        onOpenThread={(slug, tid) => setThread({ slug, tid })}
+        onOpenThread={(slug, tid, node) =>
+          setThread(node ? { slug, tid, node } : { slug, tid })
+        }
         onClose={() => setSteer(null)}
         // The rename's re-point, and the ONE reason it belongs up here: the
         // open overlay's identity is App's state, not the modal's, so a modal
@@ -440,7 +497,8 @@ export function App() {
       <EditorOverlay
         open={editor !== null}
         slug={editor?.slug ?? null}
-        job={jobFor(editor?.slug)}
+        job={jobFor(editor?.slug, editor?.node)}
+        node={editor?.node}
         onClose={() => setEditor(null)}
         onCreated={(slug) => setEditor({ slug })}
         // Byte-for-byte the create re-point: same state, same shape, and the
@@ -496,13 +554,14 @@ export function App() {
         open={thread !== null}
         slug={thread?.slug ?? null}
         tid={thread?.tid ?? null}
-        job={jobFor(thread?.slug)}
+        job={jobFor(thread?.slug, thread?.node)}
         onClose={() => setThread(null)}
-        onBranched={(tid) =>
-          setThread((t) => (t ? { slug: t.slug, tid } : t))
-        }
+        // spreads the open thread so a remote ask keeps its owner `node`
+        onBranched={(tid) => setThread((t) => (t ? { ...t, tid } : t))}
         mutate={mutate}
         operator={board.board?.operator}
+        node={thread?.node}
+        boardNodeID={board.board?.node_id}
       />
 
       {/* ◆ mind — once, over every view. A capture lands in a mind thread:
@@ -522,6 +581,12 @@ export function App() {
         data={usage.data}
         onClose={() => setUsageOpen(false)}
         refetch={refetchUsage}
+      />
+
+      <DevicesOverlay
+        open={devicesOpen}
+        onClose={() => setDevicesOpen(false)}
+        board={board.board}
       />
 
       <Toast />

@@ -33,13 +33,15 @@ import { showToast } from "./Toast.tsx";
 // picked from the URL's extension alone, two opt-in toggles:
 //
 //   png|jpe?g|gif|webp   → <img>
-//   html|svg|pdf         → same-origin <iframe src>
+//   html|svg|pdf         → same-origin <iframe src> (for a remote html|svg,
+//                          a sandboxed, opaque-origin one — below)
 //   anything else        → fetched text, rendered as markdown
 //   …with `raw` on       → the same fetched text, verbatim in a <pre>-ish body
 //   …with `3D` on        → the isoscene-compiled scene (IsoSceneView), offered
-//                          only for an .html diagram card whose whole markup
-//                          parses (lib/isoscene cardCompilable); a bespoke
-//                          card gets no 3D affordance and displays as-is
+//                          only for a LOCAL .html diagram card whose whole
+//                          markup parses (lib/isoscene cardCompilable); a
+//                          bespoke card gets no 3D affordance and displays
+//                          as-is
 //
 // The iframe is deliberately UNSANDBOXED. web/serve.go:253 justifies it as
 // "same trust as opening the file" — these are artifacts this machine's own
@@ -47,6 +49,23 @@ import { showToast } from "./Toast.tsx";
 // origin, and a sandbox would break exactly the diagram cards the viewer
 // exists for. Adding `sandbox` is a separate decision with its own
 // consequences, not a porting cleanup.
+//
+// A REMOTE .html/.svg artifact is the exception, and gets `sandbox=""` —
+// every restriction, scripts included (ArtifactFrame's `sandboxed`). Its bytes
+// come from another node through this node's proxy, on THIS origin, so an
+// unsandboxed frame would run a sibling's script with this board's rights —
+// "same trust as opening the file" holds only for files this machine's own
+// agents wrote. Scripts stay off too, not just same-origin: an opaque-origin
+// script can still SEND a no-cors POST at this board. The gate refuses the
+// writes among such requests (its JSON and Origin rules), and running no
+// script at all keeps a sibling's page from depending on that. (A `.htm` is
+// never framed — `isPage` takes html|svg|pdf — so it reaches the markdown
+// branch as text.) The costs: a diagram card's own script does not run, the arrow keys and code
+// refs cannot be wired inside the frame (its document is unreachable), so
+// paging a remote page is the ‹ › buttons once focus is in the frame, and the
+// 3D view is not offered (below). A remote PDF is framed WITHOUT a sandbox:
+// Chromium's PDF viewer refuses to load in a sandboxed frame, and neither a
+// PDF nor an image can script against this origin.
 //
 // Reading an artifact set is a SEQUENCE, so the viewer also pages: `job` is
 // the job the open artifact belongs to and its artifact list is the ordered
@@ -56,7 +75,12 @@ import { showToast } from "./Toast.tsx";
 const isPage = (url: string) => /\.(html|svg|pdf)$/i.test(url);
 const isImage = (url: string) => /\.(png|jpe?g|gif|webp)$/i.test(url);
 // only .html pages can hold a compilable diagram card; .svg/.pdf never offer 3D
-const isHtmlPage = (url: string) => /\.html?$/i.test(url);
+// exported for the fleet tests, which pin the tail test on a proxied url: a
+// remote artifact's url ends in its `name` parameter, so the same test holds
+// for `/api/nodes/artifact?…&name=10-arch.html`
+export const isHtmlPage = (url: string) => /\.html?$/i.test(url);
+// the page types that can carry script — what a remote frame is sandboxed for
+const isScriptablePage = (url: string) => /\.(html?|svg)$/i.test(url);
 
 // The 3D toggle's session stickiness: compilable cards open FLAT (carl's
 // call — the flat card is the default, with the toggle opting in to the
@@ -499,7 +523,16 @@ function ArtifactBody({
   // memoised so its identity is stable across the 3s board re-render — it is a
   // dependency of the handler below
   const saveParts = useMemo(() => artifactParts(url), [url]);
-  const savable = saved !== null || saveParts !== null;
+  // Another node's job: its artifact is served through this node's proxy, and
+  // every write this head offers (feedback, ask, the library) is a write into
+  // THIS machine's stores about a job that lives elsewhere — so none is
+  // offered. The url test covers an owned card that has since left the board.
+  const remote = !!job?.owner || url.startsWith("/api/nodes/");
+  const savable = !remote && (saved !== null || saveParts !== null);
+  // No 3D for another node's card: the compiled scene is inserted into THIS
+  // board's document as live markup, the one place a sibling's content would
+  // stop being confined to a sandboxed frame.
+  const offer3D = compilable && !remote;
 
   const toggleSaved = useCallback(async () => {
     if (savingLib) return;
@@ -534,15 +567,20 @@ function ArtifactBody({
    * names the artifact, with no slug: the capture then has no job to fork and
    * the server says so.
    */
-  const mindAttrs = useMemo<MindAttrs>(
-    () => ({
-      "data-mind-kind": "artifact",
-      "data-mind-slug": saveParts?.slug || undefined,
-      "data-mind-home": saveParts?.home || undefined,
-      "data-mind-name": saveParts?.name || name.split("/").slice(1).join("/") || name,
-      "data-mind-sha": sha || undefined,
-    }),
-    [saveParts, name, sha],
+  const mindAttrs = useMemo<MindAttrs | Record<string, never>>(
+    () =>
+      // the mental model is this machine's: another node's artifact is never a
+      // capture source, so it carries no `data-mind-*` at all
+      remote
+        ? ({} as Record<string, never>)
+        : {
+            "data-mind-kind": "artifact",
+            "data-mind-slug": saveParts?.slug || undefined,
+            "data-mind-home": saveParts?.home || undefined,
+            "data-mind-name": saveParts?.name || name.split("/").slice(1).join("/") || name,
+            "data-mind-sha": sha || undefined,
+          },
+    [remote, saveParts, name, sha],
   );
 
   const onKey = useArtifactKeys(onStep);
@@ -750,7 +788,7 @@ function ArtifactBody({
         <button
           className="btn ghost"
           id="panel-iso"
-          hidden={!compilable}
+          hidden={!offer3D}
           aria-pressed={iso}
           title="compile this card into an animated isometric scene"
           onClick={() => {
@@ -797,30 +835,36 @@ function ArtifactBody({
             closing OR switching the composer mid-flight would route its own
             outcome — "failed — see status bar" — into a region that is no
             longer on screen, or worse, into the other mode's. */}
-        <button
-          className="btn ghost"
-          id="panel-ask"
-          hidden={!job?.live}
-          disabled={sending}
-          title="ask about this artifact in a side thread — forks zeus, doesn't interrupt it"
-          onClick={() => toggleComposer("ask")}
-        >
-          {sentMode === "ask" ? "asked ✓" : "⑂ ask"}
-        </button>
-        <button
-          className="btn ghost"
-          id="panel-feedback"
-          disabled={sending}
-          title="leave feedback on this artifact for the job to read"
-          onClick={() => toggleComposer("feedback")}
-        >
-          {sentMode === "feedback" ? "saved ✓" : "feedback"}
-        </button>
+        {/* neither composer is offered on another node's job: feedback rows
+            and side threads are both the OWNER's stores (see `remote`) */}
+        {remote ? null : (
+          <button
+            className="btn ghost"
+            id="panel-ask"
+            hidden={!job?.live}
+            disabled={sending}
+            title="ask about this artifact in a side thread — forks zeus, doesn't interrupt it"
+            onClick={() => toggleComposer("ask")}
+          >
+            {sentMode === "ask" ? "asked ✓" : "⑂ ask"}
+          </button>
+        )}
+        {remote ? null : (
+          <button
+            className="btn ghost"
+            id="panel-feedback"
+            disabled={sending}
+            title="leave feedback on this artifact for the job to read"
+            onClick={() => toggleComposer("feedback")}
+          >
+            {sentMode === "feedback" ? "saved ✓" : "feedback"}
+          </button>
+        )}
       </div>
       <div
         className={"feedback-form" + (mode === "ask" ? " ask" : "")}
         id={mode === "ask" ? "ask-form" : "feedback-form"}
-        hidden={!mode}
+        hidden={!mode || remote}
       >
         {/* the ask box is one gesture away from the feedback box and does
             something quite different with what you type — this line is what
@@ -899,7 +943,7 @@ function ArtifactBody({
       <ArtifactBodyContent
         url={url}
         raw={raw}
-        iso={iso && compilable}
+        iso={iso && offer3D}
         page={page}
         image={image}
         text={text}
@@ -908,6 +952,7 @@ function ArtifactBody({
         artifacts={job?.artifacts ?? []}
         onOpenRef={onOpenRef}
         mindAttrs={mindAttrs}
+        remote={remote}
       />
     </>
   );
@@ -944,9 +989,15 @@ function ArtifactBody({
 function ArtifactFrame({
   url,
   onKey,
+  sandboxed = false,
 }: {
   url: string;
   onKey: (ev: KeyboardEvent) => void;
+  /**
+   * Another node's artifact: framed with `sandbox=""` (see the
+   * header), which makes it cross-origin, so nothing is wired inside it.
+   */
+  sandboxed?: boolean;
 }) {
   const frame = useRef<HTMLIFrameElement | null>(null);
   const hooked = useRef<Document | null>(null);
@@ -973,6 +1024,9 @@ function ArtifactFrame({
   }, []);
 
   const attach = useCallback(() => {
+    // a sandboxed frame's document is cross-origin by construction — skip
+    // rather than lean on the catch below
+    if (sandboxed) return;
     try {
       const doc = frame.current?.contentDocument ?? null;
       if (!doc || doc === hooked.current) return;
@@ -986,7 +1040,7 @@ function ArtifactFrame({
     } catch {
       /* cross-origin or torn down: buttons still work */
     }
-  }, [handle]);
+  }, [handle, sandboxed]);
 
   useEffect(() => {
     return () => {
@@ -1001,7 +1055,17 @@ function ArtifactFrame({
     };
   }, [handle, url]);
 
-  return <iframe ref={frame} src={url} title="artifact" onLoad={attach} />;
+  return (
+    <iframe
+      ref={frame}
+      src={url}
+      title="artifact"
+      // "" is the strictest sandbox (no scripts, opaque origin) — for a remote
+      // artifact; a local one carries no attribute at all
+      sandbox={sandboxed ? "" : undefined}
+      onLoad={attach}
+    />
+  );
 }
 
 function ArtifactBodyContent({
@@ -1016,7 +1080,10 @@ function ArtifactBodyContent({
   artifacts,
   onOpenRef,
   mindAttrs,
+  remote,
 }: {
+  /** another node's artifact — framed sandboxed (see the header) */
+  remote: boolean;
   url: string;
   raw: boolean;
   /** true only when the 3D toggle is on AND the card compiles (the caller
@@ -1031,8 +1098,8 @@ function ArtifactBodyContent({
   artifacts: WebArtifact[];
   /** Open a resolved artifact ref in this viewer (ArtifactBody's seq lookup). */
   onOpenRef: (hit: ArtifactRefHit) => void;
-  /** The ◆ mind source every body mode carries. */
-  mindAttrs: MindAttrs;
+  /** The ◆ mind source every body mode carries — empty for another node's. */
+  mindAttrs: MindAttrs | Record<string, never>;
 }) {
   // Above the branches because it is a hook, and memoised because this is the
   // component the 3s board poll used to rebuild wholesale — see useRenderedMD.
@@ -1144,7 +1211,12 @@ function ArtifactBodyContent({
     // styles/scripts can't leak into the board
     return (
       <div className="panel-body page" id="panel-body" {...mindAttrs}>
-        <ArtifactFrame url={url} onKey={onKey} />
+        <ArtifactFrame
+          url={url}
+          onKey={onKey}
+          // the scriptable types only — see the header for why not a PDF
+          sandboxed={remote && isScriptablePage(url)}
+        />
       </div>
     );
   }

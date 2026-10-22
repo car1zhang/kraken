@@ -42,17 +42,34 @@ func TestThreadRoundTrip(t *testing.T) {
 		Seed:          "look at watchPRs",
 		Role:          "mind",
 		CreatedAt:     1000,
+		// schema v36: every row reads back with a kind, and a pane thread is
+		// what a write that names none stores
+		Kind: "pane",
 	}
 	if err := s.AddThread(want); err != nil {
 		t.Fatalf("AddThread: %v", err)
+	}
+	// a headless row with every v36 field set, so a transposition among the
+	// six new columns cannot hide behind their zero values
+	headless := Thread{
+		JobID: jobID, TID: "t2", Title: "ci", SessionID: "sess-def", ParentSession: "zeus-xyz",
+		CWD: "/tmp/cell", State: "live", Role: "ask", CreatedAt: 2000, Kind: "headless",
+		OriginNode: "nSTUDIO", OriginLabel: "studio-mini", OriginLogin: "jess@probook.ai",
+		Answering: true, Note: "ask failed: boom",
+	}
+	if err := s.AddThread(headless); err != nil {
+		t.Fatalf("AddThread(headless): %v", err)
+	}
+	if got, err := s.GetThread(jobID, "t2"); err != nil || *got != headless {
+		t.Fatalf("GetThread(t2) = %+v, %v; want %+v", got, err, headless)
 	}
 
 	list, err := s.ListThreads(jobID)
 	if err != nil {
 		t.Fatalf("ListThreads: %v", err)
 	}
-	if len(list) != 1 {
-		t.Fatalf("ListThreads = %+v, want exactly one row", list)
+	if len(list) != 2 {
+		t.Fatalf("ListThreads = %+v, want exactly two rows", list)
 	}
 	if list[0] != want {
 		t.Fatalf("ListThreads[0] = %+v, want %+v", list[0], want)

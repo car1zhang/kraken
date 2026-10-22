@@ -200,6 +200,15 @@ var webBoardSpec = map[string]fieldSpec{
 	// turns. A plain string with no omitempty, so it always rides. Additive —
 	// never bumps apiContract.
 	"operator": {kind: wireString, required: true},
+	// The fleet registry (board.go's webNode), present only when this node
+	// knows at least one sibling kraken. Additive.
+	"nodes": {kind: wireArray, required: false},
+	// This node's tailscale stable id, absent with no tailscale or the fleet
+	// off; clients compare a thread's origin.node_id with it. Additive.
+	"node_id": {kind: wireString, required: false},
+	// This node's device label, for the machines dropdown's self row.
+	// Absent with the fleet off. Additive.
+	"node_label": {kind: wireString, required: false},
 }
 
 // webBackgroundSpec covers background.go's webBackground — webBoard's
@@ -294,7 +303,7 @@ var webJobSpec = map[string]fieldSpec{
 	"detail":      {kind: wireString, required: false},
 	"question":    {kind: wireObject, required: false},
 	"zeus_status": {kind: wireString, required: false},
-	// the pipeline skill zeus most recently used (info/aim/do/pr/dream),
+	// the pipeline skill zeus most recently used (info/aim/do/dream),
 	// read off zeus' transcript; started non-done jobs with a
 	// resolvable transcript only, and omitted until a pipeline skill has
 	// actually been used. Additive, no contract bump.
@@ -309,6 +318,12 @@ var webJobSpec = map[string]fieldSpec{
 	"reactivatable": {kind: wireBool, required: false},
 	"last_sent":     {kind: wireString, required: false},
 	"prs":           {kind: wireArray, required: false},
+	// the cell's manual-test URLs (jobstack.go), omitempty: absent means the
+	// cell registered none, and an archived job never carries it (its rows
+	// were deleted with the cell). Elements are webStackLinkSpec. Additive,
+	// so it never bumps apiContract; listed because assertShape rejects any
+	// key the spec does not document.
+	"stack":         {kind: wireArray, required: false},
 	"doc_questions": {kind: wireArray, required: false},
 	"feedback":      {kind: wireArray, required: false},
 	"threads":       {kind: wireArray, required: false},
@@ -331,6 +346,15 @@ var webJobSpec = map[string]fieldSpec{
 	// through undocumented, which is the whole point of transcribing
 	// ios/API.md.
 	"load": {kind: wireObject, required: false},
+	// the cell lead's context-window fill as its statusline last reported it
+	// (webJobContext; its own spec and shape test are in cellctx_wire_test.go),
+	// omitempty. Absent means UNREPORTED — no stamped session yet, a cell
+	// whose statusLine kraken left alone, a codex cell — and ARCHIVED, where
+	// archivedWebJob withholds it (TestArchivedWebJobWithholdsContext). Served
+	// for done jobs that still hold a row: a reactivation resumes the same
+	// session near that fill. Additive, so it never bumps apiContract;
+	// listed because assertShape rejects any key the spec does not document.
+	"context": {kind: wireObject, required: false},
 	// Every goal this job serves (goals.go), in link order, omitempty — absent
 	// means the job links none, which is every job until carl labels one and
 	// every job whose goals were deleted (schema v27's ON DELETE CASCADE takes
@@ -359,6 +383,11 @@ var webJobSpec = map[string]fieldSpec{
 	// apiContract; listed here because assertShape rejects any key the spec
 	// doesn't document.
 	"account": {kind: wireObject, required: false},
+	// Who on the tailnet may see or drive the job (private|readonly|public),
+	// always present. Additive.
+	"visibility": {kind: wireString, required: true},
+	// A remote card's owning node; absent on every local card. Additive.
+	"owner": {kind: wireObject, required: false},
 }
 
 // webJobAccountSpec covers board.go's webJobAccount — webJob's "account"
@@ -1218,6 +1247,9 @@ func TestWebJobWireShapePopulated(t *testing.T) {
 		// a fixture that omitted this would leave the registration passing
 		// whether or not it existed.
 		Account: &webJobAccount{Slug: "dorisexplorer4", Email: "dorisexplorer4@gmail.com", At: 1769040000000},
+		// Present for Account's reason: a fixture without it would leave the
+		// "context" registration passing whether or not it existed.
+		Context: &webJobContext{Pct: 25, Window: 1_000_000, Used: 242_390, At: 1_792_599_370_254, HandoffPct: 75},
 	}
 	data, err := json.Marshal(wj)
 	if err != nil {
@@ -1241,6 +1273,9 @@ var webAgentSpec = map[string]fieldSpec{
 	"role":    {kind: wireString, required: true},
 	"status":  {kind: wireString, required: true},
 	"working": {kind: wireBool, required: true},
+	// additive (job 612): "teammate", or a background task's kind
+	// ("subagent" | "monitor" | "shell") riding the roster
+	"kind": {kind: wireString, required: false},
 }
 
 // webLibraryItemSpec covers library.go's webLibraryItem, the elements of GET
@@ -1300,6 +1335,17 @@ func TestWebAgentWireShape(t *testing.T) {
 		t.Fatal(err)
 	}
 	assertShape(t, "webAgent", data, webAgentSpec)
+	// a background task riding the roster carries its kind; a teammate
+	// carries "teammate" (job 612)
+	task := webAgent{Name: "Checking repo usage in daemon.go", Model: "opus", Role: "general-purpose", Status: "running", Working: true, Kind: "subagent"}
+	data, err = json.Marshal(task)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertShape(t, "webAgent", data, webAgentSpec)
+	if !strings.Contains(string(data), `"kind":"subagent"`) {
+		t.Fatalf("kind missing from %s", data)
+	}
 }
 
 // webDocQuestionSpec covers board.go's webDocQuestion, the elements of
@@ -1377,6 +1423,96 @@ var webThreadSpec = map[string]fieldSpec{
 	"role":       {kind: wireString, required: true},
 	"created_at": {kind: wireNumber, required: true},
 	"closed_at":  {kind: wireNumber, required: false},
+	// headless ask threads (jobs/askthread.go), all additive: kind on every
+	// thread ("pane" | "headless", independent of role), origin only when
+	// the row names one, answering only while true, note only when set
+	"kind":      {kind: wireString, required: true},
+	"origin":    {kind: wireObject, required: false},
+	"answering": {kind: wireBool, required: false},
+	"note":      {kind: wireString, required: false},
+}
+
+// webThreadOriginSpec is webThread's "origin" object: every key always
+// present once the object rides.
+var webThreadOriginSpec = map[string]fieldSpec{
+	"node_id": {kind: wireString, required: true},
+	"label":   {kind: wireString, required: true},
+	"login":   {kind: wireString, required: true},
+}
+
+// TestWebThreadHeadlessWireShape pins a headless row's wire: kind
+// "headless" beside role "ask", the origin object, and answering/note
+// riding only when set — and a pane row's kind "pane".
+func TestWebThreadHeadlessWireShape(t *testing.T) {
+	rows := webThreadsFrom([]store.Thread{
+		{TID: "t3", State: "live", Kind: "headless", Role: "ask", OriginNode: "nSTUDIO", OriginLabel: "studio-mini", OriginLogin: "jess@probook.ai", Answering: true, Note: "ask failed: boom", CreatedAt: 1},
+		{TID: "t4", State: "live", Kind: "headless", Role: "ask", CreatedAt: 1},
+		{TID: "t5", State: "live", Role: "mind", CreatedAt: 1},
+	})
+	data, err := json.Marshal(rows[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertShape(t, "webThread (headless)", data, webThreadSpec)
+	var m map[string]json.RawMessage
+	if err := json.Unmarshal(data, &m); err != nil {
+		t.Fatal(err)
+	}
+	assertShape(t, "webThread.origin", m["origin"], webThreadOriginSpec)
+	for _, k := range []string{"kind", "origin", "answering", "note"} {
+		if _, ok := m[k]; !ok {
+			t.Errorf("populated headless row: key %q missing", k)
+		}
+	}
+	if string(m["role"]) != `"ask"` {
+		t.Errorf("role = %s, want \"ask\" beside kind headless", m["role"])
+	}
+	data, err = json.Marshal(rows[1])
+	if err != nil {
+		t.Fatal(err)
+	}
+	m = nil
+	if err := json.Unmarshal(data, &m); err != nil {
+		t.Fatal(err)
+	}
+	for _, k := range []string{"origin", "answering", "note"} {
+		if _, ok := m[k]; ok {
+			t.Errorf("bare headless row: key %q present, want it omitted", k)
+		}
+	}
+	if string(m["kind"]) != `"headless"` {
+		t.Errorf("kind = %s, want \"headless\"", m["kind"])
+	}
+	// a hand-built row with no Kind reads as a pane on the wire
+	data, err = json.Marshal(rows[2])
+	if err != nil {
+		t.Fatal(err)
+	}
+	m = nil
+	if err := json.Unmarshal(data, &m); err != nil {
+		t.Fatal(err)
+	}
+	if string(m["kind"]) != `"pane"` || string(m["role"]) != `"mind"` {
+		t.Errorf("pane mind row: kind = %s, role = %s; want \"pane\", \"mind\"", m["kind"], m["role"])
+	}
+}
+
+// TestNodeThreadActionsWire pins the three action names /api/node/action
+// admits on a readonly card (ios/API.md's node action table): exactly these,
+// and none of them also in nodeActions, whose members stay public-only.
+func TestNodeThreadActionsWire(t *testing.T) {
+	want := []string{"thread-ask", "thread-send", "thread-kill"}
+	if len(nodeThreadActions) != len(want) {
+		t.Errorf("nodeThreadActions = %v, want exactly %v", nodeThreadActions, want)
+	}
+	for _, a := range want {
+		if !nodeThreadActions[a] {
+			t.Errorf("nodeThreadActions is missing %q", a)
+		}
+		if nodeActions[a] {
+			t.Errorf("%q is in nodeActions too — it would be public-only", a)
+		}
+	}
 }
 
 func TestWebThreadWireShape(t *testing.T) {
@@ -1397,6 +1533,104 @@ func TestWebThreadWireShape(t *testing.T) {
 		t.Fatal(err)
 	}
 	assertShape(t, "webThread (populated)", data, webThreadSpec)
+}
+
+// webStackLinkSpec covers jobstack.go's webStackLink, the elements of
+// webJob's "stack" array and of GET /api/job/stack's "stack". Every key is
+// required: the type carries no omitempty, an empty label is a real answer
+// (the chip shows the port alone), and status is always one of the three
+// probe words — "unknown" from birth, "up"/"down" once a loopback dial ran.
+var webStackLinkSpec = map[string]fieldSpec{
+	"url":    {kind: wireString, required: true},
+	"label":  {kind: wireString, required: true},
+	"status": {kind: wireString, required: true},
+	"at":     {kind: wireNumber, required: true},
+}
+
+// jobStackGetSpec is GET /api/job/stack's envelope: "stack" is always an
+// array, EMPTY for a job with no links (never null — `kraken stack get`
+// prints it straight through and a list of zero is the honest answer).
+var jobStackGetSpec = map[string]fieldSpec{
+	"stack": {kind: wireArray, required: true},
+}
+
+// jobStackPostReqSpec covers POST /api/job/stack's per-op body. url and label
+// are optional at the shape level (clear sends neither); the handler decides
+// per op what is required. The response is the shared bare ack.
+var jobStackPostReqSpec = map[string]fieldSpec{
+	"slug":  {kind: wireString, required: true},
+	"op":    {kind: wireString, required: true},
+	"url":   {kind: wireString, required: false},
+	"label": {kind: wireString, required: false},
+}
+
+func TestWebStackLinkWireShape(t *testing.T) {
+	data, err := json.Marshal(webStackLink{URL: "http://127.0.0.1:7878", Label: "", Status: jobs.StackUnknown, At: 0})
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertShape(t, "webStackLink (fresh, unlabelled)", data, webStackLinkSpec)
+	data, err = json.Marshal(webStackLink{URL: "http://localhost:5173", Label: "ui", Status: jobs.StackUp, At: 1769040000000})
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertShape(t, "webStackLink (probed)", data, webStackLinkSpec)
+	for _, s := range []string{jobs.StackUp, jobs.StackDown, jobs.StackUnknown} {
+		if s != "up" && s != "down" && s != "unknown" {
+			t.Errorf("status vocabulary drifted: %q (ios/API.md documents up|down|unknown)", s)
+		}
+	}
+}
+
+// TestJobStackRoundTripShapes drives GET → POST add → GET → POST clear through
+// the handler against a real temp store, asserting each envelope.
+func TestJobStackRoundTripShapes(t *testing.T) {
+	st := useTestStore(t)
+	if _, err := st.CreateJob(&store.Job{Slug: "contract-stack", Repo: "kraken", State: "working"}); err != nil {
+		t.Fatal(err)
+	}
+	get := func(label string) []json.RawMessage {
+		req := httptest.NewRequest(http.MethodGet, "/api/job/stack?slug=contract-stack", nil)
+		rec := httptest.NewRecorder()
+		jobStackHandler(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("%s: GET status %d: %s", label, rec.Code, rec.Body.String())
+		}
+		assertShape(t, label, rec.Body.Bytes(), jobStackGetSpec)
+		var env struct {
+			Stack []json.RawMessage `json:"stack"`
+		}
+		if err := json.Unmarshal(rec.Body.Bytes(), &env); err != nil {
+			t.Fatal(err)
+		}
+		return env.Stack
+	}
+	if items := get("GET /api/job/stack (empty)"); len(items) != 0 {
+		t.Fatalf("fresh job has %d links", len(items))
+	}
+	body := mustJSON(t, map[string]any{"slug": "contract-stack", "op": "add", "url": "http://127.0.0.1:7878", "label": "board"})
+	assertShape(t, "POST /api/job/stack request", body, jobStackPostReqSpec)
+	req := httptest.NewRequest(http.MethodPost, "/api/job/stack", bytes.NewReader(body))
+	rec := httptest.NewRecorder()
+	jobStackHandler(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("POST add: %d %s", rec.Code, rec.Body.String())
+	}
+	assertShape(t, "POST /api/job/stack", rec.Body.Bytes(), jobLoadPostRespSpec)
+	items := get("GET /api/job/stack (one link)")
+	if len(items) != 1 {
+		t.Fatalf("after add: %d links", len(items))
+	}
+	assertShape(t, "GET /api/job/stack element", items[0], webStackLinkSpec)
+	req = httptest.NewRequest(http.MethodPost, "/api/job/stack", bytes.NewReader(mustJSON(t, map[string]any{"slug": "contract-stack", "op": "clear"})))
+	rec = httptest.NewRecorder()
+	jobStackHandler(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("POST clear: %d %s", rec.Code, rec.Body.String())
+	}
+	if items := get("GET /api/job/stack (cleared)"); len(items) != 0 {
+		t.Fatalf("after clear: %d links", len(items))
+	}
 }
 
 func TestJobPRWireShape(t *testing.T) {
@@ -2272,6 +2506,12 @@ var threadReadSpec = map[string]fieldSpec{
 	"fork_uuid": {kind: wireString, required: true},
 	"source":    {kind: wireString, required: true},
 	"session":   {kind: wireString, required: true},
+	// headless ask threads, additive: kind/answering/note always ride (note
+	// "" when none); origin only when the row names one
+	"kind":      {kind: wireString, required: true},
+	"answering": {kind: wireBool, required: true},
+	"note":      {kind: wireString, required: true},
+	"origin":    {kind: wireObject, required: false},
 }
 
 // threadReadBlockSpec is /api/thread/read's block element: /api/peers/read's
@@ -3269,11 +3509,13 @@ func TestRecallWireShape(t *testing.T) {
 // clients ignore what they don't know. v6 is a real break and is the reason
 // the number moved: `ready` and `prereqs` left the job form's GET and POST
 // shapes, and `start_error` and `prereqs` left /api/board's job objects.
+// v7 is the request gate (gate.go): an unpaired tailnet client is refused on
+// every board route.
 // A literal here rather than a comparison against itself: a future change
 // that genuinely IS breaking has to come here and change this number
 // deliberately, in the same commit as expectedContract in APIClient.swift.
 func TestAPIContractUnchanged(t *testing.T) {
-	if apiContract != 6 {
-		t.Fatalf("apiContract = %d, want 6 — bump this ONLY alongside ios/API.md and APIClient.swift's expectedContract, and only for a breaking change", apiContract)
+	if apiContract != 7 {
+		t.Fatalf("apiContract = %d, want 7 — bump this ONLY alongside ios/API.md and APIClient.swift's expectedContract, and only for a breaking change", apiContract)
 	}
 }

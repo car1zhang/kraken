@@ -14,7 +14,7 @@ import (
 // SLUGS, because that is what the browser's `data-slug` attributes carry and
 // what a human reads. So these two functions are the translation: slugs in,
 // ids to the store, ids back, slugs out. Nothing above this file (api/board.go,
-// api/actions.go, web/static/app.js, the iOS client) changes at all, and
+// api/actions.go, the SPA under web/_ui, the iOS client) changes at all, and
 // nothing below it ever sees a slug again.
 //
 // Translation is by ACTIVE job only, which is what makes it unambiguous:

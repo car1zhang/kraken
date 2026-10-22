@@ -2,6 +2,7 @@ import { useEffect, useRef } from "react";
 
 import type { JobSearchModel } from "../../hooks/useJobSearch.ts";
 import { goalChipText } from "../../lib/goals.ts";
+import { FleetPicker, type FleetPickerProps } from "./FleetPicker.tsx";
 
 export interface BoardBarProps {
   search: JobSearchModel;
@@ -27,6 +28,12 @@ export interface BoardBarProps {
   overlayOpen?: boolean;
   /** The view router hides the board rather than unmounting it, as today. */
   hidden?: boolean;
+  /**
+   * The fleet's machines dropdown (FleetPicker), fully wired by the host:
+   * the registry, this Mac's label, the unfiltered cards, the selection and
+   * its setter. Absent → no picker rendered (singleplayer, or a bare harness).
+   */
+  fleet?: FleetPickerProps;
 }
 
 /**
@@ -59,6 +66,7 @@ export function BoardBar({
   onClearGoal,
   overlayOpen,
   hidden,
+  fleet,
 }: BoardBarProps) {
   const { query, setQuery, matched, total, active } = search;
   const inputRef = useRef<HTMLInputElement>(null);
@@ -134,6 +142,13 @@ export function BoardBar({
         </span>
       ) : null}
       {active ? null : <span className="bb-hint">⌘K</span>}
+      {/* The fleet's one board-bar control: the machines dropdown — show only
+          the cells of the machines you tick, on THIS browser only (persisted
+          as kraken.fleetNodes by App). Rendered only when the host wires it,
+          which BoardView does when the registry is non-empty (or a selection
+          is persisted) — a lone node's bar stays byte-identical to the one
+          before the fleet existed. */}
+      {fleet ? <FleetPicker {...fleet} /> : null}
       <span className="bb-read">
         {active ? (
           <>

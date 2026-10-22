@@ -39,6 +39,13 @@ struct KrakenApp: App {
 
     init() {
         NotificationManager.shared.attachDelegate()
+        // Loads the stored pairing and installs its `kraken_pair` cookie into
+        // both cookie jars before any artifact page or thumbnail loads —
+        // session cookies do not survive a relaunch, the Keychain record does.
+        _ = PairingSession.shared
+        // The machine filter's one-time migration off the old hideOthers
+        // switch, before any view reads either key (job 634).
+        BoardViewModel.migrateHideOthers()
         // BGTaskScheduler registration must happen before the app finishes
         // launching, so init() (there's no AppDelegate in this SwiftUI-only
         // app) — not a button/toggle handler — is the only correct place.
@@ -74,9 +81,11 @@ struct KrakenApp: App {
                 }
         }
         .onChange(of: scenePhase) {
-            // No server set yet (fresh install): schedule no background
-            // fetch, since it would have nothing to ask.
-            if scenePhase == .background, KrakenDefaults.isConfigured(KrakenDefaults.storedServerURL) {
+            // No server set yet (fresh install), or not paired (every board
+            // call would be a 401): schedule no background fetch, since it
+            // would have nothing it may ask.
+            if scenePhase == .background, KrakenDefaults.isConfigured(KrakenDefaults.storedServerURL),
+               PairingStore.load() != nil {
                 NotificationManager.shared.scheduleBackgroundRefresh()
             }
             if scenePhase == .active {

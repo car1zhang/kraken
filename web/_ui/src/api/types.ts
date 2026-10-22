@@ -31,6 +31,9 @@
 // import is type-only, so nothing is pulled into the bundle by it.
 import type { Goal } from "../lib/goals.ts";
 import type { MMFlag } from "../lib/mm.ts";
+// Same type-only inversion: the contract froze `Visibility` as a lib/fleet.ts
+// export (its VISIBILITIES tuple is the one spelling of the three words).
+import type { Visibility } from "../lib/fleet.ts";
 
 export type { Goal };
 
@@ -102,6 +105,13 @@ export interface WebAgent {
   role: string;
   status: string;
   working: boolean;
+  /**
+   * "teammate" for the crew proper, else the background task riding the
+   * roster: "subagent" (an in-process Agent spawn; name is its description,
+   * role its agent type), "monitor" or "shell". Absent on a pre-612 server,
+   * where every entry is a teammate.
+   */
+  kind?: string;
 }
 
 /** A pending ScheduleWakeup on the zeus peer. `fires_at` is unix millis. */
@@ -159,6 +169,28 @@ export interface WebThread {
    * from an older server, which means `ask`.
    */
   role?: "ask" | "mind" | string;
+  /**
+   * How the thread RUNS, orthogonal to `role` (what it is FOR): `pane` — an
+   * interactive claude in a tmux window of the cell — or `headless` — an ask
+   * thread with no pane, answered one `claude -p` run per question. The value
+   * is "headless" rather than "ask" because `role: "ask"` already names the
+   * ordinary pane side thread. Optional and widened with string only for a
+   * server predating the key; absence reads as a pane thread.
+   */
+  kind?: "pane" | "headless" | string;
+  /** Who opened the thread; absent when the row records nobody. */
+  origin?: WebThreadOrigin;
+  /** Present (true) only while a headless thread's question is being answered. */
+  answering?: boolean;
+  /** The last ask run's failure, e.g. "ask timed out after 5m0s"; absent when none. */
+  note?: string;
+}
+
+/** `webThreadOrigin` (internal/api): the node and login a thread was opened from. */
+export interface WebThreadOrigin {
+  node_id: string;
+  label: string;
+  login: string;
 }
 
 export type PRState = "open" | "merged" | "closed" | string;
@@ -166,6 +198,27 @@ export type PRState = "open" | "merged" | "closed" | string;
 export interface JobPR {
   url: string;
   state: PRState;
+}
+
+/**
+ * The daemon probe's verdict on a stack link's port (internal/jobs/stackprobe.go):
+ * `unknown` from birth and forever for a non-loopback host, `up`/`down` once a
+ * loopback dial has run. Widened with string for the same reason PRState is.
+ */
+export type StackStatus = "up" | "down" | "unknown" | string;
+
+/**
+ * One manual-test URL a cell registered with `kraken stack add`, mirroring
+ * api.webStackLink (internal/api/jobstack.go). All four keys are always
+ * present once the array is; an empty label is a real answer (the chip then
+ * shows the port alone).
+ */
+export interface StackLink {
+  url: string;
+  label: string;
+  status: StackStatus;
+  /** unix millis, registration time */
+  at: number;
 }
 
 /**
@@ -214,6 +267,53 @@ export interface WebTokens {
   zeus_out?: number;
   zeus_cache_write?: number;
   zeus_cache_read?: number;
+}
+
+/**
+ * The cell lead's context-window fill, mirroring api.webJobContext
+ * (internal/api/board.go): the kv row `cell_ctx:<id>:<session>` that
+ * `kraken ctx-hook` writes on every statusline render and the daemon's
+ * auto-handoff pass reads. Nothing here is recomputed — `pct` is Claude Code's
+ * own input-only fill over the model's REAL window.
+ *
+ * "context", never "tokens" or "usage": WebTokens is the job's summed SPEND
+ * and usage is account QUOTA; this is how much of one live session's window
+ * is occupied right now.
+ *
+ * Absence (`job.context === undefined`) is the only spelling of "unreported";
+ * inside the object every number is present. Two zeros carry meaning: `used`
+ * 0 means the reporting hook predates the exact-count field, so the panel
+ * derives an approximate count from `pct × window` and marks it `~`; `window`
+ * 0 means the hook sent no size, so the panel shows the percentage alone.
+ * Neither ever means an empty window — a session reports only once its first
+ * response has been billed.
+ */
+export interface WebJobContext {
+  /** context_window.used_percentage as reported — may carry decimals */
+  pct: number;
+  /** context_window_size in tokens; 0 when the hook sent none */
+  window: number;
+  /** total_input_tokens, the exact count pct came from; 0 when unreported */
+  used: number;
+  /** unix MILLIS of the report (WebJob.mtime's convention). Age here is time since the last statusline RENDER, not staleness: an idle zeus renders nothing new. */
+  at: number;
+  /** the fill at which the daemon types /handoff into the pane — served so no client hardcodes 75 */
+  handoff_pct: number;
+  /** the auto-handoff pass' state for THIS session; absent when it has recorded none */
+  handoff?: WebJobHandoff;
+}
+
+/**
+ * The daemon's auto-handoff state for one session. `fires` counts the CURRENT
+ * streak only — the pass resets it once the last fire is two hours old — so
+ * it is never a lifetime total and the panel words it that way.
+ */
+export interface WebJobHandoff {
+  fires: number;
+  /** unix MILLIS of the last fire; 0 when never fired */
+  last_at: number;
+  /** the streak hit its cap and the pass stopped typing */
+  exhausted: boolean;
 }
 
 /**
@@ -329,8 +429,8 @@ export interface WebJob {
   question?: WebQuestion;
   zeus_status?: ZeusStatus;
   /**
-   * The pipeline skill zeus most recently used — one of the five
-   * phase-governing skill names (info/aim/do/pr/dream), read off zeus'
+   * The pipeline skill zeus most recently used — one of the four
+   * phase-governing skill names (info/aim/do/dream), read off zeus'
    * transcript server-side. Absent when no transcript resolves or no pipeline
    * skill has been used yet; the card renders its one stage chip when a
    * non-empty value is present. Typed as bare string rather than a union: the
@@ -356,11 +456,24 @@ export interface WebJob {
   cell_gone?: boolean;
   reactivatable?: boolean;
   prs?: JobPR[];
+  /**
+   * The cell's manual-test URLs, one chip each in the card's PR band. ABSENT
+   * (never `[]`) when the cell registered none and always absent on an
+   * archived card: the rows are deleted with the cell at teardown.
+   */
+  stack?: StackLink[];
   doc_questions?: WebDocQuestion[];
   feedback?: WebFeedback[];
   threads?: WebThread[];
   /** Absent means NEVER MEASURED, which is not a measured zero — see WebTokens. */
   tokens?: WebTokens;
+  /**
+   * The cell lead's context-window fill as its statusline last reported it —
+   * see WebJobContext. Absent means UNREPORTED (no stamped session yet, a
+   * cell whose statusLine kraken left alone, a codex cell) or ARCHIVED; a
+   * done job keeps its last report, since a reactivation resumes near it.
+   */
+  context?: WebJobContext;
   /**
    * Present means "estimated, and the estimate still stands". ABSENT is three
    * different states the wire does not separate, so no client can:
@@ -429,6 +542,22 @@ export interface WebJob {
    * (see accountChipVisible), not a payload rule.
    */
   account?: WebJobAccount;
+  /**
+   * The node this card RUNS on, present only on a card another kraken on the
+   * tailnet polled in (`remoteCards`, internal/api/board.go). ABSENT on every
+   * local card — the absence is the wire's only spelling of "mine", which is
+   * why every client-side "is this remote" test is `owner !== undefined`
+   * (lib/fleet.ts `isRemote`) and never a comparison against this node's id.
+   */
+  owner?: WebJobOwner;
+  /**
+   * Who beyond this machine may see or drive the job: `private` never leaves
+   * it, `readonly` (the default, and what every pre-feature job reads) is
+   * visible everywhere and touchable nowhere else, `public` may be driven from
+   * any board on the net. A current server always sends it; optional only for a
+   * server predating the key. Widened with string for jobs.ValidColor's reason.
+   */
+  visibility?: Visibility | string;
   // `start_error` is GONE from the wire with the queued state. It existed
   // because a start happened on a daemon tick nobody was watching, so its
   // failure had nowhere to land but the card. A submit is now a request carl
@@ -564,6 +693,88 @@ export interface WebBoard {
    * which falls back to "you".
    */
   operator?: string;
+  /**
+   * The registry of other krakens on the tailnet (`webBoard.nodes`). ABSENT
+   * when the registry is empty — singleplayer — which is how a lone node's
+   * chrome shows no `nodes` stat at all (lib/fleet.ts `nodesStat`).
+   */
+  nodes?: WebNode[];
+  /**
+   * THIS node's tailscale stable id (`webBoard.node_id`); absent with no
+   * tailscale or with the fleet off. Read by `threadOriginBadge` to leave this
+   * node's own ask threads unbadged.
+   */
+  node_id?: string;
+  /**
+   * THIS node's device label (`webBoard.node_label`, `jobs.DeviceLabel`), so
+   * the board bar's machines dropdown can name this Mac without a second poll
+   * of `/api/node`. Absent with the fleet off, and on a server older than the
+   * key — the picker then says the bare words "this Mac".
+   */
+  node_label?: string;
+}
+
+/** `webJobOwner` (internal/api/board.go): the node a remote card runs on. */
+export interface WebJobOwner {
+  /** the tailscale stable id — the card's identity half (lib/jobKey.ts) */
+  node_id: string;
+  /** the node's device label (ComputerName first) */
+  label: string;
+  /** the name that node's operator goes by; may be "" */
+  operator: string;
+  /** whether this node's last polls of it succeeded */
+  online: boolean;
+}
+
+/**
+ * `webNode` as the BOARD carries it: one registered kraken. `jobs` rides only
+ * `GET /api/nodes` (not modelled here), never the board.
+ */
+export interface WebNode {
+  node_id: string;
+  label: string;
+  operator: string;
+  dns_name: string;
+  ip: string;
+  port: number;
+  build: string;
+  contract: number;
+  online: boolean;
+  /** unix millis of the last successful poll; 0 when never */
+  last_ok: number;
+  last_err?: string;
+}
+
+/** One paired phone (`GET /api/pair/devices`). Times are unix millis. */
+export interface PairDevice {
+  id: number;
+  label: string;
+  tailnet_name: string;
+  created_at: number;
+  last_seen_at: number;
+  last_ip: string;
+}
+
+export interface PairDevicesResponse {
+  devices: PairDevice[];
+}
+
+/** `GET /api/node` — this node's own envelope (jobs.NodeEnvelope). */
+export interface NodeEnvelope {
+  node_id: string;
+  label: string;
+  operator: string;
+  dns_name: string;
+  ips: string[];
+  port: number;
+  build: string;
+  contract: number;
+}
+
+/** `GET /api/nodes/read` — a remote readonly or public cell's last transcript blocks. */
+export interface NodeRead {
+  blocks: { kind: string; text: string; from?: string }[];
+  counted?: number;
 }
 
 /** The `background` key on /api/board: the upload stamp, never the bytes. */
@@ -640,6 +851,14 @@ export interface ThreadRead {
    * server omits it.
    */
   session?: string;
+  /** The row's kind (`pane` | `headless`); optional only for an older server. */
+  kind?: "pane" | "headless" | string;
+  /** Whether a headless thread's question is in flight right now. */
+  answering?: boolean;
+  /** The row's note — the last ask run's failure — "" when none. */
+  note?: string;
+  /** Who opened the thread; omitted when the row records nobody. */
+  origin?: WebThreadOrigin;
 }
 
 /** One block of zeus' transcript, `GET /api/job/transcript` (jobs.TranscriptBlock). */
@@ -897,4 +1116,16 @@ export interface PeersRead {
 /** Every non-2xx response body across the whole API. */
 export interface WireError {
   error: string;
+}
+
+/**
+ * `GET /api/job/raw` (and `/api/nodes/job/raw`, which relays the owner's):
+ * the job's whole frontmatter-plus-spec text. `mtime` is the optimistic-lock
+ * token the save must echo — opaque here, passed back verbatim.
+ */
+export interface RawJob {
+  slug: string;
+  content: string;
+  mtime: number | string;
+  editable: boolean;
 }

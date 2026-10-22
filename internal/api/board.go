@@ -41,7 +41,12 @@ import (
 // starts its cell in the same request, so there is no flag to set and nothing
 // to gate on), `start_error` and `prereqs` left /api/board's job objects, and
 // `state`'s value domain lost "queued" — draft · working · blocked · done.
-const apiContract = 6
+// v7: the request gate (gate.go). No key changed shape; what broke is who may
+// call: a request from another device on the tailnet with no pairing token is
+// the node tier now and is refused (401) on every board route, so a shipped
+// client that has not paired stops working against this server. Bumped so
+// such a client says why instead of failing route by route.
+const apiContract = 7
 
 // legacyCellCap is the number webBoard.CellCap is served at. See that field's
 // doc comment: nothing enforces a cap any more, and this exists only so
@@ -101,6 +106,12 @@ type webAgent struct {
 	Role    string `json:"role"`
 	Status  string `json:"status"`
 	Working bool   `json:"working"`
+	// Kind is additive (job 612): "teammate" for the crew proper, else the
+	// background-task kind riding the roster — "subagent", "monitor",
+	// "shell". Old clients ignore it and render a task as an "other" crew
+	// entry; omitempty only so a pre-field payload shape is still a legal
+	// one, since every entry a current server emits carries it.
+	Kind string `json:"kind,omitempty"`
 }
 
 // webWakeup mirrors core.Wakeup for the wire, minus DelaySeconds — the
@@ -244,6 +255,44 @@ type webThread struct {
 	Role      string `json:"role"`
 	CreatedAt int64  `json:"created_at"` // unix millis
 	ClosedAt  int64  `json:"closed_at,omitempty"`
+	// Kind is how the thread runs, on every thread: "pane" (a claude in a
+	// tmux window) or "headless" (an ask thread, jobs/askthread.go). It is
+	// independent of Role above, which says what the thread is for; a
+	// headless thread is always role "ask".
+	Kind string `json:"kind"`
+	// Origin is who opened a headless thread, absent when the row names
+	// nobody (every pane thread). A client compares origin.node_id with the
+	// board's own node_id to tell its own threads from another node's.
+	Origin *webThreadOrigin `json:"origin,omitempty"`
+	// Answering is present (true) while a question is in flight.
+	Answering bool `json:"answering,omitempty"`
+	// Note is the last ask run's failure line, absent after a clean answer.
+	Note string `json:"note,omitempty"`
+}
+
+// webThreadOrigin is a headless thread's opener: the node's tailscale stable
+// id and label, and the login of the person on it.
+type webThreadOrigin struct {
+	NodeID string `json:"node_id"`
+	Label  string `json:"label"`
+	Login  string `json:"login"`
+}
+
+// webThreadOriginFrom is nil when the row names no origin at all.
+func webThreadOriginFrom(t store.Thread) *webThreadOrigin {
+	if t.OriginNode == "" && t.OriginLabel == "" && t.OriginLogin == "" {
+		return nil
+	}
+	return &webThreadOrigin{NodeID: t.OriginNode, Label: t.OriginLabel, Login: t.OriginLogin}
+}
+
+// threadKind is the row's kind for the wire. store always reads one back;
+// the fallback covers a Thread value built by hand.
+func threadKind(t store.Thread) string {
+	if t.Kind == "" {
+		return "pane"
+	}
+	return t.Kind
 }
 
 // webThreadsFrom converts store.Thread rows into the wire DTO — same
@@ -263,6 +312,8 @@ func webThreadsFrom(ts []store.Thread) []webThread {
 		out[i] = webThread{
 			TID: t.TID, Title: t.Title, State: t.State, Pane: t.Pane,
 			Model: t.Model, Role: role, CreatedAt: t.CreatedAt, ClosedAt: t.ClosedAt,
+			Kind: threadKind(t), Origin: webThreadOriginFrom(t),
+			Answering: t.Answering, Note: t.Note,
 		}
 	}
 	return out
@@ -466,6 +517,82 @@ func webAccountFor(j *jobs.Job) *webJobAccount {
 	return &webJobAccount{Slug: j.AccountSlug, Email: j.AccountEmail, At: j.AccountAt}
 }
 
+// webJobContext is the cell lead's context-window fill as its statusline last
+// reported it (jobs.CellContext, the kv row `cell_ctx:<id>:<session>` that
+// `kraken ctx-hook` writes through /api/cell/context and the auto-handoff pass
+// reads). It is served so the steer modal can show how full zeus is beside
+// what the job has spent; nothing here is recomputed — Pct is Claude Code's
+// own input-only fill over the model's REAL window.
+//
+// "context", never "tokens" or "usage": tokens is the job's summed SPEND
+// (webTokens) and usage is account QUOTA (/api/usage), and this is a third
+// thing — how much of one live session's window is occupied right now.
+//
+// No key inside carries omitempty except Handoff, the rule webTokens states:
+// presence of the OBJECT is the whole answer, so a client reads every number
+// unconditionally. Absence is said one level up, by webJob.Context being nil
+// — see webContextFor for what it covers. Used is 0 for a row written by a
+// hook that predates the field, which a client reads as "derive from pct",
+// never as an empty window (a billed session never reports zero).
+type webJobContext struct {
+	// Pct is `context_window.used_percentage` as reported — may carry
+	// decimals (the statusline reference's example shows 23.5).
+	Pct float64 `json:"pct"`
+	// Window is `context_window_size` in tokens; 0 when the hook sent none.
+	Window int64 `json:"window"`
+	// Used is `total_input_tokens`, the exact count Pct came from; 0 when
+	// the reporting hook predates the field.
+	Used int64 `json:"used"`
+	// At is unix MILLIS of the report — webJob.mtime's convention. A report
+	// is as old as the last statusline RENDER, not the last turn, and an
+	// idle zeus renders nothing new, so age here is not staleness.
+	At int64 `json:"at"`
+	// HandoffPct is the fill at which the daemon types /handoff into the
+	// pane (jobs.HandoffThreshold), served so no client hardcodes it.
+	HandoffPct float64 `json:"handoff_pct"`
+	// Handoff is the auto-handoff pass' state for THIS session, absent when
+	// the pass has recorded none for it (a fresh session, or state left by a
+	// previous run's session, which jobs.HandoffFor refuses).
+	Handoff *webJobHandoff `json:"handoff,omitempty"`
+}
+
+// webJobHandoff mirrors jobs.HandoffSummary for the wire: fires in the
+// CURRENT streak (the pass resets the count once the last fire is two hours
+// old, so this is never a lifetime total), the last fire's unix millis (0
+// when never fired), and whether the streak hit its cap and gave up.
+type webJobHandoff struct {
+	Fires     int   `json:"fires"`
+	LastAt    int64 `json:"last_at"`
+	Exhausted bool  `json:"exhausted"`
+}
+
+// webContextFor shapes one job's recorded fill for the wire, or nil when the
+// job carries none. The presence rule is jobs.CellContextFor's — the row under
+// the job's STAMPED session, nothing else — and the nil decision lives here
+// rather than at the call site for webAccountFor's reason: absence is the
+// wire's only spelling of "unreported", so exactly one function decides it.
+//
+// Absence covers every job whose lead has never reported: a cell under a
+// minute old (no session stamped yet, or no render yet), a cell whose
+// statusLine was left alone because it already ran something else, a codex
+// cell (codex has no statusline hook), and — by archivedWebJob never calling
+// this — an ARCHIVED job, Load's call for Load's reason: a card with no cell
+// is not filling. A DONE but unarchived job keeps its key: the row survives
+// teardown, and a reactivation resumes the same session near that fill, so
+// the number is the one a reader wants before pressing the button. Display
+// state plays no part (Load's no-flicker rule).
+func webContextFor(ctxIndex map[string]jobs.CellContext, handoffIndex map[int64]jobs.HandoffSummary, j *jobs.Job) *webJobContext {
+	c, ok := jobs.CellContextFor(ctxIndex, j)
+	if !ok {
+		return nil
+	}
+	out := &webJobContext{Pct: c.Pct, Window: c.Window, Used: c.Used, At: c.At, HandoffPct: jobs.HandoffThreshold()}
+	if h, ok := jobs.HandoffFor(handoffIndex, j); ok {
+		out.Handoff = &webJobHandoff{Fires: h.Fires, LastAt: h.LastFireAt, Exhausted: h.Exhausted}
+	}
+	return out
+}
+
 type webJob struct {
 	Slug    string `json:"slug"`
 	Repo    string `json:"repo"`
@@ -491,9 +618,12 @@ type webJob struct {
 	Cell      string        `json:"cell,omitempty"`
 	Live      bool          `json:"live"`
 	Artifacts []webArtifact `json:"artifacts,omitempty"`
-	// Detail is the cell's last words: for a live started cell, the full
-	// text of the last assistant text block of zeus' transcript, capped at
-	// 4000 chars.
+	// Detail is the cell's last words: the full text of the last assistant
+	// text block of zeus' transcript, capped at 4000 chars. Set wherever
+	// that transcript resolves — a live started cell, a cell-gone one, and a
+	// DONE job (located by its stamped session, since the cell is torn
+	// down) — so a done card reads like a blocked one: the job's final
+	// report stays on the board until the job is archived.
 	Detail string `json:"detail,omitempty"`
 	// LastSent is the last real user message from zeus' own transcript,
 	// regardless of send channel (board steer, k s, direct tmux typing),
@@ -504,11 +634,13 @@ type webJob struct {
 	// Question mirrors an unanswered AskUserQuestion call in zeus'
 	// transcript; the board renders it as header + option buttons.
 	Question *webQuestion `json:"question,omitempty"`
-	// Stage is the pipeline skill zeus most recently used — one of the five
-	// phase-governing skill names (info, aim, do, pr, dream) — read
+	// Stage is the pipeline skill zeus most recently used — one of the four
+	// phase-governing skill names (info, aim, do, dream; `pr` folded into do
+	// in job 624, and a client renders an unknown stage with its generic
+	// fallback) — read
 	// off zeus' transcript (jobs.FindStage), never declared by any agent.
-	// Set only where a transcript already resolves (live started cells and
-	// the cell-gone branch, exactly the two branches that read Detail).
+	// Set only where a transcript already resolves (live started cells, the
+	// cell-gone branch and done jobs — exactly the branches that read Detail).
 	// Absence covers three states the wire deliberately does not separate —
 	// no resolvable transcript, any failed or truncated scan (FindStage
 	// fails closed), and no pipeline skill used yet — because a client
@@ -541,8 +673,8 @@ type webJob struct {
 	// archived one. Archived entries are appended last (see the loop at the
 	// bottom of buildWebBoard), so a client that keys anything by bare slug
 	// silently loses the ACTIVE job to the archived one — which is exactly
-	// how a live job stopped being steerable from the board (web/static/
-	// app.js' jobKey). Pair slug with `archived` to get a unique key.
+	// how a live job stopped being steerable from the board (the retired
+	// static board's jobKey). Pair slug with `archived` to get a unique key.
 	// DisplaySlug carries the original slug for rendering.
 	Archived    bool   `json:"archived,omitempty"`
 	DisplaySlug string `json:"display_slug,omitempty"`
@@ -559,6 +691,13 @@ type webJob struct {
 	// PRs mirrors the job file's kraken-owned prs: list — every PR the
 	// cell ever shipped, rendered by the clients as linked state chips.
 	PRs []jobs.JobPR `json:"prs,omitempty"`
+	// Stack is the cell's manual-test URLs (jobstack.go), one linked chip
+	// each beside the PR chips. Served straight from `job_stacks` rows for
+	// active jobs; absent (omitempty, and webStackLinksFrom returns nil for
+	// no rows) when the cell registered none, and never set for archived
+	// jobs — the rows are deleted at teardown, so an archived job has none
+	// to show. ADDITIVE, so apiContract does not bump.
+	Stack []webStackLink `json:"stack,omitempty"`
 	// DocQuestions mirrors zeus' open doc questions (answered or not),
 	// served straight from `questions` rows in kraken.db — live or dead, no
 	// file, no parse step, so there is no more malformed-file case (see
@@ -652,6 +791,146 @@ type webJob struct {
 	// or removal — so apiContract does NOT bump. A client that does not know
 	// the key renders the card exactly as it did before per-cell binding.
 	Account *webJobAccount `json:"account,omitempty"`
+	// Context is the cell lead's context-window fill as its statusline last
+	// reported it (webJobContext above). A pointer with omitempty because
+	// ABSENCE IS THE WIRE'S ONLY SPELLING OF "unreported" — a zeroed object
+	// would claim an empty window, and a billed session never reports one.
+	// Served for every non-archived job with a report under its stamped
+	// session, done jobs included (a reactivation resumes near that fill);
+	// archivedWebJob withholds it, Load's call. ADDITIVE — a new optional
+	// key — so apiContract does NOT bump.
+	Context *webJobContext `json:"context,omitempty"`
+	// Visibility is who on the tailnet may see or drive this job — private,
+	// readonly or public (jobs.EffectiveVisibility, so readonly for a job that
+	// never set one). Always present: a remote board decides which controls
+	// to offer from it, and the local modal shows the current level.
+	Visibility string `json:"visibility"`
+	// Owner names the node a REMOTE card runs on. Absent on every local card
+	// — absence is the wire's spelling of "this machine's job".
+	Owner *webJobOwner `json:"owner,omitempty"`
+}
+
+// webJobOwner is a remote card's owner chip: which node, whose, and whether
+// that node answered its last polls.
+type webJobOwner struct {
+	NodeID   string `json:"node_id"`
+	Label    string `json:"label"`
+	Operator string `json:"operator"`
+	Online   bool   `json:"online"`
+}
+
+// webNode is one registry row on the wire. Jobs (the node's card list) is
+// filled only by GET /api/nodes; on the board the cards already ride `jobs`.
+type webNode struct {
+	NodeID   string          `json:"node_id"`
+	Label    string          `json:"label"`
+	Operator string          `json:"operator"`
+	DNSName  string          `json:"dns_name"`
+	IP       string          `json:"ip"`
+	Port     int             `json:"port"`
+	Build    string          `json:"build"`
+	Contract int             `json:"contract"`
+	Online   bool            `json:"online"`
+	LastOK   int64           `json:"last_ok"`
+	LastErr  string          `json:"last_err,omitempty"`
+	Jobs     json.RawMessage `json:"jobs,omitempty"`
+}
+
+func webNodeFrom(n *store.NodeRow, withJobs bool) webNode {
+	w := webNode{NodeID: n.ID, Label: n.Label, Operator: n.Operator, DNSName: n.DNSName,
+		IP: n.IP, Port: n.Port, Build: n.Build, Contract: n.Contract, Online: n.Online,
+		LastOK: n.LastOK, LastErr: n.LastErr}
+	// re-encoded through the same per-element decode and strip the board
+	// applies, never the stored jobs_json verbatim — a sibling that serves
+	// more than it should is not repeated here either
+	if withJobs {
+		if cards, ok := strippedCards(n.ID, n.JobsJSON); ok {
+			if b, err := json.Marshal(cards); err == nil {
+				w.Jobs = json.RawMessage(b)
+			}
+		}
+	}
+	return w
+}
+
+// strippedCards decodes a node's stored card list element by element — a bad
+// element drops alone — and passes each card through nodeCard. ok is false
+// when nothing is stored or the stored value is not an array (a stored `[]`
+// is ok with zero cards).
+//
+// Every artifact URL is then REPLACED with this node's own proxy URL for
+// (nodeID, slug, name): the sibling's URL addresses the sibling's
+// /api/artifact/, which resolved here would read a same-slug job of THIS
+// node, so a stored card's url values are never read at all. An artifact
+// with a blank name has nothing to address and is dropped, as is a repeat of
+// a name already listed on the card.
+func strippedCards(nodeID, jobsJSON string) ([]webJob, bool) {
+	if jobsJSON == "" {
+		return nil, false
+	}
+	var raws []json.RawMessage
+	if err := json.Unmarshal([]byte(jobsJSON), &raws); err != nil {
+		return nil, false
+	}
+	cards := make([]webJob, 0, len(raws))
+	for _, raw := range raws {
+		var card webJob
+		if err := json.Unmarshal(raw, &card); err != nil {
+			continue
+		}
+		card = nodeCard(card)
+		if card.Artifacts != nil {
+			arts := make([]webArtifact, 0, len(card.Artifacts))
+			seen := map[string]bool{}
+			for _, a := range card.Artifacts {
+				// a repeated name would address the same proxied file twice
+				// and collide as a client list key; the first one wins
+				if strings.TrimSpace(a.Name) == "" || seen[a.Name] {
+					continue
+				}
+				seen[a.Name] = true
+				arts = append(arts, webArtifact{Name: a.Name, URL: remoteArtifactURL(nodeID, card.Slug, a.Name)})
+			}
+			card.Artifacts = arts
+		}
+		cards = append(cards, card)
+	}
+	return cards, true
+}
+
+// remoteArtifactURL is the URL this node serves a sibling's artifact under:
+// GET /api/nodes/artifact, relayed to the owner's /api/node/artifact. name is
+// the LAST parameter because the SPA decides whether to render an artifact as
+// a page by matching the URL's tail against .html, and url.QueryEscape leaves
+// that suffix as written.
+func remoteArtifactURL(nodeID, slug, name string) string {
+	return "/api/nodes/artifact?node=" + url.QueryEscape(nodeID) + "&slug=" + url.QueryEscape(slug) + "&name=" + url.QueryEscape(name)
+}
+
+// remoteCards are the registry's polled cards, each stamped with its owner.
+// A stored list that is not an array contributes nothing; within one, each
+// element decodes on its own, so a single malformed card drops alone. Every
+// card passes through the strip nodeCard applies to outbound cards — a
+// sibling that serves more than it should is not repeated on this board —
+// and has its artifact URLs rewritten to this node's proxy (strippedCards).
+func remoteCards(rows []*store.NodeRow) []webJob {
+	var out []webJob
+	for _, n := range rows {
+		cards, ok := strippedCards(n.ID, n.JobsJSON)
+		if !ok {
+			continue
+		}
+		// nodeLabel: a row announced with no label names its node by id, so
+		// the owner chip (and any label fallback a client takes) never reads
+		// blank
+		owner := webJobOwner{NodeID: n.ID, Label: nodeLabel(n), Operator: n.Operator, Online: n.Online}
+		for _, card := range cards {
+			o := owner
+			card.Owner = &o
+			out = append(out, card)
+		}
+	}
+	return out
 }
 
 type webBoard struct {
@@ -706,6 +985,21 @@ type webBoard struct {
 	// that person's turns without carrying a name of its own. Additive, same
 	// policy as Update and ShipIOS.
 	Operator string `json:"operator"`
+	// Nodes is the fleet registry (sibling krakens on the tailnet), without
+	// their card lists — those ride `jobs` with an `owner`. Absent when the
+	// registry is empty, which is every single-machine kraken: the payload is
+	// then exactly the pre-fleet one plus each card's `visibility`.
+	Nodes []webNode `json:"nodes,omitempty"`
+	// NodeID is this node's tailscale stable id, so a client can tell a
+	// headless thread this node opened (origin.node_id equal) from one
+	// another node opened. Absent with no tailscale or with the fleet off.
+	NodeID string `json:"node_id,omitempty"`
+	// NodeLabel is this node's device label (jobs.DeviceLabel), read off the
+	// same cached envelope NodeID is, so the board bar's machines dropdown
+	// can name this Mac without a second poll of /api/node. Absent with the
+	// fleet off; a server older than the key makes the picker say the bare
+	// words "this Mac". Additive, no contract bump.
+	NodeLabel string `json:"node_label,omitempty"`
 }
 
 // jobArtifacts collects a job's viewable artifacts from exactly one source.
@@ -917,6 +1211,21 @@ func cellZeusTranscript(j *jobs.Job, all []*core.Peer) (zeus *core.Peer, transcr
 // tail-reading via lastBlocks the same way k r does so huge transcripts stay
 // fast. "" when the file is unreadable or has no assistant text within the
 // lookback window.
+// fillLastWords stamps the three transcript-derived card lines — the last
+// assistant text (Detail), the last real user message (LastSent) and the
+// pipeline stage — from a transcript located WITHOUT a live peer: the
+// cell-gone and done branches of the board build, which share this because
+// they share the situation (a stamped session, no process). An empty path
+// is a job with no resolvable transcript and leaves all three unset.
+func fillLastWords(wj *webJob, transcript string) {
+	if transcript == "" {
+		return
+	}
+	wj.Detail = lastAssistantText(transcript)
+	wj.LastSent = lastUserSent(transcript)
+	wj.Stage = jobs.FindStage(transcript)
+}
+
 func lastAssistantText(path string) string {
 	blocks, _, err := core.LastBlocks(path, 20)
 	if err != nil {
@@ -1029,6 +1338,12 @@ func buildWebBoard() webBoard {
 	// queries inside the cached build (store.ListJobTokens' own reason for
 	// existing). The archived loop below reads the same index.
 	tokens := jobTokensIndex(activeStore)
+	// Two more one-query indexes for the lead's context fill (webContextFor):
+	// every `cell_ctx:*` row and every `auto_handoff:*` row, read once here
+	// rather than per job for the token index's reason. Only the active loop
+	// reads them — an archived card carries no fill.
+	ctxIndex := jobs.CellContextIndex(activeStore)
+	handoffIndex := jobs.HandoffIndex(activeStore)
 	byState := map[string][]webJob{}
 	for _, j := range js {
 		// Computed once: this loop runs for every job on a payload rebuilt
@@ -1047,6 +1362,10 @@ func buildWebBoard() webBoard {
 			Artifacts: jobArtifacts(j, live[jobs.CellSession(j)]),
 			ModTime:   j.ModTime.Unix(),
 			PRs:       j.PRs,
+			// Stack: the cell's manual-test URLs, store-only like Threads
+			// below. Teardown deletes the rows, so a done job simply has
+			// none; nothing here gates on liveness.
+			Stack: webStackLinksFrom(jobs.ListStackLinks(j)),
 			// DocQuestions/Feedback: one uniform path straight off the store,
 			// live or dead, any state — no file, no cell-dir liveness check
 			// (see jobQuestions/jobFeedback). Never set for archived jobs,
@@ -1086,6 +1405,11 @@ func buildWebBoard() webBoard {
 			// lives in webAccountFor so it is reachable by a test — this loop
 			// is not (LiveSessions/DiscoverAll).
 			Account: webAccountFor(j),
+			// Context: the lead's last statusline report, out of the two
+			// indexes above and keyed on the job's stamped session. The
+			// presence rule lives in webContextFor so a test can reach it.
+			Context:    webContextFor(ctxIndex, handoffIndex, j),
+			Visibility: j.EffectiveVisibility(),
 		}
 		if live[jobs.CellSession(j)] {
 			wj.Cell, wj.Live = jobs.CellSession(j), true
@@ -1109,7 +1433,7 @@ func buildWebBoard() webBoard {
 				crew := jobs.CellCrew(jobs.CellSession(j), zeus, all, members)
 				wj.ZeusStatus = crew.ZeusStatus
 				for _, a := range crew.Agents {
-					wj.Roster = append(wj.Roster, webAgent{Name: a.Name, Model: a.Model, Role: a.Role, Status: a.Status, Working: a.Working})
+					wj.Roster = append(wj.Roster, webAgent{Name: a.Name, Model: a.Model, Role: a.Role, Status: a.Status, Working: a.Working, Kind: a.Kind})
 				}
 			}
 		} else if j.Started() && j.State != "done" {
@@ -1120,11 +1444,17 @@ func buildWebBoard() webBoard {
 			// located by the stamped session id since no live peer exists.
 			wj.CellGone = true
 			wj.Health = "cell session is gone — reactivate to resume; done/kill discard the worktree"
-			if transcript := core.TranscriptPathForSession(j.Session); transcript != "" {
-				wj.Detail = lastAssistantText(transcript)
-				wj.LastSent = lastUserSent(transcript)
-				wj.Stage = jobs.FindStage(transcript)
-			}
+			fillLastWords(&wj, core.TranscriptPathForSession(j.Session))
+		} else if j.State == "done" {
+			// done: the cell is torn down but zeus' transcript outlives it,
+			// and the board shows a done job the way it shows a blocked one —
+			// what zeus last said, what was last said to it, which skill it
+			// ended in. Read the same way the cell-gone branch reads them,
+			// since no live peer exists for either. The live arm above
+			// deliberately skips a done job whose session is still up (the
+			// window between accept and teardown), so this is the one place
+			// a done job's words come from.
+			fillLastWords(&wj, core.TranscriptPathForSession(j.Session))
 		}
 		wj.Reactivatable = (j.State == "done" || wj.CellGone) && j.Session != ""
 		byState[wj.State] = append(byState[wj.State], wj)
@@ -1156,7 +1486,40 @@ func buildWebBoard() webBoard {
 	for _, a := range jobs.LoadArchivedJobs() {
 		board.Jobs = append(board.Jobs, archivedWebJob(a, activeStore, tokens, webJobGoalsFor(goals, links[a.ID])))
 	}
+	// the fleet: every sibling's polled cards after this node's own, each
+	// carrying its owner. Read from the registry the nodes pass keeps, so the
+	// merged board costs this request no network.
+	cards, nodes := fleetBoard(activeStore)
+	board.Jobs = append(board.Jobs, cards...)
+	board.Nodes = nodes
+	// nodeSelf is cachedNodeSelf outside tests (pair.go): one tailscale read
+	// per ~30 s, not one per board build
+	if jobs.FleetEnabled() {
+		self := nodeSelf()
+		board.NodeID = self.ID
+		board.NodeLabel = self.Label
+	}
 	return board
+}
+
+// fleetBoard is the board's fleet half: every sibling's stored cards with
+// their owner, and the registry rows (without card lists). Nothing at all
+// when KRAKEN_NODES=off — the knob opts out in both directions, so a
+// registry left from before it was set never renders — or when the registry
+// is empty. Split out of buildWebBoard so the rule is reachable by a test.
+func fleetBoard(st *store.Store) ([]webJob, []webNode) {
+	if st == nil || !jobs.FleetEnabled() {
+		return nil, nil
+	}
+	rows, err := st.ListNodes()
+	if err != nil || len(rows) == 0 {
+		return nil, nil
+	}
+	nodes := make([]webNode, 0, len(rows))
+	for _, n := range rows {
+		nodes = append(nodes, webNodeFrom(n, false))
+	}
+	return remoteCards(rows), nodes
 }
 
 // archivedWebJob builds one archived job's card. Split out of buildWebBoard's
@@ -1232,8 +1595,18 @@ func archivedWebJob(a *jobs.Job, activeStore *store.Store, tokens map[int64]stor
 		// current one. The three columns live on the job row and survive
 		// archival in both directions, so the key comes back the moment the
 		// job is unarchived onto the active loop above.
+		//
+		// Context is NOT set either — this function never calls webContextFor
+		// — and for the same reason as Account: a context fill is a fact about
+		// a session that can still be resumed, and an archived job has to be
+		// unarchived before it can. The kv row is never deleted, so the key
+		// comes back with the job.
 		Goals: goals,
 		Goal:  primaryJobGoal(goals),
+		// Visibility is always present on the wire; an archived card is never
+		// served to a sibling (/api/node/jobs skips the archive), so this is
+		// only ever this board's own rendering of the level.
+		Visibility: a.EffectiveVisibility(),
 	}
 }
 

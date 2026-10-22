@@ -105,7 +105,14 @@ import (
 // repo/dir/quote/source_json/thread_session/revised_at columns and admits a
 // seventh source, `capture`; threads gains role; mm_flags is new (see
 // schemaV33).
-const schemaVersion = 33
+// Version 34 is multiplayer kraken: the nodes registry, the paired-devices
+// table, and jobs.visibility (see schemaV34).
+// Version 35 adds job_stacks: a cell's manual-test URLs, one row per
+// (job, url), registered by the cell through `kraken stack` and deleted with
+// the cell (see schemaV35).
+// Version 36 adds ask threads' six columns to threads: kind (pane |
+// headless), the three origin columns, answering and note (see schemaV36).
+const schemaVersion = 36
 
 // schemaV1 creates all nine tables plus kv. Exact DDL (types, indexes) was
 // left to this package by the spec; shapes below mirror the spec's Data
@@ -1935,6 +1942,152 @@ func migrateV33MindLayer(tx *sql.Tx) error {
 	return nil
 }
 
+// schemaV35 is the stack-links table (jobstack.go): one row per (job, url)
+// a cell registered as a manual-test URL through `kraken stack add`. label is
+// the cell's short name for it; status is the daemon probe's last verdict
+// (`unknown` until a loopback dial has run, `up`/`down` after); at is the
+// registration time and probed_at the last dial, both unix millis.
+//
+// No FK and no cascade, the house style of prs and job_tokens — but unlike
+// those two the rows are NOT retrospective: a stack dies with its tmux
+// session, so teardownCell deletes them (DeleteStacksForJob) and a
+// reactivated job starts with none. The composite primary key is what makes
+// re-registering a url an UPSERT of its label rather than a second chip.
+const schemaV35 = `
+CREATE TABLE IF NOT EXISTS job_stacks (
+	job_id    INTEGER NOT NULL,
+	url       TEXT    NOT NULL,
+	label     TEXT    NOT NULL DEFAULT '',
+	status    TEXT    NOT NULL DEFAULT 'unknown',
+	at        INTEGER NOT NULL DEFAULT 0,
+	probed_at INTEGER NOT NULL DEFAULT 0,
+	PRIMARY KEY (job_id, url)
+);
+`
+
+// schemaV34 is multiplayer kraken's storage, three independent pieces:
+//
+//   - nodes: one row per sibling `kraken serve` this node has ever seen on
+//     the tailnet, keyed on the device's tailscale stable id. The daemon's
+//     nodes pass is its writer; rows are never deleted by it, a device that
+//     went away reads online = 0. jobs_json is the last polled card list,
+//     stored verbatim so the board serves it without a network call.
+//   - pair_devices: one row per paired phone or browser. token_hash is the
+//     SHA-256 of the bearer token, never the token; UNIQUE so a collision is
+//     an insert error rather than two rows one token could match.
+//   - jobs.visibility: private | readonly | public, defaulting to readonly so
+//     every pre-existing job reads exactly what it would have been had the
+//     field existed, and nothing becomes drivable from another machine by
+//     upgrading.
+//
+// No FK anywhere: neither table refers to a job, and a node row outlives
+// anything the job tables do.
+const schemaV34 = `
+CREATE TABLE IF NOT EXISTS nodes (
+	id         TEXT    PRIMARY KEY,
+	label      TEXT    NOT NULL DEFAULT '',
+	operator   TEXT    NOT NULL DEFAULT '',
+	dns_name   TEXT    NOT NULL DEFAULT '',
+	ip         TEXT    NOT NULL DEFAULT '',
+	port       INTEGER NOT NULL DEFAULT 0,
+	build      TEXT    NOT NULL DEFAULT '',
+	contract   INTEGER NOT NULL DEFAULT 0,
+	first_seen INTEGER NOT NULL DEFAULT 0,
+	last_seen  INTEGER NOT NULL DEFAULT 0,
+	last_ok    INTEGER NOT NULL DEFAULT 0,
+	last_err   TEXT    NOT NULL DEFAULT '',
+	online     INTEGER NOT NULL DEFAULT 0,
+	jobs_json  TEXT    NOT NULL DEFAULT ''
+);
+CREATE TABLE IF NOT EXISTS pair_devices (
+	id           INTEGER PRIMARY KEY AUTOINCREMENT,
+	label        TEXT    NOT NULL DEFAULT '',
+	tailnet_name TEXT    NOT NULL DEFAULT '',
+	token_hash   TEXT    NOT NULL UNIQUE,
+	created_at   INTEGER NOT NULL DEFAULT 0,
+	last_seen_at INTEGER NOT NULL DEFAULT 0,
+	last_ip      TEXT    NOT NULL DEFAULT ''
+);
+`
+
+// schemaV34Visibility is v34's one ALTER, run by migrateV34Visibility only
+// when jobs lacks the column. ADD COLUMN has no IF NOT EXISTS form, and
+// several migration tests age a FRESH database by resetting user_version
+// alone (no downgradeFreshDB), so v34 re-runs over a jobs table that already
+// carries the column — v33's ALTERs are guarded for the same reason.
+const schemaV34Visibility = `ALTER TABLE jobs ADD COLUMN visibility TEXT NOT NULL DEFAULT 'readonly';`
+
+// migrateV34Visibility is migrations[34]'s hook: add jobs.visibility unless
+// it is already there.
+func migrateV34Visibility(tx *sql.Tx) error {
+	var n int
+	if err := tx.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('jobs') WHERE name = 'visibility'`).Scan(&n); err != nil {
+		return fmt.Errorf("probe jobs.visibility: %w", err)
+	}
+	if n > 0 {
+		return nil
+	}
+	if _, err := tx.Exec(schemaV34Visibility); err != nil {
+		return fmt.Errorf("add jobs.visibility: %w", err)
+	}
+	return nil
+}
+
+// schemaV36 is ask threads' storage (jobs/askthread.go), and its SQL half is
+// empty: all six changes are ADD COLUMNs, which SQLite cannot spell IF NOT
+// EXISTS, so every one runs in the hook, migrateV36AskThreads, behind a
+// column probe — the v33/v34 pattern, for the same reason (several migration
+// tests age a fresh database by resetting user_version alone, and the step
+// then replays over a threads table that already has the columns).
+//
+// The six columns, all on threads:
+//
+//   - kind: how the thread RUNS — 'pane' (an interactive claude in a tmux
+//     window, the only kind before v36, so the DEFAULT gives every existing
+//     row it) or 'headless' (one `claude -p` per question, no pane). It is
+//     orthogonal to v33's role, which says what the thread is FOR ('ask' for
+//     carl's question thread, 'mind' for the mind thread): a pane thread may
+//     have either role, a headless one is always role 'ask' (AddThread
+//     refuses headless + mind). The value is 'headless' rather than 'ask'
+//     because 'ask' is already a role value on the same wire object.
+//   - origin_node, origin_label, origin_login: the tailscale node id, its
+//     label and the login that opened the thread. Empty on every pre-v36
+//     row; origin_node is also empty on a row opened by a node with no
+//     tailscale or the fleet off.
+//   - answering: the one-question-in-flight flag ClaimThreadAnswering
+//     compare-and-sets, so one thread never has two runs on its session id.
+//   - note: the last run's failure line, empty after a clean answer.
+const schemaV36 = ``
+
+// schemaV36Columns is v36's six ALTERs in order, each run by
+// migrateV36AskThreads only when threads lacks the column (see schemaV36).
+var schemaV36Columns = []struct{ column, ddl string }{
+	{"kind", `ALTER TABLE threads ADD COLUMN kind TEXT NOT NULL DEFAULT 'pane' CHECK(kind IN ('pane','headless'));`},
+	{"origin_node", `ALTER TABLE threads ADD COLUMN origin_node TEXT NOT NULL DEFAULT '';`},
+	{"origin_label", `ALTER TABLE threads ADD COLUMN origin_label TEXT NOT NULL DEFAULT '';`},
+	{"origin_login", `ALTER TABLE threads ADD COLUMN origin_login TEXT NOT NULL DEFAULT '';`},
+	{"answering", `ALTER TABLE threads ADD COLUMN answering INTEGER NOT NULL DEFAULT 0;`},
+	{"note", `ALTER TABLE threads ADD COLUMN note TEXT NOT NULL DEFAULT '';`},
+}
+
+// migrateV36AskThreads is migrations[36]'s hook: add each of the six thread
+// columns unless it is already there.
+func migrateV36AskThreads(tx *sql.Tx) error {
+	for _, c := range schemaV36Columns {
+		var n int
+		if err := tx.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('threads') WHERE name = ?`, c.column).Scan(&n); err != nil {
+			return fmt.Errorf("probe threads.%s: %w", c.column, err)
+		}
+		if n > 0 {
+			continue
+		}
+		if _, err := tx.Exec(c.ddl); err != nil {
+			return fmt.Errorf("add threads.%s: %w", c.column, err)
+		}
+	}
+	return nil
+}
+
 // migrationStep is one migration: SQL applied first, then an optional Go
 // hook run afterward inside the SAME transaction. Every migration before
 // v5 was a pure SQL string — DDL can't parse questions.yaml's hand-rolled
@@ -2048,8 +2201,17 @@ type migrationStep struct {
 // migrateV33MindLayer, runs the rebuild and the ALTER only when each table
 // lacks its v33 column, since neither is expressible as IF NOT EXISTS (see
 // schemaV33).
+// migrations[34] creates nodes and pair_devices (CREATE TABLE IF NOT EXISTS)
+// and adds jobs.visibility through its hook, migrateV34Visibility, which runs
+// the ALTER only when the column is missing (see schemaV34).
+// migrations[35] creates job_stacks (CREATE TABLE IF NOT EXISTS, no hook;
+// see schemaV35).
+// migrations[36] adds the six ask-thread columns to threads (kind,
+// origin_node, origin_label, origin_login, answering, note); its SQL is empty
+// and the hook, migrateV36AskThreads, runs each ALTER only when the column is
+// missing (see schemaV36).
 // Future schema changes append
-// migrations[34], migrations[35], ... rather than editing an existing
+// migrations[37], migrations[38], ... rather than editing an existing
 // schemaV<N> string (or hook) in place, so a database created under an older
 // binary still migrates forward correctly.
 var migrations = map[int]migrationStep{
@@ -2086,6 +2248,9 @@ var migrations = map[int]migrationStep{
 	31: {sql: schemaV31},
 	32: {sql: schemaV32},
 	33: {sql: schemaV33, hook: migrateV33MindLayer},
+	34: {sql: schemaV34, hook: migrateV34Visibility},
+	35: {sql: schemaV35},
+	36: {sql: schemaV36, hook: migrateV36AskThreads},
 }
 
 // migrateV5Questions is migrations[5]'s Go hook: schemaV5's SQL has already

@@ -1176,9 +1176,11 @@ func TestEdgeMMMigrationV29CarriesOnlyLiveWatchedEdges(t *testing.T) {
 	// dropped the kg_* tables; its arm puts them back, so the graph rows below
 	// are seeded through raw SQL AFTER the downgrade — the accessors are gone.
 	// v33 rebuilt mm_items and added threads.role and mm_flags; its arm,
-	// undoV33, reverses all three.)
-	if schemaVersion != 33 {
-		t.Fatalf("schemaVersion = %d, want 33 — this fixture seeds a v28 shape and walks it forward", schemaVersion)
+	// undoV33, reverses all three. v34 added nodes, pair_devices and
+	// jobs.visibility; its arm drops all three. v35 added job_stacks; its arm
+	// drops it. v36 added six thread columns; its arm drops them.)
+	if schemaVersion != 36 {
+		t.Fatalf("schemaVersion = %d, want 36 — this fixture seeds a v28 shape and walks it forward", schemaVersion)
 	}
 	s := edgeMMOpen(t)
 

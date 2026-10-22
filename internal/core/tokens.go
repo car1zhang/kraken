@@ -1086,27 +1086,34 @@ func addTokenLine(tk *Tokens, line []byte, own string, g *tokenGroup) {
 // It has to walk at all — rather than read the single record before the
 // offset — because the forward tracker skips non-assistant records without
 // resetting, so a message whose blocks are interleaved with tool_result
-// records is still one group. That shape is not exotic: 9,385 groups
-// across every cell transcript on this machine, with an observed maximum of
-// FIVE intervening records. 64 leaves an order of magnitude of headroom over
-// that, and exhaustion is REPORTED rather than silent (see precedingGroup).
-const groupLookbackRecords = 64
+// records is still one group. The bound used to be 64, sized against a
+// measured maximum of FIVE intervening tool_result records. That premise is
+// dead: Claude Code now writes a run of per-turn bookkeeping records between
+// one assistant message and the next (`last-prompt`, `custom-title`,
+// `agent-name`, `mode`, `permission-mode`, `atis-latch`, `bridge-session`,
+// `file-history-snapshot`), a dozen or more `attachment` records per prompt,
+// and — the one that scales — an `api-request-blob` record PER MESSAGE of the
+// outgoing request, so a fork's or a resumed session's first turn dumps its
+// whole inherited history as blobs. Measured runs of 60-70 intervening records
+// exhausted the old bound on two files in one day and on six separate days
+// before that, each costing a permanent over-count (see precedingGroup). The
+// two bounds cross at 64 MB / 8192 = 8 KB per record: a storm of small records
+// (a request blob is about 1 KB) stops on the record count after about 8 MB
+// of lines, and a gap of fat tool_results stops on the byte bound. Both are
+// an order of magnitude past the longest run measured (135 records, 0.15 MB),
+// and exhaustion stays REPORTED rather than silent.
+const groupLookbackRecords = 8192
 
-// groupLookbackBytes bounds the same walk by volume. It is the SLACKER of the
-// two bounds in practice, and saying which one binds matters because an
-// exhausted lookback costs up to a whole message's output (see precedingGroup)
-// — so anyone widening the tolerance should widen the RECORD bound.
-//
-// The arithmetic: 64 records against 64 MB means bytes bind only if the
-// intervening records average over 1 MB EACH. The measured shape is nothing
-// like that — the largest intervening run on this machine is 5 records
-// totalling 1.1 MB — and even a pathological one would have to sustain a
-// megabyte per record for 64 consecutive records to reach here first. Single
-// transcript lines do hit 8.3 MB, which is why the ceiling is set this high
-// rather than at the measured 1.1 MB: a handful of fat tool_results in one gap
-// must not exhaust it. But it exists to stop a pathological transcript turning
-// one resume into a whole-file backward read, not to be the operative limit;
-// the record count is what actually stops the walk.
+// groupLookbackBytes bounds the same walk by volume. Which bound binds (the
+// crossover above) matters because an exhausted lookback costs up to a whole
+// message's output (see precedingGroup): single transcript lines do hit 8.3
+// MB, so a handful of fat tool_results in one gap must not exhaust it, and 64
+// MB covers that with room. Neither constant bounds the walk's I/O on its own:
+// every lineBefore step reads at least one lineBeforeWindow whatever the
+// line's length, so the read cost is records × window (32 MB at the record
+// bound) plus up to a few times the line bytes (the doubling overshoots) —
+// which is why that window starts small, and why the walk is paid only on a
+// resume of a transcript that grew since the last pass.
 const groupLookbackBytes = 64 << 20
 
 // precedingGroup returns the group state left behind by the last assistant
@@ -1207,6 +1214,15 @@ func precedingGroup(f *os.File, from int64, own string) (tokenGroup, bool) {
 	return tokenGroup{}, false
 }
 
+// lineBeforeWindow is the first window lineBefore reads when walking back to
+// a line's start. It is small because precedingGroup can take thousands of
+// steps over tiny records (groupLookbackRecords), each step reading at least
+// one window whatever the line's length: at the 64 KB scanner seed that walk
+// read and allocated 512 MB in the worst case, far past the byte bound meant
+// to cap it. The window doubles until the line's start appears, so a fat
+// line still resolves in a handful of reads.
+const lineBeforeWindow = 4 << 10
+
 // lineBefore returns the complete line whose terminating newline sits at
 // end-1, together with that line's start offset.
 //
@@ -1219,7 +1235,7 @@ func lineBefore(f *os.File, end int64) ([]byte, int64, bool) {
 		return nil, 0, false
 	}
 	term := end - 1 // the '\n' that terminated the line we want
-	for window := int64(mineScanBufInit); ; window *= 2 {
+	for window := int64(lineBeforeWindow); ; window *= 2 {
 		start := term - window
 		if start < 0 {
 			start = 0

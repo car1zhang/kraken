@@ -13,6 +13,7 @@ import {
   fetchDraft,
   fetchJobForm,
   fetchJobTranscriptTurns,
+  fetchNodeTranscript,
   killJob,
   openInEditor,
   reactivateJob,
@@ -59,6 +60,7 @@ import { GoalMultiPicker } from "./GoalMultiPicker.tsx";
 import { CrewChips, crewChipsVisible } from "../board/chips/CrewPills.tsx";
 import { FeedbackPanel } from "../board/chips/FeedbackPanel.tsx";
 import { PRChip } from "../board/chips/PRChips.tsx";
+import { StackChip } from "../board/chips/StackChips.tsx";
 import { QuestionBlock } from "../board/chips/QuestionBlock.tsx";
 import { ThreadChips } from "../board/chips/ThreadChips.tsx";
 import { CmdComposer } from "./CmdComposer.tsx";
@@ -71,6 +73,8 @@ import {
   type RenameControlState,
 } from "./RenameControl.tsx";
 import { TokensPanel } from "./TokensPanel.tsx";
+import { ContextPanel } from "./ContextPanel.tsx";
+import { RemoteSteerBody, VisibilityControl } from "./RemoteSteer.tsx";
 import {
   AttChips,
   Overlay,
@@ -96,10 +100,20 @@ import { showToast } from "./Toast.tsx";
 //   steer         "— message zeus"                    /api/steer        required
 //   unblock       "— unblock"                         /api/steer        required
 //   reactivate    "— reactivate (same zeus session)"   /api/reactivate   optional*
+//   view          "— done"                            (none)            (no composer)
 //
 // * unless `requireText`, which is set ONLY by a done→working drag. The card's
 //   and editor's ↺ buttons open reactivate without it, and their optional-text
 //   behaviour is unaffected.
+//
+// `view` is the fourth, and it is what a DONE card's click opens (carl,
+// 2026-10-20): a done job should read almost exactly like a blocked one — the
+// same drilldown, with the artifacts, tokens, PRs, threads, zeus' last words
+// and the transcript all there — minus everything that acts on a cell, since
+// the cell is torn down. So the composer, the attach zone, the send button,
+// the draft sync, the kill/tmux/mark-done buttons, the crew line, the account
+// panel and the retry/question actions are all absent, and the ONE action it
+// keeps is ↺ reactivate, which flips the modal into reactivate mode.
 
 /**
  * Re-exported, not redeclared: `lib/moves.ts` owns this union because it is the
@@ -113,9 +127,17 @@ const TITLE_SUFFIX: Record<SteerMode, string> = {
   steer: " — message zeus",
   unblock: " — unblock",
   reactivate: " — reactivate (same zeus session)",
+  view: " — done",
 };
 
-const PLACEHOLDER: Record<SteerMode, string> = {
+/**
+ * The modes that render a composer. `view` is excluded at the TYPE level
+ * rather than given placeholder strings nothing reads: a Record that had a
+ * `view` placeholder would be a composer the mode promises and never mounts.
+ */
+type ComposerMode = Exclude<SteerMode, "view">;
+
+const PLACEHOLDER: Record<ComposerMode, string> = {
   steer:
     "message zeus directly — steering / pivot instruction, delivered straight to its pane",
   unblock: "tell the crew how to proceed — routed straight to the cell",
@@ -123,13 +145,22 @@ const PLACEHOLDER: Record<SteerMode, string> = {
     "optional: what to adjust — delivered as the resume prompt to the job's original zeus session (leave empty to just wake it)",
 };
 
-const SEND_LABEL: Record<SteerMode, string> = {
+const SEND_LABEL: Record<ComposerMode, string> = {
   steer: "send ⌘⏎",
   unblock: "unblock ⌘⏎",
   reactivate: "reactivate ⌘⏎",
 };
 
-/** Which endpoint a mode sends to. Pinned by SteerOverlay.test.tsx. */
+/** Does this mode send anything at all? Only `view` does not. */
+export function steerHasComposer(mode: SteerMode): mode is ComposerMode {
+  return mode !== "view";
+}
+
+/**
+ * Which endpoint a mode sends to. Pinned by SteerOverlay.test.tsx. `view` has
+ * none — it answers the steer endpoint only so the signature stays total, and
+ * the body never sends in that mode (steerHasComposer gates it).
+ */
 export function steerEndpoint(mode: SteerMode): string {
   return mode === "reactivate" ? "/api/reactivate" : "/api/steer";
 }
@@ -137,6 +168,32 @@ export function steerEndpoint(mode: SteerMode): string {
 /** app.js:2205 — is an empty message a mistake in this mode? */
 export function steerRequiresText(mode: SteerMode, requireText: boolean): boolean {
   return mode !== "reactivate" || requireText;
+}
+
+/**
+ * Whether the tokens panel has anything to say: a measured spend or a counted
+ * session. Shared with the remote body so the two drilldowns cannot disagree
+ * on when the panel shows.
+ */
+export function steerHasTokens(job: WebJob | undefined): boolean {
+  const tok = job?.tokens;
+  return (
+    !!tok &&
+    !!(
+      (tok.in || 0) + (tok.out || 0) + (tok.cache_write || 0) + (tok.cache_read || 0) ||
+      tok.sessions
+    )
+  );
+}
+
+/**
+ * Whether the context panel has anything to say: a presence test on the one
+ * key, since absent IS "unreported" (see WebJobContext) and a present object
+ * always carries a real report. Shared with the remote body like
+ * steerHasTokens, for the same reason — the two drilldowns must not disagree.
+ */
+export function steerHasContext(job: WebJob | undefined): boolean {
+  return !!job?.context;
 }
 
 /**
@@ -182,6 +239,11 @@ export interface SteerOverlayProps {
    * server sends none, and both fall back to "you" / "the operator".
    */
   operator?: string;
+  /**
+   * `board.node_id` — this node's own id, which the thread chips compare a
+   * headless thread's origin against (lib/threadquick.ts threadOriginBadge).
+   */
+  boardNodeID?: string;
   onClose: () => void;
   /**
    * A rename succeeded — the caller re-points `slug` at the SAME job under its
@@ -193,6 +255,14 @@ export interface SteerOverlayProps {
    * integrator loses a visible button rather than gaining a broken one.
    */
   onRenamed?: (slug: string) => void;
+  /**
+   * `view` mode's one action: flip this modal onto the same job in
+   * reactivate mode. Optional for renameControlVisible's reason — the button
+   * is hidden outright without it, so an integrator that never wired it
+   * loses a visible control rather than gaining a dead one — and read in no
+   * other mode, since the other three already are the action.
+   */
+  onReactivate?: (slug: string) => void;
   /** See Overlay.tsx. */
   mutate: Mutate;
 
@@ -223,8 +293,21 @@ export interface SteerOverlayProps {
    * so one shape serves every entry point.
    */
   onOpenArtifact(url: string, name: string, jobKey: string): void;
-  /** Side-thread overlay. `tid` null opens the ⑂ branch dialog. */
-  onOpenThread(slug: string, tid: string | null): void;
+  /**
+   * Side-thread overlay. `tid` null opens the ⑂ branch dialog. `node` is set
+   * only by the remote body: the thread lives on that node, and the overlay
+   * reads it through the proxy.
+   */
+  onOpenThread(slug: string, tid: string | null, node?: string): void;
+  /**
+   * The OWNER node of a remote card, when one opened the modal. Its presence
+   * — not the job's — is what selects the remote body: a remote card that
+   * left the board must still never fall through to the LOCAL body, whose
+   * controls would act on a local job of the same slug.
+   */
+  node?: string;
+  /** Opens the job editor in its remote mode (a remote public card's ✎ edit). */
+  onOpenEditor?: (slug: string, node: string) => void;
   // The detail's ○ mark known and the questions panel's → decision were
   // retired with the board's one-shot marks (PR 2, Q10): text reaches the
   // mental model through the ◆ mind button, and the transcript panel below is
@@ -255,7 +338,24 @@ export function SteerOverlay(props: SteerOverlayProps) {
       onClose={props.onClose}
       {...panelDropHandlers(sink)}
     >
-      {props.slug ? (
+      {props.slug && props.node ? (
+        // a REMOTE card (opened with its owner node): the fleet body, which
+        // shows every panel and offers no control (readonly) or proxied ones
+        // (public)
+        <RemoteSteerBody
+          key={props.node + "/" + props.slug}
+          node={props.node}
+          slug={props.slug}
+          job={props.job}
+          mutate={props.mutate}
+          onClose={props.onClose}
+          onOpenEditor={props.onOpenEditor}
+          onOpenArtifact={props.onOpenArtifact}
+          onOpenThread={props.onOpenThread}
+          operator={props.operator}
+          boardNodeID={props.boardNodeID}
+        />
+      ) : props.slug ? (
         <SteerBody
           key={props.slug + props.mode}
           {...props}
@@ -280,8 +380,10 @@ function SteerBody({
   job,
   usage,
   operator,
+  boardNodeID,
   onClose,
   onRenamed,
+  onReactivate,
   mutate,
   onOpenArtifact,
   onOpenThread,
@@ -289,6 +391,11 @@ function SteerBody({
   rename,
 }: SteerOverlayProps & { fileSink: FileSink; rename: RenameControlState }) {
   const jobSlug = slug as string;
+  // The read-only drilldown of a done job. Every "is there a cell to act on"
+  // decision below reads this alongside `mode !== "reactivate"`: reactivate
+  // targets a dead cell and hides the cell ACTIONS, view targets a dead cell
+  // and hides the actions AND the composer.
+  const composer = steerHasComposer(mode);
   const [text, setText] = useState("");
   const [note, setNote] = useState("");
   const [chips, setChips] = useState<AttChip[]>([]);
@@ -312,7 +419,9 @@ function SteerBody({
   // nothing has been typed in the meantime. An AbortController replaces the
   // vanilla `steerOverlay.hidden || steerSlug !== slug` staleness check: an
   // unmount aborts it, so a result for a modal that has moved on never lands.
+  // Skipped in view mode: there is no composer for a draft to land in.
   useEffect(() => {
+    if (!composer) return;
     const ac = new AbortController();
     fetchDraft(jobSlug, ac.signal)
       .then((d) => {
@@ -325,7 +434,7 @@ function SteerBody({
       })
       .catch(() => {});
     return () => ac.abort();
-  }, [jobSlug, markSynced]);
+  }, [composer, jobSlug, markSynced]);
 
   // ---- the collapsible spec drawer ----------------------------------------
   // reactivate skips it: /api/job/form describes the cell that would run, and
@@ -402,6 +511,19 @@ function SteerBody({
   );
 
   fileSink.current = addFiles;
+  // Cleared on unmount: the sink is the overlay's and outlives this body, so a
+  // stale one would hand a file dropped on a LATER modal — a remote card's,
+  // which wires none — to this job's upload route. Cleared only while it is
+  // still THIS body's: a body remounted for another job sets its own sink
+  // during its render, before this cleanup runs, and must keep it.
+  const mySink = useRef(addFiles);
+  mySink.current = addFiles;
+  useEffect(
+    () => () => {
+      if (fileSink.current === mySink.current) fileSink.current = null;
+    },
+    [fileSink],
+  );
 
   // steer wins the ⌘V race against the editor — see usePasteLayer.
   const onPaste = useCallback(
@@ -413,10 +535,16 @@ function SteerBody({
     },
     [addFiles],
   );
-  usePasteLayer(true, ESC_PRIORITY.steer, onPaste);
+  // armed only with a composer to paste INTO: in view mode a pasted image
+  // would upload against the job and land in a chip list nothing renders
+  usePasteLayer(composer, ESC_PRIORITY.steer, onPaste);
 
   // ---- send ---------------------------------------------------------------
   const send = useCallback(async () => {
+    // view mode mounts no composer and no send button, so nothing reaches
+    // here; the guard is for the paste layer, which is armed in every mode
+    // and could otherwise queue an attachment that a later send would carry.
+    if (!composer) return;
     if (pending > 0) {
       setNote("uploading image…");
       return;
@@ -450,6 +578,7 @@ function SteerBody({
   }, [
     cancelDraft,
     chips,
+    composer,
     jobSlug,
     mode,
     mutate,
@@ -497,20 +626,34 @@ function SteerBody({
   // hoist there); only the visibility rule, which needs `job`, is decided here.
   const showRename = renameControlVisible(job, false, onRenamed);
 
+  // Every cell action is gated on `composer` as well as on the mode check it
+  // always had: a done job's cell is torn down, so there is nothing to kill,
+  // raise or mark. (All three would read false for a done job anyway — it is
+  // not live and its column is not blocked — but the gate says WHY rather
+  // than leaning on the job's state happening to agree.)
   const liveCol = liveDisplayColumn(job);
   const killable =
-    mode !== "reactivate" && (liveCol === "working" || liveCol === "blocked");
-  const showTmux = mode !== "reactivate" && !!job?.live;
-  const showDone = mode !== "reactivate" && liveCol === "blocked";
+    composer && mode !== "reactivate" && (liveCol === "working" || liveCol === "blocked");
+  const showTmux = composer && mode !== "reactivate" && !!job?.live;
+  const showDone = composer && mode !== "reactivate" && liveCol === "blocked";
+  // view's one action. Hidden when the job cannot be reactivated (no stamped
+  // session) and when nobody wired the callback — see onReactivate.
+  const showReactivate = !composer && !!job?.reactivatable && !!onReactivate;
 
   // reactivate targets a dead cell: no crew to show, no artifacts to act on,
   // and nothing to retry or mark done. PRs, threads, the two messages and the
   // questions are job history and show in every mode.
-  const showCrew = mode !== "reactivate" && !!job && crewChipsVisible(job);
+  const showCrew = composer && mode !== "reactivate" && !!job && crewChipsVisible(job);
   // PRs are job history rather than cell state, so they show in EVERY mode —
   // "what already shipped" is exactly the reactivation context.
   const prs = job?.prs ?? [];
+  // Stack links: the cell's manual-test URLs. Shown wherever present — the
+  // server already drops them at teardown, so a reactivate-mode open simply
+  // has none.
+  const stack = job?.stack ?? [];
   const artifacts = job?.artifacts ?? [];
+  // Hidden in reactivate mode only. view SHOWS them — the done job's output
+  // is the main thing its drilldown is opened for.
   const showArtifacts = mode !== "reactivate" && artifacts.length > 0;
   // Side threads are job history too (a closed thread outlives its cell), so
   // like PRs they render in every mode. ThreadChips itself drops the ⑂ branch
@@ -548,13 +691,13 @@ function SteerBody({
   // mode, reactivate included: "what did this already cost" is exactly the
   // question a reactivation asks. Absent means never measured, which is not a
   // measured zero (see TokensPanel), and keeps the container hidden.
-  const tok = job?.tokens;
-  const hasTokens =
-    !!tok &&
-    !!(
-      (tok.in || 0) + (tok.out || 0) + (tok.cache_write || 0) + (tok.cache_read || 0) ||
-      tok.sessions
-    );
+  const hasTokens = steerHasTokens(job);
+  // The lead's context fill shows in EVERY mode for the reason tokens does,
+  // reactivate included: the row survives teardown and a reactivation resumes
+  // the same session near that fill, so "how full was zeus" is exactly the
+  // number a reactivation wants. Absent means unreported (see ContextPanel)
+  // and keeps the container hidden.
+  const hasContext = steerHasContext(job);
   // steerActionsHTML (app.js): the retry button plus the pending
   // AskUserQuestion. steer/unblock only — reactivate targets a dead cell, so
   // there is nothing on it to retry and nothing waiting on an answer.
@@ -564,7 +707,7 @@ function SteerBody({
   // ("is gone" / "startup prompt"), which a retry would only re-fail on.
   const retryable = !!job?.health && !/is gone|startup prompt/.test(job.health);
   const question = job?.question;
-  const showActions = mode !== "reactivate" && (retryable || !!question);
+  const showActions = composer && mode !== "reactivate" && (retryable || !!question);
   // Which pool account this cell is spending on. Unlike every other term in
   // showContext this one is NOT a presence test on a wire key, and deliberately
   // so: an unbound cell is not a cell with no account, it is a cell on the
@@ -577,12 +720,14 @@ function SteerBody({
   // which is burning nothing at all, and the binder re-decides at the respawn —
   // so whatever the row still says would be the account the NEXT run may not
   // get. Answering it there would be the one thing this section must not do,
-  // which is state a dead fact as a current one.
-  const hasAccount = mode !== "reactivate";
+  // which is state a dead fact as a current one. view is the same dead cell,
+  // so the same rule.
+  const hasAccount = composer && mode !== "reactivate";
 
   const showContext =
     showCrew ||
     prs.length > 0 ||
+    stack.length > 0 ||
     showThreads ||
     !!detail ||
     !!lastSent ||
@@ -591,7 +736,8 @@ function SteerBody({
     hasDocq ||
     hasFeedback ||
     hasAccount ||
-    hasTokens;
+    hasTokens ||
+    hasContext;
 
   // ---- feedback save / delete ---------------------------------------------
   // Deliberately NOT props. FeedbackPanel's two callbacks are pure mutations
@@ -788,6 +934,15 @@ function SteerBody({
             can be recoloured. A pick POSTs the colour and never sends a
             steer message. */}
         <ColorPicker slug={jobSlug} color={job?.color} mutate={mutate} />
+        {/* who beyond this Mac may see or drive the job: the same dropdown,
+            in the same row, riding its own one-field route like the colour.
+            Withheld for an archived job, which no route answers for and which
+            never leaves this machine anyway. */}
+        {job && !job.archived ? (
+          <span className="f-swatches compact" title="visibility">
+            <VisibilityControl slug={jobSlug} visibility={job.visibility} mutate={mutate} />
+          </span>
+        ) : null}
         <RenameButton id="steer-rename" state={rename} visible={showRename} />
         <span className="spacer"></span>
         <button
@@ -820,6 +975,20 @@ function SteerBody({
         >
           ✕ cancel job
         </button>
+        {/* view mode's one action — the same ↺ the card's band 6 offers,
+            here so a done job's drilldown need not be closed to reach it.
+            It flips THIS modal into reactivate mode (App re-points the mode;
+            the body remounts on slug+mode), which is where the resume prompt
+            is typed. */}
+        <button
+          className="btn reactivate"
+          id="steer-reactivate"
+          hidden={!showReactivate}
+          data-slug={jobSlug}
+          onClick={() => onReactivate?.(jobSlug)}
+        >
+          ↺ reactivate
+        </button>
       </div>
       <div
         className="panel-body answer-body"
@@ -848,14 +1017,24 @@ function SteerBody({
               <PRChip key={`${pr.url}|${i}`} pr={pr} />
             ))}
           </div>
+          {/* The cell's stack links, directly under the PRs as on the card
+              (StackChip, not StackChips, for the wrapper reason above). A
+              remote card's links render as spans — localhost on another
+              machine is not this stack. */}
+          <div className="stack" id="steer-stack" hidden={!stack.length}>
+            {stack.map((l, i) => (
+              <StackChip key={`${l.url}|${i}`} link={l} remote={job?.owner !== undefined} />
+            ))}
+          </div>
           {/* The card passes withBranch={false}, delegating ⑂ to this modal —
-              so this is the ONLY mount point of BranchButton in the app, and
-              with it unrendered no control anywhere could branch a thread.
+              so this is the ONLY mount point of BranchButton for a local job
+              (RemoteSteer.tsx mounts the other, as ⑂ ask on a remote card),
+              and with it unrendered no control could branch a local thread.
               Default withBranch here (no argument), which is exactly the split
               BranchButton's header states. */}
           <div className="threads" id="steer-threads" hidden={!showThreads}>
             {job && showThreads ? (
-              <ThreadChips job={job} onOpenThread={onOpenThread} />
+              <ThreadChips job={job} onOpenThread={onOpenThread} boardNodeID={boardNodeID} />
             ) : null}
           </div>
           <div
@@ -955,11 +1134,22 @@ function SteerBody({
           <div className="steer-account" id="steer-account" hidden={!hasAccount}>
             {hasAccount ? <AccountPanel job={job} usage={usage} /> : null}
           </div>
-          {/* last because it is ambient: nothing here is actionable, and a
-              job that was never measured leaves this hidden entirely rather
-              than showing a zero — see TokensPanel. */}
-          <div className="steer-tokens" id="steer-tokens" hidden={!hasTokens}>
-            <TokensPanel job={job} />
+          {/* The two METERS, last because both are ambient: nothing here is
+              actionable. One two-up row (Q1 of job 630): the lead's context
+              fill on the left — how full zeus is RIGHT NOW — and the job's
+              token spend on the right — what it has cost so far — read in one
+              glance and collapsing to a stack on narrow widths (style.css
+              .steer-meters). Either alone fills the row. A job that was never
+              measured, or whose lead never reported, leaves its container
+              hidden rather than showing a zero — see TokensPanel and
+              ContextPanel for why each absence is not a zero. */}
+          <div className="steer-meters" hidden={!hasTokens && !hasContext}>
+            <div className="steer-ctxwin" id="steer-ctxwin" hidden={!hasContext}>
+              <ContextPanel job={job} />
+            </div>
+            <div className="steer-tokens" id="steer-tokens" hidden={!hasTokens}>
+              <TokensPanel job={job} />
+            </div>
           </div>
         </div>
 
@@ -1006,63 +1196,73 @@ function SteerBody({
           />
         </div>
 
-        <CmdComposer
-          id="steer-text"
-          chipsId="steer-cmd-chips"
-          value={text}
-          onChange={setText}
-          rows={4}
-          placeholder={PLACEHOLDER[mode]}
-          onSubmit={() => void send()}
-        />
-
-        {/* the drop target is the whole PANEL, not this zone — see
-            panelDropHandlers in Overlay.tsx */}
-        <div className="att-zone" id="steer-att-zone">
-          <AttChips
-            id="steer-chips-att"
-            chips={chips}
-            onRemove={(path) =>
-              setChips((prev) => prev.filter((c) => c.path !== path))
-            }
-          />
-          <div className="att-bar">
-            <button
-              className="btn ghost att-btn"
-              id="steer-att-btn"
-              type="button"
-              title="attach images"
-              onClick={() => attInput.current?.click()}
-            >
-              📎 attach
-            </button>
-            <span className="att-hint">paste (⌘V) or drop images</span>
-            <input
-              type="file"
-              id="steer-att-input"
-              ref={attInput}
-              accept="image/png,image/jpeg,image/gif,image/webp"
-              multiple
-              hidden
-              onChange={(e) => {
-                if (e.target.files) addFiles(e.target.files);
-                e.target.value = ""; // allow re-picking the same file
-              }}
+        {/* The composer, the attach zone, the send button and the note:
+            UNMOUNTED in view mode rather than hidden, for LoadDrill's reason
+            — "no composer" is the absence of the element, and a hidden
+            textarea would still answer a #steer-text query (and still be a
+            paste target). `steerHasComposer` narrows `mode` here, which is
+            what lets the two Records below be keyed on ComposerMode. */}
+        {steerHasComposer(mode) ? (
+          <>
+            <CmdComposer
+              id="steer-text"
+              chipsId="steer-cmd-chips"
+              value={text}
+              onChange={setText}
+              rows={4}
+              placeholder={PLACEHOLDER[mode]}
+              onSubmit={() => void send()}
             />
-          </div>
-        </div>
 
-        <button
-          className="btn btn-big"
-          id="steer-send"
-          disabled={sending}
-          onClick={() => void send()}
-        >
-          {SEND_LABEL[mode]}
-        </button>
-        <div className="answer-note" id="steer-note">
-          {note}
-        </div>
+            {/* the drop target is the whole PANEL, not this zone — see
+                panelDropHandlers in Overlay.tsx */}
+            <div className="att-zone" id="steer-att-zone">
+              <AttChips
+                id="steer-chips-att"
+                chips={chips}
+                onRemove={(path) =>
+                  setChips((prev) => prev.filter((c) => c.path !== path))
+                }
+              />
+              <div className="att-bar">
+                <button
+                  className="btn ghost att-btn"
+                  id="steer-att-btn"
+                  type="button"
+                  title="attach images"
+                  onClick={() => attInput.current?.click()}
+                >
+                  📎 attach
+                </button>
+                <span className="att-hint">paste (⌘V) or drop images</span>
+                <input
+                  type="file"
+                  id="steer-att-input"
+                  ref={attInput}
+                  accept="image/png,image/jpeg,image/gif,image/webp"
+                  multiple
+                  hidden
+                  onChange={(e) => {
+                    if (e.target.files) addFiles(e.target.files);
+                    e.target.value = ""; // allow re-picking the same file
+                  }}
+                />
+              </div>
+            </div>
+
+            <button
+              className="btn btn-big"
+              id="steer-send"
+              disabled={sending}
+              onClick={() => void send()}
+            >
+              {SEND_LABEL[mode]}
+            </button>
+            <div className="answer-note" id="steer-note">
+              {note}
+            </div>
+          </>
+        ) : null}
       </div>
     </>
   );
@@ -1103,8 +1303,9 @@ const TRANSCRIPT_POLL_MS = 3000;
 
 /**
  * zeus' last 5 transcript turns, rendered by the thread overlay's block
- * renderer, each block stamped as a `transcript` mind source (zeus' session +
- * the record uuid). Read-only: steering is the composer below.
+ * renderer. For this machine's jobs each block is stamped as a `transcript`
+ * mind source (zeus' session + the record uuid); a remote job's panel (`node`
+ * set) stamps none. Read-only: steering is the composer below.
  *
  * COLLAPSED by default: the modal opens to steer, and the transcript is the
  * thing carl unfolds when he wants to see what zeus is doing — folded, it
@@ -1115,10 +1316,25 @@ const TRANSCRIPT_POLL_MS = 3000;
  * innerHTML every 3s would reset the scroll AND collapse any selection carl
  * is in the middle of making.
  */
-function ZeusTranscriptPanel({ slug, operator }: { slug: string; operator?: string }) {
+export function ZeusTranscriptPanel({
+  slug,
+  operator,
+  node,
+}: {
+  slug: string;
+  operator?: string;
+  /**
+   * The owner node of a remote job: read through `/api/nodes/transcript`, and
+   * stamp no mind source — another node's transcript is never a capture.
+   */
+  node?: string;
+}) {
   const [open, setOpen] = useState(false);
   const read = usePoll<JobTranscript>(
-    (signal) => fetchJobTranscriptTurns(slug, TRANSCRIPT_TURNS, signal),
+    (signal) =>
+      node
+        ? fetchNodeTranscript(node, slug, TRANSCRIPT_TURNS, signal)
+        : fetchJobTranscriptTurns(slug, TRANSCRIPT_TURNS, signal),
     TRANSCRIPT_POLL_MS,
     { enabled: open },
   );
@@ -1131,7 +1347,15 @@ function ZeusTranscriptPanel({ slug, operator }: { slug: string; operator?: stri
     if (!el) return;
     const html = blocks.length
       ? blocks
-          .map((b) => threadBlockHTML(b, false, "", { session, speaker: "zeus" }, operator))
+          .map((b) =>
+            threadBlockHTML(
+              b,
+              false,
+              "",
+              node ? { speaker: "zeus", stamp: false } : { session, speaker: "zeus" },
+              operator,
+            ),
+          )
           .join("")
       : "";
     if (html === last.current) return;
@@ -1140,7 +1364,7 @@ function ZeusTranscriptPanel({ slug, operator }: { slug: string; operator?: stri
     last.current = html;
     el.innerHTML = html;
     el.scrollTop = atBottom ? el.scrollHeight : prevTop;
-  }, [blocks, session, operator]);
+  }, [blocks, session, operator, node]);
   // Unfolding lands on the NEWEST turn: `display: none` forgets the body's
   // scroll position, and the paint above only moves it when the markup
   // changes, so a reopen on unchanged markup would otherwise sit at the top —
@@ -1156,7 +1380,11 @@ function ZeusTranscriptPanel({ slug, operator }: { slug: string; operator?: stri
   // stays empty rather than rendering a blank titled box.
   const empty = read.data !== undefined && blocks.length === 0;
   return (
-    <div className="steer-transcript" id="steer-transcript" data-mind-slug={slug}>
+    <div
+      className="steer-transcript"
+      id="steer-transcript"
+      data-mind-slug={node ? undefined : slug}
+    >
       <button
         className="steer-transcript-head"
         aria-expanded={open}
@@ -1176,7 +1404,7 @@ function ZeusTranscriptPanel({ slug, operator }: { slug: string; operator?: stri
   );
 }
 
-function LoadDrill({
+export function LoadDrill({
   load,
   roi,
   band,

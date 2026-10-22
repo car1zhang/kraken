@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 
@@ -76,6 +76,9 @@ const BAND_OF: Array<[string, number]> = [
   // "card child in no band" and hiding which rule it broke.
   ["question", 4],
   ["prs", 5],
+  // the cell's stack links share band 5 with the PRs: both name an external
+  // thing to go and open (StackChips.tsx).
+  ["stack", 5],
   ["card-actions", 6],
 ];
 
@@ -368,6 +371,54 @@ describe("band 2 carries counts, not lists", () => {
     expect(card.querySelector(".crew-chip")!.getAttribute("title")).toContain("● heph-1 (opus)");
   });
 
+  // job 612: zeus' background tasks ride the roster with a `kind`, and each
+  // kind is its own chip — never the "?" other bucket — with the task
+  // descriptions in the title; a roster entry without a kind is a teammate,
+  // exactly as before the field existed.
+  it("renders background-task roster entries as per-kind chips with descriptions in the title", () => {
+    const { card } = renderCard(
+      job({
+        state: "working",
+        live: true,
+        zeus_status: "waiting",
+        roster: [
+          { name: "heph-1", model: "opus", role: "hephaestus", status: "run", working: true, kind: "teammate" },
+          {
+            name: "Checking repo usage in daemon.go",
+            model: "opus",
+            role: "general-purpose",
+            status: "running",
+            working: true,
+            kind: "subagent",
+          },
+          { name: "Reading API.md", model: "", role: "Explore", status: "running", working: true, kind: "subagent" },
+          { name: "six researcher reports", model: "", role: "monitor", status: "running", working: true, kind: "monitor" },
+        ],
+      }),
+    );
+    const chips = Array.from(card.querySelectorAll(".crew-chip"));
+    expect(chips.map((c) => c.textContent?.trim())).toEqual(["⚒︎ 1/1", "⟳ 2/2", "◷ 1/1"]);
+    const sub = card.querySelector(".crew-task.crew-chip")!;
+    expect(sub.getAttribute("title")).toContain("subagent — 2 of 2 working");
+    expect(sub.getAttribute("title")).toContain("● Checking repo usage in daemon.go (general-purpose, opus)");
+    expect(sub.getAttribute("title")).toContain("● Reading API.md (Explore)");
+    expect(sub.classList.contains("active")).toBe(true);
+    // the ? other chip is for an unnamed-god TEAMMATE, never a task
+    expect(card.querySelector(".crew-ico-other")).toBeNull();
+  });
+
+  it("renders a kind-less roster entry exactly as a teammate", () => {
+    const { card } = renderCard(
+      job({
+        state: "working",
+        live: true,
+        roster: [{ name: "probe-x", model: "opus", role: "other", status: "run", working: false }],
+      }),
+    );
+    expect(card.querySelector(".crew-ico-other")).not.toBeNull();
+    expect(card.querySelector(".crew-task")).toBeNull();
+  });
+
   // 50-contract.md, S2 `ThreadChips`: "`compact` renders ONE `<span
   // class="thread-count chip-threads">` reading `⑂ ${list.length}` — a span,
   // NOT a button (the card's own click opens the modal where the full list
@@ -601,11 +652,21 @@ describe("the card click fallback", () => {
     expect(actions.onOpenSteer).toHaveBeenCalledWith("demo", "unblock");
   });
 
-  it("opens the editor for anything that is not live", async () => {
+  it("opens the editor for a draft", async () => {
     const { card, actions } = renderCard(job({ state: "draft" }));
     await userEvent.click(card);
     expect(actions.onOpenEditor).toHaveBeenCalledWith("demo");
     expect(actions.onOpenSteer).not.toHaveBeenCalled();
+  });
+
+  it("opens the read-only VIEW of the steer drilldown on a done job", async () => {
+    // A done job reads like a blocked one: the same modal, minus the
+    // composer and the cell actions — never the editor, which showed the
+    // spec and the artifact list and nothing else the job produced.
+    const { card, actions } = renderCard(job({ state: "done" }));
+    await userEvent.click(card);
+    expect(actions.onOpenSteer).toHaveBeenCalledWith("demo", "view");
+    expect(actions.onOpenEditor).not.toHaveBeenCalled();
   });
 
   it("is the ONLY route to the counts' drilldown — the count chips are inert", async () => {
@@ -620,7 +681,7 @@ describe("the card click fallback", () => {
       }),
     );
     await userEvent.click(card.querySelector(".ct-chip")!);
-    expect(actions.onOpenEditor).toHaveBeenCalledWith("demo");
+    expect(actions.onOpenSteer).toHaveBeenCalledWith("demo", "view");
     expect(actions.onOpenArtifact).not.toHaveBeenCalled();
   });
 
@@ -632,6 +693,33 @@ describe("the card click fallback", () => {
     await userEvent.click(screen.getByTitle("raise zeus' pane in Ghostty"));
     expect(actions.onOpenTmux).toHaveBeenCalledWith("demo");
     expect(actions.onOpenEditor).not.toHaveBeenCalled();
+  });
+
+  // The server answers an open only once the Ghostty window's tmux client has
+  // appeared — seconds on a cold launch. Until then the button is disabled and
+  // says so: a second click inside that window used to open a second window
+  // whose `attach -d` kicked the first, and a kick inside 250 ms of launch
+  // shows Ghostty's launch-failure banner on the loser.
+  it("disables the tmux button while its open is in flight", async () => {
+    const actions = stubActions();
+    let settle!: (v: Error | null) => void;
+    vi.mocked(actions.onOpenTmux).mockReturnValue(
+      new Promise<Error | null>((resolve) => {
+        settle = resolve;
+      }),
+    );
+    renderCard(job({ state: "draft", live: true, cell: "c" }), actions);
+    const btn = screen.getByTitle("raise zeus' pane in Ghostty");
+    await userEvent.click(btn);
+    expect(btn).toBeDisabled();
+    expect(btn.textContent).toBe("⌁ attaching…");
+    await userEvent.click(btn);
+    expect(actions.onOpenTmux).toHaveBeenCalledTimes(1);
+    await act(async () => {
+      settle(null);
+    });
+    await waitFor(() => expect(btn).not.toBeDisabled());
+    expect(btn.textContent).toBe("⌁ attach tmux");
   });
 });
 

@@ -20,7 +20,26 @@ import type { WebJob } from "../api/types.ts";
  *
  * This is NOT a server key: unarchive/delete carry the bare archive name,
  * which is what the server actually resolves.
+ *
+ * A card another kraken polled in (it carries `owner`) is keyed by OWNER plus
+ * slug — `<node_id>/<slug>` — for the archived entry's exact reason one level
+ * up: every machine on the tailnet has a `dream-<date>`, and a bare-slug key
+ * would let a remote card shadow the local job of the same name. The `/` can
+ * never collide with a local key: slugs are slugified and carry no slash.
  */
-export function jobKey(j: Pick<WebJob, "slug" | "archived">): string {
+export function jobKey(j: Pick<WebJob, "slug" | "archived" | "owner">): string {
+  if (j.owner) return `${j.owner.node_id}/${j.slug}`;
   return j.archived ? `archive:${j.slug}` : j.slug;
 }
+
+// Fleet predicates the contract lists beside jobKey; their one home is
+// lib/fleet.ts, re-exported so either import path reaches them.
+export {
+  filterFleet,
+  isRemote,
+  isUnauthorized,
+  nodesStat,
+  ownerChipText,
+  remoteMode,
+  type RemoteMode,
+} from "./fleet.ts";

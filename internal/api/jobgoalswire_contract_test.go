@@ -568,7 +568,7 @@ func TestContractJGWJobGoalInvalidatesTheBoardCache(t *testing.T) {
 // before. A bump here would make every installed build refuse the payload for
 // keys it does not read.
 func TestContractJGWAPIContractStaysSix(t *testing.T) {
-	if apiContract != 6 {
-		t.Fatalf("apiContract = %d, want 6 — every key in this change is additive", apiContract)
+	if apiContract != 7 {
+		t.Fatalf("apiContract = %d, want 7 (bumped by the fleet gate) — every key in this change is additive", apiContract)
 	}
 }

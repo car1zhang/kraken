@@ -528,6 +528,47 @@ func TestCellActive(t *testing.T) {
 			skipPanes: map[string]bool{"%42": true},
 			want:      true,
 		},
+		// point 3 (job 612): a waiting zeus with live background tasks
+		{
+			name:  "waiting zeus with a live subagent task -> true",
+			sess:  "cell-x",
+			peers: []*core.Peer{{TmuxSession: "cell-x", Agent: "claude", Status: "waiting", Pane: "%1", Tasks: []core.Task{{ID: "a1", Kind: core.TaskSubagent}}}},
+			want:  true,
+		},
+		{
+			name:  "waiting zeus with a live monitor task -> true",
+			sess:  "cell-x",
+			peers: []*core.Peer{{TmuxSession: "cell-x", Agent: "claude", Status: "waiting", Pane: "%1", Tasks: []core.Task{{ID: "m1", Kind: core.TaskMonitor}}}},
+			want:  true,
+		},
+		{
+			// a background shell is shown but abstains: it may be a dev
+			// server left running at the manual-test gate (Q1)
+			name:  "waiting zeus with only a background shell -> false",
+			sess:  "cell-x",
+			peers: []*core.Peer{{TmuxSession: "cell-x", Agent: "claude", Status: "waiting", Pane: "%1", Tasks: []core.Task{{ID: "s1", Kind: core.TaskShell}}}},
+			want:  false,
+		},
+		{
+			name:      "waiting side thread with a live subagent task -> false",
+			sess:      "cell-x",
+			peers:     []*core.Peer{{TmuxSession: "cell-x", Agent: "claude", Status: "waiting", Pane: "%7", Tasks: []core.Task{{ID: "a1", Kind: core.TaskSubagent}}}},
+			skipPanes: map[string]bool{"%7": true},
+			want:      false,
+		},
+		{
+			name:         "waiting zeus with a subagent task but an open question -> false",
+			sess:         "cell-x",
+			peers:        []*core.Peer{{TmuxSession: "cell-x", Agent: "claude", Status: "waiting", Pane: "%1", Tasks: []core.Task{{ID: "a1", Kind: core.TaskSubagent}}}},
+			paneQuestion: yesQuestion,
+			want:         false,
+		},
+		{
+			name:  "waiting zeus in another session with a subagent task -> false",
+			sess:  "cell-x",
+			peers: []*core.Peer{{TmuxSession: "cell-y", Agent: "claude", Status: "waiting", Pane: "%1", Tasks: []core.Task{{ID: "a1", Kind: core.TaskSubagent}}}},
+			want:  false,
+		},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

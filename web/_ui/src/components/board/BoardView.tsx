@@ -24,7 +24,19 @@ export interface BoardActions {
    * what DragProvider passes, so ONE callback can serve both the cards and the
    * drop table; `requireText` is only ever set by a done→working drag.
    */
-  onOpenSteer(slug: string, mode: SteerMode, opts?: { requireText?: boolean }): void;
+  onOpenSteer(
+    slug: string,
+    mode: SteerMode,
+    opts?: {
+      requireText?: boolean;
+      /**
+       * The OWNER node of a remote card (its `owner.node_id`). Present only
+       * when a remote card opened the modal; it is half the card's identity
+       * (lib/jobKey.ts), so a slug alone would find the local namesake.
+       */
+      node?: string;
+    },
+  ): void;
   /** Job editor. `null` opens it in new-job mode (the "+ NEW JOB" button). */
   onOpenEditor(slug: string | null): void;
   /**
@@ -55,8 +67,14 @@ export interface BoardActions {
   onAnswerQuestion(slug: string, optionIndex: number): void | Promise<Error | null>;
   /** POST /api/retry. */
   onRetry(slug: string): void;
-  /** POST /api/peers/open {slug} — raises zeus' pane in Ghostty. */
-  onOpenTmux(slug: string): void;
+  /**
+   * POST /api/peers/open {slug} — raises zeus' pane in Ghostty. Returning
+   * the mutation's promise (as onAnswerQuestion does) is what lets the card
+   * disable its button while the open is in flight: the server answers only
+   * once the window's tmux client has appeared, and a second click before
+   * then opened a second window that kicked the first.
+   */
+  onOpenTmux(slug: string): void | Promise<Error | null>;
   /** POST /api/feedback {id, feedback}. Resolves to the failure, or null. */
   onSaveFeedback(slug: string, id: number, note: string): Promise<Error | null>;
   /** POST /api/feedback {id, delete:true}. The confirm() already happened. */
@@ -98,6 +116,13 @@ export interface BoardViewProps {
    * focus out of a composer — see BoardBar.
    */
   overlayOpen?: boolean;
+  /**
+   * The fleet's machine selection and its setter, relayed to the board bar's
+   * machines dropdown. App owns the state (and its kraken.fleetNodes
+   * persistence) because the filter itself runs in useBoard, above this view.
+   */
+  fleetNodes?: readonly string[];
+  onFleetNodes?: (next: string[]) => void;
   /**
    * @deprecated Dead, and accepted only so App.tsx keeps compiling until the
    * lead drops the call site. Band 2 carries a bare artifact COUNT now
@@ -151,6 +176,8 @@ export function BoardView({
   goalFilter = null,
   onGoalFilter = () => {},
   overlayOpen,
+  fleetNodes = [],
+  onFleetNodes,
 }: BoardViewProps) {
   /**
    * How many jobs link each goal, and every goal's text — both from the ONE
@@ -175,7 +202,10 @@ export function BoardView({
    * missing name costs the chip, while COUNTING one the filter would not match
    * costs the badge its honesty.
    */
-  const jobs = board.board?.jobs;
+  // LOCAL cards only: a remote card's goal ids are its owner's goals, and
+  // counting them here would credit this board's goal of the same id.
+  const allJobs = board.board?.jobs;
+  const jobs = useMemo(() => allJobs?.filter((j) => !j.owner), [allJobs]);
   const goalIndex = useMemo(() => {
     const counts = goalJobCounts(jobs ?? []);
     const text = new Map<number, string>();
@@ -203,6 +233,21 @@ export function BoardView({
         onClearGoal={() => onGoalFilter(null)}
         overlayOpen={overlayOpen}
         hidden={hidden}
+        // offered only once there IS another kraken (or a selection is
+        // already persisted, so it can always be cleared); the picker counts
+        // against the UNFILTERED cards, which is why it gets `allJobs`
+        fleet={
+          onFleetNodes && ((board.board?.nodes?.length ?? 0) > 0 || fleetNodes.length > 0)
+            ? {
+                nodes: board.board?.nodes ?? [],
+                selfLabel: board.board?.node_label,
+                operator: board.board?.operator,
+                jobs: allJobs ?? [],
+                selected: fleetNodes,
+                onChange: onFleetNodes,
+              }
+            : undefined
+        }
       />
       <main className="board" id="board" hidden={hidden}>
         {COLUMNS.map((col) => {
@@ -240,6 +285,7 @@ export function BoardView({
                   actions={actions}
                   matchReason={search.reasonByKey.get(jobKey(j))}
                   matchTerms={search.terms}
+                  boardNodeID={board.board?.node_id}
                 />
               )}
             />

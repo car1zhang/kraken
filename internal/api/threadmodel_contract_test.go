@@ -80,9 +80,12 @@ func TestContractBranchAcceptsEveryAliasAndReachesBranchThread(t *testing.T) {
 	useTestStore(t)
 	mustCreateStoreJob(t, jobs.ActiveStore(), store.Job{Slug: "th-goodmodel", Repo: "monolith"})
 
-	// "" rides along: the contract keeps the legacy no-model branch working
+	// "" rides along: the contract keeps the legacy no-model branch working.
+	// headless:false since the ask-thread job: a branch without it opens an
+	// ask thread (jobs.AskThread), and BranchThread is now the opt-in pane path.
+	paneThread := false
 	for _, model := range append([]string{""}, contractThreadModelAliases...) {
-		rec := postThreads(t, threadsReq{Slug: "th-goodmodel", Op: "branch", Title: "why blocked", Text: "explain", Model: model})
+		rec := postThreads(t, threadsReq{Slug: "th-goodmodel", Op: "branch", Title: "why blocked", Text: "explain", Model: model, Headless: &paneThread})
 		if rec.Code == http.StatusBadRequest {
 			t.Errorf("model %q: status 400 (%s) — a valid model must pass validation", model, rec.Body.String())
 			continue
@@ -239,7 +242,7 @@ func TestContractWebThreadModelIsOmittedWhenEmpty(t *testing.T) {
 // so the wire-shape version stays where it is. Bumping it would tell every
 // client its shape is stale and force an update none of them needs.
 func TestContractApiContractDoesNotBump(t *testing.T) {
-	if apiContract != 6 {
-		t.Errorf("apiContract = %d, want 6 — a per-thread model is additive on both shapes", apiContract)
+	if apiContract != 7 {
+		t.Errorf("apiContract = %d, want 7 (bumped by the fleet gate) — a per-thread model is additive on both shapes", apiContract)
 	}
 }

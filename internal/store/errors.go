@@ -31,6 +31,27 @@ var ErrThreadIDTaken = errors.New("store: thread id taken")
 // `claude -r <same session id>` would put two writers on one transcript.
 var ErrThreadNotClosed = errors.New("store: thread is not closed")
 
+// ErrThreadKind is returned by a thread write whose Kind is neither "" (read
+// as "pane"), "pane" nor "headless", and by one that pairs Kind "headless"
+// with Role "mind": a mind thread finalizes by running `kraken mm commit`,
+// and a headless run has no shell to run it with.
+var ErrThreadKind = errors.New("store: thread kind must be pane or headless")
+
+// ErrAskThreadPane is returned when a headless row would be stored with a tmux
+// pane or window. An ask thread runs as one headless process per question
+// (jobs/askthread.go), so a pane on it could only be a stale or foreign id;
+// jobs' pane-keyed exclusions also ignore headless rows (liveThreadPanesForOK),
+// and this keeps the row itself honest.
+var ErrAskThreadPane = errors.New("store: an ask thread holds no pane")
+
+// ErrThreadAnswering is returned by ClaimThreadAnswering when the thread
+// already has a question in flight: one run per thread, because two
+// `claude -r` on one session id would be two writers on one transcript.
+var ErrThreadAnswering = errors.New("store: thread is already answering")
+
+// ErrThreadClosed is returned by ClaimThreadAnswering for a closed row.
+var ErrThreadClosed = errors.New("store: thread is closed")
+
 // ErrNotFound is returned by single-row lookups (GetBySlug, GetByID, ...)
 // when no row matches.
 var ErrNotFound = errors.New("store: not found")

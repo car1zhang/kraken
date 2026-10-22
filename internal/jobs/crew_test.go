@@ -15,7 +15,8 @@ import (
 // skill governs each phase. Every procedure it used to inline — the artifact
 // set's shape, the whole diagram pipeline, the questions write verbs, the
 // build report, the PR conventions — now lives in .claude/skills/{info,aim,
-// do,pr}, pinned by skills_embed_test.go. So this file asserts two things:
+// do,dream} (the PR conventions in do's step 8), pinned by
+// skills_embed_test.go. So this file asserts two things:
 // the brief still says everything only it can say, and it no longer restates
 // anything a skill owns (TestZeusBriefDoesNotRestateSkills).
 //
@@ -79,10 +80,16 @@ func TestZeusBrief(t *testing.T) {
 		// the gates themselves are cell policy: /do opens phase 2, and an
 		// explanation job never gets one
 		"'/do'", "never gets a '/do'", "never opens a PR",
-		// phase 2 delegates to the do skill, then the pr skill — the latter
-		// read by path, since /pr is a same-named-shadow risk
-		"Phase 2", ".claude/skills/do/SKILL.md", ".claude/skills/pr/SKILL.md",
-		"do NOT invoke /pr by name",
+		// phase 2 delegates to the do skill, whose last step is the PR (the
+		// pr skill folded into it in job 624): the brief says the PR opens
+		// BEFORE the gate and that gate-time revisions are pushed to it
+		"Phase 2", ".claude/skills/do/SKILL.md", "the PR it opens",
+		"BEFORE the manual-test gate", "push them to that same PR",
+		// a personal /pr skill would shadow nothing now, but it is still
+		// reachable by name, and it carries rules (a branch rename, an
+		// interactive prompt) the pipeline forbids — so the brief keeps the
+		// ban, in the fewest bytes the ceiling below allows
+		"Never invoke a /pr skill by name",
 		// no self-polling, and a merge is not completion
 		"bumps your pane", "never ends the job",
 		// carl's steering (2026-08-04): most generated text goes unread, so
@@ -187,7 +194,7 @@ func TestZeusBriefDoesNotRestateSkills(t *testing.T) {
 			// review round measured exactly that gap on three tokens. One
 			// entry is a drop rather than a move: "gate that judges its
 			// output" appears in no skill — the RULE survives reworded in
-			// do/SKILL.md's step 9 acceptance sentence (pinned by
+			// do/SKILL.md's step 10 acceptance sentence (pinned by
 			// TestSkillsOwnTheCellContract) — and its ban keeps the
 			// elaboration from re-accreting here.
 			{"in ONE message", "do"},
@@ -204,10 +211,11 @@ func TestZeusBriefDoesNotRestateSkills(t *testing.T) {
 			{"a genuine product decision", "do"},
 			{"never the failing assertion", "do"},
 			{"gate that judges its output", "do"},
-			// PR mechanics — pr/SKILL.md
-			{"gh pr create", "pr"},
-			{"checkout -B", "pr"},
-			{"git fetch origin", "pr"},
+			// PR mechanics — do/SKILL.md's step 8 and its cell section, since
+			// the pr skill folded into do (job 624)
+			{"gh pr create", "do"},
+			{"checkout -B", "do"},
+			{"git fetch origin", "do"},
 			// the feedback WRITE verb — dream/SKILL.md. Same split as the
 			// questions verbs above: the brief keeps the read verb and the
 			// silent-update rule and states the PROHIBITION in prose, while
@@ -655,6 +663,9 @@ func TestZeusBriefLoadEstimate(t *testing.T) {
 			// one anchor per axis, so the 1-10 ruler cannot be dropped silently
 			"1-10 is the effort Ada spends",
 			"a one-message reply",
+			// the question round's state-map entry (job 629), matching the
+			// load skill's row label word for word
+			"mid-build question round 3/remaining build",
 		} {
 			if !strings.Contains(brief, want) {
 				t.Errorf("%s brief missing %q from the load-estimate rule", j.Slug, want)
@@ -949,6 +960,12 @@ func TestZeusBriefNoTerminalQuestions(t *testing.T) {
 			{"pick the most defensible default", "what to do instead"},
 			{"FINAL message", "where an unresolved decision goes"},
 			{"last resort", "AskUserQuestion is not a convenience"},
+			// the one exception (job 629): a mid-build product decision is a
+			// question round, owned by do/SKILL.md — the brief names the
+			// skill and the stop, never the verbs or the importance rules
+			{"question round", "the mid-build exception to the default rule"},
+			{"stop on the P0s until Ada answers on the board", "the round blocks on P0 alone, released by Ada"},
+			{"kraken never wakes you for a row", "no automatic wake — Ada prompts the pane"},
 		} {
 			if !strings.Contains(brief, want.token) {
 				t.Errorf("%s brief missing %q (%s)", j.Slug, want.token, want.why)

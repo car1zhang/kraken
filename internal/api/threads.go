@@ -54,6 +54,13 @@ type threadsReq struct {
 	// thread) or "mind" (the thread that may write carl's mental model —
 	// normally branched by POST /api/mm/capture rather than by hand).
 	Role string `json:"role,omitempty"`
+	// Headless is read by `branch` alone and says how the thread RUNS, which
+	// is independent of Role. For role "ask", absent or true opens a
+	// headless ask thread (jobs.AskThread: no pane, one read-only `claude -p`
+	// per question); false opens a pane thread (jobs.BranchThreadWithRole),
+	// exactly as before headless threads existed. A mind thread is always a
+	// pane, so for role "mind" absent or false is the only accepted value.
+	Headless *bool `json:"headless,omitempty"`
 }
 
 // threadsHandler serves GET (the board/client read) and POST (branch, kill,
@@ -170,10 +177,34 @@ func threadsPost(w http.ResponseWriter, r *http.Request) {
 			webJSON(w, http.StatusBadRequest, map[string]string{"error": "bad role — want ask or mind"})
 			return
 		}
-		// text is the seed prompt and is deliberately OPTIONAL: branching
-		// with nothing to say yet is a legitimate move (the overlay's own
-		// seed box may be left blank), and the thread comes up idle.
-		t, err := jobs.BranchThreadWithRole(j, title, req.Text, req.Model, role)
+		// headless defaults per role: on for an ask thread, off (and only
+		// off) for a mind thread, which finalizes by running a `kraken mm`
+		// verb a headless run has no shell for
+		headless := role == "ask"
+		if req.Headless != nil {
+			headless = *req.Headless
+		}
+		if headless && role == "mind" {
+			webJSON(w, http.StatusBadRequest, map[string]string{"error": "a mind thread cannot be headless"})
+			return
+		}
+		var t store.Thread
+		var err error
+		if headless {
+			// a headless thread runs only to answer, so it cannot open idle:
+			// the text is its first question and is required
+			if strings.TrimSpace(req.Text) == "" {
+				webJSON(w, http.StatusBadRequest, map[string]string{"error": "missing text"})
+				return
+			}
+			t, err = jobs.AskThread(j, jobs.SelfThreadOrigin(), title, req.Text, req.Model)
+		} else {
+			// text is the seed prompt and is deliberately OPTIONAL for a pane
+			// thread: branching with nothing to say yet is a legitimate move
+			// (the overlay's own seed box may be left blank), and the thread
+			// comes up idle.
+			t, err = jobs.BranchThreadWithRole(j, title, req.Text, req.Model, role)
+		}
 		if err != nil {
 			threadErr(w, action, req.Slug, err)
 			return
@@ -199,8 +230,10 @@ func threadsPost(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	case "send":
-		// unlike branch's seed, a send with no text is meaningless — it would
-		// type a bare Enter into the thread's pane
+		// a send with no text is meaningless — into a pane it would type a
+		// bare Enter, and a headless thread would run on an empty question.
+		// SendToThread dispatches on the row's kind; to a headless thread it
+		// answers as soon as the run has started, before the answer exists.
 		if strings.TrimSpace(req.Text) == "" {
 			webJSON(w, http.StatusBadRequest, map[string]string{"error": "missing text"})
 			return
@@ -243,6 +276,14 @@ func threadErr(w http.ResponseWriter, action, slug string, err error) {
 //   - store.ErrThreadIDTaken — a recoverable tid collision (renumber and
 //     retry): 409, and the reason store exports it as a sentinel rather than
 //     leaving the API to substring-match the message.
+//   - an ask title over 120 characters or a question over 16 KB
+//     (jobs.IsAskInputError): 400, with jobs' text — the request itself is
+//     wrong, whatever the thread's state.
+//   - the headless-thread refusals — a question already in flight
+//     (store.ErrThreadAnswering), a closed thread (store.ErrThreadClosed),
+//     the per-job cap (jobs.ErrAskThreadCap), and the two row-shape guards
+//     (store.ErrAskThreadPane, store.ErrThreadKind): 409. store wraps the
+//     last two, so they are named here before the unwrap rule below.
 //   - store.ErrNotFound — an unknown tid: 404.
 //   - a store query/exec failure: 500. store is the only layer here that
 //     wraps (%w) the error it got, precisely so its sentinels stay
@@ -255,7 +296,14 @@ func threadErr(w http.ResponseWriter, action, slug string, err error) {
 //     board move uses.
 func threadErrStatus(err error) int {
 	switch {
-	case errors.Is(err, store.ErrThreadIDTaken):
+	case jobs.IsAskInputError(err):
+		return http.StatusBadRequest
+	case errors.Is(err, store.ErrThreadIDTaken),
+		errors.Is(err, store.ErrThreadAnswering),
+		errors.Is(err, store.ErrThreadClosed),
+		errors.Is(err, jobs.ErrAskThreadCap),
+		errors.Is(err, store.ErrAskThreadPane),
+		errors.Is(err, store.ErrThreadKind):
 		return http.StatusConflict
 	case errors.Is(err, store.ErrNotFound):
 		return http.StatusNotFound
@@ -321,19 +369,27 @@ func threadReadHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// live is the ROW's own answer (the daemon's per-tick ReconcileThreads
-	// closes rows whose pane moved on), and it requires a pane: a live row
-	// with no pane could never be sent to, so offering a composer for it
-	// would be a lie.
+	// closes rows whose pane moved on). A pane row also needs its pane: a
+	// live row with no pane could never be sent to, so offering a composer
+	// for it would be a lie. A headless row never has a pane and takes sends
+	// whenever it is live.
+	kind := threadKind(*t)
 	resp := map[string]any{
 		"blocks":    []any{},
 		"counted":   0,
-		"live":      t.State == "live" && t.Pane != "",
+		"live":      t.State == "live" && (kind == "headless" || t.Pane != ""),
 		"pane":      t.Pane,
 		"fork_uuid": t.ForkUUID,
 		"source":    "none",
 		// the thread's OWN claude session — what a mind-button capture of one
 		// of its blocks sends as the transcript source's session.
-		"session": t.SessionID,
+		"session":   t.SessionID,
+		"kind":      kind,
+		"answering": t.Answering,
+		"note":      t.Note,
+	}
+	if o := webThreadOriginFrom(*t); o != nil {
+		resp["origin"] = o
 	}
 	// Located by the thread's OWN session id, never zeus': a fork writes its
 	// own transcript file, which begins with the whole inherited history

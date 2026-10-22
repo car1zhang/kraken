@@ -468,3 +468,52 @@ func TestSyncCellArtifactsEmptiedRootSkipsSync(t *testing.T) {
 		t.Fatalf("stored rows must survive an emptied artifacts root untouched, got %+v", rows)
 	}
 }
+
+// TestSyncCellArtifactsSkipsSymlinks is a regression pin: a symlink under
+// artifacts/ — to a file outside it, or to a directory — is never stored,
+// so its target's bytes cannot reach the table every non-live job is served
+// from; the regular file beside it is. Both the ordinary and the teardown
+// pass.
+func TestSyncCellArtifactsSkipsSymlinks(t *testing.T) {
+	for _, atTeardown := range []bool{false, true} {
+		t.Setenv("HOME", t.TempDir())
+		st, err := store.Open(filepath.Join(t.TempDir(), "kraken.db"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		j := &Job{Slug: "sync-symlinks"}
+		writeArtifact(t, j, "00-overview.md", []byte("real"), time.Hour)
+		outside := t.TempDir()
+		secret := filepath.Join(outside, "secret.md")
+		if err := os.WriteFile(secret, []byte("SECRET"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		root := CellArtifacts(j)
+		if err := os.Symlink(secret, filepath.Join(root, "link.md")); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink(outside, filepath.Join(root, "linkdir")); err != nil {
+			t.Fatal(err)
+		}
+		id, err := st.CreateJob(&store.Job{Slug: j.Slug})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := mirrorCellArtifacts(st, id, j, atTeardown); err != nil {
+			t.Fatalf("teardown=%v: sync: %v", atTeardown, err)
+		}
+		rows, err := st.ListArtifacts(id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(rows) != 1 || rows[0].Path != "00-overview.md" || string(rows[0].Bytes) != "real" {
+			t.Errorf("teardown=%v: rows = %+v; want only 00-overview.md", atTeardown, rows)
+		}
+		for _, r := range rows {
+			if string(r.Bytes) == "SECRET" {
+				t.Errorf("teardown=%v: %s stored a symlink target's bytes", atTeardown, r.Path)
+			}
+		}
+		st.Close()
+	}
+}

@@ -284,7 +284,7 @@ func TestLogicCellContextRoundTrip(t *testing.T) {
 	st := useTestStore(t)
 
 	before := time.Now().UnixMilli()
-	if err := RecordCellContext(st, 7, "sess-a", 42.5, 1_000_000); err != nil {
+	if err := RecordCellContext(st, 7, "sess-a", 42.5, 1_000_000, 0); err != nil {
 		t.Fatalf("RecordCellContext: %v", err)
 	}
 	after := time.Now().UnixMilli()
@@ -327,7 +327,7 @@ func TestLogicCellContextRoundTrip(t *testing.T) {
 	}
 
 	// a later report replaces
-	if err := RecordCellContext(st, 7, "sess-a", 80, 1_000_000); err != nil {
+	if err := RecordCellContext(st, 7, "sess-a", 80, 1_000_000, 0); err != nil {
 		t.Fatalf("second RecordCellContext: %v", err)
 	}
 	if c, _ := ReadCellContext(st, 7, "sess-a"); c.Pct != 80 {
@@ -533,7 +533,7 @@ func TestLogicAutoHandoffPassPersistsWhenGatesOpen(t *testing.T) {
 	st := useTestStore(t)
 	logicSwapNotify(t)
 	j := logicPassJob()
-	if err := RecordCellContext(st, j.ID, j.Session, 40, 1_000_000); err != nil {
+	if err := RecordCellContext(st, j.ID, j.Session, 40, 1_000_000, 0); err != nil {
 		t.Fatalf("RecordCellContext: %v", err)
 	}
 	autoHandoffPass(st, j, nil, logicLive(j), time.Now())
@@ -563,7 +563,7 @@ func TestLogicAutoHandoffPassNoSideEffectReturns(t *testing.T) {
 			j := logicPassJob()
 			live := logicLive(j)
 			if c.mutate(j, live) {
-				if err := RecordCellContext(st, j.ID, "sess-z", 40, 1_000_000); err != nil {
+				if err := RecordCellContext(st, j.ID, "sess-z", 40, 1_000_000, 0); err != nil {
 					t.Fatalf("RecordCellContext: %v", err)
 				}
 			}
@@ -583,7 +583,7 @@ func TestLogicAutoHandoffPassNilStore(t *testing.T) {
 	st := useTestStore(t)
 	notes := logicSwapNotify(t)
 	j := logicPassJob()
-	if err := RecordCellContext(st, j.ID, j.Session, 40, 1_000_000); err != nil {
+	if err := RecordCellContext(st, j.ID, j.Session, 40, 1_000_000, 0); err != nil {
 		t.Fatalf("RecordCellContext: %v", err)
 	}
 	autoHandoffPass(nil, j, nil, logicLive(j), time.Now())
@@ -600,7 +600,7 @@ func TestLogicAutoHandoffPassNilJob(t *testing.T) {
 	st := useTestStore(t)
 	notes := logicSwapNotify(t)
 	j := logicPassJob()
-	if err := RecordCellContext(st, j.ID, j.Session, 40, 1_000_000); err != nil {
+	if err := RecordCellContext(st, j.ID, j.Session, 40, 1_000_000, 0); err != nil {
 		t.Fatalf("RecordCellContext: %v", err)
 	}
 	autoHandoffPass(st, nil, nil, logicLive(j), time.Now())
@@ -617,7 +617,7 @@ func TestLogicAutoHandoffPassNoZeusWritesNothing(t *testing.T) {
 	st := useTestStore(t)
 	notes := logicSwapNotify(t)
 	j := logicPassJob()
-	if err := RecordCellContext(st, j.ID, j.Session, 80, 1_000_000); err != nil {
+	if err := RecordCellContext(st, j.ID, j.Session, 80, 1_000_000, 0); err != nil {
 		t.Fatalf("RecordCellContext: %v", err)
 	}
 	autoHandoffPass(st, j, nil, logicLive(j), time.Now())
@@ -642,7 +642,7 @@ func TestLogicAutoHandoffPassExhaustedNotifiesOnce(t *testing.T) {
 	if err := st.SetKV(autoHandoffKVKey(j.ID), string(seed)); err != nil {
 		t.Fatalf("seed state: %v", err)
 	}
-	if err := RecordCellContext(st, j.ID, j.Session, 90, 1_000_000); err != nil {
+	if err := RecordCellContext(st, j.ID, j.Session, 90, 1_000_000, 0); err != nil {
 		t.Fatalf("RecordCellContext: %v", err)
 	}
 

@@ -947,10 +947,10 @@ func TestEdgeSlackWritesAreLiveWithMirrorOff(t *testing.T) {
 // TestEdgeSlackRoutesAreAdditive: every shape in this slice is new, so
 // apiContract must not move ON THEIR ACCOUNT. A bump for them would make the
 // shipped iOS app refuse to talk to this build over a change that could not
-// affect it. The literal tracks whatever the contract currently is — 6 since
-// the queued status was retired, a real break these routes had no part in.
+// affect it. The literal tracks whatever the contract currently is — 7 since
+// the fleet gate, a real break these routes had no part in.
 func TestEdgeSlackRoutesAreAdditive(t *testing.T) {
-	if apiContract != 6 {
-		t.Fatalf("apiContract = %d, want 6 — five additive routes bump nothing", apiContract)
+	if apiContract != 7 {
+		t.Fatalf("apiContract = %d, want 7 (bumped by the fleet gate) — five additive routes bump nothing", apiContract)
 	}
 }

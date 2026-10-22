@@ -95,8 +95,8 @@
   --glow-ok: 0 0 8px color-mix(in srgb, var(--ok) 45%, transparent);
   --glow-warn: 0 0 8px color-mix(in srgb, var(--warn) 45%, transparent);
   --text-glow: 0 0 9px color-mix(in srgb, var(--ac) 55%, transparent);
-  /* skill palette: one color per command skill (the five pipeline commands
-     /info /aim /do /pr /dream, plus /handoff below), used by the
+  /* skill palette: one color per command skill (the four pipeline commands
+     /info /aim /do /dream, plus /handoff below), used by the
      command-highlight backdrop and chips (see app.js's
      cmdHighlightHTML/attachCmdChips) — each gets a glow pair mirroring
      --glow/--text-glow above. The chips sit side by side, so dream takes
@@ -108,10 +108,10 @@
   --skill-info: #5EA8FF; --skill-info-soft: #102A45;
   --skill-aim: #FF6B6B; --skill-aim-soft: #3A1414;
   --skill-do: #F5D34D; --skill-do-soft: #332B0E;
-  --skill-pr: #4ADE80; --skill-pr-soft: #0F2E1D;
   --skill-dream: #C084FC; --skill-dream-soft: #2A1440;
-  /* /handoff is the sixth skill hue (dream has a hue but no web chip, so
-     the web row is five chips) and the only command that names no phase: it
+  /* /handoff is the fifth skill hue (dream has a hue but no web chip, so
+     the web row is five chips; the green /pr wore is gone with the pr skill,
+     which folded into do in job 624) and the only command that names no phase: it
      compacts behind a written record and returns the cell to the phase it
      was in. Orange is the wheel's remaining gap between do-yellow and
      aim-red. Its nearest neighbour is job-orange (#D97757), which DOES share
@@ -122,12 +122,12 @@
      near the amber/crimson accents' --ac2, the relationship --skill-do
      already has with them. */
   --skill-handoff: #FB923C; --skill-handoff-soft: #3B1F0A;
-  /* /direct is the seventh skill hue and the other command that names no
+  /* /direct is the sixth skill hue and the other command that names no
      phase: a modifier typed ahead of the phase it modifies (`/direct do`),
      running that phase skill minus its subagents and review rounds, so it
      gets a chip and a colour but never a stage badge. Teal (174°) is the
-     widest gap left on the wheel once the six above and the memory lime
-     (95°) are placed: 32° from pr-green and 39° from info-blue, the chip it
+     widest gap left on the wheel once the five above, the retired pr-green
+     and the memory lime (95°) were placed: 39° from info-blue, the chip it
      sits beside. Its nearest neighbour is --polling cyan (186°), which is a
      status DOT on the board and never a text chip, so the two are told
      apart by shape and position — the same argument --skill-handoff makes
@@ -136,8 +136,9 @@
   /* the MEMORY view's accent — named for the retired /graph chip and GRAPH
      view it was first picked for, and kept because the Library and Model
      panes still wear it. Lime because cyan is --polling's exact value; 95° is
-     the hue with the widest MINIMUM separation (44°) from the six skill
-     hues (info 213°, aim 0°, handoff 27°, do 51°, pr 142°, dream 279°) and
+     the hue with the widest MINIMUM separation (44°) from the skill hues
+     at the time (info 213°, aim 0°, handoff 27°, do 51°, the since-retired
+     pr 142°, dream 279°) and
      the status hues they sit beside (polling 187°, counter 333°, accent
      258°, revealed 40°). */
   --skill-graph: #87DF49;
@@ -147,8 +148,6 @@
   --text-glow-skill-aim: 0 0 1px var(--skill-aim), 0 0 9px var(--skill-aim);
   --glow-skill-do: 0 0 12px rgba(245, 211, 77, 0.30), 0 0 2px rgba(245, 211, 77, 0.7);
   --text-glow-skill-do: 0 0 1px var(--skill-do), 0 0 9px var(--skill-do);
-  --glow-skill-pr: 0 0 12px rgba(74, 222, 128, 0.30), 0 0 2px rgba(74, 222, 128, 0.7);
-  --text-glow-skill-pr: 0 0 1px var(--skill-pr), 0 0 9px var(--skill-pr);
   --glow-skill-dream: 0 0 12px rgba(192, 132, 252, 0.30), 0 0 2px rgba(192, 132, 252, 0.7);
   --text-glow-skill-dream: 0 0 1px var(--skill-dream), 0 0 9px var(--skill-dream);
   --glow-skill-handoff: 0 0 12px rgba(251, 146, 60, 0.30), 0 0 2px rgba(251, 146, 60, 0.7);
@@ -207,19 +206,16 @@
   --text-glow: none;
   /* skill palette, light siblings — same darkened-for-white-contrast pattern
      as the rest of this block; text-glows follow --text-glow: none above,
-     since light mode never glows text. info/do/pr are darkened past the
+     since light mode never glows text. info/do are darkened past the
      naive "same pattern" hex to clear 4.5:1 against both --raised (#E3E9F1)
      and their own -soft fill (WCAG AA, verified with a script — info
-     4.60/4.60, do 4.64/4.96, pr 4.61/4.82); aim's initial pick already
-     cleared both (4.61/4.52) so it's untouched. pr's contrast-driven hex no
-     longer matches --solved's light value, so it stays its own literal
-     rather than aliasing --solved. dream needed no darkening past its naive
-     violet — it measures 5.72 against --raised and 5.92 against its own
-     -soft, the widest margin of the five. */
+     4.60/4.60, do 4.64/4.96); aim's initial pick already
+     cleared both (4.61/4.52) so it's untouched. dream needed no darkening
+     past its naive violet — it measures 5.72 against --raised and 5.92
+     against its own -soft, the widest margin of the four. */
   --skill-info: #1866C4; --skill-info-soft: #DCEAFB;
   --skill-aim: #C42B2B; --skill-aim-soft: #FBE0E0;
   --skill-do: #7B6505; --skill-do-soft: #F7F0D4;
-  --skill-pr: #14773B; --skill-pr-soft: #DCF3E4;
   --skill-dream: #7E22CE; --skill-dream-soft: #F3E8FF;
   /* handoff's light orange is darkened past the naive tailwind orange-700
      (#C2410C, 4.24 against --raised) to clear AA: #B4400E measures 4.67
@@ -229,7 +225,7 @@
      AA: 5.3 against white and a little under that against --raised. */
   --skill-direct: #0F766E; --skill-direct-soft: #D3F4EE;
   /* the memory accent's light sibling is darkened past its naive lime for the
-     same reason info/do/pr are: a 95° hue is at its brightest where white is,
+     same reason info/do are: a 95° hue is at its brightest where white is,
      so the dark hex is unreadable here. #456F0B measures 4.87 against
      --raised (#E3E9F1), clearing WCAG AA. */
   --skill-graph: #456F0B;
@@ -239,8 +235,6 @@
   --text-glow-skill-aim: none;
   --glow-skill-do: 0 1px 6px rgba(123, 101, 5, 0.25);
   --text-glow-skill-do: none;
-  --glow-skill-pr: 0 1px 6px rgba(20, 119, 59, 0.25);
-  --text-glow-skill-pr: none;
   --glow-skill-dream: 0 1px 6px rgba(126, 34, 206, 0.25);
   --text-glow-skill-dream: none;
   --glow-skill-handoff: 0 1px 6px rgba(180, 64, 14, 0.25);
@@ -428,7 +422,7 @@ button, a, [role="button"], summary, label.check,
 .card.editable, .card.archived, .chip, .ac-chip, .cx-chip, .ct-chip, .dq-chip, .fb-chip, .ld-chip, .st-chip,
 .thread-chip, .thread-count, .branch-btn, .colorsel-row, .usage-stat, .archive-head,
 .goal, .goal .t,
-.dq-row.dq-answered, .cmd-chip, #thread-panehead,
+.dq-row.dq-answered, .cmd-chip,
 .panel-body.md code.code-ref, .steer-detail code.code-ref, .steer-spec-body code.code-ref,
 .panel-body.md code.artifact-ref, .steer-detail code.artifact-ref, .steer-spec-body code.artifact-ref,
 input[type="checkbox"] {
@@ -452,7 +446,6 @@ input[type="checkbox"] {
 :root[data-theme="light"] .usage-stat, :root[data-theme="light"] .archive-head,
 :root[data-theme="light"] .goal, :root[data-theme="light"] .goal .t,
 :root[data-theme="light"] .dq-row.dq-answered, :root[data-theme="light"] .cmd-chip,
-:root[data-theme="light"] #thread-panehead,
 :root[data-theme="light"] .panel-body.md code.code-ref,
 :root[data-theme="light"] .steer-detail code.code-ref,
 :root[data-theme="light"] .steer-spec-body code.code-ref,
@@ -482,12 +475,13 @@ input[type="checkbox"] {
    entry at all and the light pointer list's theme prefix simply
    out-specified the bare class. */
 input[type="text"], input:not([type]), input[type="search"], input[type="number"], textarea,
-.thread-name-label {
+input[type="password"], .thread-name-label {
   cursor: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24"><path d="M12 3 V6 M12 18 V21 M3 12 H6 M18 12 H21" stroke="%23f2edff" stroke-width="2" stroke-linecap="round"/><circle cx="12" cy="12" r="3.5" fill="none" stroke="%23f2edff" stroke-width="1.8"/></svg>') 12 12, text;
 }
 :root[data-theme="light"] input[type="text"], :root[data-theme="light"] input:not([type]),
 :root[data-theme="light"] input[type="search"], :root[data-theme="light"] input[type="number"],
-:root[data-theme="light"] textarea, :root[data-theme="light"] .thread-name-label {
+:root[data-theme="light"] textarea, :root[data-theme="light"] .thread-name-label,
+:root[data-theme="light"] input[type="password"] {
   cursor: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24"><path d="M12 3 V6 M12 18 V21 M3 12 H6 M18 12 H21" stroke="%231a1724" stroke-width="2" stroke-linecap="round"/><circle cx="12" cy="12" r="3.5" fill="none" stroke="%231a1724" stroke-width="1.8"/></svg>') 12 12, text;
 }
 /* a drag handle outranks both, but it wears the SAME ring crosshair as every
@@ -558,6 +552,8 @@ input[type="text"], input:not([type]), input[type="search"], input[type="number"
   animation: ppulse 2s step-end infinite;
 }
 .led.ok { background: var(--ok); box-shadow: 0 0 8px var(--ok); animation: none; }
+/* refused by the gate (node tier): not an outage, so amber and steady */
+.led.warn { background: var(--warn); box-shadow: 0 0 8px var(--warn); animation: none; }
 /* the kit's bordered stat segment: a boxed key/value pair rather than loose
    text. These are the bar's only elastic children — see .chrome above. */
 .chrome .stat {
@@ -789,6 +785,20 @@ input[type="text"], input:not([type]), input[type="search"], input[type="number"
 }
 .bb-clear:hover { color: var(--fg); }
 .bb-hint { color: var(--muted); opacity: 0.6; font-size: 9px; }
+/* the fleet's machines dropdown (FleetPicker): the goal picker's .colorsel/.gm
+   skin, plus a lit button while a selection is active — the button IS the
+   filter's visible owner, so there is no separate chip like the goal filter's */
+.fp.fp-on .colorsel-btn { color: var(--fg); border-color: var(--ac); }
+.fp-menu { min-width: 220px; max-width: 340px; }
+.fp-row .gm-lbl { flex: 0 1 auto; }
+.fp-dot { width: 7px; height: 7px; flex: none; border-radius: 50%; background: var(--muted); opacity: 0.5; }
+.fp-dot.on { background: var(--ok); opacity: 1; }
+.fp-self { flex: none; color: var(--tint); font-size: 8px; letter-spacing: 0.08em; }
+.fp-count { margin-left: auto; padding-left: 14px; color: var(--muted); }
+.fp-sep { display: block; border-top: 1px solid var(--divider); margin: 3px 0; }
+/* a selected machine the registry no longer lists: kept so the filter can be
+   undone from the bar, drawn as the stale thing it is */
+.fp-stale { opacity: 0.55; }
 /* the goal filter's chip: the filter's visible owner, tinted with --tint like
    the card's goal chip so the two read as the same subject, but its OWN class
    family — that one is an inert span that falls through to the card's click,
@@ -1085,6 +1095,29 @@ input[type="text"], input:not([type]), input[type="search"], input[type="number"
 .pr-chip.pr-closed { color: var(--muted); border-color: var(--border-strong); opacity: 0.8; }
 .pr-chip.pr-closed:hover { background: color-mix(in srgb, var(--ac2) 10%, transparent); opacity: 1; border-color: var(--ac2); }
 
+/* stack chips: one linked badge per manual-test URL the cell registered
+   (`kraken stack add`), the PR row's sibling in band 5 — same metrics as
+   .pr-chip so the two rows read as one family. The STATUS is said by colour:
+   up takes --ok (the port answered the daemon's last dial), unknown is the
+   neutral border (never dialled — a non-loopback host), down is muted and
+   struck through (the port refused; still a link, since the probe can be a
+   tick stale after a restart). .remote is a sibling node's card: a span, not
+   a link, because localhost on another machine is not this stack. */
+.stack { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 4px; }
+.stack-chip {
+  font: 9px var(--mono); text-decoration: none;
+  padding: 2px 6px; border: 1px solid;
+  white-space: nowrap;
+  transition: box-shadow 80ms var(--ease), border-color 80ms var(--ease);
+}
+.stack-chip.stack-up { color: var(--ok); border-color: color-mix(in srgb, var(--ok) 45%, transparent); }
+a.stack-chip.stack-up:hover { background: color-mix(in srgb, var(--ok) 12%, transparent); box-shadow: var(--glow-ok); border-color: var(--ok); }
+.stack-chip.stack-unknown { color: var(--fg); border-color: var(--border-strong); }
+a.stack-chip.stack-unknown:hover { background: color-mix(in srgb, var(--ac) 10%, transparent); border-color: var(--ac); }
+.stack-chip.stack-down { color: var(--muted); border-color: var(--border-strong); opacity: 0.6; text-decoration: line-through; }
+a.stack-chip.stack-down:hover { opacity: 0.9; border-color: var(--ac2); }
+.stack-chip.remote { color: var(--muted); border-color: var(--border); cursor: default; }
+
 /* side-thread chips: one per fork of zeus' session. On the card they sit
    among the crew tokens and the counts in the .chips row (band 2); .threads
    itself is modal-only now (#steer-threads), since threadsHTML went away with
@@ -1118,6 +1151,14 @@ input[type="text"], input:not([type]), input[type="search"], input[type="number"
 .thread-chip.closed { color: var(--stopped); border-color: color-mix(in srgb, var(--stopped) 30%, var(--b1)); }
 .thread-chip.closed:hover { background: color-mix(in srgb, var(--stopped) 12%, transparent); border-color: var(--stopped); color: var(--fg); }
 .thread-chip.closed .dot { background: var(--stopped); }
+/* an ask thread opened from another node: "from <node>" after the label,
+   split off by a rule in the accent voice so it reads as provenance rather
+   than as part of the thread's name */
+.thread-chip .thread-origin {
+  color: var(--ac);
+  border-left: 1px solid var(--b1);
+  margin-left: 5px; padding-left: 5px;
+}
 /* the card's collapsed form of the same thing (S2's `compact`): a bare count,
    a SPAN rather than a button — the card's own click opens the modal that
    holds the list — so it takes the resting chip look and no hover fill.
@@ -1264,6 +1305,10 @@ input[type="text"], input:not([type]), input[type="search"], input[type="number"
 .crew-ico-athena { font-size: 14px; }
 .crew-ico-hermes { font-size: 14px; }
 .crew-ico-other { font-size: 10px; font-weight: 600; }
+/* zeus' background tasks riding the roster (job 612): one chip per kind */
+.crew-ico-subagent { font-size: 13px; }
+.crew-ico-monitor { font-size: 13px; }
+.crew-ico-shell { font-size: 11px; font-weight: 600; }
 .crew-pill.run { color: var(--ok); border-color: color-mix(in srgb, var(--ok) 40%, transparent); }
 /* question/polling colors match the zeus status hues everywhere else
    (--revealed = amber question state, --polling = cyan, see
@@ -1543,7 +1588,6 @@ input[type="text"], input:not([type]), input[type="search"], input[type="number"
 .st-chip-info  { --skill: var(--skill-info);  --skill-soft: var(--skill-info-soft); }
 .st-chip-aim   { --skill: var(--skill-aim);   --skill-soft: var(--skill-aim-soft); }
 .st-chip-do    { --skill: var(--skill-do);    --skill-soft: var(--skill-do-soft); }
-.st-chip-pr    { --skill: var(--skill-pr);    --skill-soft: var(--skill-pr-soft); }
 .st-chip-dream { --skill: var(--skill-dream); --skill-soft: var(--skill-dream-soft); }
 .card:hover .st-chip { border-color: var(--skill); }
 
@@ -1591,6 +1635,29 @@ input[type="text"], input:not([type]), input[type="search"], input[type="number"
    what is READ and wants full contrast, the mark is what is scanned. */
 .ac-chip [aria-hidden] { color: var(--ok); }
 .card:hover .ac-chip { border-color: var(--ok); }
+
+/* ---- fleet (multiplayer kraken) ----------------------------------------
+   A REMOTE card — one another kraken on the tailnet polled in — is drawn in
+   the same columns with a DASHED frame, so "not mine" reads before a word of
+   it does. The left accent edge stays solid: it is the job's colour channel
+   and that does not change with ownership. .ow-chip names the owner
+   (`studio-mini · Jess`) in the info hue; .pub-chip is the one statement
+   that this board may drive the card, in the ok hue. Both are the .ac-chip
+   look; the owner chip mutes when its node stopped answering polls. */
+.card.remote { border-style: dashed; border-left-style: solid; }
+.ow-chip, .pub-chip {
+  font: 9px var(--mono);
+  padding: 2px 6px; white-space: nowrap;
+  color: var(--job-blue);
+  border: 1px solid color-mix(in srgb, var(--job-blue) 55%, transparent);
+  background: color-mix(in srgb, var(--job-blue) 8%, transparent);
+}
+.ow-chip.offline { color: var(--muted); border-color: var(--border); background: none; }
+.pub-chip {
+  color: var(--ok);
+  border-color: color-mix(in srgb, var(--ok) 55%, transparent);
+  background: color-mix(in srgb, var(--ok) 8%, transparent);
+}
 
 /* .cx-chip is the codex-agent badge — the same neutral chip look as .ac-chip
    but tinted with the app accent instead of --ok, so a codex cell reads as
@@ -1859,6 +1926,65 @@ input[type="text"], input:not([type]), input[type="search"], input[type="number"
 .tok-cell i { font-style: normal; opacity: 0.7; margin-right: 5px; }
 .tok-note { margin-top: 5px; font-size: 9px; opacity: 0.55; }
 
+/* the steer modal's two METERS — the lead's context fill (.cw, ContextPanel)
+   and the job's token spend (.tok) — in one two-up row (job 630, Q1): the two
+   are read in one glance, "how full is zeus now" beside "what has this cost",
+   and the steer .panel's min(1120px, 96vw) gives each ~540px (measured at a
+   1280px viewport: 540px tracks), twice what .tok's four counters need. Below
+   560px the row collapses to a stack,
+   context first. A row with one meter renders that meter full width (the
+   hidden sibling takes no track: `hidden` is display:none, and a 1fr grid
+   with one child is one column wide only when told so — hence the
+   :has() rules, with the two-column default kept for the common case). */
+.steer-meters { display: grid; grid-template-columns: 1fr 1fr; gap: 0 10px; align-items: stretch; }
+.steer-meters:has(> [hidden]) { grid-template-columns: 1fr; }
+@media (max-width: 560px) { .steer-meters { grid-template-columns: 1fr; } }
+/* Both meters are always the same height (carl, 2026-10-21): the grid
+   stretches each CONTAINER to the row, and the container is a flex column so
+   the panel inside it grows to fill — without this the panel sizes to its
+   own four tiers and the two boxes end a line apart, since the context note
+   wraps to two lines and the tokens note to one. Only the panel grows; its
+   rows keep their natural height, so the extra space lands below the note. */
+.steer-meters > * { display: flex; flex-direction: column; }
+.steer-meters > * > .cw, .steer-meters > * > .tok { flex: 1 1 auto; box-sizing: border-box; }
+
+/* the context-window meter (ContextPanel in SteerOverlay.tsx) — .tok's twin
+   in the drilldown family: same raised / border-left box, same four faded
+   tiers (headline / meter / breakdown / provenance). Its left rule takes the
+   band hue, because unlike spend this is a LIVE fact with a threshold the
+   daemon acts on — at .cw-danger kraken is typing /handoff into the pane —
+   and a resting .cw-ok takes the accent rather than the family's neutral
+   grey, so a reader can tell the live meter from the retrospective one at
+   the left edge alone. .cw-dead is a done or cell-gone job's last report:
+   faded one tier further, the number is history rather than state. */
+.cw {
+  margin-top: 10px; padding: 8px 10px;
+  background: var(--raised);
+  border: 1px solid var(--divider);
+  border-left: 2px solid color-mix(in srgb, var(--ac) 55%, transparent);
+  font: 10px var(--mono); line-height: 1.5;
+  color: var(--muted);
+}
+.cw-warn { border-left-color: color-mix(in srgb, var(--warn) 65%, transparent); }
+.cw-danger { border-left-color: color-mix(in srgb, var(--ac2) 65%, transparent); }
+.cw-dead { opacity: 0.72; }
+.cw-head { display: flex; align-items: baseline; gap: 5px; }
+.cw-big { font: 600 15px var(--mono); letter-spacing: 0.04em; color: var(--fg); }
+.cw-unit { font: 600 8px var(--display); text-transform: uppercase; letter-spacing: 0.14em; opacity: 0.65; }
+.cw .u-rows { margin-top: 7px; }
+/* the handoff tick: the one mark on the bar that is not fill. It needs the
+   bar to be a positioning context, which .u-bar is not elsewhere, and it is
+   kept INSIDE the bar's box (full height, no overhang) so .u-bar's
+   overflow:hidden does not clip it. */
+.cw-bar { position: relative; }
+.u-bar-tick { position: absolute; top: 0; bottom: 0; width: 1px; background: var(--fg); opacity: 0.6; }
+.cw-break {
+  display: flex; flex-wrap: wrap; gap: 3px 14px; margin-top: 5px;
+  font-size: 10px; opacity: 0.85;
+}
+.cw-cell i { font-style: normal; opacity: 0.7; margin-right: 5px; }
+.cw-note { margin-top: 5px; font-size: 9px; opacity: 0.55; }
+
 /* zeus' load estimate with its rungs named, in the steer modal's context block
    (LoadDrill in SteerOverlay.tsx).
 
@@ -2084,8 +2210,8 @@ input[type="text"], input:not([type]), input[type="search"], input[type="number"
 }
 .btn.steer-done:hover { background: color-mix(in srgb, var(--ok) 14%, transparent); border-color: var(--ok); color: var(--ok); box-shadow: none; }
 /* ---- command highlight: mirrored backdrop behind the steer/editor
-   textareas, so /info /aim /do /pr /handoff each read highlighted inline in
-   their own skill color + glow (info blue, aim red, do yellow, pr green,
+   textareas, so /direct /info /aim /do /handoff each read highlighted inline in
+   their own skill color + glow (direct teal, info blue, aim red, do yellow,
    handoff orange) — a
    <textarea> can't style substrings of its own value. The
    wrapper is position:relative and otherwise unstyled; the textarea stays
@@ -2129,14 +2255,12 @@ input[type="text"], input:not([type]), input[type="search"], input[type="number"
 .cmd-hl-backdrop .cmd-hl-info { --skill: var(--skill-info); --skill-glow: var(--text-glow-skill-info); }
 .cmd-hl-backdrop .cmd-hl-aim  { --skill: var(--skill-aim);  --skill-glow: var(--text-glow-skill-aim); }
 .cmd-hl-backdrop .cmd-hl-do   { --skill: var(--skill-do);   --skill-glow: var(--text-glow-skill-do); }
-.cmd-hl-backdrop .cmd-hl-pr   { --skill: var(--skill-pr);   --skill-glow: var(--text-glow-skill-pr); }
 .cmd-hl-backdrop .cmd-hl-dream { --skill: var(--skill-dream); --skill-glow: var(--text-glow-skill-dream); }
 .cmd-hl-backdrop .cmd-hl-handoff { --skill: var(--skill-handoff); --skill-glow: var(--text-glow-skill-handoff); }
 .cmd-hl-backdrop .cmd-hl-direct { --skill: var(--skill-direct); --skill-glow: var(--text-glow-skill-direct); }
 .cmd-hl-backdrop .cmd-hl-info,
 .cmd-hl-backdrop .cmd-hl-aim,
 .cmd-hl-backdrop .cmd-hl-do,
-.cmd-hl-backdrop .cmd-hl-pr,
 .cmd-hl-backdrop .cmd-hl-dream,
 .cmd-hl-backdrop .cmd-hl-handoff,
 .cmd-hl-backdrop .cmd-hl-direct {
@@ -2332,9 +2456,9 @@ input[type="text"], input:not([type]), input[type="search"], input[type="number"
 .answer-body { display: flex; flex-direction: column; gap: 12px; }
 .answer-note { font: 10px var(--mono); color: var(--ac2); min-height: 1em; }
 
-/* command chips: one-tap /info /aim /do /pr /handoff insertion above a
+/* command chips: one-tap /direct /info /aim /do /handoff insertion above a
    composer textarea, colored per skill (direct teal, info blue, aim red, do
-   yellow, pr green, handoff orange; dream violet has a rule but no web chip) —
+   yellow, handoff orange; dream violet has a rule but no web chip) —
    inactive rests in its -soft border, hover/active (command present in the
    textarea, see attachCmdChips) fills with the -soft tint and glows. The
    base rule's own color/border-color is the generic accent fallback for a
@@ -2359,17 +2483,15 @@ input[type="text"], input:not([type]), input[type="search"], input[type="number"
 .cmd-chip-info { --skill: var(--skill-info); --skill-soft: var(--skill-info-soft); --skill-glow: var(--glow-skill-info); }
 .cmd-chip-aim  { --skill: var(--skill-aim);  --skill-soft: var(--skill-aim-soft);  --skill-glow: var(--glow-skill-aim); }
 .cmd-chip-do   { --skill: var(--skill-do);   --skill-soft: var(--skill-do-soft);   --skill-glow: var(--glow-skill-do); }
-.cmd-chip-pr   { --skill: var(--skill-pr);   --skill-soft: var(--skill-pr-soft);   --skill-glow: var(--glow-skill-pr); }
 .cmd-chip-dream { --skill: var(--skill-dream); --skill-soft: var(--skill-dream-soft); --skill-glow: var(--glow-skill-dream); }
 .cmd-chip-handoff { --skill: var(--skill-handoff); --skill-soft: var(--skill-handoff-soft); --skill-glow: var(--glow-skill-handoff); }
 .cmd-chip-direct { --skill: var(--skill-direct); --skill-soft: var(--skill-direct-soft); --skill-glow: var(--glow-skill-direct); }
-.cmd-chip-info, .cmd-chip-aim, .cmd-chip-do, .cmd-chip-pr, .cmd-chip-dream, .cmd-chip-handoff, .cmd-chip-direct {
+.cmd-chip-info, .cmd-chip-aim, .cmd-chip-do, .cmd-chip-dream, .cmd-chip-handoff, .cmd-chip-direct {
   color: var(--skill); border-color: var(--skill-soft);
 }
 .cmd-chip-info:hover, .cmd-chip-info.active,
 .cmd-chip-aim:hover, .cmd-chip-aim.active,
 .cmd-chip-do:hover, .cmd-chip-do.active,
-.cmd-chip-pr:hover, .cmd-chip-pr.active,
 .cmd-chip-dream:hover, .cmd-chip-dream.active,
 .cmd-chip-handoff:hover, .cmd-chip-handoff.active,
 .cmd-chip-direct:hover, .cmd-chip-direct.active {
@@ -2454,6 +2576,39 @@ input[type="text"], input:not([type]), input[type="search"], input[type="number"
 .usage-stat .dim,
 #usage-overlay .dim { opacity: 0.55; }
 .btn.mini { font-size: 8.5px; letter-spacing: 0.08em; padding: 2px 7px; }
+
+/* ---- fleet: the remote body, the devices overlay ----
+   All in the usage drilldown's vocabulary (u-sect heads, mono 9–10px, theme
+   tokens only) so the new surfaces read as more of the same board. The
+   visibility control is a FieldSelect and wears the .colorsel* skin. */
+
+.remote-question { border: none; padding: 0; margin: 0; min-width: 0; }
+.remote-question:disabled { opacity: 0.55; }
+.remote-composer, .remote-raw { width: 100%; box-sizing: border-box; margin-top: 10px; font: 10px/1.6 var(--mono); }
+.remote-composer:disabled { opacity: 0.55; }
+.remote-raw { min-height: 50vh; resize: vertical; margin-top: 0; }
+.remote-steer button:disabled, .remote-head button:disabled { opacity: 0.4; }
+
+.devices-body { display: flex; flex-direction: column; gap: 8px; }
+.devices-body .u-sect { margin: 10px 0 0; }
+.dv-id { display: flex; gap: 14px; flex-wrap: wrap; font: 9px var(--mono); color: var(--muted); }
+.dv-pw { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+.dv-pw input { flex: 1 1 160px; min-width: 0; font: 10px var(--mono); padding: 5px 8px;
+  background: var(--raised); color: var(--fg); border: 1px solid var(--border); }
+.dv-warn { color: var(--warn); font-size: 9px; }
+.dv-qr { display: flex; gap: 14px; align-items: flex-start; flex-wrap: wrap; }
+.dv-qr img { flex: none; image-rendering: pixelated; border: 1px solid var(--border); }
+.dv-seed { display: inline-block; margin-top: 6px; font: 10px var(--mono); padding: 4px 8px; border: 1px solid var(--border); overflow-wrap: anywhere; }
+.dv-table { width: 100%; border-collapse: collapse; font-size: 9.5px; }
+.dv-table th, .dv-table td { text-align: left; padding: 5px 6px; border-bottom: 1px solid var(--divider); }
+.dv-table th { color: var(--muted); font-weight: 400; font: 8.5px var(--mono); letter-spacing: 0.08em; text-transform: uppercase; }
+.dv-dot { display: inline-block; width: 7px; height: 7px; background: var(--muted); }
+.dv-dot.on { background: var(--ok); box-shadow: 0 0 6px var(--ok); }
+.dv-foot { font-size: 9px; margin-top: 6px; }
+#devices-overlay .dim { opacity: 0.55; }
+/* the devices tables are wide: let them scroll inside the panel on a phone
+   rather than push the page sideways */
+@media (max-width: 640px) { .dv-table { display: block; overflow-x: auto; } }
 
 /* ---- job editor: frontmatter as a form, spec as prose ---- */
 .editor-body { display: flex; flex-direction: column; gap: 12px; }
@@ -2821,8 +2976,7 @@ input[type="text"], input:not([type]), input[type="search"], input[type="number"
 :root[data-theme="light"] .btn-big:hover,
 :root[data-theme="light"] .led,
 :root[data-theme="light"] .led.ok,
-:root[data-theme="light"] .upd .dot,
-:root[data-theme="light"] #thread-panehead .live-dot { box-shadow: none; }
+:root[data-theme="light"] .upd .dot { box-shadow: none; }
 
 /* honor the OS-level motion preference — one rule kills every animation and
    transition in the sheet, which is why no animated rule declares its own
@@ -3333,6 +3487,16 @@ input[type="text"], input:not([type]), input[type="search"], input[type="number"
 /* the model the thread was branched on: the same pill in the quiet voice — it
    is a fact about the thread, not a state that can change under the reader */
 .thread-pill.model { color: var(--muted); text-transform: none; letter-spacing: 0.06em; }
+/* ask threads: who opened it (the accent voice, like the chip's badge), the
+   question in flight (--warn, on the LED's stepped ppulse while it lasts), and
+   the last run's failure note (--stopped, ellipsised — the full text is its
+   title) */
+.thread-pill.thread-origin { color: var(--ac); text-transform: none; letter-spacing: 0.06em; }
+#thread-answering { color: var(--warn); animation: ppulse 2s step-end infinite; }
+#thread-note {
+  font: 10px var(--mono); color: var(--stopped);
+  max-width: 40ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
 
 /* branch dialog: says plainly what the fork does and doesn't touch */
 .thread-banner {
@@ -3355,6 +3519,9 @@ input[type="text"], input:not([type]), input[type="search"], input[type="number"
   padding: 8px 10px; width: 100%;
 }
 .thread-field textarea { resize: vertical; min-height: 70px; }
+/* the headless toggle: one checkbox beside its words, not a full-width field */
+.thread-headless-field { flex-direction: row; align-items: center; gap: 7px; }
+.thread-field input[type="checkbox"] { width: auto; padding: 0; margin: 0; accent-color: var(--ac); }
 .thread-field input:hover, .thread-field textarea:hover { border-color: var(--ac); }
 .thread-field input:focus, .thread-field textarea:focus {
   outline: none; border-color: var(--ac); box-shadow: var(--glow);
@@ -3418,29 +3585,11 @@ input[type="text"], input:not([type]), input[type="search"], input[type="number"
   content: ""; flex: 1; height: 1px; background: color-mix(in srgb, var(--ac) 35%, transparent);
 }
 
-/* live pane mirror: plain capture-pane text, the only way to watch a live
-   thread from a phone (⌁ attach tmux raises Ghostty, which a phone can't) */
-/* the head row is the mirror's toggle (▸/▾ in its label), so it's a control:
-   the capture only polls while the reader has the <pre> open */
-#thread-panehead {
-  display: flex; align-items: center; gap: 7px;
-  font: 600 9px var(--display); letter-spacing: 0.16em; text-transform: uppercase;
-  color: var(--muted); user-select: none;
-  transition: color 80ms var(--ease);
-}
-#thread-panehead:hover { color: var(--fg); }
-#thread-panehead .live-dot {
-  width: 6px; height: 6px; background: var(--ok); box-shadow: 0 0 6px var(--ok);
-}
-.thread-pane {
-  margin: 0;
-  background: color-mix(in srgb, var(--ac) 2%, var(--b0)); border: 1px solid var(--divider);
-  padding: 9px 11px;
-  font: 9.5px/1.5 var(--mono); color: var(--muted);
-  white-space: pre; overflow-x: auto; max-height: 30vh; overflow-y: auto;
-}
+/* no live pane mirror in the thread overlay any more (the #thread-panehead
+   toggle and the .thread-pane <pre> went with it): the overlay shows the
+   conversation, and the pane is the ⧉ tmux button's business */
 
-/* what replaces the pane mirror and the composer once a thread is closed */
+/* what replaces the composer once a thread is closed */
 .thread-empty {
   border: 1px dashed var(--border-strong);
   padding: 14px; text-align: center;

@@ -148,7 +148,7 @@ func TestContractAcctArchivedWebJobWithholdsTheAccount(t *testing.T) {
 // shipped iOS build its wire understanding is stale over a key it can simply
 // ignore. expectedContract in APIClient.swift mirrors this number.
 func TestContractAcctAPIContractStaysSix(t *testing.T) {
-	if apiContract != 6 {
-		t.Errorf("apiContract = %d, want 6 — webJob.account is additive", apiContract)
+	if apiContract != 7 {
+		t.Errorf("apiContract = %d, want 7 (bumped by the fleet gate) — webJob.account is additive", apiContract)
 	}
 }

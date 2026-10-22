@@ -7,7 +7,7 @@ consumes. Source of truth is the Go code — the handlers and wire types in
 (`internal/jobs/{daemon,job,status}.go`, `internal/core/peer.go`); this doc
 transcribes it, it does not define it independently.
 
-**Current contract**: `apiContract = 6` (internal/api/board.go — the Go
+**Current contract**: `apiContract = 7` (internal/api/board.go — the Go
 constant + `contract_test.go` bump lands in the same commit as this doc, per
 CLAUDE.md's API-contract rule), mirrored by `APIClient.expectedContract`
 (APIClient.swift). `/api/health` and
@@ -28,10 +28,17 @@ and `prereqs` from `/api/board`'s job objects. Submitting a job now starts its
 cell inside the request (`POST /api/queue`, URL kept — see below), so there is
 no flag to set, no dependency gate to configure, and no background failure to
 report out of band. `state`'s value domain lost `queued` with them:
-draft · working · blocked · done (+ `archived`).
+draft · working · blocked · done (+ `archived`). v7 bumped for the **request
+gate** (`internal/api/gate.go`, see "Nodes and pairing" below): no key changed
+shape, but who may call did — a request from another tailnet device that
+carries no pairing token is the *node* tier and is answered `401
+{"error":"unauthorized"}` on every board route, so an unpaired shipped app
+stops working against a v7 server and must pair first. The keys v7 adds
+(`webJob.visibility`, `webJob.owner`, `webBoard.nodes`) are additive.
 
 **Bump policy**: bump `apiContract` ONLY on a breaking change — a JSON key
-retyped, renamed, or removed. Additive keys never bump it: old clients
+retyped, renamed, or removed, or a change in who may call a route a shipped
+client already calls (v7, the request gate). Additive keys never bump it: old clients
 already ignore fields they don't recognize, and `Decodable` optionals
 absorb a key's absence.
 
@@ -95,6 +102,8 @@ the way in (`mtimeToken`), for old clients — but always emit a number.
 | `goals` | object (`{"week": [goal], "day": [goal]}`) | always (both arrays `[]`, never `null`) | the CURRENT local week's and today's goals — the same two arrays `GET /api/goals` serves, from the same store call, so the board key and that endpoint can never disagree. Periods are `store.GoalPeriods(time.Now())`: `day` is today's local `2006-01-02` date, `week` is the local Monday of this week. Added additively, no contract bump. Modeled in the iOS app as `WebGoals` (Models.swift), **Optional** on `WebBoard` for the same reason `update` is, and hand-decoded for the same blast-radius reason (see that struct's comment) |
 | `background` | object (`{"updated_at": number}`) | omitted when no background is set | the board's optional background image (api/background.go): the upload stamp alone (unix millis), never the bytes — `GET /api/background` serves those, with `?v=<updated_at>` as the cache-buster. ABSENT is the wire's only "no background". Added additively, no contract bump. Modeled in the iOS app as `WebBackground` (Models.swift), **Optional** on `WebBoard`; the app decodes it but does not render a background yet (a noted follow-up) |
 | `operator` | string | always | the name kraken's agents use for the person running it — `jobs.Operator()`: `KRAKEN_OPERATOR` (from the environment or `~/.kraken/env`), else `$USER`, else `"the operator"`. The web board labels the operator's turns in a side thread with it (falling back to `you` when the key is absent, i.e. an older server). Added additively, no contract bump. Modeled in the iOS app as `operatorName: String?` (JSON key `operator` — `operator` is a Swift keyword), **Optional** on `WebBoard`; the app decodes it but renders nothing from it yet |
+| `node_id` | string | omitempty | this node's tailscale stable id (the `node_id` of its `NodeEnvelope`); absent when tailscale is unreadable or under `KRAKEN_NODES=off`. A client compares a headless thread's `origin.node_id` with it to tell this node's own threads from another node's. Added additively, no contract bump. Modeled in the iOS app as `nodeId: String?` on `WebBoard` |
+| `node_label` | string | omitempty | this node's device label (`jobs.DeviceLabel`, the `label` of its `NodeEnvelope`), read off the same cached envelope as `node_id`; absent under `KRAKEN_NODES=off`. Names the "this Mac" row of the board bar's machines dropdown (web) and of Settings' machine filter (iOS) without a second poll of `/api/node`; a client that finds it absent (an older server) shows the bare words "this Mac". Added additively, no contract bump. Modeled in the iOS app as `nodeLabel: String?` on `WebBoard` |
 
 `webUpdate` (api/update.go) — assembled by one function (`currentUpdate`)
 shared with `GET /api/update/status`, so the board key and the poller's
@@ -166,20 +175,21 @@ payload, so a client sees exactly what it has always seen.
 | `cell` | string | omitempty | tmux session name |
 | `live` | bool | always | |
 | `artifacts` | array (`webArtifact`) | omitempty | |
-| `detail` | string | omitempty | zeus' last assistant text, full multi-line text capped at 4000 runes (not bytes) |
+| `detail` | string | omitempty | zeus' last assistant text, full multi-line text capped at 4000 runes (not bytes). Set wherever zeus' transcript resolves: live started cells, `cell_gone` jobs, and DONE jobs (by stamped session — the cell is torn down but the transcript outlives it), so a done card carries its final report until archived. Additive, no contract bump |
 | `question` | object (`webQuestion`) | omitempty (null-able) | |
 | `zeus_status` | string | omitempty | zeus' own refined status (running/polling/waiting/question); live started, non-done cells only, omitted when zeus isn't resolvable |
-| `stage` | string | omitempty | the pipeline skill zeus most recently used — one of the five phase-governing skill names (`info`/`aim`/`do`/`pr`/`dream`; `graph` was retired with the knowledge graph, and a client renders an unknown stage with its generic fallback), read off zeus' transcript (`jobs.FindStage`: last Skill invocation, `/name` command message, or Read of a `.claude/skills/<name>/SKILL.md` wins; the reference skill `load` never counts). Started non-done jobs with a resolvable transcript only (live or `cell_gone`). Absence covers three states the wire does not separate — no resolvable transcript, any failed or truncated scan, and no pipeline skill used yet — all rendered the same way (no badge). Rendered as one card chip on both clients. Additive, no contract bump |
+| `stage` | string | omitempty | the pipeline skill zeus most recently used — one of the four phase-governing skill names (`info`/`aim`/`do`/`dream`; `graph` was retired with the knowledge graph and `pr` folded into `do` when the PR became do's own last step, and a client renders an unknown stage with its generic fallback), read off zeus' transcript (`jobs.FindStage`: last Skill invocation, `/name` command message, or Read of a `.claude/skills/<name>/SKILL.md` wins; the reference skill `load` never counts). Started jobs with a resolvable transcript only (live, `cell_gone`, or done by stamped session). Absence covers three states the wire does not separate — no resolvable transcript, any failed or truncated scan, and no pipeline skill used yet — all rendered the same way (no badge). Rendered as one card chip on both clients. Additive, no contract bump |
 | `wakeup` | object (`webWakeup`) | omitempty (null-able) | pending `ScheduleWakeup` from zeus' transcript — cell is on a poll timer, still counts as `working`; render a countdown chip. Additive, no contract bump |
-| `roster` | array (`webAgent`) | omitempty | live crew (nested subagents), live started non-done cells only |
+| `roster` | array (`webAgent`) | omitempty | live crew (teammates) PLUS zeus' live background tasks (in-process subagents, monitors, background shells — each entry's `kind` says which; job 612), live started non-done cells only |
 | `health` | string | omitempty | "" (absent) = healthy |
 | `mtime` | number | always | unix millis |
 | `archived` | bool | omitempty | |
 | `display_slug` | string | omitempty | original slug, archived jobs only |
 | `cell_gone` | bool | omitempty | started + non-done + tmux session vanished; worktree (incl. uncommitted WIP) still on disk — reactivate preserves it, done/kill discard it |
 | `reactivatable` | bool | omitempty | has a recorded zeus session, and either done or `cell_gone` |
-| `last_sent` | string | omitempty | last real user message from zeus' session transcript, any send channel (board steer, `k s`, direct tmux typing); omitted when no transcript is resolvable or it has no user turn yet; one-line, capped 4000 runes (not bytes). Question-answer digit keypresses never appear (they're tool_results, not user text); started + non-done jobs (live or cell_gone) only |
+| `last_sent` | string | omitempty | last real user message from zeus' session transcript, any send channel (board steer, `k s`, direct tmux typing); omitted when no transcript is resolvable or it has no user turn yet; one-line, capped 4000 runes (not bytes). Question-answer digit keypresses never appear (they're tool_results, not user text); started jobs with a resolvable transcript — live, `cell_gone`, or done (by stamped session) |
 | `prs` | array (`jobPR`) | omitempty | every PR shipped from the cell branch (daemon-tracked history, never cleared); render as linked state chips |
+| `stack` | array (`jobStackLink`) | omitempty | the cell's manual-test URLs, registered by the cell through `kraken stack add` (`job_stacks` rows, schema v35); render as linked chips beside the PRs, dimmed when `status` is `down`. Absent means the cell registered none; always absent on an archived job (the rows are deleted at cell teardown, so a reactivated job starts with none). The web board renders a sibling node's links as plain labels, since `localhost` on another machine is not this stack; iOS decodes and does not render yet. Additive, no contract bump |
 | `doc_questions` | array (`webDocQuestion`) | omitempty | zeus' open doc questions (answered or not), served straight from `questions` rows in `kraken.db` — no file, no parse step, so there is no more cell-gone-read-only or malformed-file case; never set for archived jobs. Additive, no contract bump |
 | `feedback` | array (`webFeedback`) | omitempty | per-job feedback entries (open + addressed), served straight from `feedback` rows in `kraken.db`; unlike `doc_questions`, IS populated for archived jobs (rows outlive the cell). Additive, no contract bump |
 | `color` | string | omitempty | the job's color, one of `red` \| `blue` \| `green` \| `yellow` \| `purple` \| `orange` \| `pink` \| `cyan` (the names Claude Code's `/color` accepts, in that order); absent or `""` means the job has NO color and must render exactly as an uncolored job always has — no swatch, no reserved space. Clients degrade an unrecognized name to "no color" rather than failing. Additive, no contract bump |
@@ -190,6 +200,7 @@ payload, so a client sees exactly what it has always seen.
 | `goal` | object (`{"id": number, "text": string, "done": bool}`) | omitempty | the job's PRIMARY goal — durably `goals[0]`, the head of the array below, present under exactly the same condition and never on its own. Retained beside `goals` so a client that predates multi-goal links keeps rendering one goal rather than none. Additive, no contract bump. Modeled in the iOS app as `WebJobGoal` on `WebJob` |
 | `goals` | array (`[{"id": number, "text": string, "done": bool}]`) | omitempty | EVERY goal this job links (`job_goals`), in link-position order, present exactly when it links at least one — each from ANY period and done or not, so a job carried over from last week still names the goals it belongs to. Written only by `POST /api/job/goal` (below), never by `saveform`: the link is deliberately absent from the job form's field set, so a full form save cannot touch it. Additive, no contract bump. Modeled in the iOS app as `WebJobGoalList` on `WebJob` (a wrapper struct, because its decode is hand-written) and rendered as ONE card chip per goal (`GoalChip`, GoalsDrawer.swift) — `◎` plus the goal text truncated by the same 24-character rule web's `goalChipText` uses, muted when `done`, full text in the accessibility label since a phone has no tooltip; no `+N` badge for the rest, the chips wrap. That decode is tolerant in two places, since chips are cosmetic and the board is not: a `goals` that is not an array degrades to an empty list, and a malformed ELEMENT is dropped while the rest survive |
 | `account` | object (`{"slug": string, "email": string, "at": number}`) | omitempty | the pool slot this cell is BOUND to (schema v28's three `jobs` columns) — the login every claude in the cell bills, delivered to its panes as `CLAUDE_SECURESTORAGE_CONFIG_DIR=~/.claude-pool/<slug>` and stamped at spawn (rebound in place by the limit rescue). **Which POOL the slug names is decided by the job's `agent`, not by this object**: with `agent: "codex"` the slug names a slot under `~/.codex-pool/accounts/<slug>`, delivered to the cell's pane as `CODEX_HOME=<that dir>` and matched against `/api/usage`'s `codex_accounts`; otherwise it is a `~/.claude-pool` slot matched against `accounts`. The two pools are disjoint and a slugified email can name a slot in both, so a client that joined on the slug alone would draw one pool's percentages under the other pool's cell. `slug` is the slot directory name and is the same key `/api/usage`'s account rows carry, so a client joins the two on `agent` plus it and never on the email; `email` may be `""` for a slot ccp has no identity for yet; `at` is unix MILLIS of the bind stamp. **Absence is the wire's only spelling of UNBOUND** — the cell runs on the machine's main login exactly as every cell did before per-cell binding — and it covers two live states no client separates (the pool was dry or fully excluded at spawn; rotation is pinned `manual`, where kraken takes no account decision at all) plus a third, ARCHIVED: **withheld on archived jobs regardless of whether a binding exists**, which is `load`'s call rather than `tokens`' and for `load`'s reason — a card with no cell is not spending on anything, so the badge would answer a question it cannot pose. The columns survive archival and the key returns on unarchive. Served on every active bound job whatever its display state, so the key never flickers as a card moves column; the live-cards-only rule is a RENDERING rule the clients apply, not a payload rule. Additive, no contract bump. Rendered on web as one card chip (`AccountChip` — `⬢` plus the email's LOCAL PART, falling back to the slug, full address + slot + bind age in `title`/`aria-label`) and as the steer modal's read-only `.steer-account` section (bound-to, bind age, and that slot's bars joined from the 60s `/api/usage` poll — session/Fable for a claude cell, weekly plus a session bar only when the codex slot reports a genuinely shorter window for a codex one; no bars at all when the poll carries no row for it, never a fabricated percentage). Modeled in the iOS app as `WebJobAccount` on `WebJob`, **decode-only** this pass — nothing on the phone renders it yet. That decode is TOLERANT, the same way `goals` above is and for the same reason: `WebBoard.jobs` is a strictly decoded array, so a throw inside one job's `account` would take the entire board payload with it, and a cosmetic badge must never cost the board it is drawn on. A present-but-MALFORMED object (a retyped `slug`, a future server, a hand-edited response) degrades to nil — the card silently loses its badge — rather than failing the decode; absent and null are a different case absorbed one level up. `slug` stays required inside the object precisely so a malformed one is detectable: an object with no slug names no account at all |
+| `context` | object (`webJobContext`: `{"pct": number, "window": number, "used": number, "at": number, "handoff_pct": number, "handoff"?: {"fires": number, "last_at": number, "exhausted": bool}}`) | omitempty | the cell LEAD's context-window fill as its statusline last reported it — the kv row `cell_ctx:<job id>:<session>` that `kraken ctx-hook --slug` writes through `POST /api/cell/context` on every statusline render and the daemon's auto-handoff pass reads. Nothing is recomputed: `pct` is Claude Code's own `used_percentage` (input-only: input + cache_creation + cache_read, over the model's REAL window; may carry decimals), `window` is `context_window_size` (0 when the hook sent none), `used` is `total_input_tokens` (0 when the reporting hook predates the field — a client then derives `pct × window / 100` and marks it approximate; a billed session never reports a real zero), `at` is unix MILLIS of the report (age here is time since the last statusline RENDER, not staleness — an idle zeus renders nothing new), `handoff_pct` is the fill at which the daemon types `/handoff` into the pane (served so no client hardcodes 75), and `handoff`, the one omitempty key inside, is the pass' state for THIS session: `fires` in the CURRENT streak (reset once the last fire is two hours old — never a lifetime total), `last_at` millis (0 when never fired), `exhausted` when the streak hit its cap. **Absence is the wire's only spelling of UNREPORTED** — no stamped zeus session yet, a cell whose `statusLine` kraken left alone because it already ran something else, a codex cell (no statusline hook) — plus ARCHIVED: **withheld on archived jobs regardless of whether a row exists** (`load`'s call: a card with no cell is not filling; the row is never deleted, so the key returns on unarchive). A DONE but unarchived job KEEPS it: the row survives teardown and a reactivation resumes the same session near that fill. Served whatever the display state, so the key never flickers as a card moves column. "context", never "tokens" (summed spend) or "usage" (account quota). Rides the fleet payload as built (`nodeCard` clears only `owner` and `account`). Rendered on web as the steer modal's `.steer-ctxwin` panel beside `.steer-tokens` in one `.steer-meters` row (headline `NN%`, a bar with a tick at `handoff_pct`, `used / window`, report age, the handoff streak once it has fired; `u-ok` below 50, `u-warn` to just under `handoff_pct`, `u-danger` from it). Modeled in the iOS app as `WebJobContext` on `WebJob`, **decode-only** this pass, with `account`'s tolerant decode: a present-but-malformed object degrades to nil rather than failing the board. Additive, no contract bump |
 
 `goal` and `goals` (`webJobGoal`) are a THREE-key projection of the goal row,
 not the whole `goal` object `/api/goals` serves: a card renders the goal's
@@ -205,6 +216,8 @@ empty is one a client keeps rendering affordances for. `prereqs` went with the
 feature.
 
 `jobPR`: `url` (string, always), `state` (string, always: `open` \| `merged` \| `closed`). The PR number for display derives from the url's trailing `/pull/<n>`.
+
+`jobStackLink` (jobstack.go): `url` (string, always — `http`/`https` only, no credentials; the server refuses anything else), `label` (string, always, may be `""` — the cell's short name, capped at 24 runes server-side), `status` (string, always: `up` \| `down` \| `unknown` — the daemon's loopback probe's last verdict; `unknown` from registration and forever for a non-loopback host, which is never dialled; decode tolerantly, a future word is possible), `at` (number, always, unix millis — registration time). The chip label is `⇱ <label> :<port>` with the port taken from the url (scheme default when absent); a `down` link renders muted and struck through but stays clickable, since the probe can be one tick stale after a restart.
 
 `webArtifact`: `name` (string, always — in store mode this may contain `/`
 for a nested path, e.g. `icon-variations/v2.png`), `url` (string, always).
@@ -222,7 +235,13 @@ part of the wire *shape*, so this is no contract bump.
 `question`/`in-process`), `working` (bool, always — no `omitempty`, so
 `false` still rides the wire; tmux-backed entries are working iff their pane
 reports `running`, in-process entries iff their team-config `isActive` flag
-is true).
+is true), `kind` (string, omitempty, additive — job 612: `teammate` for the
+crew proper, else the background task riding the roster: `subagent` (an
+in-process Agent-tool spawn; `name` is its description, `role` its agent
+type, `model` its alias), `monitor` or `shell` (`name` is the command's
+description, `role` repeats the kind, `model` is empty); a task is always
+`working`, since the server has already pruned the dead ones; absent on a
+pre-612 server, in which case every entry is a teammate).
 
 `webQuestion`: `tool_use_id` (string, always), `questions` (array of `webQuestionItem`, always).
 
@@ -259,8 +278,12 @@ field set, same json tags as the old `questions.yaml` record it replaces):
 | `addressed_at` | string | omitempty | RFC3339 timestamp, server-stamped alongside `addressed` |
 
 `webThread` (one `threads` row, `store.Thread`'s board-facing subset — a side
-thread is a fork of zeus' session running as a second claude in its own tmux
-window of the same cell):
+thread is a fork of zeus' session, of one of two kinds: a **pane** thread runs
+as a second claude in its own tmux window of the same cell; a **headless**
+thread (an "ask thread") has no window and runs one `claude -p` per question,
+read-only, and may be opened from another node — see `POST /api/node/action`.
+`kind` says how a thread runs and `role` says what it is for; they are
+independent, except that a headless thread is always `role: "ask"`):
 
 | key | type | optionality | notes |
 |---|---|---|---|
@@ -272,6 +295,10 @@ window of the same cell):
 | `role` | string | always | `ask` (an ordinary side thread — every row branched before schema v33 reads back as `ask`) \| `mind` (the job's mind thread, branched by `POST /api/mm/capture`: the one thread allowed to write the operator's mental model). Clients show a `mind` chip. Additive |
 | `created_at` | number | always | unix millis the thread was branched |
 | `closed_at` | number | omitempty | unix millis the thread was closed; absent (0) while live |
+| `kind` | string | always | `pane` \| `headless` (schema v36). Every thread from before headless threads existed is `pane`, in either role. A headless thread never has a `pane`; `closed` means it was closed, not that a window died. Not to be confused with `role`'s `ask`, which a pane thread carries too. Additive |
+| `origin` | object | omitempty | who opened a headless thread: `{"node_id": string, "label": string, "login": string}` — the node's tailscale stable id and label and the person's login, all three always present once the object rides. Absent when the row names nobody (every pane thread). Compare `node_id` with the board's own `node_id` to tell this node's threads from another node's. Additive |
+| `answering` | bool | omitempty | `true` while a question is in flight on a headless thread; absent otherwise. Additive |
+| `note` | string | omitempty | the last ask run's failure line (`ask failed: …`, `ask timed out after 5m0s`, `ask cancelled`, `answer interrupted — kraken serve restarted`); absent after a clean answer. Additive |
 
 The provenance columns — `session_id`, `parent_session`, `fork_uuid`, `seed`,
 `cwd` — and the tmux window target deliberately never ride the board poll;
@@ -826,27 +853,55 @@ Every side-thread mutation, one body shape across all five ops
 | `op` | string | required | `branch` \| `kill` \| `revive` \| `rename` \| `send` |
 | `tid` | string | required for `kill`/`revive`/`rename`/`send` | |
 | `title` | string | required for `branch`/`rename` | |
-| `text` | string | required for `send`; optional for `branch` | |
+| `text` | string | required for `send` and for a headless `branch`; optional for a pane `branch` | |
 | `model` | string | optional for `branch`, ignored by every other op | `haiku` \| `sonnet` \| `opus` \| `fable` — the tier the new thread's claude runs on, matched EXACTLY (not trimmed, not case-folded). Omit or send `""` for the pre-existing behaviour: the job's own `model`, then kraken's default. Anything else is a 400. The web board's branch overlay sends it; the iOS client has no picker, which is why `ThreadActionRequest` in Models.swift carries no `model` field |
 | `role` | string | optional for `branch`, ignored by every other op | `ask` (default when omitted or `""`) \| `mind`, matched exactly; anything else is a 400 `bad role — want ask or mind`, nothing spawned. Stored on the row and kept across a `revive`. Clients normally reach a mind thread through `POST /api/mm/capture` rather than this field |
+| `headless` | bool | optional for `branch`, ignored by every other op | how the thread runs, independent of `role`. With `role` `ask` (or omitted): absent or `true` opens a **headless** thread, `false` a **pane** thread exactly as before headless threads existed. With `role` `mind`: absent or `false` (a mind thread is always a pane); `true` is a 400 `a mind thread cannot be headless`. Additive |
 
-- **`branch`** — `{slug, op:"branch", title, text?, model?}`: forks zeus' session
+- **`branch`** (headless, the default for `role` `ask`) — `{slug, op:"branch", title, text, model?, headless?: true}`:
+  opens a headless thread whose origin is this node and asks `text` as its
+  first question: one `claude -p` process forks zeus' session under a
+  brand-new session id, with read-only tools (Read, Grep, Glob, WebFetch,
+  WebSearch) and the cell's worktree as its cwd, and the question on stdin.
+  The reply comes as soon as the process has started, with the row's
+  `answering` true; the answer lands in the thread's transcript
+  (`GET /api/thread/read`). `text` is REQUIRED here (400 `missing text`). A
+  title over 120 characters (after trimming) is 400 `<slug>: ask title is too
+  long (max 120 characters)`, and a question over 16384 bytes is 400 `<slug>:
+  ask question is too long (max 16 KB)` — the same two bounds on every route
+  that asks or sends. Further refusals: the pane branch's own (no live cell,
+  no forkable zeus, bad model). The 5-thread cap (409 `ask thread cap reached
+  — close one first`) counts only live headless threads opened by OTHER
+  nodes and binds only them, so another node can never block the owner's own
+  branches.
+- **`branch`** (pane) — `{slug, op:"branch", title, text?, model?, role?, headless:false}` (or `role:"mind"` with `headless` absent): forks zeus' session
   into a new claude in a fresh window of the same cell, in the same worktree, under
   a brand-new session id. `text` is the seed prompt and is OPTIONAL — branching
   with nothing to say yet is legitimate, and the thread comes up idle. `model` is
   the thread's own tier and is likewise optional; it is stored on the row, so a
-  later `revive` comes back on the same one. This is
-  the only op whose success body carries the new `tid`.
+  later `revive` comes back on the same one. `branch` is
+  the only op whose success body carries the new `tid`, headless or not.
 - **`kill`** — `{slug, op:"kill", tid}`: kills the thread's window and marks
   the row closed. The ROW SURVIVES: its session id still locates the
-  transcript, so the conversation stays readable and revivable.
+  transcript, so the conversation stays readable and revivable. On a headless
+  thread: kills any question in flight (its note becomes `ask cancelled`) and
+  closes the row; no window is involved.
 - **`revive`** — `{slug, op:"revive", tid}`: resumes the SAME claude session
   in a fresh window (no re-fork). Refused if the thread is already live, or
-  if the job's cell is gone — reactivate the job first.
+  if the job's cell is gone — reactivate the job first. On a headless thread:
+  reopens the row only (nothing is spawned until the next `send`); refused
+  with `thread <tid> of <slug> is already live` on a live one, and with the
+  5-thread cap's 409 when the thread was opened by another node and that
+  node's share of the cap is full.
 - **`rename`** — `{slug, op:"rename", tid, title}`: retitles the row; never
   touches the pane, so it works on closed threads too.
 - **`send`** — `{slug, op:"send", tid, text}`: types a message into the live
-  thread's pane, through the same verify-before-acting guard `k s` uses.
+  thread's pane, through the same verify-before-acting guard `k s` uses. On a
+  headless thread: asks `text` as this node's operator by resuming the
+  thread's own session headlessly, replying `{"ok": true}` as soon as the run
+  has started (before the answer exists); 409 `store: thread is already
+  answering` while a question is in flight, 409 `store: thread is closed` on a
+  closed one.
 
 Response: `{"ok": true}`, plus `"tid"` on a `branch`. Errors: 400 for a
 missing required field, an unrecognized `op` (the message names every valid
@@ -878,11 +933,15 @@ Response:
 |---|---|---|---|
 | `blocks` | array | always | the tail blocks, oldest-first; `[]`, never `null` |
 | `counted` | number | always | non-tool blocks counted toward `n` (same meaning as `/api/peers/read`) |
-| `live` | bool | always | the row is `live` AND still has a pane — i.e. there is somewhere to send to; gate the composer on this |
+| `live` | bool | always | the row is `live` AND either still has a pane or is a headless thread — i.e. there is somewhere to send to; gate the composer on this |
 | `pane` | string | always | the live thread's pane (`""` when closed) — feed it to `/api/peers/capture` to mirror the window |
 | `fork_uuid` | string | always | the transcript uuid the fork hangs off (`""` when none was recorded) |
 | `source` | string | always | `transcript` when the fork's transcript was readable, `none` when there is nothing to read yet |
 | `session` | string | always | the thread's OWN claude session id (`""` before one is recorded) — what a mind-button capture of one of this thread's blocks sends as the transcript source's `session`. Additive (schema v33) |
+| `kind` | string | always | `pane` \| `headless`, as on `webThread`. Additive |
+| `answering` | bool | always | `true` while a headless thread has a question in flight; poll until it clears. Additive |
+| `note` | string | always | the last ask run's failure line, `""` when none (see `webThread.note`). Additive |
+| `origin` | object | omitempty | as on `webThread`: `{"node_id", "label", "login"}`, absent when the row names nobody. Additive |
 
 Each block is `/api/peers/read`'s shape — `kind` (string, always:
 `user`\|`text`\|`thinking`\|`tool`\|`teammate`), `text` (string, always),
@@ -1768,6 +1827,31 @@ Errors: 400 `missing slug` (the query parameter absent or empty), 404 for an
 unknown slug. A GET is a read, so it stays reachable under `--mirror`.
 **Additive, no contract bump.**
 
+### `POST /api/job/stack`
+
+The cell's write of its STACK LINKS — the URLs of whatever it spun up for manual testing — reached only through the `kraken stack add|rm|clear` cell verb (cmd/kraken/cmd_stack.go). Its own one-field route for `/api/job/load`'s reasons (written on a LIVE cell, never through the full-replace form save), and PER-OP for `/api/job/goal`'s: a client sends what it wants changed, never the list it believes is current.
+
+Request: `{"slug": string, "op": "add" | "remove" | "clear", "url": string, "label": string}`.
+
+- `op: add` needs `url`, which must parse with scheme `http` or `https`, a non-empty host and no userinfo (400 `bad url: …` naming the rule otherwise). Re-adding a url the job already has UPDATES its label and keeps its `status` and `at`. The ninth distinct url is a 400 naming the cap (8 per job). `label` is optional, one-lined and truncated at 24 runes rather than refused. Refused 409 when the job has never started or is done — there is no cell to link a stack to.
+- `op: remove` needs a token in `url`: matched against each link's url first, then its label; nothing matched is a 404.
+- `op: clear` takes neither and is a 200 even on an empty list.
+- The body is decoded with **unknown fields rejected**: `slug`, `op`, `url`, `label` and nothing else.
+
+Response: `{"ok": true}`. The list rides back on the next `/api/board` poll (`webJob.stack`).
+
+Errors: 400 (bad json; an unrecognized field; a missing or unknown `op`; `add` without `url` or with a refused url; `remove` without a token; the per-job cap), 404 (no such job, or `remove` of a token no link matches), 409 (`add` on a draft or done job), 413 (body over 1 MiB), 500 (write failed). Gated under `--mirror` with the standard plain-text 403; 405 is served by the route for any method but GET and POST.
+
+Like `/api/job/load`, the write bumps NEITHER the job's `rev` NOR `updated_at`. Rows are deleted at cell teardown (`teardownCell`), so a done or reactivated job carries none. **Additive, no contract bump.**
+
+### `GET /api/job/stack?slug=`
+
+zeus-side read through the `kraken stack get` cell verb; the clients read `webJob.stack` on `/api/board` instead.
+
+Response: `{"stack": [jobStackLink]}` — always an array, **empty** (never null) for a job with no links, in registration order.
+
+Errors: 400 `missing slug`, 404 for an unknown slug. A read, so it stays reachable under `--mirror`. **Additive, no contract bump.**
+
 ### `GET /api/job/list`
 
 The Slack intake bot's read of what jobs exist right now — iris polls it to answer "is there already a job about this?" before drafting a new one. Not consumed by the iOS app or the web UI, both of which read the whole job objects from `/api/board`; this route exists because an agent's context cannot afford that payload for a question one line per job answers.
@@ -1825,6 +1909,132 @@ board, and nothing here reaches that. The route's remaining job is to keep
 iris out of the fields kraken owns.
 
 Other errors: 405 (non-POST), 409 (slug taken by a concurrent create), 413 (body over 1 MiB), 500 (no store wired; the write failed; or — on the create path only — the job WAS created and then its reload failed, in which case the error text says so explicitly). Gated under `--mirror` with the standard plain-text 403. **Additive, no contract bump.**
+
+### `POST /api/job/visibility` → `{"ok": true}` (api/jobvisibility.go `webJobVisibility`)
+
+Body `{"slug": string, "visibility": "private"|"readonly"|"public"}`. Sets who on the tailnet may see or drive the job: **private** never leaves this machine, **readonly** (the default, and what every job created before v7 reads) is visible to every node and drivable by none, **public** may be driven by any node. A one-field route for `/api/job/color`'s reasons: it works on a live (working/blocked) job, and the form save never writes the field. Errors: 405 non-POST, 413 body over 1 MiB, 400 `bad json`, 400 `{"error":"unknown visibility <v>"}` (anything but the three lowercase words), 404 `no such job`, 500 write failed. Not mirror-gated (it writes a row and types nothing). The same level is hand-authorable as a `visibility:` line in the job text and rides every card as `webJob.visibility`.
+
+---
+
+## Nodes and pairing
+
+Every `kraken serve` on the tailnet is a **node**. A node finds its siblings through `tailscale status`, polls their card lists into its `nodes` table, and serves them on its own board as cards carrying an `owner`. A phone binds to exactly one node by a pairing password that is proven, never sent. The **request gate** (`api.Gate`, wrapping the mux both listeners serve) classifies every request into a tier and refuses a route whose floor is above it with `401 {"error":"unauthorized"}`:
+
+| Tier | Recognised by | Reaches |
+|---|---|---|
+| owner | loopback, or one of this host's own interface addresses | everything |
+| paired | `Authorization: Bearer <token>`, or the cookie `kraken_pair=<token>` (for `<img>`/`<iframe>`/WKWebView loads), whose SHA-256 matches a paired device | everything except `/api/pair/password`, `/api/pair/devices`, `/api/editor/open` |
+| node | any other tailnet device (tailscale status, else `tailscale whois`) | `/api/health`, `/api/node*`, `GET /api/nodes`, `/api/pair/challenge`, `POST /api/pair`, the SPA shell and assets |
+| anon | anything else | `/api/health` |
+
+A route with no policy entry under `/api/` is owner-only (fail closed). Past the tier check, the gate answers every `POST` under `/api/` that does not carry `Content-Type: application/json` with `415 {"error":"content-type must be application/json"}` — on every tier, owner included — except the two multipart uploads, `POST /api/upload` and `POST /api/background`. A JSON POST is never a CORS simple request, so a page on another origin cannot send one without a preflight this server never grants; without the rule, a script in any page could fire a text/plain POST at loopback and have it run as owner. The JSON rule alone does not cover the two multipart uploads, so the gate also answers any `POST` whose `Origin` header is present and is not this server's own (`http://<Host>`; the literal `null` an opaque-origin frame sends counts as foreign) with `403 {"error":"cross-origin post refused"}`, checked before the 415. A request with no `Origin` passes — the app, the CLI and the cell hooks send none. Every gate refusal (401, 403, 415) carries `X-Content-Type-Options: nosniff`. The app sends the bearer on every JSON call and installs the same token as the `kraken_pair` cookie for artifact and image loads. A 401 means "not paired (any more)": clear the stored record and show the pair screen.
+
+Wire additions on existing shapes (all additive):
+- `webJob.visibility` — string, always present: `private`|`readonly`|`public` (readonly when the job never set one).
+- `webJob.owner` — object, **absent on every local card**: `{"node_id": string, "label": string, "operator": string, "online": bool}` naming the node a remote card runs on. A card's identity is owner plus slug — two nodes can each have a `dream-2026-10-20`.
+- A remote card's `artifacts[].url` is always THIS node's proxy URL, `/api/nodes/artifact?node=<node_id>&slug=<slug>&name=<name>` (`name` last, so a `.html` name still ends the URL); the URL the owner served is never passed on, and an artifact with a blank name is dropped.
+- `webBoard.nodes` — array of `webNode` (below, without `jobs`), **absent** when the registry is empty (every single-machine kraken).
+- Under `KRAKEN_NODES=off` both `nodes` and every owner-chipped card are absent, whatever the registry holds.
+
+`webNode`: `{"node_id": string, "label": string, "operator": string, "dns_name": string, "ip": string, "port": int, "build": string, "contract": int, "online": bool, "last_ok": int (unix millis, 0 = never), "last_err"?: string, "jobs"?: [webJob]}` — `jobs` only on `GET /api/nodes`, and only for a node that has been polled.
+
+`NodeEnvelope` (a node's self-description): `{"node_id": string (tailscale stable id; "" when tailscale is unreadable), "label": string, "operator": string, "dns_name": string, "ips": [string] (never null), "port": int, "build": string, "contract": int}`.
+
+### `GET /api/node` (node tier) → `NodeEnvelope`
+
+The probe target a sibling's discover pass hits. `404 {"error":"fleet off"}` when this machine set `KRAKEN_NODES=off`.
+
+### `GET /api/node/jobs` (node tier) → `{"node": NodeEnvelope, "jobs": [webJob]}`
+
+This node's non-archived **readonly** and **public** cards — a private card is absent, not blanked. Each is the board's own card object minus exactly two keys: `owner` (the receiver stamps it from its registry) and `account` (the binding names this machine's pool login, which means nothing on another machine). Everything else rides as built — `feedback`, `tokens`, `threads`, `doc_questions`, `artifacts`, `prs`, `load`, `goals`/`goal`, `question`, `roster`, `detail`, `last_sent`, `color`, `visibility`. The `artifacts[].url` values are the OWNER's (`/api/artifact/<slug>/<home>/<name>`); a receiving board rewrites each to its own `/api/nodes/artifact?node=&slug=&name=` and never serves the owner's URL onward. `jobs` is `[]` under `KRAKEN_NODES=off`.
+
+Readonly and public are READ alike on every node route below; only `POST /api/node/action` tells them apart, and its three ask-thread actions (`thread-ask`, `thread-send`, `thread-kill`) are admitted on both. The owner-only writes (feedback, doc-question answers, pane threads and every other thread op, goals, rename, visibility, uploads, the mental model) have no node route on any visibility. Visibility is read from the store on every request, so a flip to private refuses everything that arrives after it.
+
+### `GET /api/node/job?slug=` (node tier) → `{"job": webJob, "artifacts": [string], "question"?: webQuestion}`
+
+One readonly or public card (as in `/api/node/jobs`), its artifact names, and its pending AskUserQuestion when there is one. A private, archived or unknown slug all answer the identical `404 {"error":"no such job"}`.
+
+### `GET /api/node/job/raw?slug=` (node tier)
+
+`GET /api/job/raw`'s exact body (`{"slug","content","mtime","editable"}`) for a **readonly or public** job. `editable` is the owner's local rule; whether a client offers a save is its own remote mode's business (a save is an action, public only). `405` for anything but GET; 404 `no such job` for private, unknown, archived, an empty slug, or under `KRAKEN_NODES=off`.
+
+### `GET /api/node/read?slug=&n=` (node tier)
+
+A readonly or public cell's last `n` zeus transcript blocks (default 5, clamped 1–50), `/api/peers/read`'s shape: `{"blocks": [{"kind": string, "text": string, "from"?: string}], "counted": int}`. 404 as above; `409 {"error":"<slug> has no live zeus"}` when the cell has no live zeus.
+
+### `GET /api/node/artifact?slug=&name=` (node tier) → bytes
+
+One artifact of a readonly or public job. Refusals, in order: `405 {"error":"GET only"}` for anything but GET; 404 `no such job` (as above); `404 {"error":"no such artifact"}` when `name` is blank, is not EXACTLY the `name` of one entry of the owner's own artifact list for that job, or cannot be read — and, for a live cell, when any segment of the path is a symlink or the last is not a regular file. An artifact larger than 16 MB is `413 {"error":"artifact over 16 MB"}` and is never read whole; exactly 16 MB is served. That is the same bound the receiving node's relay applies. The bytes come from the same source the list did — the live cell's artifacts dir, else the artifacts table. EVERY reply, refusals included, carries `X-Content-Type-Options: nosniff` and `Cache-Control: no-store`; when the requested `name` is html or svg (`text/html`, `image/svg+xml`) every reply also carries `Content-Security-Policy: sandbox` (no `allow-scripts`, no `allow-same-origin`: another node's page renders with no script at all, in an opaque origin). Any other name — a PDF, an image — gets no CSP, since it cannot script and a browser's built-in PDF viewer can refuse to load inside a sandboxed document. A 200 adds `Content-Type` from the name's extension (the board's artifact mapping) and the bytes verbatim. Not mirror-gated.
+
+### `GET /api/node/transcript?slug=&n=&turns=` (node tier)
+
+`GET /api/job/transcript`'s exact reply (`{"session": string, "blocks": [...]}`, its own 500 included) for a readonly or public job, `n` and `turns` passed through when given. `405` for anything but GET; 404 `no such job` as above. Not mirror-gated.
+
+### `GET /api/node/thread/read?slug=&tid=&n=` (node tier)
+
+`GET /api/thread/read`'s exact reply for one side thread of a readonly or public job, `tid` and `n` passed through when given. `405` for anything but GET; 404 `no such job` as above; then that route's own `400 {"error":"missing tid"}` and `404 {"error":"unknown thread"}` (a `tid` of another job's thread is `unknown thread`). Not mirror-gated.
+
+### `POST /api/node/announce` (node tier) → `NodeEnvelope`
+
+Body: the sender's `NodeEnvelope`. Records (upserts) the sender under the address the request came from — the body's `ips` are not used — and replies with this node's envelope. Refusals, in order: 400 when `node_id` is empty; 200 with nothing recorded when `node_id` is this node's own; `403 {"error":"node id does not match caller"}` unless the caller's tailnet identity is exactly `node_id` (a device may announce only itself); `400 {"error":"port must be 1..65535"}`; `404 fleet off` under `KRAKEN_NODES=off`. Mirror-gated (plain-text 403).
+
+### `POST /api/node/action` (node tier)
+
+Body `{"slug": string, "action": string, "payload": object, "from": {"cell": string}}`. Drives a **public** cell from another node (or asks in a readonly one — the ask-thread actions below). Order of refusals: 404 `no such job` (unknown or private), `403 {"error":"not public"}` (visibility read from the store at request time; skipped for the three ask-thread actions), `400 unknown action` (anything but `steer`, `question`, `kill`, `done`, `submit`, `archive`, `color`, `save`, `stop` and the three ask-thread actions), `400 bad payload` for a payload that does not decode. Each action runs the handler the local route runs and replies exactly what it replies:
+
+| action | payload | local route |
+|---|---|---|
+| `steer` | `{"text"}` | `/api/steer`, the text prefixed `[from <label> · <login>]` — or `[from <label> · cell <slug>]` when `from.cell` is set — with the label taken from the registry row bound to the caller's tailnet identity (else its tailnet device name, else its address), never from the body or a row matched by address |
+| `question` | `{"text": "<digit>"}` | `/api/question` |
+| `kill` `done` `submit` `archive` `stop` | none | `/api/kill` `/api/done` `/api/queue` `/api/archive` `/api/stop` |
+| `color` | `{"color"}` | `/api/job/color` |
+| `save` | `{"content", "mtime"}` (a `text` key is ignored) | `/api/job/save` |
+
+**Ask-thread actions** — `thread-ask`, `thread-send`, `thread-kill` — are admitted on a **readonly or public** cell alike: after the 404 above they skip the `not public` 403 entirely. They open and drive **headless** threads only (`kind: "headless"`, always `role: "ask"`). The thread's origin is the caller's verified tailnet identity — `{"node_id": <caller's tailscale stable id>, "label": <the steer prefix's label>, "login": <caller's login>}` — never anything in the body. A headless thread opened this way has NO tools at all and runs with the cell dir as its cwd. A question another node sends runs with NO tools even in a thread the owner opened (whose cwd stays the worktree): the read-only tools apply only when both the thread and the question are the owner's own. Every question is stamped `[from <label> · <login>]` (`[from <label>]` when the caller's login is unknown) on stdin, and any line of the question itself that begins with `[from` is prefixed `· `, so it cannot pass for a stamp. A question not both opened and sent by the owner also has every `@` rewritten to `＠` (U+FF20), so it cannot `@`-mention a file, and the `[from …]` stamp's label and login are rewritten the same way on every run. The origin's label and login are truncated to 120 runes. Each success invalidates the board cache and logs a `node-action` event naming the action, slug and sender label (never the text).
+
+| action | payload | behaviour and refusals |
+|---|---|---|
+| `thread-ask` | `{"title", "text", "model"?}` | 400 `missing title` / `missing text` on blanks; 400 `bad model — want haiku, sonnet, opus or fable` for a `model` outside the four aliases (omitted: the job's `model`, then kraken's default); 400 `<slug>: ask title is too long (max 120 characters)` / `<slug>: ask question is too long (max 16 KB)`; then the local headless `branch`'s refusals (409 with jobs' own message, e.g. the 5-thread cap — at most 5 live headless threads opened by other nodes per job — or no live cell). Success `{"ok": true, "tid": "<tid>"}`, returned as soon as the first run has started |
+| `thread-send` | `{"tid", "text"}` | 400 `missing tid` / `missing text`; 400 `<slug>: ask question is too long (max 16 KB)`; 404 `unknown thread`; 409 for a pane thread, a closed thread (`store: thread is closed`), a question already in flight (`store: thread is already answering`) or no live cell. Any caller may send into any headless thread. Success `{"ok": true}` before the answer exists |
+| `thread-kill` | `{"tid"}` | 400 `missing tid`; 404 `unknown thread`; `409 {"error":"thread <tid> of <slug> is a pane thread — only its owner can close it"}`; `403 {"error":"not your thread"}` unless the thread's `origin.node_id` is the caller's own; then the local `kill` (stops any run in flight, closes the row). Success `{"ok": true}` |
+
+Mirror-gated (plain-text 403).
+
+### `GET /api/nodes` (node tier) → `{"nodes": [webNode]}`
+
+The registry with each node's stored card list in `jobs`. Node tier so an unpaired phone can fan its pairing out from the registry its seed serves. `nodes` is `[]` when empty, and `{"nodes":[]}` under `KRAKEN_NODES=off`. Each node's `jobs` is re-encoded card by card as the board shows them: no `owner` or `account`, and every `artifacts[].url` rewritten to this node's `/api/nodes/artifact?node=&slug=&name=`. Online nodes first, then by label.
+
+### `POST /api/nodes/action` (paired)
+
+Body `{"node": string (node_id), "slug": string, "action": string, "payload": object}`. Forwards to that node's `POST /api/node/action`, setting `from.cell` from the request's `X-Kraken-From-Cell` header (the CLI sets it inside a cell from `KRAKEN_JOB_SLUG`), and relays the sibling's status and JSON body, always as `application/json` with `X-Content-Type-Options: nosniff`. A sibling 401 is relayed as `502 {"error":"<label> did not recognise this node"}` (never as a 401, which a client would read as its own gate) and a non-JSON body as `502 {"error":"<label> answered non-JSON"}`, `<label>` being the node's label or else its id; a transport error is `502 {"error": "<transport error>"}`; 404 `no such node`. Timeout 5 s (60 s for `submit`, 30 s for `thread-ask`, whose far side runs a discovery pass and starts a process before answering; `thread-send` and `thread-kill` take the 5 s default). Mirror-gated (plain-text 403).
+
+### `GET /api/nodes/job/raw?node=&slug=`, `GET /api/nodes/read?node=&slug=&n=`, `GET /api/nodes/transcript?node=&slug=&n=&turns=`, `GET /api/nodes/thread/read?node=&slug=&tid=&n=` (paired)
+
+The same relay (JSON-forced, 401/non-JSON → 502; `405` for anything but GET; 404 `no such node`) to the sibling's `/api/node/job/raw`, `/api/node/read`, `/api/node/transcript` and `/api/node/thread/read`, forwarding only the listed parameters that are non-empty. Not mirror-gated.
+
+### `GET /api/nodes/artifact?node=&slug=&name=` (paired) → bytes
+
+The URL every remote card's `artifacts[].url` carries. Refusals, in order: `405 {"error":"GET only"}`; `404 {"error":"no such node"}`. Forwards to the sibling's `GET /api/node/artifact?slug=&name=` (timeout 15 s). Every reply carries `X-Content-Type-Options: nosniff` and `Cache-Control: no-store`, the 405/404/502s included, plus `Content-Security-Policy: sandbox` exactly when `name` is html or svg (the `/api/node/artifact` rule above). A sibling 200 is served with status 200, `Content-Type` computed HERE from `name`'s extension (the sibling's header is never read), and the body verbatim; a body over 16 MB is `502 {"error":"<label> answered more than 16 MB"}` (exactly 16 MB passes), and the owner's `/api/node/artifact` refuses such an artifact itself with `413 {"error":"artifact over 16 MB"}`, which is relayed as is. So an artifact larger than that (a big rendered page, a video) is viewable on its owner's own board but not from another node; a sibling 401 is `502 {"error":"<label> did not recognise this node"}`; any other sibling status is relayed as JSON when its body is JSON, else `502 {"error":"<label> answered non-JSON"}`; a transport error is `502 {"error": "<transport error>"}`. Not mirror-gated.
+
+### `POST /api/pair/password` (owner) → `{"ok": true, "revoked": int}`
+
+Body `{"password": string}`. A non-empty password under 12 characters is `400 {"error":"password must be at least 12 characters"}`. A valid one replaces the stored verifier (a fresh 16-byte salt, `PBKDF2-HMAC-SHA256(password, salt, 600000, 32)`); an empty one clears it. **Either way every paired device is revoked**; `revoked` is how many. Mirror-gated (plain-text 403).
+
+### `GET /api/pair/challenge` (node tier) → `{"node_id", "label", "salt", "iters", "nonce"}`
+
+`salt` and `nonce` are base64url without padding; `nonce` is 16 random bytes, single use, valid 60 s. `409 {"error":"no pairing password set"}` when none is set; 429 when the caller already holds 20 live nonces.
+
+### `POST /api/pair` (node tier) → `{"token", "node_id", "label"}`
+
+Body `{"nonce": string, "proof": string, "device_label": string}` where `proof = base64url(HMAC-SHA256(K, nonce_bytes ‖ node_id ‖ device_label))` and `K = PBKDF2-HMAC-SHA256(password, salt, iters, 32)` from the challenge. On a match the node mints a 32-byte token (base64url), stores only its SHA-256 with the device label (≤ 120 characters) and the caller's tailnet device name, and returns it **once**. Refusals: `429 {"error":"too many attempts"}` (5 per minute per address; 10 failures lock the address out for 10 minutes), 409 no password set, `401 {"error":"no match"}` for a spent/expired/unknown nonce or a wrong proof.
+
+### `POST /api/pair/revoke` (paired) → `{"ok": true}`
+
+Body `{"id"?: int}`. A paired caller with no `id` (or its own) revokes itself — the app's Log out. The owner revokes any device by `id` (404 when none; 400 when `id` is missing). A paired caller naming another device's `id` is 401.
+
+### `GET /api/pair/devices` (owner) → `{"devices": [{"id": int, "label": string, "tailnet_name": string, "created_at": int, "last_seen_at": int, "last_ip": string}]}`
+
+Oldest first; `devices` is `[]` when none. Times are unix millis.
 
 ---
 
@@ -2440,7 +2650,8 @@ Response (200):
 Errors: 405 (non-POST), 404 (missing/unknown `slug`), 413 (file exceeds
 10MB, or total body exceeds the 11MB ceiling), 415 (file doesn't sniff as
 PNG/JPEG/GIF/WebP), 400 (malformed multipart form, or missing `file`), 500
-(write failure).
+(write failure), and 403 from the gate for a browser POST with a foreign
+Origin (see Nodes and pairing).
 
 ### `GET /api/upload/<slug>/<name>` (web/serve.go)
 
@@ -2468,7 +2679,8 @@ how a client learns one is set without ever pulling the bytes.
   wired.
 - **POST** — `multipart/form-data` with a single `file` field; same 10MB
   cap, 11MB body ceiling, and content-sniffed PNG/JPEG/GIF/WebP allow-list
-  as `POST /api/upload`, and the same error statuses (413/415/400/500).
+  as `POST /api/upload`, and the same error statuses (413/415/400/500, and
+  403 from the gate for a browser POST with a foreign Origin).
   Replaces any previous background. Response (200): `{"ok": true,
   "updated_at": <unix millis>}`.
 - **DELETE** — removes the background (the plain board is the fallback).

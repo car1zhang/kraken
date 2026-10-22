@@ -83,7 +83,7 @@ func TestLastTurnUUIDSurvivesLongTurnsAndHarnessRecords(t *testing.T) {
 	if got := LastTurnUUID(path); got != "u-prompt" {
 		t.Fatalf("LastTurnUUID = %q, want u-prompt (past a 4 MB turn, with seven harness records after it)", got)
 	}
-	// a skill invocation (`/do`, `/pr`) is carl's prompt and starts a turn
+	// a skill invocation (`/do`, `/aim`) is carl's prompt and starts a turn
 	lines = append(lines, `{"type":"user","uuid":"u-do","message":{"content":"<command-message>do</command-message>\n<command-name>/do</command-name>"}}`)
 	path = writeTranscript(t, lines...)
 	if got := LastTurnUUID(path); got != "u-do" {

@@ -92,9 +92,15 @@ func TestScanStageSignalShapes(t *testing.T) {
 		// silently resolving prose-adjacent bodies.
 		{"relative-path command body ignored", []string{commandLine(t, "../do")}, ""},
 		{"trailing-slash command body ignored", []string{commandLine(t, "/do/")}, ""},
-		{"read of worktree skill", []string{readToolLine(t, "/Users/x/.kraken/cells/foo-1/wt-kraken/.claude/skills/pr/SKILL.md")}, "pr"},
+		{"read of worktree skill", []string{readToolLine(t, "/Users/x/.kraken/cells/foo-1/wt-kraken/.claude/skills/do/SKILL.md")}, "do"},
 		{"read of shadowing personal skill", []string{readToolLine(t, "/Users/x/.claude/skills/info/SKILL.md")}, "info"},
-		{"last signal wins across shapes", []string{commandLine(t, "/aim"), skillToolLine(t, "do"), readToolLine(t, "/wt/.claude/skills/pr/SKILL.md")}, "pr"},
+		{"last signal wins across shapes", []string{commandLine(t, "/aim"), skillToolLine(t, "info"), readToolLine(t, "/wt/.claude/skills/do/SKILL.md")}, "do"},
+		// `pr` folded into `do` (job 624): the PR is do's own last step, so
+		// there is no pr skill, no pr stage, and an older transcript's Read of
+		// pr/SKILL.md neither badges `pr` nor clears the `do` it was in.
+		{"retired pr skill is not a stage", []string{readToolLine(t, "/wt/.claude/skills/pr/SKILL.md")}, ""},
+		{"retired pr read does not clear do", []string{commandLine(t, "/do"), readToolLine(t, "/wt/.claude/skills/pr/SKILL.md")}, "do"},
+		{"typed /pr is not a stage", []string{commandLine(t, "/do"), commandLine(t, "/pr")}, "do"},
 		{"non-pipeline skill ignored", []string{skillToolLine(t, "claude-api")}, ""},
 		{"load is not a stage", []string{skillToolLine(t, "aim"), readToolLine(t, "/wt/.claude/skills/load/SKILL.md")}, "aim"},
 		// A typed /handoff (carl's, or the daemon's auto-handoff) arrives on

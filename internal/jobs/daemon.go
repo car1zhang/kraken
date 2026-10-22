@@ -316,7 +316,10 @@ type daemonState struct {
 	// the active board, whose slugs are unique), with the same freed-slug
 	// hazard closed by prunePRScan.
 	PRScan map[string]int64
-	tickN  int
+	// nodes is the fleet pass' per-process memory (nodes.go): failure counts,
+	// the last announced envelope, and its single-flight flag.
+	nodes NodesState
+	tickN int
 	// offline: in-memory only, like the dedup maps above — losing it on
 	// restart just costs one duplicate "offline" notification. Set while
 	// probeOnline fails so auto-retry pokes are suppressed instead of eaten
@@ -915,7 +918,7 @@ func (d *daemonState) tick(mirror bool) (int, error) {
 				key := "blocked:" + j.Slug
 				if d.Notified[key] == 0 {
 					if !mirror {
-						notify("kraken ⏸ "+j.Slug, "blocked — see the board")
+						notify("kraken ⏸ "+j.Slug, blockedNotifyBody(jobQuestionRows(j)))
 					}
 					d.Notified[key] = now.Unix()
 				}
@@ -987,6 +990,13 @@ func (d *daemonState) tick(mirror bool) (int, error) {
 		// this block.
 		for _, j := range jobs {
 			autoHandoffPass(ActiveStore(), j, all, live, now)
+		}
+		// stack probe (its own pass, same per-tick cadence): dial each live
+		// cell's loopback stack links and stamp up/down on change
+		// (stackprobe.go). It writes rows a mirror board must not, which is
+		// why it sits in this block; it types into no pane.
+		for _, j := range jobs {
+			stackProbePass(ActiveStore(), j, live, now)
 		}
 		// usage-limit rescue (its own pass, same per-tick cadence): a cell
 		// whose claudes hit their account's usage limit is REBOUND to a
@@ -1105,6 +1115,14 @@ func (d *daemonState) tick(mirror bool) (int, error) {
 	// TYPES INTO A LIVE PANE.
 	if !mirror {
 		LinearPass(now)
+	}
+
+	// the fleet (nodes.go): discover sibling krakens on the tailnet, announce
+	// this one, poll their card lists. Skipped under mirror because it writes
+	// the registry and, by announcing, tells every sibling that this process
+	// is a node — a sandbox serve must never present itself as the machine's.
+	if !mirror {
+		d.nodesPass(now)
 	}
 
 	// usage poll (throttled, first-tick eager so UIs have data right after
@@ -1525,7 +1543,7 @@ func mergeBumpWanted(j *Job, live map[string]bool) bool {
 // stopped at a gate for a LATER PR must not read "continue" as that gate
 // opening.
 func mergeBumpMessage(url string) string {
-	return prWatchPrefix() + " " + url + " has MERGED into its base branch. That branch is finished: do not push to it, re-run its checks, or report it as awaiting checks or review. Any further change starts on a fresh branch recycled off origin/main (the pr skill's recycle step). If this PR completed the job's work, say so in your closing message and stop; if not, continue and open the follow-up from the recycled branch. Any gate you are stopped at still holds — this notice does not answer it."
+	return prWatchPrefix() + " " + url + " has MERGED into its base branch. That branch is finished: do not push to it, re-run its checks, or report it as awaiting checks or review. Any further change starts on a fresh branch recycled off origin/main (the recycle step in do/SKILL.md's cell section). If this PR completed the job's work, say so in your closing message and stop; if not, continue and open the follow-up from the recycled branch. Any gate you are stopped at still holds — this notice does not answer it."
 }
 
 // prWatchPrefix opens EVERY message the PR watcher types into a pane. It is
@@ -1876,6 +1894,19 @@ func (d *daemonState) repairPRs(j *Job, all []*core.Peer) {
 				if _, statErr := os.Stat(transcript); statErr == nil {
 					vouchedOK = true
 					for _, url := range transcriptPRURLs(transcript, prefix) {
+						createVouched[url] = true
+					}
+					// A PR of another repo that the spec names was attached on
+					// purpose (api/prattach.go's carve-out); the transcript scan
+					// above is narrowed to the job's own repo and can never
+					// vouch for it, so it would be dropped here on the first
+					// pass after every restart. The own-repo exclusion needs the
+					// NORMALISED prefix (githubPrefix: userinfo stripped), not the
+					// raw one the transcript scan uses — a `user@github.com/o/r`
+					// origin would otherwise never match its own PRs and the
+					// exclusion would silently admit them.
+					own, _ := githubPrefix(prefix)
+					for _, url := range specNamedPRs(j, own) {
 						createVouched[url] = true
 					}
 				}

@@ -23,6 +23,16 @@ import (
 // (Model, which every respawn re-reads so a revive comes back on the tier carl
 // picked), and the live tmux coordinates (Pane/Window) that CloseThread clears
 // and SetThreadPane records.
+//
+// Since schema v36 a row also has a Kind, which is how it RUNS and is
+// independent of Role (what it is FOR). A "pane" row is the thread described
+// above, in either role. A "headless" row (an ask thread, jobs/askthread.go)
+// never has a pane: each question runs as one `claude -p` process, so the
+// row instead carries who opened it (Origin*), whether a question is in
+// flight (Answering, flipped by ClaimThreadAnswering/FinishThreadAnswering)
+// and the last run's failure line (Note). A headless row is always Role
+// "ask". The per-job cap on live headless rows lives in jobs
+// (MaxAskThreads), not here.
 
 // Thread is one side thread. Deliberately tag-free like every other type in
 // this package: the store layer never carries JSON tags — the API layer owns
@@ -60,6 +70,21 @@ type Thread struct {
 	Role      string
 	CreatedAt int64 // unix millis
 	ClosedAt  int64 // unix millis; 0 means still live
+	// Kind is how the thread runs: "pane" (a claude in a tmux window) or
+	// "headless" (an ask thread, one process per question). A write with ""
+	// stores "pane". Orthogonal to Role, except that a headless row cannot be
+	// a mind thread (ErrThreadKind).
+	Kind string
+	// OriginNode/OriginLabel/OriginLogin name who opened the thread: the
+	// tailscale stable id and label of the node, and the login (or, for this
+	// node's own threads, jobs.Operator()). All "" on a pane row.
+	OriginNode  string
+	OriginLabel string
+	OriginLogin string
+	// Answering is true while a question is in flight on a headless row.
+	Answering bool
+	// Note is the last ask run's failure line, "" after a clean answer.
+	Note string
 }
 
 // threadIDRe / validThreadState bound the two fields this package validates
@@ -149,15 +174,20 @@ func validateThreadState(state string) error {
 const threadColumns = `job_id, COALESCE(tid,''), COALESCE(title,''), COALESCE(session_id,''),
 	COALESCE(parent_session,''), COALESCE(fork_uuid,''), COALESCE(cwd,''),
 	COALESCE(pane,''), COALESCE("window",''), COALESCE(state,''), COALESCE(seed,''),
-	COALESCE(model,''), COALESCE(role,'ask'), COALESCE(turn_uuid,''), COALESCE(created_at,0), COALESCE(closed_at,0)`
+	COALESCE(model,''), COALESCE(role,'ask'), COALESCE(turn_uuid,''), COALESCE(created_at,0), COALESCE(closed_at,0),
+	COALESCE(kind,'pane'), COALESCE(origin_node,''), COALESCE(origin_label,''),
+	COALESCE(origin_login,''), COALESCE(answering,0), COALESCE(note,'')`
 
 func scanThread(row interface{ Scan(...any) error }) (*Thread, error) {
 	var t Thread
+	var answering int64
 	if err := row.Scan(&t.JobID, &t.TID, &t.Title, &t.SessionID, &t.ParentSession,
 		&t.ForkUUID, &t.CWD, &t.Pane, &t.Window, &t.State, &t.Seed, &t.Model,
-		&t.Role, &t.TurnUUID, &t.CreatedAt, &t.ClosedAt); err != nil {
+		&t.Role, &t.TurnUUID, &t.CreatedAt, &t.ClosedAt, &t.Kind, &t.OriginNode,
+		&t.OriginLabel, &t.OriginLogin, &answering, &t.Note); err != nil {
 		return nil, err
 	}
+	t.Answering = answering != 0
 	return &t, nil
 }
 
@@ -274,6 +304,18 @@ func normalizeThread(t Thread) (Thread, error) {
 	if !validThreadRole[t.Role] {
 		return t, fmt.Errorf("bad thread role %q: want ask or mind", t.Role)
 	}
+	if t.Kind == "" {
+		t.Kind = "pane"
+	}
+	if t.Kind != "pane" && t.Kind != "headless" {
+		return t, fmt.Errorf("bad thread kind %q: %w", t.Kind, ErrThreadKind)
+	}
+	if t.Kind == "headless" && t.Role == "mind" {
+		return t, fmt.Errorf("thread %s for job %d: a mind thread cannot be headless: %w", t.TID, t.JobID, ErrThreadKind)
+	}
+	if t.Kind == "headless" && (t.Pane != "" || t.Window != "") {
+		return t, fmt.Errorf("thread %s for job %d: %w", t.TID, t.JobID, ErrAskThreadPane)
+	}
 	if t.CreatedAt == 0 {
 		t.CreatedAt = time.Now().UnixMilli()
 	}
@@ -301,11 +343,13 @@ func normalizeThread(t Thread) (Thread, error) {
 func insertThreadTx(x execer, t Thread) error {
 	res, err := x.Exec(
 		`INSERT INTO threads (job_id, tid, title, session_id, parent_session, fork_uuid,
-			cwd, pane, "window", state, seed, model, role, turn_uuid, created_at, closed_at)
-			SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+			cwd, pane, "window", state, seed, model, role, turn_uuid, created_at, closed_at,
+			kind, origin_node, origin_label, origin_login, answering, note)
+			SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
 			WHERE NOT EXISTS (SELECT 1 FROM threads WHERE job_id = ? AND tid = ?)`,
 		t.JobID, t.TID, t.Title, t.SessionID, t.ParentSession, t.ForkUUID,
 		t.CWD, t.Pane, t.Window, t.State, t.Seed, t.Model, t.Role, t.TurnUUID, t.CreatedAt, t.ClosedAt,
+		t.Kind, t.OriginNode, t.OriginLabel, t.OriginLogin, t.Answering, t.Note,
 		t.JobID, t.TID,
 	)
 	if err != nil {
@@ -470,11 +514,15 @@ func (s *Store) ClaimClosedThread(jobID int64, tid string) error {
 // It deliberately does NOT touch state: the row is already live by the time
 // anyone has coordinates to record, and a verb that could flip state here
 // would be exactly the unconditional open that let two revives both "succeed".
-// ErrNotFound when the tid doesn't exist for jobID.
+// ErrNotFound when the tid doesn't exist for jobID; ErrAskThreadPane when the
+// row is headless and a non-empty pane or window was passed (the kind test is
+// in the UPDATE's own WHERE, so it cannot go stale between a read and the
+// write).
 func (s *Store) SetThreadPane(jobID int64, tid, pane, window string) error {
 	res, err := s.db.Exec(
-		`UPDATE threads SET pane = ?, "window" = ? WHERE job_id = ? AND tid = ?`,
-		pane, window, jobID, tid,
+		`UPDATE threads SET pane = ?, "window" = ? WHERE job_id = ? AND tid = ?
+			AND (kind != 'headless' OR (? = '' AND ? = ''))`,
+		pane, window, jobID, tid, pane, window,
 	)
 	if err != nil {
 		return fmt.Errorf("set pane of thread %s for job %d: %w", tid, jobID, err)
@@ -484,9 +532,105 @@ func (s *Store) SetThreadPane(jobID int64, tid, pane, window string) error {
 		return fmt.Errorf("set pane of thread %s for job %d: %w", tid, jobID, err)
 	}
 	if n == 0 {
-		return fmt.Errorf("set pane of thread %s for job %d: %w", tid, jobID, ErrNotFound)
+		// missing row or a headless row; the read only picks which error to name
+		if _, gerr := s.GetThread(jobID, tid); gerr != nil {
+			return fmt.Errorf("set pane of thread %s for job %d: %w", tid, jobID, gerr)
+		}
+		return fmt.Errorf("set pane of thread %s for job %d: %w", tid, jobID, ErrAskThreadPane)
 	}
 	return nil
+}
+
+// ClaimThreadAnswering marks a live thread as answering, clearing its note —
+// the gate every ask run passes BEFORE its process starts. One
+// compare-and-set, for ClaimClosedThread's reason: two sends racing on one
+// thread must not both start a `claude -r` on its session id, so the
+// answering = 0 predicate decides the winner and the loser gets
+// ErrThreadAnswering having changed nothing. A closed row is ErrThreadClosed
+// and an unknown tid ErrNotFound. The sentinels are returned bare, not
+// wrapped, so a caller may hand them on as they are.
+func (s *Store) ClaimThreadAnswering(jobID int64, tid string) error {
+	res, err := s.db.Exec(
+		`UPDATE threads SET answering = 1, note = ''
+			WHERE job_id = ? AND tid = ? AND state = 'live' AND answering = 0`,
+		jobID, tid,
+	)
+	if err != nil {
+		return fmt.Errorf("claim answering on thread %s for job %d: %w", tid, jobID, err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("claim answering on thread %s for job %d: %w", tid, jobID, err)
+	}
+	if n == 1 {
+		return nil
+	}
+	// lost or refused; the read names which, it decides nothing
+	t, gerr := s.GetThread(jobID, tid)
+	switch {
+	case errors.Is(gerr, ErrNotFound):
+		return ErrNotFound
+	case gerr != nil:
+		return gerr
+	case t.State != "live":
+		return ErrThreadClosed
+	default:
+		return ErrThreadAnswering
+	}
+}
+
+// FinishThreadAnswering clears the answering flag and records note ("" clears
+// it) whatever state the row is in: a run that ends after its thread was
+// closed still has to drop the flag. ErrNotFound for an unknown tid.
+func (s *Store) FinishThreadAnswering(jobID int64, tid, note string) error {
+	res, err := s.db.Exec(
+		`UPDATE threads SET answering = 0, note = ? WHERE job_id = ? AND tid = ?`,
+		note, jobID, tid,
+	)
+	if err != nil {
+		return fmt.Errorf("finish answering on thread %s for job %d: %w", tid, jobID, err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("finish answering on thread %s for job %d: %w", tid, jobID, err)
+	}
+	if n == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+// ClearStaleThreadAnswering is FinishThreadAnswering for a row whose run is
+// believed lost: it writes only where answering = 1 still holds at write
+// time, so it never overwrites the outcome a run recorded after the caller
+// read the row. Reports whether it wrote; an unknown tid, or a row no longer
+// answering, writes nothing and is not an error.
+func (s *Store) ClearStaleThreadAnswering(jobID int64, tid, note string) (bool, error) {
+	res, err := s.db.Exec(
+		`UPDATE threads SET answering = 0, note = ? WHERE job_id = ? AND tid = ? AND answering = 1`,
+		note, jobID, tid,
+	)
+	if err != nil {
+		return false, fmt.Errorf("clear stale answering on thread %s for job %d: %w", tid, jobID, err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return false, fmt.Errorf("clear stale answering on thread %s for job %d: %w", tid, jobID, err)
+	}
+	return n == 1, nil
+}
+
+// CountLiveThreads is how many of jobID's rows are live and of kind kind
+// ("pane" or "headless").
+func (s *Store) CountLiveThreads(jobID int64, kind string) (int, error) {
+	var n int
+	if err := s.db.QueryRow(
+		`SELECT COUNT(*) FROM threads WHERE job_id = ? AND state = 'live' AND kind = ?`,
+		jobID, kind,
+	).Scan(&n); err != nil {
+		return 0, fmt.Errorf("count live %s threads for job %d: %w", kind, jobID, err)
+	}
+	return n, nil
 }
 
 // CloseThread marks a thread closed and CLEARS its pane/window, stamping
@@ -497,14 +641,16 @@ func (s *Store) SetThreadPane(jobID int64, tid, pane, window string) error {
 // any send/kill target derived from it) point at a stranger's pane. The row
 // itself survives — session_id still locates the transcript, so a closed
 // thread stays readable and can be revived later (ClaimClosedThread, then
-// SetThreadPane once the new window exists).
+// SetThreadPane once the new window exists). It also drops a headless row's
+// answering flag, since a closed thread has no run to wait on; its note is
+// kept.
 // ErrNotFound when the tid doesn't exist for jobID.
 func (s *Store) CloseThread(jobID int64, tid string, closedAt int64) error {
 	if closedAt == 0 {
 		closedAt = time.Now().UnixMilli()
 	}
 	res, err := s.db.Exec(
-		`UPDATE threads SET state = 'closed', pane = '', "window" = '', closed_at = ?
+		`UPDATE threads SET state = 'closed', pane = '', "window" = '', closed_at = ?, answering = 0
 			WHERE job_id = ? AND tid = ?`,
 		closedAt, jobID, tid,
 	)

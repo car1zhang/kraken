@@ -128,11 +128,11 @@ func TestGraphRemovalGraphRoutesAre404(t *testing.T) {
 }
 
 // "`GET /api/mm` — Every item object still carries an integer `episode_id` key
-// ... `apiContract` stays 6." / "`POST /api/mm/*` create responses — Carry `id`;
-// the `episode` key is absent."
+// ... `apiContract` stays 6." (7 since the fleet gate's bump) / "`POST /api/mm/*`
+// create responses — Carry `id`; the `episode` key is absent."
 func TestGraphRemovalMMWireKeepsEpisodeIDDropsEpisode(t *testing.T) {
-	if apiContract != 6 {
-		t.Errorf("apiContract = %d, want 6", apiContract)
+	if apiContract != 7 {
+		t.Errorf("apiContract = %d, want 7 (bumped by the fleet gate)", apiContract)
 	}
 	mux := contractGRServe(t)
 	rec := contractGRDo(mux, http.MethodPost, "/api/mm/note", string(mustJSON(t, map[string]any{"text": "the graph is gone"})))

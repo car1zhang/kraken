@@ -1,35 +1,49 @@
-import { useCallback, useEffect, useRef, useState } from "react";
-import { capturePane, fetchThreadRead, threadOp } from "../../api/client.ts";
-import type { ThreadBlock, ThreadRead, WebJob } from "../../api/types.ts";
-import { ESC_PRIORITY } from "../../hooks/useEscapeStack.ts";
+import { useCallback, useEffect, useRef, useState, type KeyboardEvent } from "react";
 import {
-  useLocalStorage,
-  useLocalStorageFlag,
-} from "../../hooks/useLocalStorage.ts";
+  fetchNodeThreadRead,
+  fetchThreadRead,
+  postNodeAction,
+  threadOp,
+} from "../../api/client.ts";
+import type { ThreadBlock, ThreadRead, WebJob, WebThread } from "../../api/types.ts";
+import { ESC_PRIORITY } from "../../hooks/useEscapeStack.ts";
+import { useLocalStorage, useLocalStorageFlag } from "../../hooks/useLocalStorage.ts";
 import { usePoll } from "../../hooks/usePoll.ts";
+import { ownerTurnLabel } from "../../lib/fleet.ts";
 import { age } from "../../lib/format.ts";
 import { esc, renderMD } from "../../lib/markdown.ts";
 import {
   THREAD_MODELS,
   deriveThreadTitle,
   threadAwaitingReply,
+  threadComposerAllowed,
+  threadOriginBadge,
 } from "../../lib/threadquick.ts";
 import { Overlay, useOpenTmux, type Mutate } from "./Overlay.tsx";
 
-// A side thread: a fork of zeus' session running as a second claude in its own
-// tmux window of the same cell — somewhere to ASK without disturbing zeus.
+// A side thread: a fork of zeus' session — somewhere to ASK without disturbing
+// zeus. Two KINDS, by the row's `kind`:
+//   pane     — a second claude in its own tmux window of the same cell
+//   headless — an ask thread: no pane, each question answered by one
+//              `claude -p` run on the owner's Mac, with an `answering` flag
+//              while it runs
+// `kind` is orthogonal to the row's `role` ("ask" | "mind"): a pane thread may
+// be either role (the `mind` chip below reads `role`, unchanged), a headless
+// one is always role "ask". Every kind test here reads `kind === "headless"`.
 //
 // ONE overlay, two modes (app.js:2461 openThread), split on `tid`:
 //   tid == null   "new"    — branch: the question, then an optional name and
 //                            the model to answer it on
 //   tid != null   "thread" — read/steer/kill/revive one that exists
 // They share a head, a body column and a close path, which is why they are one
-// component rather than two.
+// component rather than two. A remote card (`node` set) gets its own pair of
+// bodies, which reach the owner through `/api/nodes/action` and
+// `/api/nodes/thread/read`.
 //
-// Every op goes through /api/threads, so a server refusal ("no live cell to
-// branch", "3 live threads already", "t2 can't be revived: …") lands in the
-// status bar IN THE SERVER'S OWN WORDS. This file never invents error copy for
-// a failed op — it only points at the status bar.
+// Every local op goes through /api/threads, so a server refusal ("no live
+// cell to branch", "t2 can't be revived: …") lands in the status bar IN THE
+// SERVER'S OWN WORDS. This file never invents error copy for a failed op — it
+// only points at the status bar.
 
 const THREAD_BLOCK_KINDS: Record<
   string,
@@ -81,7 +95,7 @@ export function threadBlockHTML(
   };
   const cls = `blk ${spec.cls}${inherited ? " inherited" : ""}`;
   const text = b.text || "";
-  const attrs = mind ? blockMindAttrs(mind, b) : "";
+  const attrs = mind && mind.stamp !== false ? blockMindAttrs(mind, b) : "";
   if (kind === "tool") {
     // tool lines are already terse and mono — no speaker row, no markdown
     return `<div class="${cls}"${attrs}>${spec.icon} ${esc(text)}</div>`;
@@ -106,6 +120,11 @@ export interface BlockMindAttrs {
   tid?: string;
   /** The assistant speaker label, in place of "thread <tid>" (zeus' panel). */
   speaker?: string;
+  /**
+   * `false` keeps `speaker` and stamps NO `data-mind-*` attribute: another
+   * node's transcript, which is never a mind source on this machine.
+   */
+  stamp?: false;
 }
 
 /** ` data-mind-…="…"` for one block; values escaped, empty ones omitted. */
@@ -198,6 +217,14 @@ export interface ThreadOverlayProps {
   mutate: Mutate;
   /** `board.operator` — labels the operator's turns ("you" when absent). */
   operator?: string;
+  /**
+   * The owner node of a REMOTE job's thread: the conversation is read through
+   * `/api/nodes/thread/read`, and the only writes are the ask actions
+   * (`thread-ask`, `thread-send`) posted through `/api/nodes/action`.
+   */
+  node?: string;
+  /** `board.node_id` — this node's own id, for the origin badge. */
+  boardNodeID?: string;
 }
 
 export function ThreadOverlay(props: ThreadOverlayProps) {
@@ -208,8 +235,457 @@ export function ThreadOverlay(props: ThreadOverlayProps) {
       priority={ESC_PRIORITY.thread}
       onClose={props.onClose}
     >
-      {props.slug ? <ThreadBody {...props} /> : null}
+      {props.slug && props.node ? (
+        props.tid ? (
+          <RemoteThreadBody
+            key={props.node + "/" + props.slug + "/" + props.tid}
+            node={props.node}
+            slug={props.slug}
+            tid={props.tid}
+            job={props.job}
+            onClose={props.onClose}
+            mutate={props.mutate}
+            boardNodeID={props.boardNodeID}
+            // the thread's prompts are the OWNER's — see ownerTurnLabel
+            operator={ownerTurnLabel(props.job?.owner, props.operator)}
+          />
+        ) : (
+          <RemoteNewThread
+            key={props.node + "/" + props.slug}
+            node={props.node}
+            slug={props.slug}
+            job={props.job}
+            onClose={props.onClose}
+            onBranched={props.onBranched}
+            mutate={props.mutate}
+          />
+        )
+      ) : props.slug ? (
+        <ThreadBody {...props} />
+      ) : null}
     </Overlay>
+  );
+}
+
+/**
+ * The thread row the head and composer read: the board's row when it carries
+ * one, else — for a thread the board has not caught yet — the fields the read
+ * itself reports (kind, origin, answering, note).
+ */
+function threadRow(
+  tid: string,
+  rec: WebThread | null,
+  read: ThreadRead | undefined,
+): WebThread | undefined {
+  if (rec) return rec;
+  if (!read) return undefined;
+  return {
+    tid,
+    state: read.live ? "live" : "closed",
+    created_at: 0,
+    kind: read.kind,
+    origin: read.origin,
+    answering: read.answering,
+    note: read.note,
+  };
+}
+
+/**
+ * The model picker shared by both new-thread dialogs. The choice is STICKY
+ * (`kraken-thread-model`): it is a standing preference, not a per-branch
+ * decision, and re-picking it on every branch would be the typing this dialog
+ * exists to remove. A key left by a hand edit (or a future board with a fifth
+ * model) must not ride out as a request the server refuses by name — an
+ * unrecognised value reads as the default, and the picker lights that
+ * default, so what is shown as picked is what a branch would actually send.
+ */
+function useThreadModel(): [string, (m: string) => void] {
+  const [storedModel, setStoredModel] = useLocalStorage(
+    "kraken-thread-model",
+    "opus",
+  );
+  const model = (THREAD_MODELS as readonly string[]).includes(storedModel)
+    ? storedModel
+    : "opus";
+  return [model, setStoredModel];
+}
+
+/**
+ * The model buttons. A div, not a <label>: a label wrapping buttons hands its
+ * click to the first one, which would make "model" itself a pick of haiku.
+ * role=group + aria-label is what names it for AT instead — the same move,
+ * and the same reason, as the load drill's group.
+ */
+function ModelPicker({
+  model,
+  onPick,
+  busy,
+}: {
+  model: string;
+  onPick: (m: string) => void;
+  busy: boolean;
+}) {
+  return (
+    <div className="thread-field">
+      model
+      <div
+        className="thread-models"
+        id="thread-models"
+        role="group"
+        aria-label="model for this thread"
+      >
+        {THREAD_MODELS.map((m) => (
+          <button
+            key={m}
+            type="button"
+            className="btn"
+            aria-pressed={model === m}
+            disabled={busy}
+            onClick={() => onPick(m)}
+          >
+            {m}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * The headless-thread additions to a thread view's head: the origin badge,
+ * the `answering…` pill while a question runs, and the row's note (the last
+ * run's failure). Each renders only when it has something to say, so a pane
+ * row — which has no origin badge, never answers and carries no note —
+ * renders none of them.
+ */
+function AskHeadExtras({
+  row,
+  boardNodeID,
+}: {
+  row: WebThread | undefined;
+  boardNodeID: string | undefined;
+}) {
+  const badge = row ? threadOriginBadge(row, boardNodeID) : null;
+  const login = row?.origin?.login ?? "";
+  return (
+    <>
+      {badge ? (
+        <span
+          className="thread-pill thread-origin"
+          id="thread-origin"
+          title={"opened from " + badge + (login && login !== badge ? " · " + login : "")}
+        >
+          from {badge}
+        </span>
+      ) : null}
+      {row?.answering ? (
+        <span className="thread-pill" id="thread-answering">
+          answering…
+        </span>
+      ) : null}
+      {row?.note ? (
+        <span id="thread-note" title={row.note}>
+          {row.note}
+        </span>
+      ) : null}
+    </>
+  );
+}
+
+/**
+ * A remote card's new-thread dialog, opened by the steer modal's ⑂ ask. The
+ * local dialog's question, optional name and model picker, under a banner
+ * saying where the thread runs and what it cannot do. Branch posts
+ * `thread-ask` through this node's proxy; nothing is fetched before that.
+ * The question is required: the owner refuses an ask without one. There is
+ * no headless toggle — a remote ask is always headless (a pane on another
+ * person's Mac is not this node's to open).
+ */
+function RemoteNewThread({
+  node,
+  slug,
+  job,
+  onClose,
+  onBranched,
+  mutate,
+}: {
+  node: string;
+  slug: string;
+  job: WebJob | undefined;
+  onClose: () => void;
+  onBranched: (tid: string, title: string) => void;
+  mutate: Mutate;
+}) {
+  const [seed, setSeed] = useState("");
+  const [newName, setNewName] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [note, setNote] = useState("");
+  const [model, setModel] = useThreadModel();
+  const seedInput = useRef<HTMLTextAreaElement | null>(null);
+  const label = job?.owner?.label || node;
+  const ownerName = job?.owner?.operator || "its owner";
+
+  const branch = useCallback(async () => {
+    const text = seed.trim();
+    if (!text) {
+      setNote("ask something — the thread opens on your question");
+      seedInput.current?.focus();
+      return;
+    }
+    const title = newName.trim() || deriveThreadTitle(seed);
+    setBusy(true);
+    const res = await mutate(() =>
+      postNodeAction(node, slug, "thread-ask", { title, text, model }),
+    );
+    setBusy(false);
+    if (!res) {
+      setNote("ask failed — see status bar");
+      return;
+    }
+    const tid = (res as { tid?: unknown }).tid;
+    if (typeof tid === "string" && tid) onBranched(tid, title);
+    else onClose(); // asked, but no id came back — the card carries it
+  }, [model, mutate, newName, node, onBranched, onClose, seed, slug]);
+
+  const submitOnCmdEnter = (e: KeyboardEvent) => {
+    if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
+      e.preventDefault();
+      void branch();
+    }
+  };
+
+  return (
+    <>
+      <div className="panel-head">
+        <span className="panel-title" id="thread-tid">
+          {"⑂ ask — " + label + " / " + slug}
+        </span>
+        <span className="spacer"></span>
+      </div>
+      <div className="panel-body answer-body">
+        <div className="thread-new" id="thread-new">
+          <div className="thread-banner">
+            <b>⑂ ask a side thread on {label}</b>
+            <br />
+            Opens a headless fork of zeus' conversation on {label}, the owner's
+            Mac, on that cell's account. Opened from here it has no tools: it
+            answers from what zeus already knows, and every reply is readable
+            on every board. {ownerName} sees who asked.
+          </div>
+          <label className="thread-field">
+            what do you want to ask?
+            <textarea
+              id="thread-seed"
+              ref={seedInput}
+              rows={4}
+              placeholder="the thread answers this with zeus' context already loaded"
+              autoFocus
+              value={seed}
+              onChange={(e) => setSeed(e.target.value)}
+              onKeyDown={submitOnCmdEnter}
+            />
+          </label>
+          <label className="thread-field">
+            name <span className="dim">— optional, taken from the question</span>
+            <input
+              id="thread-new-name"
+              placeholder={deriveThreadTitle(seed) || "short name — e.g. why is CI red"}
+              spellCheck={false}
+              maxLength={80}
+              value={newName}
+              onChange={(e) => setNewName(e.target.value)}
+              onKeyDown={submitOnCmdEnter}
+            />
+          </label>
+          <ModelPicker model={model} onPick={setModel} busy={busy} />
+          <div className="thread-new-actions">
+            <button
+              className="btn"
+              id="thread-branch"
+              disabled={busy}
+              onClick={() => void branch()}
+            >
+              {"⑂ ask " + label + " ⌘⏎"}
+            </button>
+            <button className="btn ghost" id="thread-cancel" onClick={onClose}>
+              cancel
+            </button>
+          </div>
+        </div>
+        <div className="answer-note" id="thread-status">
+          {note}
+        </div>
+      </div>
+    </>
+  );
+}
+
+/**
+ * A remote job's side thread: the head's title, live/closed pill, model,
+ * origin badge, `answering…` pill and note, then the conversation. No rename,
+ * no kill/revive, no tmux and no mind source. A composer appears on a live
+ * HEADLESS thread only (threadComposerAllowed) — any node that sees the card
+ * may send into one; a pane thread (either role) is its owner's alone. Read
+ * on the local body's 3s cadence.
+ */
+function RemoteThreadBody({
+  node,
+  slug,
+  tid,
+  job,
+  onClose,
+  mutate,
+  boardNodeID,
+  operator,
+}: {
+  node: string;
+  slug: string;
+  tid: string;
+  job: WebJob | undefined;
+  onClose: () => void;
+  mutate: Mutate;
+  boardNodeID?: string;
+  operator?: string;
+}) {
+  const read = usePoll<ThreadRead>(
+    (signal) => fetchNodeThreadRead(node, slug, tid, undefined, signal),
+    3000,
+  );
+  const refetchRead = read.refetch;
+  const convoRef = useRef<HTMLDivElement | null>(null);
+  const lastHTML = useRef("");
+  const [text, setText] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [note, setNote] = useState("");
+  const rec = (job?.threads || []).find((t) => t.tid === tid) || null;
+  const live = read.data ? !!read.data.live : rec ? rec.state === "live" : true;
+  // the read's own answering/note are fresher than the board's row
+  const row = threadRow(tid, rec, read.data);
+  const headRow: WebThread | undefined = row
+    ? {
+        ...row,
+        answering: read.data ? !!read.data.answering : row.answering,
+        note: read.data ? (read.data.note ?? "") : row.note,
+      }
+    : undefined;
+  const composer = threadComposerAllowed(row, read.data ?? null, true);
+  // a second question while one runs is refused by the owner (409), so the
+  // composer stays mounted but disabled until the answer lands
+  const answering = !!headRow?.answering;
+  const label = job?.owner?.label || node;
+
+  const send = useCallback(async () => {
+    const body = text.trim();
+    if (!body) {
+      setNote("message is empty");
+      return;
+    }
+    setBusy(true);
+    const res = await mutate(() =>
+      postNodeAction(node, slug, "thread-send", { tid, text: body }),
+    );
+    setBusy(false);
+    if (!res) {
+      setNote("send failed — see status bar");
+      return;
+    }
+    setNote("");
+    setText("");
+    void refetchRead();
+  }, [mutate, node, refetchRead, slug, text, tid]);
+
+  // ThreadBody's force-close rule: only the job leaving the board closes this
+  const sawJob = useRef(false);
+  useEffect(() => {
+    if (job) {
+      sawJob.current = true;
+      return;
+    }
+    if (sawJob.current) onClose();
+  }, [job, onClose]);
+
+  // painted imperatively for ThreadBody's scroll-preserving reason; no mind
+  // attrs are passed, so no block carries a `data-mind-*` source
+  useEffect(() => {
+    const el = convoRef.current;
+    if (!el) return;
+    if (!read.data) {
+      if (lastHTML.current === "") {
+        el.innerHTML = '<div class="thread-empty">loading…</div>';
+      }
+      return;
+    }
+    const html = threadConvoRender(read.data, tid, undefined, operator);
+    if (html === lastHTML.current) return;
+    const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 24;
+    const prevTop = el.scrollTop;
+    lastHTML.current = html;
+    el.innerHTML = html;
+    el.scrollTop = atBottom ? el.scrollHeight : prevTop;
+  }, [read.data, tid, operator]);
+
+  const readFailed = !!read.error && read.failStreak > 0;
+  return (
+    <>
+      <div className="panel-head">
+        <span className="panel-title" id="thread-tid">
+          {"⑂ " + tid}
+        </span>
+        {rec?.title ? (
+          <span className="thread-name-label" id="thread-name-label">
+            {rec.title}
+          </span>
+        ) : null}
+        <span className={"thread-pill " + (live ? "live" : "closed")} id="thread-pill">
+          {live ? "live" : "closed"}
+        </span>
+        {rec?.model ? (
+          <span className="thread-pill model" id="thread-model-pill">
+            {rec.model}
+          </span>
+        ) : null}
+        <AskHeadExtras row={headRow} boardNodeID={boardNodeID} />
+        <span className="spacer"></span>
+      </div>
+      <div className="panel-body answer-body">
+        <div className="thread-view" id="thread-view">
+          <div className="convo" id="thread-convo" ref={convoRef} />
+          {composer ? (
+            <div className="thread-composer" id="thread-composer">
+              <textarea
+                id="thread-text"
+                rows={3}
+                placeholder={
+                  answering
+                    ? "answering… — you can ask again once this answer lands"
+                    : `ask this thread — sent to ${label} as text, never typed into a pane`
+                }
+                disabled={answering}
+                value={text}
+                onChange={(e) => setText(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
+                    e.preventDefault();
+                    void send();
+                  }
+                }}
+              />
+              <button
+                className="btn btn-big"
+                id="thread-send"
+                disabled={busy || answering}
+                onClick={() => void send()}
+              >
+                send ⌘⏎
+              </button>
+            </div>
+          ) : null}
+        </div>
+        <div className="answer-note" id="thread-status">
+          {readFailed ? "couldn't read this thread: " + (read.error?.message ?? "") : note}
+        </div>
+      </div>
+    </>
   );
 }
 
@@ -221,6 +697,7 @@ function ThreadBody({
   onBranched,
   mutate,
   operator,
+  boardNodeID,
 }: ThreadOverlayProps) {
   const jobSlug = slug as string;
   const [note, setNote] = useState("");
@@ -239,26 +716,17 @@ function ThreadBody({
   const convoRef = useRef<HTMLDivElement | null>(null);
   const lastHTML = useRef<string>("");
 
-  // The live-pane mirror is opt-in and STICKY, the same gating iOS does with
-  // its Terminal tab: a capture nobody opened is a second tmux round-trip
-  // every 3s for a pane nobody is looking at. One click, remembered from then
-  // on.
-  const [mirror, setMirror] = useLocalStorageFlag("kraken-thread-mirror", false);
+  // No live-pane mirror any more (carl, 2026-10-20: "in branched we shouldn't
+  // display the pane"). The overlay is the CONVERSATION — the read endpoint's
+  // blocks — and the pane itself is one ⧉ tmux click away in Ghostty. What
+  // went with it: the sticky `kraken-thread-mirror` flag, the 3s
+  // capture-pane poll it gated, the ▸/▾ panehead toggle and the <pre> under
+  // it. `pane` below is still read, for the tmux button's target.
 
-  // The model picker's choice is STICKY for the same reason the mirror toggle
-  // is: it is a standing preference, not a per-branch decision, and re-picking
-  // it on every branch would be the typing this dialog exists to remove.
-  const [storedModel, setStoredModel] = useLocalStorage(
-    "kraken-thread-model",
-    "opus",
-  );
-  // A key left by a hand edit (or a future board with a fifth model) must not
-  // ride out as a request the server refuses by name — an unrecognised value
-  // reads as the default, and the picker lights that default, so what is shown
-  // as picked is what a branch would actually send.
-  const model = (THREAD_MODELS as readonly string[]).includes(storedModel)
-    ? storedModel
-    : "opus";
+  const [model, setStoredModel] = useThreadModel();
+  // headless (an ask thread: no pane, read-only tools) or pane (an interactive
+  // claude in a tmux window). Sticky like the model, for the same reason.
+  const [headless, setHeadless] = useLocalStorageFlag("kraken-thread-headless", true);
 
   const rec = (job?.threads || []).find((t) => t.tid === tid) || null;
 
@@ -298,6 +766,18 @@ function ThreadBody({
     typeof read.data?.counted === "number"
       ? read.data.counted
       : (read.data?.blocks || []).length;
+  // the read's own answering/note are fresher than the board's row
+  const row = tid ? threadRow(tid, rec, read.data) : undefined;
+  const isHeadless = row?.kind === "headless";
+  const answering = read.data ? !!read.data.answering : !!row?.answering;
+  const headRow: WebThread | undefined = row
+    ? {
+        ...row,
+        answering,
+        note: read.data ? (read.data.note ?? "") : row.note,
+      }
+    : undefined;
+  const composer = threadComposerAllowed(row, read.data ?? null, false);
 
   // The gap between asking and the first block landing is the ONE stretch a
   // reader WATCHES this column rather than reads it, so that is where the
@@ -305,9 +785,12 @@ function ThreadBody({
   // A closed thread is never awaiting: nothing is running to answer. `seed` is
   // what makes a just-branched thread count — it carries only inherited blocks
   // until its first turn, so the question carl typed is the only evidence that
-  // anything is coming at all.
+  // anything is coming at all. A headless thread says so directly: its
+  // `answering` flag is set while a question runs and cleared when it ends,
+  // failed runs included, so it alone decides.
   const nextAwaiting =
-    live && threadAwaitingReply(read.data?.blocks || [], seed);
+    live &&
+    (isHeadless ? answering : threadAwaitingReply(read.data?.blocks || [], seed));
   useEffect(() => {
     setAwaiting(nextAwaiting);
   }, [nextAwaiting]);
@@ -366,20 +849,6 @@ function ThreadBody({
     el.scrollTop = atBottom ? el.scrollHeight : prevTop;
   }, [read.data, tid, operator]);
 
-  // ---- the pane mirror ----------------------------------------------------
-  // A second tmux round-trip on every tick, so it runs ONLY while the mirror
-  // is actually open. A pane that just died is the common case here and the
-  // next read re-derives live/pane, so a capture failure stays quiet.
-  const capture = usePoll(
-    (signal) => capturePane(pane, signal),
-    3000,
-    { enabled: !!tid && live && !!pane && mirror },
-  );
-  // A capture that fails is almost always a pane that just died, and the next
-  // read re-derives live/pane — so it stays QUIET and the mirror goes away
-  // rather than freezing the last frame or explaining itself in the note.
-  const captureOK = !capture.error;
-
   const op = useCallback(
     async (
       o: "kill" | "revive" | "rename" | "send",
@@ -404,6 +873,13 @@ function ThreadBody({
     // server still REQUIRES a title, so the derivation is not a nicety — it is
     // what lets the name field be optional at all.
     const t = newName.trim() || deriveThreadTitle(seed);
+    if (headless && !seed.trim()) {
+      // a headless thread has no prompt to open at: it exists to answer, and
+      // the server refuses one without a question
+      setNote("ask something — a headless thread opens on your question");
+      seedInput.current?.focus();
+      return;
+    }
     if (!t) {
       // the only way to reach here is an empty question AND an empty name,
       // so the ask is for either one — not for the name in particular
@@ -413,15 +889,15 @@ function ThreadBody({
     }
     setBusy(true);
     const res = await mutate(() =>
-      threadOp(jobSlug, "branch", { title: t, text: seed.trim(), model }),
+      threadOp(jobSlug, "branch", { title: t, text: seed.trim(), model, headless }),
     );
     setBusy(false);
     if (!res) {
       setNote("branch failed — see status bar");
       return;
     }
-    // branching spawns a claude in a new tmux window — seconds, during which
-    // Escape/backdrop/a stale-close can all dismiss the overlay. A cancelled
+    // a pane branch spawns a claude in a new tmux window — seconds, during
+    // which Escape/backdrop/a stale-close can all dismiss the overlay. A cancelled
     // branch stays cancelled: the thread exists either way and its chip is on
     // the card, so there is nothing to reopen an overlay for. React gives us
     // that for free — this component is unmounted and the callback is gone.
@@ -431,7 +907,7 @@ function ThreadBody({
     } else {
       onClose(); // branched, but no id came back — the card carries it
     }
-  }, [jobSlug, model, mutate, newName, onBranched, onClose, seed]);
+  }, [headless, jobSlug, model, mutate, newName, onBranched, onClose, seed]);
 
   const send = useCallback(async () => {
     const body = text.trim();
@@ -457,18 +933,12 @@ function ThreadBody({
   // ---- head ---------------------------------------------------------------
   const closedAt = rec?.closed_at ? threadSeconds(rec.closed_at) : 0;
   const closedNote =
-    "tmux window closed" +
+    (isHeadless ? "thread closed" : "tmux window closed") +
     // 0 means "no read has landed yet", not "nothing was kept" — say nothing
     // rather than undercount the conversation sitting right above
     (kept ? ` · ${kept} blocks kept on the job` : "") +
     (closedAt ? ` · killed ${age(closedAt)} ago` : "") +
     " · revive to continue";
-
-  const mirrorable = live && !!pane && captureOK;
-  const paneLabel =
-    (mirror ? "▾ live pane · " : "▸ live pane · ") +
-    (job?.cell ? job.cell + " · " : "") +
-    pane;
 
   return (
     <>
@@ -562,27 +1032,35 @@ function ThreadBody({
             {rec.model}
           </span>
         ) : null}
+        {tid ? <AskHeadExtras row={headRow} boardNodeID={boardNodeID} /> : null}
         <span className="spacer"></span>
         {/* raises THIS THREAD's window, by pane — pointless once the window is
             gone, and hidden without a pane too: a slug-only post would raise
             zeus' window instead, the one window a thread exists not to
-            disturb. */}
-        <button
-          className="btn tmux-open open-tmux"
-          id="thread-tmux"
-          hidden={!tid || !live || !pane}
-          data-pane={pane}
-          title="raise this thread's window in Ghostty"
-          onClick={() => void openTmuxTarget({ pane })}
-        >
-          ⧉ tmux
-        </button>
+            disturb. Not rendered at all for a headless thread, which has no
+            window. */}
+        {isHeadless ? null : (
+          <button
+            className="btn tmux-open open-tmux"
+            id="thread-tmux"
+            hidden={!tid || !live || !pane}
+            data-pane={pane}
+            title="raise this thread's window in Ghostty"
+            onClick={() => void openTmuxTarget({ pane })}
+          >
+            ⧉ tmux
+          </button>
+        )}
         <button
           className="btn ghost"
           id="thread-revive"
           hidden={!tid || live}
           disabled={busy}
-          title="resume this thread's session in a fresh window of the cell"
+          title={
+            isHeadless
+              ? "reopen this thread so it can be asked again"
+              : "resume this thread's session in a fresh window of the cell"
+          }
           onClick={() => void op("revive")}
         >
           ⟲ revive
@@ -592,9 +1070,14 @@ function ThreadBody({
           id="thread-kill"
           hidden={!tid || !live}
           disabled={busy}
-          title="close this thread's tmux window — the conversation stays and can be revived"
-          // no confirm: killing a thread only closes its tmux window; the row
-          // and the conversation stay on the job and ⟲ revive brings it back
+          title={
+            isHeadless
+              ? "close this thread, cancelling any answer in flight — the conversation stays and can be revived"
+              : "close this thread's tmux window — the conversation stays and can be revived"
+          }
+          // no confirm: killing a thread only closes its tmux window (or, for
+          // a headless thread, its row and any run in flight); the row and the
+          // conversation stay on the job and ⟲ revive brings it back
           onClick={() => void op("kill")}
         >
           ✕ kill thread
@@ -605,10 +1088,31 @@ function ThreadBody({
           <div className="thread-banner">
             <b>⑂ branch a side thread</b>
             <br />
-            Forks zeus' session as it stands right now into a new window of the
-            same cell, in the same worktree. Zeus is not interrupted and this
-            conversation is unaffected. Threads are for asking, not for doing.
+            {headless ? (
+              <>
+                <b>headless: a read-only fork with no pane</b> — it forks zeus'
+                session as it stands right now and answers each question as one{" "}
+                <code>claude -p</code> run in the cell's worktree with read-only
+                tools, without interrupting zeus.
+              </>
+            ) : (
+              <>
+                <b>pane: a full claude in a tmux window, as before</b> — it forks
+                zeus' session as it stands right now into a new window of the
+                same cell, in the same worktree, without interrupting zeus.
+              </>
+            )}
           </div>
+          <label className="thread-field thread-headless-field">
+            <input
+              type="checkbox"
+              id="thread-headless"
+              checked={headless}
+              disabled={busy}
+              onChange={(e) => setHeadless(e.target.checked)}
+            />{" "}
+            headless <span className="dim">— uncheck for a pane thread</span>
+          </label>
           {/* The question comes FIRST and takes the focus: asking is the whole
               errand, and making a name the price of admission put a naming
               decision in front of every question. */}
@@ -618,7 +1122,11 @@ function ThreadBody({
               id="thread-seed"
               ref={seedInput}
               rows={4}
-              placeholder="the thread opens on this, with zeus' context already loaded — leave it empty to open at a bare prompt instead"
+              placeholder={
+                headless
+                  ? "the thread answers this with zeus' context already loaded"
+                  : "the thread opens on this, with zeus' context already loaded — leave it empty to open at a bare prompt instead"
+              }
               autoFocus={!tid}
               value={seed}
               onChange={(e) => setSeed(e.target.value)}
@@ -652,32 +1160,7 @@ function ThreadBody({
               }}
             />
           </label>
-          {/* a div, not a <label>: a label wrapping buttons hands its click to
-              the first one, which would make "model" itself a pick of haiku.
-              role=group + aria-label is what names it for AT instead — the
-              same move, and the same reason, as the load drill's group. */}
-          <div className="thread-field">
-            model
-            <div
-              className="thread-models"
-              id="thread-models"
-              role="group"
-              aria-label="model for this thread"
-            >
-              {THREAD_MODELS.map((m) => (
-                <button
-                  key={m}
-                  type="button"
-                  className="btn"
-                  aria-pressed={model === m}
-                  disabled={busy}
-                  onClick={() => setStoredModel(m)}
-                >
-                  {m}
-                </button>
-              ))}
-            </div>
-          </div>
+          <ModelPicker model={model} onPick={setStoredModel} busy={busy} />
           <div className="thread-new-actions">
             <button
               className="btn"
@@ -702,41 +1185,23 @@ function ThreadBody({
             // selectionSlug); each block below carries its own source
             data-mind-slug={jobSlug}
           />
-          {/* the panehead IS the mirror's toggle: capture-pane runs on every
-              3s tick while it is open, so it is opt-in and sticky */}
-          <div
-            className="panehead"
-            id="thread-panehead"
-            hidden={!mirrorable}
-            role="button"
-            tabIndex={0}
-            title="mirror this thread's tmux pane — polls while open"
-            onClick={() => setMirror(!mirror)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter" || e.key === " ") {
-                e.preventDefault();
-                setMirror(!mirror);
-              }
-            }}
-          >
-            <span className="live-dot"></span>
-            <span id="thread-panelabel">{paneLabel}</span>
-          </div>
-          <pre
-            className="thread-pane"
-            id="thread-pane"
-            hidden={!mirrorable || !mirror}
-          >
-            {capture.data?.content ?? ""}
-          </pre>
+          {/* no pane mirror between the conversation and the composer — see
+              the note at the top of ThreadBody */}
           <div className="thread-empty" id="thread-closed-note" hidden={live}>
             {closedNote}
           </div>
-          <div className="thread-composer" id="thread-composer" hidden={!live}>
+          <div className="thread-composer" id="thread-composer" hidden={!composer}>
             <textarea
               id="thread-text"
               rows={3}
-              placeholder="ask this thread — routed straight to its pane"
+              placeholder={
+                answering
+                  ? "answering… — you can ask again once this answer lands"
+                  : isHeadless
+                    ? "ask this thread — answered by a headless claude -p run"
+                    : "ask this thread — routed straight to its pane"
+              }
+              disabled={answering}
               value={text}
               onChange={(e) => setText(e.target.value)}
               onKeyDown={(e) => {
@@ -749,14 +1214,14 @@ function ThreadBody({
             <button
               className="btn btn-big"
               id="thread-send"
-              disabled={busy}
+              disabled={busy || answering}
               onClick={() => void send()}
             >
               send ⌘⏎
             </button>
           </div>
         </div>
-        <div className="answer-note" id="thread-note">
+        <div className="answer-note" id="thread-status">
           {shownNote}
         </div>
       </div>

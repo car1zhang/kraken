@@ -86,6 +86,8 @@ func main() {
 		cmdWatchlist(rest)
 	case "load":
 		cmdLoad(rest)
+	case "stack":
+		cmdStack(rest)
 	case "artifacts":
 		cmdArtifacts(rest)
 	case "mm":
@@ -100,6 +102,8 @@ func main() {
 		cmdJob(rest)
 	case "mine":
 		cmdMine(rest)
+	case "nodes":
+		cmdNodes(rest)
 	case "_complete":
 		cmdComplete()
 	case "-h", "--help", "help":
@@ -122,8 +126,11 @@ Commands:
                       dd to kill, t to cycle grouping
   k o <sel>           jump to an agent or shell pane: focus its ghostty window + pane
   k b [sel]           branch (fork) a session into a vertical split (default: current pane)
-  k s <sel> <msg...>  send a message into an agent's prompt (stdin if no msg args)
-  k r <sel> [n]       read back the last n message blocks (user/thinking/text; default 1; sel '.' = current pane)
+  k s <sel> <msg...>  send a message into an agent's prompt (stdin if no msg args);
+                      sel <node>/<slug> steers a PUBLIC cell on another kraken
+  k r <sel> [n]       read back the last n message blocks (user/thinking/text; default 1; sel '.' = current pane);
+                      sel <node>/<slug> reads a PUBLIC cell on another kraken
+  k nodes [--json]    the other krakens on the tailnet: operator, online, card counts
   k k <sel>           kill an agent or shell pane (refuses the current pane and nested agents)
   k n [-c dir] [cmd...]
                       new shell in a new window of the current session, optionally
@@ -223,6 +230,16 @@ Commands:
                       Both numbers or neither — a half estimate has no ratio,
                       and 'clear' is how an estimate is removed. get prints
                       the pair as JSON ({"load": null} when unestimated).
+  k stack add|rm|get|clear <slug> ...
+                      cell-side verb zeus uses to register the URLs of the
+                      stack it spun up for manual testing, proxied the same
+                      way as 'k questions': add <slug> <url> [--label "<name>"]
+                      puts a linked chip on the job's card beside its PR
+                      chips (the daemon dials loopback ports every tick and
+                      dims a chip whose port stops listening); rm <slug>
+                      <url-or-label> drops one; clear <slug> drops them all
+                      (do this after the manual-test gate passes — teardown
+                      does it anyway). get prints {"stack": [...]} as JSON.
   k artifacts get <slug> [name]
   k artifacts get --archived <slug> [name]
                       read any job's artifacts — a sibling's, or a torn-down

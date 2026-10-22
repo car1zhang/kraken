@@ -132,6 +132,9 @@ export function useJobSearch(
       // there is no fallback to the legacy `goal` key to write here: it is
       // that array's head whenever it exists at all.
       if (goal !== null && !(job.goals ?? []).some((g) => g.id === goal)) return false;
+      // A remote card's goal ids are its OWNER's goals: an id that happens to
+      // equal one of this board's must not file it under this board's goal.
+      if (goal !== null && job.owner) return false;
       // Keyed by jobKey(), never bare slug: an archived entry and a live job
       // that reused its freed slug are two rows here (see lib/jobKey.ts), and
       // a bare-slug key would hand one of them the other's match reason.

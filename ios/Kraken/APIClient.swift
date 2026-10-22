@@ -26,10 +26,16 @@ enum KrakenDefaults {
 
 enum KrakenError: Error, LocalizedError {
     case message(String)
+    /// HTTP 401 from the request gate: this phone holds no pairing the server
+    /// accepts (never paired, revoked, or the password changed). The board
+    /// model treats it as "unpaired" — record and cookie cleared, back to the
+    /// pair screen — rather than as an ordinary failed request.
+    case unauthorized
 
     var errorDescription: String? {
         switch self {
         case .message(let m): return m
+        case .unauthorized: return "not paired — pair this phone with your Mac"
         }
     }
 }
@@ -50,6 +56,39 @@ private struct ReorderRequest: Encodable {
 /// and an empty object is the honest spelling of "no force, no test".
 private struct EmptyRequest: Encodable {}
 
+/// POST /api/job/visibility body.
+private struct JobVisibilityRequest: Encodable {
+    let slug: String
+    let visibility: String
+}
+
+/// POST /api/nodes/action body.
+private struct NodeActionRequest: Encodable {
+    let node: String
+    let slug: String
+    let action: String
+    let payload: NodeActionPayload
+}
+
+/// The `payload` of a remote action: `text` for steer and question, `color`
+/// for colour, `title` + `text` for thread-ask, `tid` + `text` for
+/// thread-send, `tid` for thread-kill, nothing for the rest. A nil field is
+/// omitted from the JSON.
+struct NodeActionPayload: Encodable {
+    var text: String?
+    var color: String?
+    var title: String?
+    var tid: String?
+}
+
+/// GET /api/nodes/job/raw's reply, decoded down to the one key the phone
+/// reads. The owner also sends `slug`, `mtime` and `editable`; they are
+/// ignored, and `editable` would be the owner's LOCAL rule anyway — the phone
+/// offers no remote edit in either mode.
+struct NodeJobRaw: Decodable {
+    let content: String
+}
+
 /// One networking client for the whole app: plain async/await URLSession,
 /// generic get/post plumbing, and a typed convenience method per endpoint.
 /// An actor so it's safe to share a single instance (and its URLSession)
@@ -63,7 +102,73 @@ actor APIClient {
     // removed from /api/board's job objects.
     // v6: ready + prereqs removed from the job form shapes, start_error
     // removed from /api/board's job objects, the queued state retired.
-    static let expectedContract = 6
+    // v7: the request gate — every board route answers 401 to a phone that
+    // has not paired, so a build without the pair screen cannot load at all.
+    static let expectedContract = 7
+
+    /// The cookie the server's gate reads when a request cannot carry the
+    /// Authorization header (WKWebView artifact pages, AsyncImage thumbnails).
+    static let pairCookieName = "kraken_pair"
+
+    /// Adds `Authorization: Bearer <token>` when a record is present, and
+    /// returns the request unchanged otherwise. `perform` runs every request
+    /// this client builds through it.
+    static func authorize(_ request: URLRequest, record: PairingRecord?) -> URLRequest {
+        guard let record else { return request }
+        var out = request
+        out.setValue("Bearer \(record.token)", forHTTPHeaderField: "Authorization")
+        return out
+    }
+
+    /// The `kraken_pair` cookie for a record: the token, scoped to the record
+    /// URL's host (and its port when the URL names one), path `/`. nil when
+    /// the record's URL has no host.
+    static func pairCookie(for record: PairingRecord) -> HTTPCookie? {
+        guard let url = URL(string: record.url), let host = url.host, !host.isEmpty else { return nil }
+        var props: [HTTPCookiePropertyKey: Any] = [
+            .name: pairCookieName,
+            .value: record.token,
+            .domain: host,
+            .path: "/",
+            .originURL: url,
+        ]
+        if let port = url.port { props[.port] = String(port) }
+        return HTTPCookie(properties: props)
+    }
+
+    static func installCookie(record: PairingRecord, into storage: HTTPCookieStorage) {
+        guard let cookie = pairCookie(for: record) else { return }
+        storage.setCookie(cookie)
+    }
+
+    /// Removes every `kraken_pair` cookie set for `url`'s host.
+    static func clearCookie(for url: String, in storage: HTTPCookieStorage) {
+        guard let host = URL(string: url)?.host?.lowercased() else { return }
+        for cookie in storage.cookies ?? [] where cookie.name == pairCookieName
+            && cookie.domain.trimmingCharacters(in: CharacterSet(charactersIn: ".")).lowercased() == host {
+            storage.deleteCookie(cookie)
+        }
+    }
+
+    /// The record `perform` authorizes with: `stored`, but only for a request
+    /// to the host (case-insensitive) and port it was issued by — a missing
+    /// port reads as the scheme's default (80 for http, 443 for https). The
+    /// token is a credential for ONE node; sending it to whatever host the
+    /// server field happens to name would hand that node a token it could
+    /// replay against ours. Pure.
+    static func record(for request: URLRequest, stored: PairingRecord?) -> PairingRecord? {
+        guard let stored,
+              let paired = URL(string: stored.url), let target = request.url,
+              let pairedHost = paired.host?.lowercased(), !pairedHost.isEmpty,
+              pairedHost == target.host?.lowercased(),
+              effectivePort(paired) == effectivePort(target) else { return nil }
+        return stored
+    }
+
+    private static func effectivePort(_ url: URL) -> Int {
+        if let port = url.port { return port }
+        return url.scheme?.lowercased() == "https" ? 443 : 80
+    }
 
     private let session: URLSession
     // Multi-MB image uploads over cellular can easily take longer than the
@@ -76,6 +181,15 @@ actor APIClient {
     // cannot ride the 5s cap: a timeout there reports failure for a cell that
     // is in fact coming up, which is the one wrong answer available here.
     private let submitSession: URLSession
+    // A remote `thread-ask` is relayed to the owner, which looks the cell up
+    // and starts a claude process before it answers; the paired node gives
+    // the `thread-ask` relay 30 s. On the 5s cap a slow owner would read as
+    // a failure for a thread that was in fact created, and the natural retry
+    // would open a second one. `thread-send` shares this session only for
+    // symmetry: the relay caps a send at its 5 s default anyway, so the
+    // longer client timeout buys a send nothing. Used only by nodeAction for
+    // those two actions.
+    private let askSession: URLSession
     private let decoder = JSONDecoder()
     private let encoder = JSONEncoder()
 
@@ -93,6 +207,11 @@ actor APIClient {
         submitConfig.timeoutIntervalForRequest = 60
         submitConfig.timeoutIntervalForResource = 60
         submitSession = URLSession(configuration: submitConfig)
+
+        let askConfig = URLSessionConfiguration.ephemeral
+        askConfig.timeoutIntervalForRequest = 30
+        askConfig.timeoutIntervalForResource = 30
+        askSession = URLSession(configuration: askConfig)
     }
 
     // MARK: - low-level plumbing
@@ -131,7 +250,21 @@ actor APIClient {
         return url
     }
 
-    private func perform(_ request: URLRequest, session: URLSession? = nil) async throws -> Data {
+    /// The token a request to `baseURL` would carry given `stored` — the
+    /// same host/port rule `perform` applies, so a caller that hands `perform`
+    /// that record knows exactly which token (if any) a 401 answered.
+    static func tokenSent(to baseURL: String, stored: PairingRecord?) -> String? {
+        guard let url = URL(string: baseURL) else { return nil }
+        return record(for: URLRequest(url: url), stored: stored)?.token
+    }
+
+    /// `stored` is the record to authorize with; it defaults to a fresh
+    /// Keychain read. A caller that must tell "my token was refused" from "a
+    /// tokenless or stale request was refused" reads the record once and
+    /// passes it, so the token it compares is the one actually sent.
+    private func perform(_ request: URLRequest, session: URLSession? = nil,
+                         stored: PairingRecord? = PairingStore.load()) async throws -> Data {
+        let request = Self.authorize(request, record: Self.record(for: request, stored: stored))
         let data: Data
         let response: URLResponse
         do {
@@ -141,6 +274,9 @@ actor APIClient {
         }
         guard let http = response as? HTTPURLResponse else {
             throw KrakenError.message("no HTTP response from server")
+        }
+        if http.statusCode == 401 {
+            throw KrakenError.unauthorized
         }
         guard (200...299).contains(http.statusCode) else {
             if let body = try? decoder.decode(ErrorBody.self, from: data),
@@ -201,11 +337,12 @@ actor APIClient {
         }
     }
 
-    private func get<T: Decodable>(baseURL: String, path: String, query: [(String, String)] = []) async throws -> T {
+    private func get<T: Decodable>(baseURL: String, path: String, query: [(String, String)] = [],
+                                   stored: PairingRecord? = PairingStore.load()) async throws -> T {
         let url = try buildURL(baseURL: baseURL, path: path, query: query)
         var request = URLRequest(url: url)
         request.httpMethod = "GET"
-        let data = try await perform(request)
+        let data = try await perform(request, stored: stored)
         do {
             return try decoder.decode(T.self, from: data)
         } catch {
@@ -232,6 +369,11 @@ actor APIClient {
 
     func fetchBoard(baseURL: String) async throws -> WebBoard {
         try await get(baseURL: baseURL, path: "/api/board")
+    }
+
+    /// The board, authorized with exactly `stored` (see `perform`'s `stored`).
+    func fetchBoard(baseURL: String, stored: PairingRecord?) async throws -> WebBoard {
+        try await get(baseURL: baseURL, path: "/api/board", stored: stored)
     }
 
     /// Submits a draft: the server starts its cell inline and answers only
@@ -391,20 +533,25 @@ actor APIClient {
     // MARK: - side threads
 
     /// One side-thread mutation, all five ops through the one endpoint the
-    /// server exposes: "branch" (needs `title`, optional seed `text`, and is
-    /// the only op whose response carries a `tid`), "kill"/"revive" (`tid`),
+    /// server exposes: "branch" (needs `title` and a seed `text` — optional
+    /// only for a pane thread, `headless: false` — and is the only op whose
+    /// response carries a `tid`), "kill"/"revive" (`tid`),
     /// "rename" (`tid` + `title`), "send" (`tid` + `text`). Unused arguments
     /// stay nil and never ride on the wire. Errors — a dead cell, an unknown
     /// tid, a send to a closed thread — surface as KrakenError verbatim like
     /// every other action here.
+    /// `headless` rides only on "branch": nil leaves the key off (the server
+    /// then opens a headless ask thread), false asks for a pane thread.
     @discardableResult
     func threadAction(
         baseURL: String, slug: String, op: ThreadOp,
-        tid: String? = nil, title: String? = nil, text: String? = nil
+        tid: String? = nil, title: String? = nil, text: String? = nil,
+        headless: Bool? = nil
     ) async throws -> ThreadActionResponse {
         try await post(
             baseURL: baseURL, path: "/api/threads",
-            body: ThreadActionRequest(slug: slug, op: op.rawValue, tid: tid, title: title, text: text)
+            body: ThreadActionRequest(slug: slug, op: op.rawValue, tid: tid, title: title, text: text,
+                                      headless: headless)
         )
     }
 
@@ -470,6 +617,66 @@ actor APIClient {
             baseURL: baseURL, path: "/api/job/color",
             body: JobColorRequest(slug: slug, color: color)
         )
+    }
+
+    /// Sets a LOCAL job's visibility: "private" (never leaves this Mac),
+    /// "readonly" (the default — other boards see it, nobody touches it) or
+    /// "public" (other krakens may drive it). A one-field route like colour,
+    /// so it works on a live cell.
+    func setJobVisibility(baseURL: String, slug: String, visibility: String) async throws {
+        let _: OkResponse = try await post(
+            baseURL: baseURL, path: "/api/job/visibility",
+            body: JobVisibilityRequest(slug: slug, visibility: visibility)
+        )
+    }
+
+    // MARK: - pairing and the fleet
+
+    /// Revokes THIS phone's pairing on the paired node (no id: a paired caller
+    /// revokes itself). Log out calls it before wiping the Keychain record.
+    func revokePairing(baseURL: String) async throws {
+        let _: OkResponse = try await post(baseURL: baseURL, path: "/api/pair/revoke", body: EmptyRequest())
+    }
+
+    /// One action on a REMOTE cell, through the paired node's proxy: `node`
+    /// is the owner's node id, `action` one of steer, question, kill, done,
+    /// submit, archive, color, stop (public cards only) or thread-ask,
+    /// thread-send, thread-kill (readonly and public). The remote node's own
+    /// answer is relayed back, so a refusal reads exactly as it would
+    /// locally. Submit starts the remote cell inline and gets the long session
+    /// for the same reason `queueJob` does; thread-ask and thread-send get
+    /// `askSession`'s 30 s (see its declaration).
+    func nodeAction(baseURL: String, node: String, slug: String, action: String,
+                    payload: NodeActionPayload = NodeActionPayload()) async throws {
+        let url = try buildURL(baseURL: baseURL, path: "/api/nodes/action")
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try encoder.encode(NodeActionRequest(node: node, slug: slug, action: action, payload: payload))
+        let session: URLSession?
+        switch action {
+        case "submit": session = submitSession
+        case "thread-ask", "thread-send": session = askSession
+        default: session = nil
+        }
+        _ = try await perform(request, session: session)
+    }
+
+    /// A remote job's raw text, relayed by the paired node from its owner's
+    /// `GET /api/node/job/raw` — the remote sheet's Spec section reads it.
+    /// Readonly and public jobs both answer; private or unknown is a 404.
+    func fetchNodeJobRaw(baseURL: String, node: String, slug: String) async throws -> NodeJobRaw {
+        try await get(baseURL: baseURL, path: "/api/nodes/job/raw", query: [("node", node), ("slug", slug)])
+    }
+
+    /// A remote job's side thread, relayed by the paired node from its
+    /// owner's `GET /api/node/thread/read` — the same body as the local
+    /// `readThread`. `n` rides only when given.
+    func fetchNodeThreadRead(baseURL: String, node: String, slug: String, tid: String,
+                             n: Int?) async throws -> ThreadReadResponse {
+        var query = [("node", node), ("slug", slug), ("tid", tid)]
+        if let n { query.append(("n", String(n))) }
+        return try await get(baseURL: baseURL, path: "/api/nodes/thread/read", query: query)
     }
 
     // MARK: - goals

@@ -384,6 +384,22 @@ export function usageColorClass(percent: number): "u-ok" | "u-warn" | "u-danger"
 }
 
 /**
+ * contextColorClass colours a context-window fill: the same three classes
+ * usageColorClass uses, with a DIFFERENT danger line. Quota goes red at 80
+ * because that is where rotation stops considering a slot; a context fill
+ * goes red at the daemon's own handoff threshold, served on the wire as
+ * `handoff_pct` so this never hardcodes 75 — past it the daemon is typing
+ * `/handoff` into the pane, which is the one event the colour exists to warn
+ * about. Warn from 50 to just under it, matching the statusline's own battery
+ * flip at 50.
+ */
+export function contextColorClass(pct: number, handoffPct: number): "u-ok" | "u-warn" | "u-danger" {
+  if (pct >= handoffPct) return "u-danger";
+  if (pct >= 50) return "u-warn";
+  return "u-ok";
+}
+
+/**
  * usageCountdown formats a resets_at (unix MILLIS) as a compact countdown —
  * "3h12m", "4d", "8m", "now" — mirroring wakeupLabel's feel at day/hour/minute
  * granularity instead of minutes/seconds.

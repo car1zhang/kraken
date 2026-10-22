@@ -4,6 +4,10 @@
 // logic, just shapes; ios/API.md documents them and
 // internal/api/contract_test.go pins them).
 //
+// Foundation is imported explicitly for FleetFilter's JSONSerialization —
+// everything else here is Codable shapes the stdlib already covers.
+import Foundation
+//
 // Rule of thumb applied throughout: a Go struct field tagged `,omitempty`
 // becomes an Optional in Swift (the key may be entirely absent, and for
 // slices Go's nil-vs-empty distinction can even surface as JSON `null`;
@@ -61,6 +65,24 @@ struct WebBoard: Decodable {
     // absent on older servers; decoded so the shape is modeled, rendered
     // nowhere in the app yet.
     let operatorName: String?
+    // The other krakens on the tailnet this node has registered (v7,
+    // multiplayer). `omitempty` server-side: absent whenever the registry is
+    // empty, which is the singleplayer board. Stored behind a tolerant box
+    // (TolerantWebNodes) so a drifted node row costs that row, never the
+    // whole board decode; read through `nodes`.
+    private let nodesBox: TolerantWebNodes?
+    /// The registry, or nil when the server sent none.
+    var nodes: [WebNode]? { nodesBox?.nodes }
+    // This node's own tailscale stable id (`node_id`, additive and
+    // `omitempty`: absent with no tailscale or the fleet off). Compared
+    // against a thread's origin node by `threadOriginBadge`, so an ask
+    // thread this node opened carries no "from" badge.
+    let nodeId: String?
+    // This node's device label (`node_label`, additive and `omitempty`:
+    // absent with the fleet off, and on a server older than the key). Names
+    // the "this Mac" row of Settings' machine filter; absent, that row reads
+    // the bare words.
+    let nodeLabel: String?
 
     enum CodingKeys: String, CodingKey {
         case daemon
@@ -74,6 +96,200 @@ struct WebBoard: Decodable {
         case goals
         case background
         case operatorName = "operator"
+        case nodesBox = "nodes"
+        case nodeId = "node_id"
+        case nodeLabel = "node_label"
+    }
+}
+
+// MARK: - fleet (multiplayer)
+
+/// Which node a REMOTE card belongs to — present on exactly the cards another
+/// kraken served to this one (`owner` is absent on every local card).
+struct WebJobOwner: Decodable, Equatable {
+    let nodeID: String
+    let label: String
+    let `operator`: String
+    let online: Bool
+
+    enum CodingKeys: String, CodingKey {
+        case nodeID = "node_id"
+        case label
+        case `operator`
+        case online
+    }
+
+    /// The owner chip: `label · operator` (space, U+00B7, space), or the
+    /// label alone when the operator is empty.
+    var chipText: String {
+        `operator`.isEmpty ? label : "\(label) \u{00B7} \(`operator`)"
+    }
+}
+
+/// One registered node on `/api/board`'s `nodes` (webNode in
+/// internal/api/board.go). `last_err` is omitempty; `jobs` rides only on
+/// GET /api/nodes and is not modeled here.
+struct WebNode: Decodable, Equatable {
+    let nodeID: String
+    let label: String
+    let `operator`: String
+    let dnsName: String
+    let ip: String
+    let port: Int
+    let build: String
+    let contract: Int
+    let online: Bool
+    let lastOK: Int64
+    let lastErr: String?
+
+    enum CodingKeys: String, CodingKey {
+        case nodeID = "node_id"
+        case label
+        case `operator`
+        case dnsName = "dns_name"
+        case ip, port, build, contract, online
+        case lastOK = "last_ok"
+        case lastErr = "last_err"
+    }
+}
+
+/// `nodes` decoded element by element: a row that fails to decode is dropped
+/// and its neighbours kept, and a non-array value reads as no registry.
+private struct TolerantWebNodes: Decodable {
+    let nodes: [WebNode]?
+
+    private struct Skip: Decodable { init(from decoder: Decoder) throws {} }
+
+    init(from decoder: Decoder) throws {
+        guard var c = try? decoder.unkeyedContainer() else {
+            nodes = nil
+            return
+        }
+        var out: [WebNode] = []
+        while !c.isAtEnd {
+            if (try? c.decodeNil()) == true { continue }
+            if let node = try? c.decode(WebNode.self) {
+                out.append(node)
+            } else if (try? c.decode(Skip.self)) == nil {
+                break
+            }
+        }
+        nodes = out
+    }
+}
+
+/// How the phone may treat a card: its own (`local`), another kraken's that
+/// only shows (`readonly`), or another kraken's opened to the net
+/// (`publicCell` — every action travels through the paired node's proxy).
+enum RemoteMode {
+    case local, readonly, publicCell
+}
+
+extension WebJob {
+    var isRemote: Bool { owner != nil }
+
+    var remoteMode: RemoteMode {
+        guard owner != nil else { return .local }
+        return visibility == "public" ? .publicCell : .readonly
+    }
+
+    /// The card's identity on the merged board: `<node id>/<slug>` for a
+    /// remote card (two Macs can each have a `dream-<date>`), otherwise the
+    /// local identity (slug, or `archive:<slug>` for an archived job).
+    var boardKey: String {
+        if let owner { return "\(owner.nodeID)/\(slug)" }
+        return archived == true ? "archive:" + slug : slug
+    }
+}
+
+/// The spec text of a job's raw document: its YAML frontmatter dropped. The
+/// Swift twin of the web board's `stripFrontmatter` — same rule, same results.
+enum FrontmatterText {
+    /// When `text` opens with a `---` line (`\n` or `\r\n`) and a LATER line
+    /// is exactly `---` (a trailing `\r` allowed), everything after that
+    /// closing line with its leading run of newlines trimmed; otherwise
+    /// `text` unchanged.
+    ///
+    /// Walked as UTF-8 bytes rather than Characters because Swift folds
+    /// `\r\n` into ONE Character, so a Character-level `hasPrefix("---\n")`
+    /// misses a CRLF document and a split on `"\n"` never splits its lines.
+    /// Every byte compared is ASCII, so each cut lands on a scalar boundary.
+    ///
+    /// A leading UTF-8 byte-order mark (EF BB BF) is skipped before the fence
+    /// test, so a job file saved with one still loses its frontmatter instead
+    /// of rendering raw YAML. Text with no frontmatter comes back unchanged,
+    /// mark included.
+    static func body(of text: String) -> String {
+        let all = Array(text.utf8)
+        let bom: [UInt8] = [0xEF, 0xBB, 0xBF]
+        let bytes = all.starts(with: bom) ? Array(all.dropFirst(bom.count)) : all
+        let dash = UInt8(ascii: "-"), cr = UInt8(ascii: "\r"), lf = UInt8(ascii: "\n")
+        let fence: [UInt8] = [dash, dash, dash]
+        var i: Int
+        if bytes.starts(with: fence + [lf]) {
+            i = 4
+        } else if bytes.starts(with: fence + [cr, lf]) {
+            i = 5
+        } else {
+            return text
+        }
+        while i < bytes.count {
+            let end = bytes[i...].firstIndex(of: lf) ?? bytes.count
+            var line = bytes[i..<end]
+            if line.last == cr { line = line.dropLast() }
+            if line.elementsEqual(fence) {
+                var k = min(end + 1, bytes.count)
+                while k < bytes.count, bytes[k] == lf || bytes[k] == cr { k += 1 }
+                return String(decoding: bytes[k...], as: UTF8.self)
+            }
+            i = end + 1
+        }
+        return text
+    }
+}
+
+/// The board's machine filter — the iOS port of the web board bar's machines
+/// dropdown (job 634). The selection is the list of machine KEYS to show:
+/// `localNode` for this Mac's own cards, a node's tailscale stable id for a
+/// sibling's. Empty is no filter.
+enum FleetFilter {
+    /// The key of this node's own cards. A sentinel rather than the board's
+    /// `nodeId`: local cards carry no `owner` and are matched by that absence,
+    /// and `nodeId` is absent whenever the server's tailscale is unreadable. A
+    /// tailscale stable id is never the bare word `local`.
+    static let localNode = "local"
+
+    /// The machine a card belongs to, in the selection's vocabulary.
+    static func nodeKey(of job: WebJob) -> String {
+        job.owner?.nodeID ?? localNode
+    }
+
+    /// Empty `selected` returns `jobs` unchanged, order kept; otherwise exactly
+    /// the cards whose machine key is in `selected`, order kept. A machine that
+    /// joins the tailnet while a selection is active is hidden until picked.
+    static func apply(_ jobs: [WebJob], selected: [String]) -> [WebJob] {
+        if selected.isEmpty { return jobs }
+        let shown = Set(selected)
+        return jobs.filter { shown.contains(nodeKey(of: $0)) }
+    }
+
+    /// The persisted form: a JSON array of keys in one UserDefaults string
+    /// (`@AppStorage` takes a String, not an array). Anything unreadable — nil,
+    /// malformed JSON, a non-array — is the empty selection; duplicates and
+    /// empty strings are dropped.
+    static func selection(from raw: String?) -> [String] {
+        guard let raw, let data = raw.data(using: .utf8),
+              let any = try? JSONSerialization.jsonObject(with: data),
+              let list = any as? [Any] else { return [] }
+        var out: [String] = []
+        for case let s as String in list where !s.isEmpty && !out.contains(s) { out.append(s) }
+        return out
+    }
+
+    /// The inverse of `selection(from:)`; an empty selection encodes as `[]`.
+    static func encode(_ selected: [String]) -> String {
+        guard let data = try? JSONSerialization.data(withJSONObject: selected) else { return "[]" }
+        return String(decoding: data, as: UTF8.self)
     }
 }
 
@@ -491,6 +707,72 @@ private struct TolerantWebJobAccount: Decodable {
     }
 }
 
+// WebJobContext mirrors board.go's webJobContext — the cell lead's
+// context-window fill as its statusline last reported it (the kv row
+// `cell_ctx:<id>:<session>` that `kraken ctx-hook` writes on every render and
+// the daemon's auto-handoff pass reads). Nothing here is recomputed: `pct` is
+// Claude Code's own input-only fill over the model's REAL window.
+//
+// "context", never "tokens" or "usage": WebTokens is the job's summed SPEND
+// and usage is account QUOTA; this is how much of one live session's window
+// is occupied right now.
+//
+// Decode-only this pass — nothing on the phone renders it yet (Q6 of job
+// 630). Every field but `handoff` rides on every present object (no omitempty
+// on the Go type); absence is said one level up by `WebJob.context` being
+// nil. Two zeros carry meaning and neither is an empty window: `used` 0 means
+// the reporting hook predates the exact-count field, `window` 0 means the
+// hook sent no size.
+struct WebJobContext: Decodable {
+    /// `context_window.used_percentage` as reported — may carry decimals.
+    let pct: Double
+    /// `context_window_size` in tokens; 0 when the hook sent none.
+    let window: Int64
+    /// `total_input_tokens`, the exact count `pct` came from; 0 when unreported.
+    let used: Int64
+    /// Unix MILLIS of the report (WebJob.mtime's convention).
+    let at: Int64
+    /// The fill at which the daemon types /handoff into the pane — served so
+    /// no client hardcodes it.
+    let handoffPct: Double
+    /// The auto-handoff pass' state for THIS session; nil when it holds none.
+    let handoff: WebJobHandoff?
+
+    enum CodingKeys: String, CodingKey {
+        case pct, window, used, at
+        case handoffPct = "handoff_pct"
+        case handoff
+    }
+}
+
+// WebJobHandoff mirrors board.go's webJobHandoff: fires in the CURRENT streak
+// (the pass resets the count once the last fire is two hours old, so never a
+// lifetime total), the last fire's unix millis (0 when never fired), and
+// whether the streak hit its cap.
+struct WebJobHandoff: Decodable {
+    let fires: Int
+    let lastAt: Int64
+    let exhausted: Bool
+
+    enum CodingKeys: String, CodingKey {
+        case fires
+        case lastAt = "last_at"
+        case exhausted
+    }
+}
+
+// One `context` object, decoded so that it CANNOT throw — TolerantWebJobAccount's
+// twin, for its reason: `WebBoard.jobs` is a strictly decoded `[WebJob]`, so a
+// malformed `context` on one job would take the whole board with it, and a
+// meter nobody renders yet must never cost the board it would be drawn on.
+private struct TolerantWebJobContext: Decodable {
+    let context: WebJobContext?
+
+    init(from decoder: Decoder) throws {
+        context = try? WebJobContext(from: decoder)
+    }
+}
+
 struct WebJob: Decodable, Identifiable {
     let slug: String
     let repo: String
@@ -507,7 +789,7 @@ struct WebJob: Decodable, Identifiable {
     // zeus' own refined status (running/polling/waiting/question), distinct
     // from `state` — absent when zeus isn't resolvable yet.
     let zeusStatus: String?
-    // The pipeline skill zeus most recently used (info/aim/do/pr/dream),
+    // The pipeline skill zeus most recently used (info/aim/do/dream),
     // read off zeus' transcript server-side — see webJob.Stage
     // (internal/api/board.go) for what absence covers. Additive key, no
     // contract bump.
@@ -541,6 +823,13 @@ struct WebJob: Decodable, Identifiable {
     // Open/merged/closed PRs associated with this job, if any — additive key,
     // absent on older servers just like every other omitempty field here.
     let prs: [JobPR]?
+    // The cell's manual-test URLs (`kraken stack add`, job 622): one entry
+    // per link the cell registered, absent when it registered none and always
+    // absent on an archived job (the rows die with the cell). Decoded,
+    // tolerant of any `status` string, and NOT rendered yet: a localhost
+    // link means nothing on the phone until it is rewritten to the owner's
+    // tailnet host (Q3 of that job, open). Additive key.
+    let stack: [JobStackLink]?
     // zeus' open doc questions (answered or not), served straight from
     // `questions` rows in kraken.db — no file, no parse step, so there is
     // no more malformed-questions-file case (docQuestionsErr is gone, v5).
@@ -625,6 +914,27 @@ struct WebJob: Decodable, Identifiable {
     // its decode. Call sites see `WebJobAccount?` either way — the wrapper is
     // the decode's business and nothing else's.
     private let accountBox: TolerantWebJobAccount?
+    // The cell lead's context-window fill (WebJobContext above). nil is the
+    // ONLY spelling of UNREPORTED — no stamped session yet, a cell whose
+    // statusLine kraken left alone, a codex cell — and ARCHIVED, where
+    // api/board.go's `archivedWebJob` withholds the key (`account`'s call); a
+    // done job keeps its last report, since a reactivation resumes the same
+    // session near that fill. Served whatever the display state, so the key
+    // never flickers as a card moves column. Decode-only this pass. Additive
+    // key, absent on older servers, so no contract bump.
+    //
+    // Stored behind TolerantWebJobContext and read through the computed
+    // `context` below, exactly as `account` is, so a MALFORMED object costs
+    // this card its (unrendered) meter rather than the board its decode.
+    private let contextBox: TolerantWebJobContext?
+    // The node that owns this card when another kraken served it (v7). Absent
+    // on every local card — its presence IS "remote".
+    let owner: WebJobOwner?
+    // private | readonly | public — present on every card a v7 server sends
+    // (a local card's is its effective visibility, readonly by default).
+    // Optional for absence on an older server; compare, never switch, so an
+    // unknown word from a newer one reads as "not public".
+    let visibility: String?
     // `start_error` is gone with the queued state (v6): a start is now the
     // synchronous answer to POST /api/queue, so a failure surfaces as that
     // call's own 409 rather than as a field on a job parked in a queue.
@@ -639,13 +949,20 @@ struct WebJob: Decodable, Identifiable {
     // ForEach over jobs — SwiftUI's rows then reuse and swap state between two
     // unrelated jobs. The wire keeps carrying the slug deliberately (it is the
     // human-facing name); disambiguating is the client's job, on both clients.
-    var id: String { archived == true ? "archive:" + slug : slug }
+    //
+    // A remote card widens the same argument to owners: two Macs each have a
+    // `dream-<date>`, so the identity is `boardKey` — `<node id>/<slug>` for
+    // an owned card, the (slug, archived) pairing otherwise.
+    var id: String { boardKey }
     /// What the UI shows as the job's name (archived jobs may be numbered).
     var title: String { displaySlug ?? slug }
     /// The pool account this cell is bound to, or nil — unbound, archived, or
     /// (see accountBox) an object that failed to decode. The stored wrapper is
     /// private precisely so this is the only spelling a reader ever uses.
     var account: WebJobAccount? { accountBox?.account }
+    /// The cell lead's last context-window report, or nil — unreported,
+    /// archived, or (see contextBox) an object that failed to decode.
+    var context: WebJobContext? { contextBox?.context }
 
     enum CodingKeys: String, CodingKey {
         case slug, repo, state, err, outcome, cell, live
@@ -659,6 +976,7 @@ struct WebJob: Decodable, Identifiable {
         case reactivatable
         case lastSent = "last_sent"
         case prs
+        case stack
         case docQuestions = "doc_questions"
         case feedback
         case threads
@@ -671,6 +989,9 @@ struct WebJob: Decodable, Identifiable {
         // the wire name is `account`; the stored property is the tolerant
         // wrapper, read back through the computed `account` above
         case accountBox = "account"
+        // same arrangement for `context`
+        case contextBox = "context"
+        case owner, visibility
     }
 }
 
@@ -1015,6 +1336,18 @@ struct JobPR: Decodable {
     let state: String
 }
 
+// JobStackLink mirrors one entry of a job's `stack` array (ios/API.md's
+// `jobStackLink`, internal/api/jobstack.go's webStackLink): the url the cell
+// registered, its optional label, the daemon probe's last verdict on the port
+// (`up` | `down` | `unknown` — a plain String so a future word decodes), and
+// the registration time in unix millis.
+struct JobStackLink: Decodable {
+    let url: String
+    let label: String
+    let status: String
+    let at: Int64
+}
+
 // WebDocQuestion mirrors one `questions` row (board.go's webDocQuestion /
 // store.DocQuestion) — same field set, same json tags as the old
 // questions.yaml record it replaces, straight field copy.
@@ -1159,9 +1492,19 @@ struct WatchVerdictRequest: Encodable {
 // the same cell, so carl can ask questions without disturbing the run. A
 // thread can be killed (the window dies, the conversation survives) and
 // revived later, which is why `pane` comes and goes while `tid` never does.
-// `title`/`pane`/`model`/`closed_at` are `omitempty` on the wire → Optional
-// here per the rule atop this file; `tid`/`state`/`created_at` are always
-// present.
+// That is the `kind: "pane"` thread. A `kind: "headless"` thread (an ask
+// thread) holds no pane at all: kraken serve runs one headless claude per
+// question against the fork's session, so it is driven only through the
+// thread API (send/kill/revive), and `answering` is set while a question is in
+// flight. `kind` is orthogonal to `role` (`ask` | `mind`): the kind VALUE is
+// "headless" rather than "ask" precisely because `role: "ask"` already rides
+// this wire, so a headless thread reads `role: "ask", kind: "headless"`.
+// `title`/`pane`/`model`/`closed_at`/`origin`/`answering`/`note` are
+// `omitempty` on the wire → Optional here per the rule atop this file;
+// `tid`/`state`/`created_at` are always present, and `kind` is present on
+// every thread from a server that has it — Optional only so an older
+// server's threads still decode (they read as pane threads: `isHeadless`
+// false).
 struct WebThread: Decodable, Identifiable {
     let tid: String
     let title: String?
@@ -1176,11 +1519,27 @@ struct WebThread: Decodable, Identifiable {
     let closedAt: Int64?
     /// `ask` | `mind` — additive; nil from a server predating thread roles.
     var role: String? = nil
+    // The four below are `var … = nil` for the reason `role` is: the
+    // memberwise initializer then lets the app's own call sites (a freshly
+    // branched thread, a capture's mind thread) leave them out.
+    /// `"pane"` or `"headless"` (see the comment above the struct).
+    var kind: String? = nil
+    /// The node and login that opened the thread; nil when the row records
+    /// none.
+    var origin: WebThreadOrigin? = nil
+    /// True while an ask thread's question is being answered; nil otherwise.
+    var answering: Bool? = nil
+    /// What the last ask run left behind when it did not finish cleanly
+    /// (e.g. a failure or timeout line); nil when there is none.
+    var note: String? = nil
 
     var id: String { tid }
 
     /// A mind thread: the one a capture routes highlighted text to.
     var isMind: Bool { role == "mind" }
+
+    /// An ask thread: no pane, one headless claude per question.
+    var isHeadless: Bool { kind == "headless" }
 
     /// "live" means a claude is actually running in the thread's window;
     /// anything else (closed) is a conversation waiting to be revived —
@@ -1198,7 +1557,39 @@ struct WebThread: Decodable, Identifiable {
         case tid, title, state, pane, model, role
         case createdAt = "created_at"
         case closedAt = "closed_at"
+        case kind, origin, answering, note
     }
+}
+
+/// Who opened a thread: `origin` on a thread object (webThreadOrigin in
+/// internal/api). All three keys are present whenever `origin` is.
+struct WebThreadOrigin: Decodable {
+    let nodeId: String
+    let label: String
+    let login: String
+
+    enum CodingKeys: String, CodingKey {
+        case nodeId = "node_id"
+        case label, login
+    }
+}
+
+/// The "from …" badge a thread chip carries — the same rule as the web
+/// board's `threadOriginBadge` (web/_ui/src/lib/threadquick.ts): nil for a
+/// non-headless thread, for a thread with no origin, and for an ask thread
+/// this board's own node opened (`origin.nodeId == boardNodeId`); otherwise
+/// the origin's label, falling back to its login, then its node id, and nil
+/// when all three are blank. A nil `boardNodeId` compares as "": a board with
+/// no tailscale or with `KRAKEN_NODES=off` states no node id, and the server
+/// stamps "" as the origin node of the rows such a node opens (SelfNodeID),
+/// so they are its own.
+func threadOriginBadge(_ t: WebThread, boardNodeId: String?) -> String? {
+    guard t.isHeadless, let origin = t.origin else { return nil }
+    if origin.nodeId == (boardNodeId ?? "") { return nil }
+    for candidate in [origin.label, origin.login, origin.nodeId] where !candidate.isEmpty {
+        return candidate
+    }
+    return nil
 }
 
 // The five ops POST /api/threads accepts, spelled once so no call site can
@@ -1209,7 +1600,8 @@ enum ThreadOp: String {
 }
 
 // ThreadActionRequest mirrors POST /api/threads' single body shape across all
-// five ops — "branch" (title + optional seed text), "kill"/"revive" (tid),
+// five ops — "branch" (title + seed text, which the server requires unless
+// `headless` is false), "kill"/"revive" (tid),
 // "rename" (tid + title), "send" (tid + text). Unused fields stay nil and
 // JSONEncoder omits them entirely, same as SpawnRequest above.
 //
@@ -1224,6 +1616,9 @@ struct ThreadActionRequest: Encodable {
     var tid: String? = nil
     var title: String? = nil
     var text: String? = nil
+    /// "branch" only: true (or absent) opens a headless ask thread, false a
+    /// pane thread. nil leaves the key off, as for the fields above.
+    var headless: Bool? = nil
 }
 
 // POST /api/threads' success body: the uniform {"ok": true}, plus the new
@@ -1294,11 +1689,18 @@ struct ThreadReadResponse: Decodable {
     // "transcript" when the fork's transcript was readable, "none" when
     // there's nothing to read yet (freshly branched, never spoken to).
     let source: String
+    // The thread's kind ("pane"/"headless"), whether a question is in flight,
+    // and the last run's note ("" when none). The server sends all three on
+    // every read; Optional only so a server that predates them still decodes.
+    let kind: String?
+    let answering: Bool?
+    let note: String?
 
     enum CodingKeys: String, CodingKey {
         case blocks, counted, live, pane
         case forkUUID = "fork_uuid"
         case source
+        case kind, answering, note
     }
 }
 
@@ -1368,6 +1770,10 @@ struct WebRosterAgent: Decodable {
     let role: String?
     let status: String?
     let working: Bool?
+    // "teammate", or a background task's kind ("subagent" | "monitor" |
+    // "shell") riding the roster — additive (job 612), decoded only: nil on a
+    // pre-612 server means every entry is a teammate.
+    let kind: String?
 }
 
 struct WebArtifact: Decodable, Identifiable {

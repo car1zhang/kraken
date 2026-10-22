@@ -10,7 +10,12 @@ import Observation
 // shared by both rather than copied) — since a thread IS just another claude
 // in a pane; the differences are that it's addressed by (slug, tid) through
 // /api/threads rather than by pane through /api/peers, and that it can be
-// killed and revived without losing the conversation.
+// killed and revived without losing the conversation. That describes a pane
+// thread; an ask thread (`kind: "headless"`) has no pane, so it gets no
+// Terminal mode — only the conversation, its answering/note status and the
+// composer. The kind VALUE is "headless", not "ask": `role: "ask"` already
+// names carl's question thread (versus the mind thread) on this wire, and
+// the two are orthogonal.
 
 @Observable
 final class ThreadDetailViewModel {
@@ -25,6 +30,11 @@ final class ThreadDetailViewModel {
     // The fork's uuid in zeus' session — rendered in the "branched here"
     // divider, matching the web board's "⑂ branched here · <uuid>".
     var forkUUID = ""
+    // The read's kind ("pane"/"headless"; nil from a server that predates it),
+    // whether an ask thread's question is in flight, and the last run's note.
+    var kind: String?
+    var answering = false
+    var note = ""
     var loaded = false
     var loadError: String?
 
@@ -47,6 +57,9 @@ final class ThreadDetailViewModel {
             pane = resp.pane
             source = resp.source
             forkUUID = resp.forkUUID
+            kind = resp.kind
+            answering = resp.answering ?? false
+            note = resp.note ?? ""
             loaded = true
             loadError = nil
         } catch {
@@ -139,6 +152,7 @@ struct ThreadDetailView: View {
     // conversation out from under the reader. Optional so a future call site
     // that doesn't inject one still renders instead of trapping.
     @Environment(SheetNavState.self) private var sheetNav: SheetNavState?
+    @Environment(\.boardNodeId) private var boardNodeId
     @FocusState private var messageFocused: Bool
     @State private var vm = ThreadDetailViewModel()
     @State private var messageText = ""
@@ -156,6 +170,10 @@ struct ThreadDetailView: View {
 
     // Before the first read lands, the board's snapshot is all we have.
     private var isLive: Bool { vm.loaded ? vm.live : thread.isLive }
+    // The read's kind once it carries one, else the board snapshot's.
+    private var isHeadless: Bool { (vm.kind ?? thread.kind) == "headless" }
+    private var isAnswering: Bool { vm.loaded ? vm.answering : thread.answering == true }
+    private var note: String { vm.loaded ? vm.note : (thread.note ?? "") }
     private var displayTitle: String { titleOverride ?? thread.displayTitle }
     private var capturePane: String? {
         let pane = vm.pane ?? thread.pane
@@ -189,7 +207,8 @@ struct ThreadDetailView: View {
     var body: some View {
         VStack(spacing: 0) {
             header
-            if isLive {
+            // An ask thread has no pane, so there is no Terminal to pick.
+            if isLive && !isHeadless {
                 modePicker
             }
             ScrollViewReader { proxy in
@@ -335,7 +354,9 @@ struct ThreadDetailView: View {
         // the dialog says so, since "kill" otherwise reads like the job Kill
         // that tears a whole cell down.
         .confirmationDialog(
-            "Close this thread's window? The conversation is kept and can be revived later.",
+            isHeadless
+                ? "Close this thread? Any answer in flight is cancelled; the conversation is kept and can be revived later."
+                : "Close this thread's window? The conversation is kept and can be revived later.",
             isPresented: $showingKillConfirm, titleVisibility: .visible
         ) {
             Button("Close Thread", role: .destructive) { act(op: .kill) }
@@ -392,6 +413,10 @@ struct ThreadDetailView: View {
                 }
                 Spacer()
             }
+            ThreadAskStatusRow(
+                badge: threadOriginBadge(thread, boardNodeId: boardNodeId),
+                answering: isAnswering, note: note
+            )
             if let actionError = vm.actionError {
                 Text(actionError).font(.voice(11)).foregroundStyle(KTheme.counter)
             }
@@ -551,6 +576,9 @@ struct ThreadDetailView: View {
                         .foregroundStyle(KTheme.text2)
                 }
             }
+            // Kept visible, disabled while an ask thread is answering: the
+            // server refuses a second send then (409).
+            .disabled(isAnswering)
         }
         .padding()
         .background(.regularMaterial)
@@ -580,6 +608,48 @@ struct ThreadDetailView: View {
                 }
                 await vm.load(baseURL: baseURL, slug: slug, tid: thread.tid, n: 30)
                 onChanged()
+            }
+        }
+    }
+}
+
+/// The ask-thread line under a thread view's header: "from <node>" when the
+/// thread came from another node, an "answering…" pill while a question is in
+/// flight, and the last run's note. Draws nothing when all three are absent,
+/// which is always the case for a pane thread. Shared by ThreadDetailView and
+/// RemoteThreadView.
+struct ThreadAskStatusRow: View {
+    let badge: String?
+    let answering: Bool
+    let note: String
+
+    var body: some View {
+        if badge != nil || answering || !note.isEmpty {
+            VStack(alignment: .leading, spacing: 3) {
+                HStack(spacing: 8) {
+                    if let badge {
+                        Text("from \(badge)")
+                            .font(.data(11))
+                            .foregroundStyle(KTheme.skillInfo)
+                            .lineLimit(1)
+                    }
+                    if answering {
+                        HStack(spacing: 4) {
+                            ProgressView().controlSize(.mini)
+                            Text("answering…").font(.data(11))
+                        }
+                        .foregroundStyle(KTheme.polling)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 2)
+                        .background(KTheme.pollingSoft, in: Capsule())
+                    }
+                }
+                if !note.isEmpty {
+                    Text(note)
+                        .font(.voice(11))
+                        .foregroundStyle(KTheme.revealed)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
             }
         }
     }

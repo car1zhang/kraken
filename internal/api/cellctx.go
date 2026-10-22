@@ -11,11 +11,19 @@ import (
 // statusline hook (`kraken ctx-hook --slug <slug>`) reporting how full its
 // context window is. UsedPercentage is a pointer for orchContextReq's reason:
 // an absent number must be refused rather than recorded as 0%.
+//
+// TotalInputTokens is the statusline's exact input-only count, the number
+// UsedPercentage was computed from. Optional: a hook binary that predates the
+// field sends none and the row records 0, which the board's reader treats as
+// "not reported" rather than as a count (jobs.CellContext). It is a plain int
+// rather than a pointer because 0 is already that spelling — a billed session
+// never reports a zero count.
 type cellContextReq struct {
-	Slug           string   `json:"slug"`
-	SessionID      string   `json:"session_id"`
-	UsedPercentage *float64 `json:"used_percentage"`
-	ContextWindow  int64    `json:"context_window_size"`
+	Slug             string   `json:"slug"`
+	SessionID        string   `json:"session_id"`
+	UsedPercentage   *float64 `json:"used_percentage"`
+	ContextWindow    int64    `json:"context_window_size"`
+	TotalInputTokens int64    `json:"total_input_tokens"`
 }
 
 // cellContextHandler serves POST /api/cell/context. It persists the report
@@ -29,7 +37,7 @@ func cellContextHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	var req cellContextReq
 	if !decodeStrictBody(w, r, &req,
-		"this route takes only slug, session_id, used_percentage and context_window_size") {
+		"this route takes only slug, session_id, used_percentage, context_window_size and total_input_tokens") {
 		return
 	}
 	slug := strings.TrimSpace(req.Slug)
@@ -55,6 +63,10 @@ func cellContextHandler(w http.ResponseWriter, r *http.Request) {
 		webJSON(w, http.StatusBadRequest, map[string]string{"error": "used_percentage must be within 0..100"})
 		return
 	}
+	if req.TotalInputTokens < 0 {
+		webJSON(w, http.StatusBadRequest, map[string]string{"error": "total_input_tokens must not be negative"})
+		return
+	}
 	j := jobs.LoadJobBySlug(slug)
 	if j == nil {
 		webJSON(w, http.StatusNotFound, map[string]string{"error": "no job " + slug})
@@ -71,7 +83,7 @@ func cellContextHandler(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if err := jobs.RecordCellContext(st, j.ID, session, pct, req.ContextWindow); err != nil {
+	if err := jobs.RecordCellContext(st, j.ID, session, pct, req.ContextWindow, req.TotalInputTokens); err != nil {
 		webJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}

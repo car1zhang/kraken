@@ -27,6 +27,9 @@ func writeTestJob(t *testing.T, slug, extraFrontmatter string) {
 	src := "---\njob: " + slug + "\ntype: build\nrepo: monolith\n" +
 		extraFrontmatter + "---\n\n# Spec\n"
 	seedJobText(t, slug, src)
+	// a board an earlier test built inside the cache TTL would otherwise be
+	// served without this job
+	webBoardCache.invalidate()
 }
 
 // mustJSON marshals v for use as an httptest request body.
@@ -322,6 +325,35 @@ func TestLastUserSentCapsAt4000(t *testing.T) {
 	}
 	if want := strings.Repeat("a", 3999); !strings.HasPrefix(got, want) {
 		t.Errorf("got prefix %q, want 3999 leading a's before the ellipsis", got[:20])
+	}
+}
+
+// --- fillLastWords: the cell-gone and done branches' shared transcript read ---
+
+func TestFillLastWordsStampsDetailAndLastSent(t *testing.T) {
+	path := writeBoardTestTranscript(t,
+		`{"type":"user","message":{"content":"ship it"}}`,
+		`{"type":"assistant","message":{"content":[{"type":"text","text":"PR opened, stopping here"}]}}`,
+	)
+	var wj webJob
+	fillLastWords(&wj, path)
+	if wj.Detail != "PR opened, stopping here" {
+		t.Errorf("Detail = %q, want the last assistant text", wj.Detail)
+	}
+	if wj.LastSent != "ship it" {
+		t.Errorf("LastSent = %q, want the last user message", wj.LastSent)
+	}
+	// no Skill call, no /name command, no SKILL.md read in the fixture
+	if wj.Stage != "" {
+		t.Errorf("Stage = %q, want empty for a transcript that used no skill", wj.Stage)
+	}
+}
+
+func TestFillLastWordsLeavesAnUnresolvedTranscriptAlone(t *testing.T) {
+	wj := webJob{Detail: "kept", LastSent: "kept", Stage: "do"}
+	fillLastWords(&wj, "")
+	if wj.Detail != "kept" || wj.LastSent != "kept" || wj.Stage != "do" {
+		t.Errorf("an empty path must set nothing: %+v", wj)
 	}
 }
 

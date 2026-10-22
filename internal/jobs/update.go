@@ -1,3 +1,9 @@
+// Protocol parity: this file is part of the UPDATE protocol (CLAUDE.md
+// § Protocol parity). The protocol is kraken-core's and identical in every
+// fork; a change here lands in kraken-core first, carries "protocol:" in its
+// PR title, and is named to the operator as a protocol change before it is
+// pushed.
+
 package jobs
 
 import (
@@ -330,13 +336,42 @@ type UpdatePreflightInfo struct {
 	XcodegenPath string
 }
 
+// selfRepo resolves kraken's own checkout — the one self-update merges into
+// and builds, the availability poll fetches, and a TestFlight ship archives.
+// KRAKEN_SELF_REPO names it: an absolute path must be a directory holding a
+// .git and is returned cleaned; any other value is a repo name resolved under
+// the repos dir like a job's repo field. Unset or empty falls back to the
+// repo named "kraken", which is what every caller resolved before the knob.
+func selfRepo() (string, error) {
+	v := strings.TrimSpace(os.Getenv("KRAKEN_SELF_REPO"))
+	if v == "" {
+		p, err := ResolveRepo("kraken")
+		if err != nil {
+			return "", fmt.Errorf("%w — set KRAKEN_SELF_REPO to kraken's own checkout", err)
+		}
+		return p, nil
+	}
+	if filepath.IsAbs(v) {
+		dir := filepath.Clean(v)
+		if !isGitRepo(dir) {
+			return "", fmt.Errorf("KRAKEN_SELF_REPO=%s is not a git checkout (no .git in it)", dir)
+		}
+		return dir, nil
+	}
+	p, err := ResolveRepo(v)
+	if err != nil {
+		return "", fmt.Errorf("KRAKEN_SELF_REPO=%s: %w (an absolute path or a repo name under the repos dir)", v, err)
+	}
+	return p, nil
+}
+
 // PreflightUpdate runs every cheap local check before anything mutates. It is
 // shared by the CLI verb and the API handler on purpose: the refusal a board
 // click shows and the refusal a terminal prints are then the same sentence,
 // produced by the same code. Its error text IS the user-facing message.
 func PreflightUpdate() (UpdatePreflightInfo, error) {
 	var pf UpdatePreflightInfo
-	repo, err := ResolveRepo("kraken")
+	repo, err := selfRepo()
 	if err != nil {
 		return pf, err
 	}
@@ -530,7 +565,7 @@ func refreshUpdateAvail() UpdateAvail {
 		_ = writeUpdateAvail(a)
 		return a
 	}
-	repo, err := ResolveRepo("kraken")
+	repo, err := selfRepo()
 	if err != nil {
 		return fail(err.Error())
 	}

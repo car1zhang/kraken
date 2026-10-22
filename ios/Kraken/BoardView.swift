@@ -9,8 +9,12 @@ final class BoardViewModel {
     var errorMessage: String?
 
     func refresh(baseURL: String) async {
+        // Read once and handed to the request, so the token compared on a 401
+        // below is the one this request actually carried.
+        let stored = PairingStore.load()
+        let sentToken = APIClient.tokenSent(to: baseURL, stored: stored)
         do {
-            let board = try await APIClient.shared.fetchBoard(baseURL: baseURL)
+            let board = try await APIClient.shared.fetchBoard(baseURL: baseURL, stored: stored)
             self.board = board
             self.errorMessage = nil
             ingestBoardUpdate(board.update)
@@ -19,6 +23,22 @@ final class BoardViewModel {
             // BGAppRefreshTask in NotificationManager) runs the same
             // blocked-job diff — one notification per newly-blocked job.
             NotificationManager.shared.processBoard(board)
+        } catch KrakenError.unauthorized {
+            // The gate refused THIS phone's token: revoked from the board, or
+            // the password changed. Only then is the pairing forgotten (and
+            // only once — the next 401 finds a different or no record) and
+            // BoardView's gate swaps the board for the pair screen.
+            //
+            // A 401 to a request that carried no token (the server field
+            // names another host) or a token that is no longer the stored one
+            // (an in-flight request from before a re-pair) says nothing about
+            // the current pairing: it is shown as an error and wipes nothing.
+            if let sentToken, sentToken == PairingStore.load()?.token {
+                PairingSession.shared.clear()
+                NotificationManager.shared.resetConditionTracking()
+                self.board = nil
+            }
+            self.errorMessage = KrakenError.unauthorized.errorDescription
         } catch {
             // An update's last act restarts the server this poll talks to,
             // so mid-run the board goes dark for a few seconds. Say what is
@@ -30,8 +50,36 @@ final class BoardViewModel {
         }
     }
 
+    /// Every card in `column`, local and remote, narrowed to the machines
+    /// ticked in Settings' machine filter (none ticked: every card). The
+    /// selection is read straight from UserDefaults: BoardView observes the
+    /// same key through @AppStorage, which is what re-runs this when it
+    /// changes.
     func jobs(in column: BoardColumn) -> [WebJob] {
-        (board?.jobs ?? []).filter { BoardTheme.column(for: $0) == column }
+        let selected = FleetFilter.selection(from: UserDefaults.standard.string(forKey: Self.fleetNodesKey))
+        return FleetFilter.apply(board?.jobs ?? [], selected: selected)
+            .filter { BoardTheme.column(for: $0) == column }
+    }
+
+    /// The `@AppStorage` key of Settings' machine filter: a JSON array of
+    /// machine keys (FleetFilter). Replaces the old `hideOthers` Bool, which
+    /// is read once more by `migrateHideOthers` and then removed.
+    static let fleetNodesKey = "fleetNodes"
+    private static let legacyHideOthersKey = "hideOthers"
+
+    /// One-time migration of the old all-or-nothing switch: `hideOthers=true`
+    /// meant "only this Mac", which is exactly `[FleetFilter.localNode]`.
+    /// Runs only while the new key is absent; the legacy key is removed
+    /// either way, so this is a no-op from the second launch on.
+    static func migrateHideOthers(_ defaults: UserDefaults = .standard) {
+        guard defaults.object(forKey: fleetNodesKey) == nil else {
+            defaults.removeObject(forKey: legacyHideOthersKey)
+            return
+        }
+        if defaults.bool(forKey: legacyHideOthersKey) {
+            defaults.set(FleetFilter.encode([FleetFilter.localNode]), forKey: fleetNodesKey)
+        }
+        defaults.removeObject(forKey: legacyHideOthersKey)
     }
 
     /// Non-blocking contract-handshake warnings for the latest board fetch —
@@ -897,20 +945,21 @@ enum BoardSheet: Identifiable {
 
     var id: String {
         switch self {
-        case .job(let job): "job:\(job.slug)"
+        case .job(let job): "job:\(job.id)"
         case .newJob: "newJob"
         case .dream: "dream"
         case .usage: "usage"
         case .overview(let focused): "overview:\(focused)"
-        case .dragSteer(let job): "dragSteer:\(job.slug)"
-        case .dragReactivate(let job): "dragReactivate:\(job.slug)"
+        case .dragSteer(let job): "dragSteer:\(job.id)"
+        case .dragReactivate(let job): "dragReactivate:\(job.id)"
         }
     }
 
-    /// The presented job, when a job sheet is what's up. The staleness
+    /// The presented job's board identity (`WebJob.id` — owner-qualified for
+    /// a remote card), when a job sheet is what's up. The staleness
     /// auto-dismiss and the pushed-child reset both key off this.
-    var jobSlug: String? {
-        if case .job(let job) = self { return job.slug }
+    var jobID: String? {
+        if case .job(let job) = self { return job.id }
         return nil
     }
 
@@ -949,37 +998,181 @@ final class BoardRouteStamp {
     var generation = 0
 }
 
-/// The board's first-run state: no server URL stored yet (a fresh install —
-/// `KrakenDefaults.serverURL` is empty). It says what is missing and where to
-/// set it, and issues no request of any kind; BoardView renders it INSTEAD of
-/// the board composition, so none of the board's polls exist while it shows.
-struct BoardNoServerView: View {
-    /// Switches to the Settings tab, where the server URL is entered.
+/// The board's unpaired state — the pair screen (it was BoardNoServerView, the
+/// "set your server" view, before pairing generalised it). Shown instead of the board
+/// composition whenever no pairing is stored (a fresh install, a Log out, or
+/// a 401 that cleared the record), so none of the board's polls exist while
+/// it shows.
+///
+/// The seed field IS the stored server URL (typed, or scanned from the board's pairing QR), and
+/// Pair runs `PairFlow` — a challenge and a proof per kraken the seed knows,
+/// binding to the single one whose password matches. The password never
+/// leaves the phone and is never stored.
+struct BoardPairView: View {
+    /// Switches to the Settings tab.
     let openSettings: () -> Void
 
+    @AppStorage("serverURL") private var serverURL = KrakenDefaults.serverURL
+    @State private var password = ""
+    @State private var isPairing = false
+    @State private var status: String?
+    @State private var statusIsError = false
+    @State private var showingScanner = false
+    @State private var tailnetAddress: String?
+    @FocusState private var focused: Field?
+
+    private enum Field { case seed, password }
+
+    private var canPair: Bool {
+        !isPairing && KrakenDefaults.isConfigured(serverURL) && !password.isEmpty
+    }
+
     var body: some View {
-        VStack(spacing: 14) {
-            Image(systemName: "antenna.radiowaves.left.and.right")
-                .font(.system(size: 34))
-                .foregroundStyle(KTheme.accent)
-            Text("Set your server")
-                .font(.voice(17, weight: .semibold))
-            Text("Enter the address of the Mac running kraken serve — for example \(SettingsView.serverURLPlaceholder) — on the Settings screen. The board loads as soon as it is saved.")
-                .font(.voice(13))
-                .foregroundStyle(KTheme.text2)
-                .multilineTextAlignment(.center)
-            Button("Open Settings", action: openSettings)
-                .buttonStyle(.borderedProminent)
+        ScrollView {
+            VStack(alignment: .leading, spacing: 16) {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Pair this phone")
+                        .font(.voice(20, weight: .semibold))
+                        .foregroundStyle(KTheme.text)
+                    Text(tailnetLine)
+                        .font(.voice(13))
+                        .foregroundStyle(tailnetAddress == nil ? KTheme.revealed : KTheme.text2)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                seedCard
+                passwordCard
+                Button("Open Settings", action: openSettings)
+                    .font(.voice(13))
+                    .foregroundStyle(KTheme.accent)
+            }
+            .padding(20)
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .padding(24)
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background { ThemeBackgroundView().ignoresSafeArea() }
         .navigationTitle("Board")
+        .task { refreshTailnet() }
+        .sheet(isPresented: $showingScanner) {
+            PairScannerSheet { scanned in
+                serverURL = scanned
+                showingScanner = false
+                focused = .password
+            }
+        }
+    }
+
+    private var seedCard: some View {
+        ThemedCard {
+            VStack(alignment: .leading, spacing: 10) {
+                Text("Seed — any kraken on the tailnet").kLabelStyle()
+                TextField(SettingsView.serverURLPlaceholder, text: $serverURL)
+                    .keyboardType(.URL)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+                    .focused($focused, equals: .seed)
+                    .font(.data(13))
+                    .kField(focused: focused == .seed)
+                Button {
+                    showingScanner = true
+                } label: {
+                    Label("Scan the board's pairing code", systemImage: "qrcode.viewfinder")
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.bordered)
+                .disabled(!PairScannerView.isAvailable)
+                if !PairScannerView.isAvailable {
+                    Text("the camera scanner isn't available here — type the address instead")
+                        .font(.voice(11))
+                        .foregroundStyle(KTheme.text2)
+                }
+            }
+            .padding(14)
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+
+    private var passwordCard: some View {
+        ThemedCard {
+            VStack(alignment: .leading, spacing: 10) {
+                Text("Pairing password").kLabelStyle()
+                SecureField("set on the board's ◉ Devices panel", text: $password)
+                    .textContentType(.password)
+                    .focused($focused, equals: .password)
+                    .font(.data(13))
+                    .kField(focused: focused == .password)
+                    .submitLabel(.go)
+                    .onSubmit { if canPair { pair() } }
+                Button {
+                    pair()
+                } label: {
+                    if isPairing {
+                        ProgressView().frame(maxWidth: .infinity)
+                    } else {
+                        Label("Pair", systemImage: "link")
+                            .frame(maxWidth: .infinity)
+                    }
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(!canPair)
+                if let status {
+                    Text(status)
+                        .font(.voice(12))
+                        .foregroundStyle(statusIsError ? KTheme.counter : KTheme.text2)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            .padding(14)
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+
+    private var tailnetLine: String {
+        if let tailnetAddress {
+            return "On the tailnet as \(tailnetAddress). Pick a kraken by its pairing password."
+        }
+        return "Not on a tailnet — turn Tailscale on, then pair. Krakens are only reachable over it."
+    }
+
+    private func refreshTailnet() {
+        tailnetAddress = TailnetDetector.currentAddresses().first(where: TailnetDetector.isTailnetAddress)
+    }
+
+    private func pair() {
+        let raw = serverURL.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let seed = URL(string: raw), seed.host != nil else {
+            statusIsError = true
+            status = "that seed isn't a URL — e.g. \(SettingsView.serverURLPlaceholder)"
+            return
+        }
+        let pw = password
+        isPairing = true
+        statusIsError = false
+        status = "asking each kraken…"
+        refreshTailnet()
+        Task {
+            do {
+                let record = try await PairFlow.pair(
+                    seed: seed, password: pw, deviceLabel: UIDevice.current.name,
+                    client: URLSessionPairClient()
+                )
+                try PairingSession.shared.adopt(record)
+                password = ""
+                status = nil
+            } catch {
+                statusIsError = true
+                status = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+            }
+            isPairing = false
+        }
     }
 }
 
 struct BoardView: View {
     @AppStorage("serverURL") private var serverURL = KrakenDefaults.serverURL
+    // Observed so a pick in Settings' machine filter re-renders the columns,
+    // whose `vm.jobs(in:)` reads the same key (see BoardViewModel.jobs).
+    @AppStorage(BoardViewModel.fleetNodesKey) private var fleetNodesRaw = ""
+    // The pairing gate: pairing, Log out and a 401 all change this.
+    @State private var pairing = PairingSession.shared
     @Environment(\.scenePhase) private var scenePhase
     @Environment(AppRouter.self) private var router
     // Owned by KrakenApp, not by this view: Settings' "Mac" section drives the
@@ -1058,10 +1251,17 @@ struct BoardView: View {
             // then, so no board request is issued until a URL is saved; the
             // @AppStorage read re-evaluates this the moment Settings writes
             // one, and the polls start on the composition's first appear.
-            if KrakenDefaults.isConfigured(serverURL) {
+            //
+            // v7 adds the second half: a server is not enough, the phone
+            // must also hold a pairing, or every board call is a 401. Until
+            // it does, the pair screen stands in for the board.
+            if KrakenDefaults.isConfigured(serverURL) && pairing.isPaired {
                 withRouting(withSheets(withPolling(boardStack)))
+                    // Read by ThreadChip and the thread views to leave this
+                    // node's own ask threads unbadged (threadOriginBadge).
+                    .environment(\.boardNodeId, vm.board?.nodeId)
             } else {
-                BoardNoServerView {
+                BoardPairView {
                     router.selectedTab = .settings
                 }
             }
@@ -1236,7 +1436,7 @@ struct BoardView: View {
             // appear/disappear pair leaving auto-dismiss suppressed forever.
             // Keyed on the presented JOB, not on the sheet as a whole: raising
             // the usage drawer over nothing is not a reason to touch it.
-            .onChange(of: sheet?.jobSlug) { jobSheetNav.childPushed = false }
+            .onChange(of: sheet?.jobID) { jobSheetNav.childPushed = false }
             // Auto-dismiss the presented job sheet once the board's own
             // polling refresh (vm.refresh, every 4s above) shows that job's
             // `state` has moved on since it was opened — unblocked, killed,
@@ -1251,7 +1451,7 @@ struct BoardView: View {
             // (jobSheetNav): a pushed thread view is a place to sit and read,
             // and a working↔blocked flip underneath it is routine, not a
             // reason to tear the reader's stack down (see SheetNavState).
-            .onChange(of: vm.board?.jobs.first(where: { $0.slug == sheet?.jobSlug })?.state) { _, newState in
+            .onChange(of: vm.board?.jobs.first(where: { $0.id == sheet?.jobID })?.state) { _, newState in
                 // `case .job` and not merely "a slug is presented": clearing
                 // the slot has to be conditional on a JOB being the thing in
                 // it, or a state flip could dismiss a drawer.
@@ -1271,6 +1471,7 @@ struct BoardView: View {
                 }
             }
             .environment(jobSheetNav)
+            .environment(\.boardNodeId, vm.board?.nodeId)
         case .newJob:
             NavigationStack {
                 NewJobSheet(baseURL: serverURL) {
@@ -1354,7 +1555,9 @@ struct BoardView: View {
                     if vm.board == nil {
                         await vm.refresh(baseURL: serverURL)
                     }
-                    if let job = vm.board?.jobs.first(where: { $0.slug == slug }) {
+                    // A kraken://job link names a LOCAL job — a remote card
+                    // with the same slug belongs to another Mac.
+                    if let job = vm.board?.jobs.first(where: { $0.slug == slug && !$0.isRemote }) {
                         // Up to five seconds have passed and a later route may
                         // already be on screen. Presenting now would put this
                         // OLDER link on top of it — so the stamp decides, and
@@ -1772,7 +1975,11 @@ struct BoardView: View {
                             // and no cross-column drop has an archived
                             // source (mirrors the web board, where archived
                             // cards render without draggable at all).
-                            if column == .archived {
+                            //
+                            // Remote (owned) cards aren't draggable either:
+                            // their order and lifecycle belong to another
+                            // Mac, and a drop would act on a LOCAL slug.
+                            if column == .archived || job.isRemote {
                                 JobCardView(job: job)
                                     // See the non-archived branch below for
                                     // why the shape is spelled out.
@@ -1859,12 +2066,16 @@ struct BoardView: View {
     private func orderedJobs(_ column: BoardColumn) -> [WebJob] {
         let serverJobs = vm.jobs(in: column)
         guard let overlay = localOrder[column] else { return serverJobs }
-        var bySlug = Dictionary(uniqueKeysWithValues: serverJobs.map { ($0.slug, $0) })
+        // Keyed by board identity, not slug: a remote card can share a local
+        // card's slug, and `uniqueKeysWithValues` traps on a duplicate key.
+        // The overlay only ever holds LOCAL slugs (remote cards never drag),
+        // and a local non-archived card's identity is its slug.
+        var byID = Dictionary(serverJobs.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         var listed: [WebJob] = []
         for slug in overlay {
-            if let job = bySlug.removeValue(forKey: slug) { listed.append(job) }
+            if let job = byID.removeValue(forKey: slug) { listed.append(job) }
         }
-        let unlisted = serverJobs.filter { bySlug[$0.slug] != nil }
+        let unlisted = serverJobs.filter { byID[$0.id] != nil }
         return unlisted + listed
     }
 
@@ -1874,7 +2085,9 @@ struct BoardView: View {
     /// crosses other cards.
     private func slugsBinding(for column: BoardColumn) -> Binding<[String]> {
         Binding(
-            get: { localOrder[column] ?? orderedJobs(column).map(\.slug) },
+            // Local cards only: /api/reorder orders THIS Mac's column, and a
+            // remote slug in it would be a name the server does not have.
+            get: { localOrder[column] ?? orderedJobs(column).filter { !$0.isRemote }.map(\.slug) },
             set: { localOrder[column] = $0 }
         )
     }
@@ -1953,7 +2166,7 @@ struct BoardView: View {
     /// pending-settle (cleared on the next poll), on error everything
     /// reverts to the server's order immediately.
     private func commitReorder(column: BoardColumn, slugs: [String]) {
-        guard slugs != vm.jobs(in: column).map(\.slug) else {
+        guard slugs != vm.jobs(in: column).filter({ !$0.isRemote }).map(\.slug) else {
             localOrder[column] = nil
             return
         }
@@ -1990,7 +2203,8 @@ struct BoardView: View {
     /// WebJob is looked up fresh from the board rather than threaded through
     /// the drag, since drag state only ever carried the slug.
     private func performCrossColumnDrop(from: BoardColumn, to: BoardColumn, slug: String) {
-        let job = vm.board?.jobs.first { $0.slug == slug }
+        // Only local cards drag, so the dragged slug names a local job.
+        let job = vm.board?.jobs.first { $0.slug == slug && !$0.isRemote }
         switch (from, to) {
         // Draft → working IS the submit: one POST that starts the cell and
         // only answers once it is up, so this drop can hold for several
@@ -2236,6 +2450,40 @@ private struct JobCardView: View {
                 .padding(14)
                 .frame(maxWidth: .infinity, alignment: .leading)
         }
+        // A remote card is outlined dashed — the web board's owned-card
+        // treatment — so it reads as "another Mac's" before the chip is read.
+        .overlay {
+            if job.isRemote {
+                RoundedRectangle(cornerRadius: 24, style: .continuous)
+                    .strokeBorder(KTheme.text2.opacity(0.55), style: StrokeStyle(lineWidth: 1, dash: [5, 4]))
+            }
+        }
+    }
+
+    /// The owner chip (`label · operator`) and, for a public remote cell, a
+    /// `public` tag — the two facts that say whose card this is and whether
+    /// the phone may drive it.
+    @ViewBuilder
+    private var ownerRow: some View {
+        if let owner = job.owner {
+            HStack(spacing: 6) {
+                Text(owner.chipText)
+                    .font(.data(10, weight: .semibold))
+                    .foregroundStyle(owner.online ? KTheme.accent : KTheme.text2)
+                    .padding(.horizontal, 7).padding(.vertical, 2)
+                    .overlay(Capsule().stroke(KTheme.accent.opacity(owner.online ? 0.6 : 0.25), lineWidth: 1))
+                if job.remoteMode == .publicCell {
+                    Text("public")
+                        .font(.data(10))
+                        .foregroundStyle(KTheme.solved)
+                }
+                if !owner.online {
+                    Text("offline")
+                        .font(.data(10))
+                        .foregroundStyle(KTheme.text2)
+                }
+            }
+        }
     }
 
     // Split out of `body` so the card is one expression the type-checker can
@@ -2273,6 +2521,7 @@ private struct JobCardView: View {
             Text(job.repo)
                 .font(.data(11))
                 .foregroundStyle(KTheme.text2)
+            ownerRow
             HStack(spacing: 8) {
                 StateCapsule(state: job.state)
                 if job.live, let cell = job.cell {
@@ -2479,18 +2728,19 @@ private struct CardChipFlow: Layout {
 }
 
 /// The stage badge: which pipeline skill zeus most recently used
-/// (info/aim/do/pr/dream), read off zeus' transcript server-side —
+/// (info/aim/do/dream), read off zeus' transcript server-side —
 /// see `webJob.Stage` (internal/api/board.go) for what absence covers.
 /// Like the goal it is a fact ABOUT the job rather than something it
 /// contains, so the card slots it with the identity chips (after the
 /// threads, before the goal — the slot web's `.st-chip` takes).
 ///
 /// Each stage wears its skill's own icon and palette colour (`KTheme.skill*`
-/// — the same five tokens the steer modal's command chips and the DREAM
+/// — the same tokens the steer modal's command chips and the DREAM
 /// surface wear, mirrored from web's `--skill-*`), so a column of badges
 /// sorts by eye; web's `.st-chip-<stage>` carries the text-glyph sibling of
 /// each symbol and the two lists move together. A stage this build does not
-/// name (including the retired `graph`) falls back to the accent
+/// name (including the retired `graph`, and `pr`, which folded into `do`
+/// when the PR became do's own last step) falls back to the accent
 /// look with a neutral symbol rather than drawing nothing — a symbol rather
 /// than web's bare-name treatment because `KChip.icon` is non-optional, so
 /// this chip structurally always draws one: the name is the payload, the
@@ -2503,7 +2753,6 @@ private struct StageChip: View {
         case "info": return ("info.circle", KTheme.skillInfo)
         case "aim": return ("scope", KTheme.skillAim)
         case "do": return ("gearshape.fill", KTheme.skillDo)
-        case "pr": return ("arrow.triangle.branch", KTheme.skillPr)
         case "dream": return ("moon.fill", KTheme.skillDream)
         default: return ("arrow.triangle.turn.up.right.diamond", KTheme.accent)
         }
@@ -2804,13 +3053,14 @@ private struct BoardOverviewSheet: View {
                 JobDetailView(job: job, baseURL: baseURL, onUpdate: onUpdate)
             }
             .environment(jobSheetNav)
+            .environment(\.boardNodeId, vm.board?.nodeId)
         }
-        .onChange(of: selectedJob?.slug) { jobSheetNav.childPushed = false }
+        .onChange(of: selectedJob?.id) { jobSheetNav.childPushed = false }
         // Same auto-dismiss-on-staleness as BoardView's own job sheet — this
         // sheet reads `vm` live (see its doc comment above), so the same
         // polling refresh drives it here too, and it stands down the same way
         // while a child view is pushed on the stack.
-        .onChange(of: vm.board?.jobs.first(where: { $0.slug == selectedJob?.slug })?.state) { _, newState in
+        .onChange(of: vm.board?.jobs.first(where: { $0.id == selectedJob?.id })?.state) { _, newState in
             guard selectedJob != nil, !jobSheetNav.childPushed,
                   let presentedJobState, let newState, newState != presentedJobState else { return }
             selectedJob = nil
