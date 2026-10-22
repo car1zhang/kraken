@@ -195,14 +195,10 @@ const remoteProxyTimeout = 15 * time.Second
 // Inside a cell, KRAKEN_JOB_SLUG (exported into zeus' spawn command) names
 // the sending cell, which the receiving zeus sees in its sender prefix.
 func sendRemote(n *nodeRowWire, slug, msg string) {
-	headers := map[string]string{}
-	if cell := strings.TrimSpace(os.Getenv("KRAKEN_JOB_SLUG")); cell != "" {
-		headers["X-Kraken-From-Cell"] = cell
-	}
 	body, err := qfPostWith("/api/nodes/action", map[string]any{
 		"node": n.NodeID, "slug": slug, "action": "steer",
 		"payload": map[string]string{"text": msg},
-	}, headers, remoteProxyTimeout)
+	}, fromCellHeaders(), remoteProxyTimeout)
 	if err != nil {
 		util.Die("%v", err)
 	}

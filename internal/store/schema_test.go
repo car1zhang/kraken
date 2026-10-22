@@ -224,6 +224,12 @@ func undoV37(t *testing.T, s *Store) {
 
 func downgradeFreshDB(t *testing.T, s *Store, target int) {
 	t.Helper()
+	// Reverse v38: the spawn-links table goes. Shape-only, like v35's arm.
+	if target < 38 {
+		if _, err := s.db.Exec(`DROP TABLE job_spawns`); err != nil {
+			t.Fatalf("downgrade to v%d (undo v38) drop job_spawns: %v", target, err)
+		}
+	}
 	// Reverse v37: jobs.author and the mind-pass mm_items shape go.
 	if target < 37 {
 		undoV37(t, s)

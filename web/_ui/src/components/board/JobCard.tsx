@@ -14,6 +14,7 @@ import { DocQuestionChip, docQuestionChipVisible } from "./chips/DocQuestionChip
 import { FeedbackChip, feedbackChipVisible } from "./chips/FeedbackChip.tsx";
 import { LoadChip, loadChipVisible } from "./chips/LoadChip.tsx";
 import { PRChips } from "./chips/PRChips.tsx";
+import { SpawnChips } from "./chips/SpawnChips.tsx";
 import { StackChips } from "./chips/StackChips.tsx";
 import { StageChip, stageChipVisible } from "./chips/StageChip.tsx";
 import { ThreadChips, threadChipsVisible } from "./chips/ThreadChips.tsx";
@@ -511,6 +512,12 @@ export function JobCard({
            exactly what they were. */}
       <PRChips prs={job.prs} />
       <StackChips job={job} />
+      {/* the cells this cell filed, and the one that filed it: band 5's third
+          row, the first that names another JOB — a chip opens that job's own
+          card drilldown through the same two actions this card's click uses.
+          A remote card's chips are inert (SpawnChipList): the slug names a job
+          on the owner's board. */}
+      <SpawnChips job={job} opener={remote ? undefined : actions} />
 
       {/* ---- band 6: ACTIONS. */}
       {hasActions ? (

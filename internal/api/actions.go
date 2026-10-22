@@ -24,6 +24,12 @@ type webReq struct {
 	// ID is doc-question-only (POST /api/doc-question's question id, e.g.
 	// "Q1"): additive, every other webAction handler simply ignores it.
 	ID string `json:"id,omitempty"`
+	// FromCell is the X-Kraken-From-Cell header, copied in by webAction and
+	// never read from the body (`json:"-"`): the slug of the cell whose own
+	// `kraken cell submit` made this request, or "" for the board, the phone
+	// and a human at a terminal. webSubmit stamps the started job's parent
+	// from it (spawn.go); every other action ignores it.
+	FromCell string `json:"-"`
 }
 
 // docAnswerMaxLen caps a doc-question answer's length (after trim, counted
@@ -122,6 +128,7 @@ func webAction(name string, f func(webReq) error) http.HandlerFunc {
 			_ = json.NewEncoder(w).Encode(map[string]string{"error": "bad json"})
 			return
 		}
+		req.FromCell = strings.TrimSpace(r.Header.Get(fromCellHeader))
 		if err := f(req); err != nil {
 			util.LogEvent("web", "error", name, name+" "+req.Slug+": "+err.Error())
 			w.WriteHeader(http.StatusConflict)
@@ -167,7 +174,15 @@ func webSubmit(req webReq) error {
 	if err != nil {
 		return err
 	}
-	return submitJobFn(j)
+	if err := submitJobFn(j); err != nil {
+		return err
+	}
+	// The cell is up and the job reads working: a submit that came from
+	// another cell's `kraken cell submit` records that cell as the parent
+	// (spawn.go). After the start, never before — a refused submit stamps
+	// nothing — and the stamp cannot fail the submit.
+	stampSpawn(j, req.FromCell, jobs.SpawnViaSubmit)
+	return nil
 }
 
 // webDone is the blocked→done drag: complete the job with the fixed

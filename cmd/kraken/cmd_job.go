@@ -176,7 +176,10 @@ func runJobDraft(slug string, mtime int64, stdin io.Reader) ([]byte, error) {
 	if strings.TrimSpace(string(raw)) == "" {
 		return nil, fmt.Errorf("%s (stdin was empty)", jobDraftUsage)
 	}
-	return qfPost("/api/job/draft", map[string]any{
+	// fromCellHeaders: a draft filed from inside a cell names that cell as
+	// the new job's parent (internal/api/spawn.go); outside a cell the map is
+	// nil and the request is exactly what it always was.
+	return qfPostWith("/api/job/draft", map[string]any{
 		"slug": slug, "content": string(raw), "mtime": mtime,
-	})
+	}, fromCellHeaders(), qfHTTPTimeout)
 }

@@ -324,7 +324,13 @@ var webJobSpec = map[string]fieldSpec{
 	// were deleted with the cell). Elements are webStackLinkSpec. Additive,
 	// so it never bumps apiContract; listed because assertShape rejects any
 	// key the spec does not document.
-	"stack":         {kind: wireArray, required: false},
+	"stack": {kind: wireArray, required: false},
+	// who this job's cell filed, and who filed it (spawn.go, board.go's
+	// spawnIndex), both omitempty: absence is the wire's spelling of "none".
+	// Elements and the object are webSpawnLinkSpec. Unlike stack, both ride
+	// on archived cards — the link is history. Additive, no contract bump.
+	"spawned":       {kind: wireArray, required: false},
+	"spawned_by":    {kind: wireObject, required: false},
 	"doc_questions": {kind: wireArray, required: false},
 	"feedback":      {kind: wireArray, required: false},
 	"threads":       {kind: wireArray, required: false},
@@ -1251,12 +1257,38 @@ func TestWebJobWireShapePopulated(t *testing.T) {
 		// Present for Account's reason: a fixture without it would leave the
 		// "context" registration passing whether or not it existed.
 		Context: &webJobContext{Pct: 25, Window: 1_000_000, Used: 242_390, At: 1_792_599_370_254, HandoffPct: 75},
+		// Present so the two spawn registrations are exercised, for Account's
+		// reason.
+		Spawned:   []webSpawnLink{{Slug: "spawned-cells-ios-chips", State: "working"}},
+		SpawnedBy: &webSpawnLink{Slug: "kraken-link-spawned-cells", State: "done"},
 	}
 	data, err := json.Marshal(wj)
 	if err != nil {
 		t.Fatal(err)
 	}
 	assertShape(t, "webJob (populated)", data, webJobSpec)
+}
+
+// webSpawnLinkSpec covers board.go's webSpawnLink, the elements of webJob's
+// "spawned" array and the "spawned_by" object. Both keys are required: the
+// type carries no omitempty, and a link with no slug or no state names
+// nothing a client could render or open.
+var webSpawnLinkSpec = map[string]fieldSpec{
+	"slug":  {kind: wireString, required: true},
+	"state": {kind: wireString, required: true},
+}
+
+func TestWebSpawnLinkWireShape(t *testing.T) {
+	for _, l := range []webSpawnLink{
+		{Slug: "child", State: "working"},
+		{Slug: "child-2", State: "archived"},
+	} {
+		data, err := json.Marshal(l)
+		if err != nil {
+			t.Fatal(err)
+		}
+		assertShape(t, "webSpawnLink "+l.State, data, webSpawnLinkSpec)
+	}
 }
 
 // --- webJob's array-element types, marshaled and checked directly: webJob's

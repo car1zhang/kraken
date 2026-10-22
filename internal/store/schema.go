@@ -115,7 +115,10 @@ import (
 // Version 37 is the nightly mind pass: jobs gains author, and mm_items is
 // rebuilt to admit the `nightly` source and carry a proposed|live state (see
 // schemaV37).
-const schemaVersion = 37
+// Version 38 adds job_spawns: which job's cell filed which other job, one row
+// per child, stamped by kraken serve when a cell's own `kraken job draft` or
+// `kraken cell submit` carries its slug (see jobSpawnsTable).
+const schemaVersion = 38
 
 // schemaV1 creates all nine tables plus kv. Exact DDL (types, indexes) was
 // left to this package by the spec; shapes below mirror the spec's Data
@@ -2333,8 +2336,10 @@ type migrationStep struct {
 // source and the state column; its SQL is empty and the hook,
 // migrateV37MindPass, runs each step only when its probe says it is missing
 // (see schemaV37).
+// migrations[38] creates job_spawns (CREATE TABLE IF NOT EXISTS, no hook; see
+// jobSpawnsTable).
 // Future schema changes append
-// migrations[38], migrations[39], ... rather than editing an existing
+// migrations[39], migrations[40], ... rather than editing an existing
 // schemaV<N> string (or hook) in place, so a database created under an older
 // binary still migrates forward correctly.
 var migrations = map[int]migrationStep{
@@ -2375,6 +2380,7 @@ var migrations = map[int]migrationStep{
 	35: {sql: schemaV35},
 	36: {sql: schemaV36, hook: migrateV36AskThreads},
 	37: {sql: schemaV37, hook: migrateV37MindPass},
+	38: {sql: jobSpawnsTable},
 }
 
 // migrateV5Questions is migrations[5]'s Go hook: schemaV5's SQL has already
@@ -3539,3 +3545,22 @@ func (s *Store) migrate() error {
 	}
 	return nil
 }
+
+// jobSpawnsTable is migration 38: the spawn-links table (jobs/jobspawn.go),
+// one row per CHILD job naming the job whose cell filed it. child_id is the
+// primary key because a job is filed once; parent_id is the filer; at is the
+// stamp (unix millis) and via is which verb carried it (`draft` or `submit`).
+//
+// No FK and no cascade, the house style of prs and job_tokens, and like
+// those two the rows ARE retrospective: a link to a done or archived child is
+// the most useful kind (the child's output is what the parent handed off), so
+// nothing at teardown or archive touches them. Only a hard delete from the
+// archive removes a job's rows (DeleteJob), on either side of the link.
+const jobSpawnsTable = `
+CREATE TABLE IF NOT EXISTS job_spawns (
+	child_id  INTEGER PRIMARY KEY,
+	parent_id INTEGER NOT NULL,
+	at        INTEGER NOT NULL DEFAULT 0,
+	via       TEXT    NOT NULL DEFAULT ''
+);
+`

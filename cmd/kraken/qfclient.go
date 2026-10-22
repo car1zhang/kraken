@@ -9,11 +9,32 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 
 	"kraken/internal/jobs"
 	"kraken/internal/util"
 )
+
+// fromCellHeader names the cell a request came from. Inside a cell every
+// claude zeus (and every teammate it spawns, by inheritance) runs with
+// KRAKEN_JOB_SLUG exported (internal/jobs/cell.go's jobSlugEnvPrefix); the
+// verbs whose request MEANS something different when a cell makes it — the
+// cross-node steer (cmd_nodes.go), and `kraken job draft` / `kraken cell
+// submit`, where kraken serve records the sending cell as the new job's
+// parent (internal/api/spawn.go) — send it as this header. Outside a cell the
+// variable is absent and the request carries nothing.
+const fromCellHeader = "X-Kraken-From-Cell"
+
+// fromCellHeaders is the header set those verbs pass to qfPostWith: the one
+// header when KRAKEN_JOB_SLUG is set (trimmed), nil otherwise — qfPostWith
+// ranges over nil fine, so a caller never has to branch.
+func fromCellHeaders() map[string]string {
+	if cell := strings.TrimSpace(os.Getenv("KRAKEN_JOB_SLUG")); cell != "" {
+		return map[string]string{fromCellHeader: cell}
+	}
+	return nil
+}
 
 // qfclient.go — shared HTTP plumbing for `kraken questions` and `kraken
 // feedback` (cmd_questions.go, cmd_feedback.go): thin proxies to kraken

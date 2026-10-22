@@ -879,5 +879,9 @@ func (s *Store) DeleteJob(id int64) error {
 	if n == 0 {
 		return fmt.Errorf("delete job %d: %w", id, ErrNotFound)
 	}
-	return nil
+	// the job's spawn links go with it (jobspawn.go): a link naming a job that
+	// exists nowhere renders as nothing, so the row would only be noise. After
+	// the row delete rather than in one transaction, since a leftover link is
+	// harmless and a failed delete must not undo a hard delete already asked for.
+	return deleteSpawnsForJob(s.db, id)
 }

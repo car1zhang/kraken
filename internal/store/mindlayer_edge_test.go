@@ -115,8 +115,8 @@ func edgeMLGetFlag(t *testing.T, s *Store, id int64) MMFlag {
 // scope, quote, source_json, thread_session) exactly as they were.
 func TestMindLayerEdgeThirdOpenAtV33IsANoOp(t *testing.T) {
 	s, path := edgeMLOpen(t)
-	if schemaVersion != 37 {
-		t.Fatalf("schemaVersion = %d, want 37 (the fleet's v34, job_stacks' v35, the ask-thread columns' v36 and the mind pass' v37 follow the mind layer's v33)", schemaVersion)
+	if schemaVersion != 38 {
+		t.Fatalf("schemaVersion = %d, want 38 (the fleet's v34, job_stacks' v35, the ask-thread columns' v36, the mind pass' v37 and the spawn links' v38 follow the mind layer's v33)", schemaVersion)
 	}
 	id := edgeMLAdd(t, s, MMItem{
 		Kind: "decision", Source: "capture", Content: "body", CreatedAt: edgeMLNow,

@@ -981,6 +981,84 @@ describe("#steer-crew — the crew line", () => {
   });
 });
 
+describe("#steer-spawned — the cells this cell filed, and its filer", () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  const spawnJob = makeJob({
+    slug: "j",
+    state: "working",
+    live: true,
+    spawned_by: { slug: "parent-cell", state: "done" },
+    spawned: [
+      { slug: "child-a", state: "working" },
+      { slug: "child-b", state: "archived" },
+    ],
+  });
+
+  it("renders the parent and each child from the job alone, under the stack row", () => {
+    const onOpenJob = vi.fn();
+    render(
+      <Steer
+        open
+        slug="j"
+        mode="steer"
+        job={spawnJob}
+        onClose={() => {}}
+        mutate={mutate}
+        onOpenJob={onOpenJob}
+      />,
+    );
+    const box = document.getElementById("steer-spawned") as HTMLElement;
+    expect(box).not.toHaveAttribute("hidden");
+    const chips = [...box.querySelectorAll<HTMLElement>(".spawn-chip")];
+    expect(chips.map((c) => c.textContent)).toEqual(["↰ parent-cell", "↳ child-a", "↳ child-b"]);
+    expect(chips.map((c) => c.className)).toEqual([
+      "spawn-chip spawn-done",
+      "spawn-chip spawn-working",
+      "spawn-chip spawn-archived inert",
+    ]);
+    // exactly one .spawned box: SpawnChips' own wrapper would nest a second
+    expect(box.querySelectorAll(".spawned")).toHaveLength(0);
+    // directly after the stack row, as on the card
+    expect(document.getElementById("steer-stack")?.nextElementSibling).toBe(box);
+    // a click hands the slug and the link's state up; the archived chip is inert
+    fireEvent.click(chips[1]!);
+    fireEvent.click(chips[2]!);
+    expect(onOpenJob.mock.calls).toEqual([["child-a", "working"]]);
+  });
+
+  it("opens the context block for a job whose only context is a spawn link", () => {
+    render(
+      <Steer
+        open
+        slug="j"
+        mode="view"
+        job={makeJob({ slug: "j", state: "done", spawned: [{ slug: "child-a", state: "working" }] })}
+        onClose={() => {}}
+        mutate={mutate}
+      />,
+    );
+    expect(document.getElementById("steer-context")).not.toHaveAttribute("hidden");
+    expect(document.getElementById("steer-spawned")).not.toHaveAttribute("hidden");
+    // no handler wired: the chip is still there, as an inert span
+    expect(document.querySelector("#steer-spawned .spawn-chip")?.tagName).toBe("SPAN");
+  });
+
+  it("hides the row for a job with no links", () => {
+    render(
+      <Steer
+        open
+        slug="j"
+        mode="steer"
+        job={makeJob({ slug: "j", state: "working", live: true })}
+        onClose={() => {}}
+        mutate={mutate}
+      />,
+    );
+    expect(document.getElementById("steer-spawned")).toHaveAttribute("hidden");
+  });
+});
+
 describe("#steer-stack — the cell's stack links", () => {
   beforeEach(() => vi.clearAllMocks());
 

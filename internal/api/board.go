@@ -702,6 +702,18 @@ type webJob struct {
 	// jobs — the rows are deleted at teardown, so an archived job has none
 	// to show. ADDITIVE, so apiContract does not bump.
 	Stack []webStackLink `json:"stack,omitempty"`
+	// Spawned lists the jobs this job's cell FILED (spawn.go: a `kraken job
+	// draft` or `kraken cell submit` that carried this cell's slug), one entry
+	// per child in stamp order, each resolved to its current slug and display
+	// state at build time from `job_spawns` rows (one query per build, like
+	// Tokens). SpawnedBy is the other direction: the job whose cell filed this
+	// one. Both omitempty — absence is the wire's only spelling of "none" —
+	// and both ride on archived cards too, since the link is history like
+	// PRs: a child that is done or archived is the useful kind of child to
+	// see. A side whose job exists nowhere any more (hard-deleted) is dropped.
+	// ADDITIVE, so apiContract does not bump.
+	Spawned   []webSpawnLink `json:"spawned,omitempty"`
+	SpawnedBy *webSpawnLink  `json:"spawned_by,omitempty"`
 	// DocQuestions mirrors zeus' open doc questions (answered or not),
 	// served straight from `questions` rows in kraken.db — live or dead, no
 	// file, no parse step, so there is no more malformed-file case (see
@@ -812,6 +824,75 @@ type webJob struct {
 	// Owner names the node a REMOTE card runs on. Absent on every local card
 	// — absence is the wire's spelling of "this machine's job".
 	Owner *webJobOwner `json:"owner,omitempty"`
+}
+
+// webSpawnLink is one end of a spawn link on the wire: the other job's
+// current slug (an archived job's display slug) and its display state —
+// draft/working/blocked/done, or `archived`. No omitempty on either: a client
+// reads both once the object is present. The state is what colours the chip
+// and decides what a click opens (working → steer, blocked → unblock, done →
+// view, draft → the editor, archived → nothing).
+type webSpawnLink struct {
+	Slug  string `json:"slug"`
+	State string `json:"state"`
+}
+
+// spawnIndex is one board build's view of `job_spawns`: every row, resolved
+// against the jobs the build loaded (active and archived), read once rather
+// than per card. children keeps stamp order; a row whose other side is in
+// neither list resolves to nothing and is dropped by the two readers.
+type spawnIndex struct {
+	children map[int64][]int64
+	parent   map[int64]int64
+	link     map[int64]webSpawnLink
+}
+
+// buildSpawnIndex reads the table and names every job it could refer to. The
+// archived list is needed because a parent whose child was archived still
+// shows the child (muted), and vice versa.
+func buildSpawnIndex(active, archived []*jobs.Job) spawnIndex {
+	ix := spawnIndex{children: map[int64][]int64{}, parent: map[int64]int64{}, link: map[int64]webSpawnLink{}}
+	rows := jobs.ListSpawns()
+	if len(rows) == 0 {
+		return ix
+	}
+	for _, j := range active {
+		ix.link[j.ID] = webSpawnLink{Slug: j.Slug, State: jobs.DisplayState(j)}
+	}
+	for _, a := range archived {
+		ix.link[a.ID] = webSpawnLink{Slug: a.Slug, State: "archived"}
+	}
+	for _, r := range rows {
+		ix.children[r.ParentID] = append(ix.children[r.ParentID], r.ChildID)
+		ix.parent[r.ChildID] = r.ParentID
+	}
+	return ix
+}
+
+// spawnedOf is webJob.Spawned for job id: nil when it filed nothing the board
+// can still name.
+func (ix spawnIndex) spawnedOf(id int64) []webSpawnLink {
+	var out []webSpawnLink
+	for _, c := range ix.children[id] {
+		if l, ok := ix.link[c]; ok {
+			out = append(out, l)
+		}
+	}
+	return out
+}
+
+// spawnedByOf is webJob.SpawnedBy for job id: nil when nothing filed it, or
+// when what did no longer exists.
+func (ix spawnIndex) spawnedByOf(id int64) *webSpawnLink {
+	p, ok := ix.parent[id]
+	if !ok {
+		return nil
+	}
+	l, ok := ix.link[p]
+	if !ok {
+		return nil
+	}
+	return &l
 }
 
 // webJobOwner is a remote card's owner chip: which node, whose, and whether
@@ -1348,6 +1429,11 @@ func buildWebBoard() webBoard {
 	// reads them — an archived card carries no fill.
 	ctxIndex := jobs.CellContextIndex(activeStore)
 	handoffIndex := jobs.HandoffIndex(activeStore)
+	// Archived jobs are loaded here, once, because the spawn index needs them
+	// to name an archived child or parent; the archived loop below reuses
+	// the same list rather than loading it a second time.
+	archived := jobs.LoadArchivedJobs()
+	spawns := buildSpawnIndex(js, archived)
 	byState := map[string][]webJob{}
 	for _, j := range js {
 		// Computed once: this loop runs for every job on a payload rebuilt
@@ -1371,6 +1457,10 @@ func buildWebBoard() webBoard {
 			// below. Teardown deletes the rows, so a done job simply has
 			// none; nothing here gates on liveness.
 			Stack: webStackLinksFrom(jobs.ListStackLinks(j)),
+			// Spawned/SpawnedBy: who this cell filed and who filed it, out of
+			// the one index above; both survive teardown and done, like PRs.
+			Spawned:   spawns.spawnedOf(j.ID),
+			SpawnedBy: spawns.spawnedByOf(j.ID),
 			// DocQuestions/Feedback: one uniform path straight off the store,
 			// live or dead, any state — no file, no cell-dir liveness check
 			// (see jobQuestions/jobFeedback). Never set for archived jobs,
@@ -1488,8 +1578,16 @@ func buildWebBoard() webBoard {
 	// archived jobs ride the same list under state "archived": no cell, no
 	// derivation — just the file, its artifacts, and the two
 	// actions (unarchive, delete) keyed on the archive file base
-	for _, a := range jobs.LoadArchivedJobs() {
-		board.Jobs = append(board.Jobs, archivedWebJob(a, activeStore, tokens, webJobGoalsFor(goals, links[a.ID])))
+	for _, a := range archived {
+		wj := archivedWebJob(a, activeStore, tokens, webJobGoalsFor(goals, links[a.ID]))
+		// Spawn links are history and ride an archived card too — the
+		// opposite of Account's call and the same as Tokens': a parent
+		// archived after its children finished still names them. Filled here
+		// rather than inside archivedWebJob so that function's signature, and
+		// its per-field decisions, stay what its tests pin.
+		wj.Spawned = spawns.spawnedOf(a.ID)
+		wj.SpawnedBy = spawns.spawnedByOf(a.ID)
+		board.Jobs = append(board.Jobs, wj)
 	}
 	// the fleet: every sibling's polled cards after this node's own, each
 	// carrying its owner. Read from the registry the nodes pass keeps, so the

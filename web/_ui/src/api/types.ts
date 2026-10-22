@@ -222,6 +222,18 @@ export interface StackLink {
 }
 
 /**
+ * One end of a spawn link, mirroring api.webSpawnLink (internal/api/board.go):
+ * the other job's current slug (an archived job's display slug) and its
+ * display state — draft | working | blocked | done | archived, widened with
+ * string for PRState's reason. Both keys are always present once the object
+ * is. The state colours the chip and decides what a click opens.
+ */
+export interface SpawnLink {
+  slug: string;
+  state: string;
+}
+
+/**
  * Per-job token spend, mirroring api.webTokens (internal/api/board.go:299).
  *
  * Counters are RAW and unweighted — no blended cost, deliberately: cache reads
@@ -462,6 +474,14 @@ export interface WebJob {
    * archived card: the rows are deleted with the cell at teardown.
    */
   stack?: StackLink[];
+  /**
+   * The jobs this job's cell FILED (a `kraken job draft` or `kraken cell
+   * submit` run inside it), in stamp order, and the job whose cell filed this
+   * one. ABSENT (never `[]` / null) when there are none. Unlike `stack`, both
+   * ride on an archived card too: the link is history like `prs`.
+   */
+  spawned?: SpawnLink[];
+  spawned_by?: SpawnLink;
   doc_questions?: WebDocQuestion[];
   feedback?: WebFeedback[];
   threads?: WebThread[];
