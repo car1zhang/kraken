@@ -42,6 +42,11 @@ func edgeFleetEnv(t *testing.T) *store.Store {
 	t.Setenv("KRAKEN_DEVICE_NAME", "edge-node")
 	SetMirrorMode(false)
 	t.Cleanup(func() { SetMirrorMode(false) })
+	// the process' limiter and nonce store outlive a test, so a rerun from the
+	// same fixed address would start rate-limited
+	savedNonces, savedAttempts := pairNonces, pairAttempts
+	pairNonces, pairAttempts = &nonceStore{}, &pairLimiter{}
+	t.Cleanup(func() { pairNonces, pairAttempts = savedNonces, savedAttempts })
 	return useTestStore(t)
 }
 

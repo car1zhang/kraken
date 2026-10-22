@@ -398,8 +398,9 @@ func PreflightShipIOS() (ShipPreflightInfo, error) {
 
 	// Always the canonical checkout, never the caller's cwd — even when that
 	// cwd is a kraken worktree: what ships to real testers must be what is on
-	// main.
-	repo, err := ResolveRepo("kraken")
+	// main. selfRepo (update.go) honours KRAKEN_SELF_REPO and otherwise
+	// resolves the repo named kraken, as the updater does.
+	repo, err := selfRepo()
 	if err != nil {
 		return pf, err
 	}
