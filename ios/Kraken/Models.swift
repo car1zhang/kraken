@@ -707,6 +707,36 @@ private struct TolerantWebJobAccount: Decodable {
     }
 }
 
+// JobSpawnLink mirrors one end of a spawn link (ios/API.md's `jobSpawnLink`,
+// internal/api/board.go's webSpawnLink): the other job's current slug and its
+// display state — draft | working | blocked | done | archived, a plain String
+// so a future word decodes. Decode-only this pass: nothing on the phone
+// renders it yet.
+struct JobSpawnLink: Decodable {
+    let slug: String
+    let state: String
+}
+
+// TolerantJobSpawnLink and TolerantJobSpawnLinks are `spawned_by`'s and
+// `spawned`'s wrappers, TolerantWebJobAccount's arrangement for the same
+// reason: a malformed object or array costs this card its (unrendered) links,
+// never the board its decode.
+private struct TolerantJobSpawnLink: Decodable {
+    let link: JobSpawnLink?
+
+    init(from decoder: Decoder) throws {
+        link = try? JobSpawnLink(from: decoder)
+    }
+}
+
+private struct TolerantJobSpawnLinks: Decodable {
+    let links: [JobSpawnLink]?
+
+    init(from decoder: Decoder) throws {
+        links = try? [JobSpawnLink](from: decoder)
+    }
+}
+
 // WebJobContext mirrors board.go's webJobContext — the cell lead's
 // context-window fill as its statusline last reported it (the kv row
 // `cell_ctx:<id>:<session>` that `kraken ctx-hook` writes on every render and
@@ -830,6 +860,14 @@ struct WebJob: Decodable, Identifiable {
     // link means nothing on the phone until it is rewritten to the owner's
     // tailnet host (Q3 of that job, open). Additive key.
     let stack: [JobStackLink]?
+    // The cells this cell FILED and the cell that filed it (job 647): the
+    // board's `spawned` array and `spawned_by` object, both absent when there
+    // are none and both present on an archived card too — the link is history
+    // like `prs`. Stored behind tolerant wrappers and read through the
+    // computed `spawned` / `spawnedBy` below, `account`'s arrangement.
+    // Decode-only this pass. Additive keys.
+    private let spawnedBox: TolerantJobSpawnLinks?
+    private let spawnedByBox: TolerantJobSpawnLink?
     // zeus' open doc questions (answered or not), served straight from
     // `questions` rows in kraken.db — no file, no parse step, so there is
     // no more malformed-questions-file case (docQuestionsErr is gone, v5).
@@ -966,6 +1004,10 @@ struct WebJob: Decodable, Identifiable {
     /// The cell lead's last context-window report, or nil — unreported,
     /// archived, or (see contextBox) an object that failed to decode.
     var context: WebJobContext? { contextBox?.context }
+    /// The cells this cell filed, or nil — none, or a malformed array.
+    var spawned: [JobSpawnLink]? { spawnedBox?.links }
+    /// The cell that filed this one, or nil — none, or a malformed object.
+    var spawnedBy: JobSpawnLink? { spawnedByBox?.link }
 
     enum CodingKeys: String, CodingKey {
         case slug, repo, state, err, outcome, cell, live
@@ -980,6 +1022,10 @@ struct WebJob: Decodable, Identifiable {
         case lastSent = "last_sent"
         case prs
         case stack
+        // the wire names are `spawned` / `spawned_by`; the stored properties
+        // are the tolerant wrappers, read back through the computed pair above
+        case spawnedBox = "spawned"
+        case spawnedByBox = "spawned_by"
         case docQuestions = "doc_questions"
         case feedback
         case threads

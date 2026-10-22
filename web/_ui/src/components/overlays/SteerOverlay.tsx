@@ -60,6 +60,7 @@ import { GoalMultiPicker } from "./GoalMultiPicker.tsx";
 import { CrewChips, crewChipsVisible } from "../board/chips/CrewPills.tsx";
 import { FeedbackPanel } from "../board/chips/FeedbackPanel.tsx";
 import { PRChip } from "../board/chips/PRChips.tsx";
+import { SpawnChipList, spawnChipsVisible } from "../board/chips/SpawnChips.tsx";
 import { StackChip } from "../board/chips/StackChips.tsx";
 import { QuestionBlock } from "../board/chips/QuestionBlock.tsx";
 import { ThreadChips } from "../board/chips/ThreadChips.tsx";
@@ -300,6 +301,15 @@ export interface SteerOverlayProps {
    */
   onOpenThread(slug: string, tid: string | null, node?: string): void;
   /**
+   * A spawn chip's click (SpawnChips.tsx): open the named job — its state is
+   * the link's display state, and App routes it through the card's own
+   * mapping (openSpawned) so the modal RE-POINTS to the child or parent rather
+   * than stacking. Optional only because the modal has many direct test
+   * mounts; App.tsx always passes it, and without it the chips render as
+   * inert spans, which a test can see.
+   */
+  onOpenJob?: (slug: string, state: string) => void;
+  /**
    * The OWNER node of a remote card, when one opened the modal. Its presence
    * — not the job's — is what selects the remote body: a remote card that
    * left the board must still never fall through to the LOCAL body, whose
@@ -387,6 +397,7 @@ function SteerBody({
   mutate,
   onOpenArtifact,
   onOpenThread,
+  onOpenJob,
   fileSink,
   rename,
 }: SteerOverlayProps & { fileSink: FileSink; rename: RenameControlState }) {
@@ -651,6 +662,9 @@ function SteerBody({
   // server already drops them at teardown, so a reactivate-mode open simply
   // has none.
   const stack = job?.stack ?? [];
+  // Spawn links: who this cell filed and who filed it. Job history like the
+  // PRs, so shown in every mode, done and archived included.
+  const hasSpawn = !!job && spawnChipsVisible(job);
   const artifacts = job?.artifacts ?? [];
   // Hidden in reactivate mode only. view SHOWS them — the done job's output
   // is the main thing its drilldown is opened for.
@@ -728,6 +742,7 @@ function SteerBody({
     showCrew ||
     prs.length > 0 ||
     stack.length > 0 ||
+    hasSpawn ||
     showThreads ||
     !!detail ||
     !!lastSent ||
@@ -1025,6 +1040,13 @@ function SteerBody({
             {stack.map((l, i) => (
               <StackChip key={`${l.url}|${i}`} link={l} remote={job?.owner !== undefined} />
             ))}
+          </div>
+          {/* The cells this cell filed and the one that filed it, under the
+              stack links as on the card (SpawnChipList, not SpawnChips, for
+              the wrapper reason above). A click hands the slug and state to
+              onOpenJob, which re-points this modal at that job. */}
+          <div className="spawned" id="steer-spawned" hidden={!hasSpawn}>
+            {job && hasSpawn ? <SpawnChipList job={job} onOpen={onOpenJob} /> : null}
           </div>
           {/* The card passes withBranch={false}, delegating ⑂ to this modal —
               so this is the ONLY mount point of BranchButton for a local job

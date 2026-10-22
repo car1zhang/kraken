@@ -247,14 +247,14 @@ func contractMLSeedV32(t *testing.T) (string, map[string]string, map[string][]st
 // "`const schemaVersion = 33`" — "a fresh database lands at 33". 34 since the
 // fleet's migration was appended after it, 35 since job_stacks (schemaV35),
 // 36 since the ask-thread columns (schemaV36), 37 since the nightly mind pass
-// (schemaV37).
+// (schemaV37), 38 since the spawn links (jobSpawnsTable).
 func TestMindLayerSchemaVersionIs33AndFreshLandsThere(t *testing.T) {
-	if schemaVersion != 37 {
-		t.Fatalf("schemaVersion = %d, want 37", schemaVersion)
+	if schemaVersion != 38 {
+		t.Fatalf("schemaVersion = %d, want 38", schemaVersion)
 	}
 	s := contractMLStore(t)
-	if v := contractMLVersion(t, s.DB()); v != 37 {
-		t.Fatalf("fresh user_version = %d, want 37", v)
+	if v := contractMLVersion(t, s.DB()); v != 38 {
+		t.Fatalf("fresh user_version = %d, want 38", v)
 	}
 }
 
@@ -313,8 +313,8 @@ func TestMindLayerV32MigratesPreservingRows(t *testing.T) {
 	}
 	defer s.Close()
 	db := s.DB()
-	if v := contractMLVersion(t, db); v != 37 {
-		t.Fatalf("user_version after migrating v32 = %d, want 37", v)
+	if v := contractMLVersion(t, db); v != 38 {
+		t.Fatalf("user_version after migrating v32 = %d, want 38", v)
 	}
 	for tbl, c := range cols {
 		if after := contractMLDumpCols(t, db, tbl, c); after != before[tbl] {
@@ -372,8 +372,8 @@ func TestMindLayerSecondOpenIsNoOp(t *testing.T) {
 		t.Fatalf("second Open: %v", err)
 	}
 	defer s2.Close()
-	if v := contractMLVersion(t, s2.DB()); v != 37 {
-		t.Fatalf("user_version after second Open = %d, want 37", v)
+	if v := contractMLVersion(t, s2.DB()); v != 38 {
+		t.Fatalf("user_version after second Open = %d, want 38", v)
 	}
 	for tbl, c := range all {
 		if after := contractMLDumpCols(t, s2.DB(), tbl, c); after != snap[tbl] {

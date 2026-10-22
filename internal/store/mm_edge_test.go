@@ -1179,9 +1179,10 @@ func TestEdgeMMMigrationV29CarriesOnlyLiveWatchedEdges(t *testing.T) {
 	// undoV33, reverses all three. v34 added nodes, pair_devices and
 	// jobs.visibility; its arm drops all three. v35 added job_stacks; its arm
 	// drops it. v36 added six thread columns; its arm drops them. v37 added
-	// jobs.author and rebuilt mm_items; its arm, undoV37, reverses both.)
-	if schemaVersion != 37 {
-		t.Fatalf("schemaVersion = %d, want 37 — this fixture seeds a v28 shape and walks it forward", schemaVersion)
+	// jobs.author and rebuilt mm_items; its arm, undoV37, reverses both. v38
+	// added job_spawns; its arm drops it.)
+	if schemaVersion != 38 {
+		t.Fatalf("schemaVersion = %d, want 38 — this fixture seeds a v28 shape and walks it forward", schemaVersion)
 	}
 	s := edgeMMOpen(t)
 

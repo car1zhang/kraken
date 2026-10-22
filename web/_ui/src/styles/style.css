@@ -1118,6 +1118,32 @@ a.stack-chip.stack-unknown:hover { background: color-mix(in srgb, var(--ac) 10%,
 a.stack-chip.stack-down:hover { opacity: 0.9; border-color: var(--ac2); }
 .stack-chip.remote { color: var(--muted); border-color: var(--border); cursor: default; }
 
+/* spawn chips: one per cell this cell FILED (↳ slug) and one for the cell that
+   filed it (↰ slug) — band 5's third row, the first that names another JOB.
+   A chip is a <button> that opens that job's own drilldown, so the metrics
+   are .pr-chip's but the background is reset from the UA button. Colour is the
+   other job's STATE in the board's vocabulary: working --ok, blocked --warn,
+   done the merged-PR tint, draft the neutral border, archived muted. .inert
+   is a span — an archived job or a remote card's link — with no click. */
+.spawned { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 4px; }
+.spawn-chip {
+  font: 9px var(--mono); text-decoration: none; text-align: left;
+  padding: 2px 6px; border: 1px solid; background: transparent;
+  white-space: nowrap; cursor: pointer; border-radius: 0;
+  transition: box-shadow 80ms var(--ease), border-color 80ms var(--ease);
+}
+.spawn-chip.spawn-working { color: var(--ok); border-color: color-mix(in srgb, var(--ok) 45%, transparent); }
+button.spawn-chip.spawn-working:hover { background: color-mix(in srgb, var(--ok) 12%, transparent); box-shadow: var(--glow-ok); border-color: var(--ok); }
+.spawn-chip.spawn-blocked { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 45%, transparent); }
+button.spawn-chip.spawn-blocked:hover { background: color-mix(in srgb, var(--warn) 12%, transparent); box-shadow: var(--glow-warn); border-color: var(--warn); }
+.spawn-chip.spawn-done { color: var(--tint); border-color: color-mix(in srgb, var(--ac) 45%, transparent); }
+button.spawn-chip.spawn-done:hover { background: color-mix(in srgb, var(--ac) 14%, transparent); box-shadow: var(--glow); border-color: var(--ac); }
+.spawn-chip.spawn-draft { color: var(--fg); border-color: var(--border-strong); }
+button.spawn-chip.spawn-draft:hover { background: color-mix(in srgb, var(--ac) 10%, transparent); border-color: var(--ac); }
+.spawn-chip.spawn-archived { color: var(--muted); border-color: var(--border); opacity: 0.7; }
+.spawn-chip.inert { cursor: default; }
+.steer-context .spawned { margin-top: 0; }
+
 /* side-thread chips: one per fork of zeus' session. On the card they sit
    among the crew tokens and the counts in the .chips row (band 2); .threads
    itself is modal-only now (#steer-threads), since threadsHTML went away with

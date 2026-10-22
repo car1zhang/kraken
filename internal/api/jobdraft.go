@@ -239,7 +239,7 @@ func jobDraftHandler(w http.ResponseWriter, r *http.Request) {
 		jobDraftEdit(w, st, j, parsed, int64(req.MTime))
 		return
 	}
-	jobDraftCreate(w, st, slug, parsed)
+	jobDraftCreate(w, st, slug, parsed, r.Header.Get(fromCellHeader))
 }
 
 // jobDraftCreate is the no-such-job path: three refusals, then the row.
@@ -248,7 +248,13 @@ func jobDraftHandler(w http.ResponseWriter, r *http.Request) {
 // its slug is the request's slugified one rather than parsed.Slug — a `job:`
 // key in the frontmatter names the file's own identity to the parser, and
 // honouring it here would let a draft addressed to one slug land on another.
-func jobDraftCreate(w http.ResponseWriter, st *store.Store, slug string, parsed *jobs.Job) {
+//
+// fromCell is the X-Kraken-From-Cell header: when a cell's own `kraken job
+// draft` filed this job, that cell is recorded as its parent (spawn.go) once
+// the row exists. Filing is spawning — a draft a cell wrote and the operator
+// started by hand is still that cell's child — and the edit path never
+// stamps, since editing a draft is not filing it.
+func jobDraftCreate(w http.ResponseWriter, st *store.Store, slug string, parsed *jobs.Job, fromCell string) {
 	// `state` is kraken-owned: it is how the daemon records that a cell is
 	// working or that a job is done. A job created with one already set would
 	// be lying about a lifecycle that never happened.
@@ -298,6 +304,7 @@ func jobDraftCreate(w http.ResponseWriter, st *store.Store, slug string, parsed 
 		webJSON(w, http.StatusInternalServerError, map[string]string{"error": "job " + slug + " WAS created but could not be reloaded: " + err.Error()})
 		return
 	}
+	stampSpawn(created, fromCell, jobs.SpawnViaDraft)
 	webBoardCache.invalidate()
 	webJSON(w, http.StatusOK, map[string]any{"ok": true, "slug": slug, "mtime": jobEditMTime(created)})
 }

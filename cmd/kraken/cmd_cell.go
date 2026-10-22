@@ -230,7 +230,10 @@ func runCellSteer(slug, text string) error {
 // that already post it (register.go), and the action behind it is "start this
 // job's cell, now, synchronously".
 func runCellSubmit(slug string) error {
-	if _, err := qfPost("/api/queue", map[string]any{"slug": slug}); err != nil {
+	// fromCellHeaders: a submit from inside a cell names that cell as the
+	// started job's parent (internal/api/spawn.go), the way the cross-node
+	// steer names its sender; outside a cell the map is nil.
+	if _, err := qfPostWith("/api/queue", map[string]any{"slug": slug}, fromCellHeaders(), qfHTTPTimeout); err != nil {
 		return err
 	}
 	logCellAction("cell-submit", slug)

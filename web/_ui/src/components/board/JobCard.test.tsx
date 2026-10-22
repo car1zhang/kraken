@@ -79,6 +79,9 @@ const BAND_OF: Array<[string, number]> = [
   // the cell's stack links share band 5 with the PRs: both name an external
   // thing to go and open (StackChips.tsx).
   ["stack", 5],
+  // the cells this cell filed and its filer: band 5's third row, the first
+  // that names another JOB (SpawnChips.tsx).
+  ["spawned", 5],
   ["card-actions", 6],
 ];
 
@@ -121,6 +124,8 @@ const MAXIMAL = job({
     ],
   },
   prs: [{ url: "https://github.com/o/r/pull/73", state: "open" }],
+  spawned: [{ slug: "child-cell", state: "working" }],
+  spawned_by: { slug: "parent-cell", state: "done" },
 });
 
 describe("the six bands", () => {

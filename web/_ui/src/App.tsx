@@ -4,6 +4,7 @@ import { fetchUsage } from "./api/client.ts";
 import type { WebUsage } from "./api/types.ts";
 import { BoardView, type BoardActions } from "./components/board/BoardView.tsx";
 import { JobCard } from "./components/board/JobCard.tsx";
+import { openSpawned } from "./components/board/chips/SpawnChips.tsx";
 import { DragProvider } from "./components/board/DragProvider.tsx";
 import { Chrome } from "./components/chrome/Chrome.tsx";
 import MindButton from "./components/chrome/MindButton.tsx";
@@ -485,6 +486,19 @@ export function App() {
         onOpenArtifact={(url, name, key) => setArtifact({ url, name, key })}
         onOpenThread={(slug, tid, node) =>
           setThread(node ? { slug, tid, node } : { slug, tid })
+        }
+        // A spawn chip: re-point this modal at the child or parent through
+        // the card's own click mapping (openSpawned) — the same openSteer
+        // the cards call, so the body remounts on the new slug+mode; a draft
+        // closes the modal and opens the editor, as the card's click would.
+        onOpenJob={(slug, state) =>
+          openSpawned(slug, state, {
+            onOpenSteer: (s, mode) => openSteer(s, mode),
+            onOpenEditor: (s) => {
+              setSteer(null);
+              setEditor({ slug: s });
+            },
+          })
         }
         onClose={() => setSteer(null)}
         // The rename's re-point, and the ONE reason it belongs up here: the
