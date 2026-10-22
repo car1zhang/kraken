@@ -700,7 +700,7 @@ that echoed a whole row back from the GET needs to be told.
 | `class` | string | required on `add`, one of the five classes above; optional on `update` |
 | `src` / `dst` | string | `add` only, OPTIONAL — entity names describing what the observation runs between. They were required while a watch item was an edge (a new fact needs two endpoints); a row does not. **Refused on `update`**, ignored on a fold |
 | `predicate` | string | `add` only, optional, defaults to `concerns`. **Refused on `update`** |
-| `state` | string | one of the three states; blank defaults to `watching` on add, and leaves the current state alone on update |
+| `state` | string | one of the three states; blank defaults to `watching` when the add CREATES a row, and leaves the current state alone on a fold or an update |
 | `sightings` | number | blank/zero on update leaves the current count alone |
 | `first_seen` / `last_seen` | number | unix millis; blank/zero leaves the current values alone — the store's update is partial per column, so a restatement of one field never zeroes the rest |
 | `evidence` | string | JSON sample, replaced wholesale |
@@ -709,8 +709,8 @@ that echoed a whole row back from the GET needs to be told.
 
 **`add` is fold-or-create.** If a LIVE row already states this observation —
 matched on the whitespace-collapsed sentence — the add FOLDS: `sightings`
-increments, `last_seen` moves, `evidence` is replaced, and
-`class`/`state`/`suggested_fix`/`pr_url` are applied when sent. `src`/`dst`/
+increments, `last_seen` moves, and `evidence`/`class`/`state`/`suggested_fix`/
+`pr_url` are each replaced only when sent non-empty. `src`/`dst`/
 `predicate` are ignored: the observation already has them, and letting a re-add
 move them would rewrite history on the strength of one night's phrasing.
 Otherwise a new row is inserted, with `state` defaulting to `watching` and
