@@ -287,7 +287,7 @@ func logicAssertCellPost(t *testing.T, rec *logicRecorder) {
 func TestLogicRunCtxHookCellModeDefaultLine(t *testing.T) {
 	rec := logicServe(t)
 	var out bytes.Buffer
-	runCtxHook(strings.NewReader(logicStatusPayload), &out, "my-job", "")
+	runCtxHook(strings.NewReader(logicStatusPayload), &out, "my-job", "", "")
 
 	logicAssertCellPost(t, rec)
 	if got, want := out.String(), "my-job 42.5%\n"; got != want {
@@ -299,7 +299,7 @@ func TestLogicRunCtxHookCellModeDefaultLine(t *testing.T) {
 func TestLogicRunCtxHookCellModeNullPct(t *testing.T) {
 	rec := logicServe(t)
 	var out bytes.Buffer
-	runCtxHook(strings.NewReader(`{"session_id":"sess-1","context_window":{"used_percentage":null,"context_window_size":1000000}}`), &out, "my-job", "")
+	runCtxHook(strings.NewReader(`{"session_id":"sess-1","context_window":{"used_percentage":null,"context_window_size":1000000}}`), &out, "my-job", "", "")
 
 	if posts := rec.all(); len(posts) != 0 {
 		t.Errorf("posts = %+v, want none for a null percentage", posts)
@@ -316,7 +316,7 @@ func TestLogicRunCtxHookCellModeWrapsUserStatusLine(t *testing.T) {
 	rec := logicServe(t)
 	userCmd := `sed -n 's/.*"session_id":"\([^"]*\)".*/mine sid=\1/p'`
 	var out bytes.Buffer
-	runCtxHook(strings.NewReader(logicStatusPayload), &out, "my-job", userCmd)
+	runCtxHook(strings.NewReader(logicStatusPayload), &out, "my-job", userCmd, "")
 
 	logicAssertCellPost(t, rec)
 	if got, want := out.String(), "mine sid=sess-1\n"; got != want {
@@ -333,7 +333,7 @@ func TestLogicRunCtxHookCellModeWrapsUserStatusLine(t *testing.T) {
 func TestLogicRunCtxHookNoSlugReportsNowhere(t *testing.T) {
 	rec := logicServe(t)
 	var out bytes.Buffer
-	runCtxHook(strings.NewReader(logicStatusPayload), &out, "", "")
+	runCtxHook(strings.NewReader(logicStatusPayload), &out, "", "", "")
 
 	if posts := rec.all(); len(posts) != 0 {
 		t.Fatalf("posts = %+v, want none without a slug", posts)

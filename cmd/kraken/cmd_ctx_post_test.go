@@ -33,7 +33,7 @@ func ctxPostCapture(t *testing.T, stdin string) map[string]any {
 	defer srv.Close()
 	t.Setenv("KRAKEN_SERVE_ADDR", srv.Listener.Addr().String())
 	var out bytes.Buffer
-	runCtxHook(strings.NewReader(stdin), &out, "ctx-job", "")
+	runCtxHook(strings.NewReader(stdin), &out, "ctx-job", "", "")
 	if !strings.HasPrefix(out.String(), "ctx-job") {
 		t.Errorf("printed %q, want the slug-prefixed line whatever the POST did", out.String())
 	}
