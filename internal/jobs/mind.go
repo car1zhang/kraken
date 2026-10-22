@@ -60,6 +60,10 @@ type CaptureSource struct {
 	Repo    string `json:"repo,omitempty"`
 	Dir     string `json:"dir,omitempty"`
 	ItemID  int64  `json:"item_id,omitempty"`
+	// QID and FeedbackID are the mind pass' pointers (schema v37): a question
+	// row by job slug + qid, a feedback row by id.
+	QID        string `json:"qid,omitempty"`
+	FeedbackID int64  `json:"feedback_id,omitempty"`
 }
 
 // CaptureRequest is POST /api/mm/capture's body.
@@ -76,9 +80,12 @@ type CaptureResult struct {
 	Created bool   `json:"created"`
 }
 
-// ValidCaptureSource refuses a kind outside the five, and a kind missing the
-// one field that makes its pointer resolvable: an artifact's name, a
-// transcript's session, a dir's repo.
+// ValidCaptureSource refuses a kind outside the eight, and a kind missing the
+// field that makes its pointer resolvable: an artifact's name, a transcript's
+// session, a dir's repo, a job's slug, a feedback row's id, a question's slug
+// and qid. job/feedback/question are the mind pass' kinds; a capture from the
+// board never sends one, and accepting them here is harmless (the API's
+// source resolver answers all eight).
 func ValidCaptureSource(s CaptureSource) error {
 	switch s.Kind {
 	case "artifact":
@@ -93,9 +100,21 @@ func ValidCaptureSource(s CaptureSource) error {
 		if strings.TrimSpace(s.Repo) == "" {
 			return errors.New("a dir source needs a repo")
 		}
+	case "job":
+		if strings.TrimSpace(s.Slug) == "" {
+			return errors.New("a job source needs a slug")
+		}
+	case "feedback":
+		if s.FeedbackID <= 0 {
+			return errors.New("a feedback source needs a feedback_id")
+		}
+	case "question":
+		if strings.TrimSpace(s.Slug) == "" || strings.TrimSpace(s.QID) == "" {
+			return errors.New("a question source needs a slug and a qid")
+		}
 	case "item", "manual":
 	default:
-		return fmt.Errorf("bad source kind %q: want artifact, transcript, dir, item or manual", s.Kind)
+		return fmt.Errorf("bad source kind %q: want artifact, transcript, dir, item, manual, job, feedback or question", s.Kind)
 	}
 	return nil
 }

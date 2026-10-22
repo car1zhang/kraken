@@ -142,12 +142,23 @@ func qfPost(path string, reqBody any) ([]byte, error) {
 // serve to a sibling's) that has a timeout of its own, so the CLI must
 // outlast it to print the sibling's answer rather than its own timeout.
 func qfPostWith(path string, reqBody any, headers map[string]string, timeout time.Duration) ([]byte, error) {
+	return qfPostLimit(path, reqBody, headers, timeout, qfMaxBodyBytes)
+}
+
+// qfPostLimit is qfPostWith with the route's own body cap, for the one route
+// whose server cap is above qfMaxBodyBytes (`kraken mm propose`, 8 MB).
+func qfPostLimit(path string, reqBody any, headers map[string]string, timeout time.Duration, limit int) ([]byte, error) {
 	buf, err := json.Marshal(reqBody)
 	if err != nil {
 		return nil, fmt.Errorf("encode request: %w", err)
 	}
-	if len(buf) > qfMaxBodyBytes {
-		return nil, fmt.Errorf("request body is %d bytes, over kraken serve's %d-byte limit — split it into smaller ops (e.g. multiple `add` calls instead of one big `set`) rather than resending the same body", len(buf), qfMaxBodyBytes)
+	if len(buf) > limit {
+		if limit != qfMaxBodyBytes {
+			// a route with its own cap (propose) is one call by design, so
+			// there is no "split it up" advice to give — only the cap
+			return nil, fmt.Errorf("request body is %d bytes, over %s's own %d-byte cap", len(buf), path, limit)
+		}
+		return nil, fmt.Errorf("request body is %d bytes, over kraken serve's %d-byte limit — split it into smaller ops (e.g. multiple `add` calls instead of one big `set`) rather than resending the same body", len(buf), limit)
 	}
 	req, err := http.NewRequest(http.MethodPost, jobs.ServeBaseURL()+path, bytes.NewReader(buf))
 	if err != nil {

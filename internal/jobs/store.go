@@ -79,6 +79,7 @@ func jobFromStoreRow(sr *store.Job, prs []store.PR) *Job {
 		Color:      sr.Color,
 		Agent:      sr.Agent,
 		Visibility: sr.Visibility,
+		Author:     sr.Author,
 		Body:       sr.Body,
 		State:      sr.State,
 		Outcome:    sr.Outcome,

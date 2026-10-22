@@ -28,8 +28,8 @@ import (
 var contractPortCarlWord = regexp.MustCompile(`(?i)\bcarl\b`)
 
 // contractPortSkillFiles are the files Slice S's skills row names, plus
-// direct/SKILL.md, which joined the bundle after that slice and names the
-// operator the same way, minus pr/SKILL.md, which folded into do/SKILL.md
+// direct/SKILL.md and mind/SKILL.md, which joined the bundle after that slice
+// and name the operator the same way, minus pr/SKILL.md, which folded into do/SKILL.md
 // in job 624 (its operator mentions travelled with it).
 var contractPortSkillFiles = []string{
 	".claude/skills/aim/SKILL.md",
@@ -39,6 +39,7 @@ var contractPortSkillFiles = []string{
 	".claude/skills/load/SKILL.md",
 	".claude/skills/handoff/SKILL.md",
 	".claude/skills/direct/SKILL.md",
+	".claude/skills/mind/SKILL.md",
 	".claude/skills/aim/assets/hermes-contract.md",
 }
 

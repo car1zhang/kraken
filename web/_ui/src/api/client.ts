@@ -419,6 +419,9 @@ export const addMMNote = (text: string, context = "") =>
 /** Drop one mark by the id the list served. Invalidates; never deletes. */
 export const removeMM = (id: number) => postJSON("/api/mm/remove", { id });
 
+/** Confirm a `proposed` item (the nightly mind pass') so it goes live. */
+export const confirmMM = (id: number) => postJSON<{ ok: true }>("/api/mm/confirm", { id });
+
 // ------------------------------------------------------------ threads
 
 /**

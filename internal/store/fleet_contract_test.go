@@ -19,10 +19,11 @@ import (
 
 // Contract G2 `schemaVersion`: "const schemaVersion = 34 — v34 appends
 // migrations[34] with no hook". 35 since job_stacks was appended after it
-// (schemaV35, job 622), 36 since the ask-thread columns (schemaV36).
+// (schemaV35, job 622), 36 since the ask-thread columns (schemaV36), 37 since
+// the nightly mind pass (schemaV37).
 func TestContractFleetSchemaV34(t *testing.T) {
-	if schemaVersion != 36 {
-		t.Errorf("schemaVersion = %d, want 36", schemaVersion)
+	if schemaVersion != 37 {
+		t.Errorf("schemaVersion = %d, want 37", schemaVersion)
 	}
 	step, ok := migrations[34]
 	if !ok {
@@ -38,8 +39,8 @@ func TestContractFleetSchemaV34(t *testing.T) {
 	if err := s.db.QueryRow(`PRAGMA user_version`).Scan(&version); err != nil {
 		t.Fatal(err)
 	}
-	if version != 36 {
-		t.Errorf("fresh store user_version = %d, want 36", version)
+	if version != 37 {
+		t.Errorf("fresh store user_version = %d, want 37", version)
 	}
 	// the hook is idempotent over a jobs table that already has the column
 	tx, err := s.db.Begin()
@@ -133,8 +134,8 @@ func TestContractFleetV33MigratesInPlaceToReadonly(t *testing.T) {
 	if err := s.db.QueryRow(`PRAGMA user_version`).Scan(&version); err != nil {
 		t.Fatal(err)
 	}
-	if version != 36 {
-		t.Fatalf("migrated user_version = %d, want 36", version)
+	if version != 37 {
+		t.Fatalf("migrated user_version = %d, want 37", version)
 	}
 	j, err := s.GetJobBySlug("legacy-v33")
 	if err != nil {

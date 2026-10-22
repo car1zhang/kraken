@@ -122,6 +122,12 @@ func registerRoutes(mux routeMux) {
 	mux.HandleFunc("/api/mm/flag/raise", mirrorGated(mmFlagRaiseHandler))
 	mux.HandleFunc("/api/mm/flag/dismiss", mirrorGated(mmFlagDismissHandler))
 	mux.HandleFunc("/api/mm/flag/resolve", mirrorGated(mmFlagResolveHandler))
+	// The mind pass (schema v37, mmpropose.go / mmevidence.go): the nightly
+	// job's propose and the operator's confirm are gated writes, the evidence
+	// read is open.
+	mux.HandleFunc("/api/mm/propose", mirrorGated(mmProposeHandler))
+	mux.HandleFunc("/api/mm/confirm", mirrorGated(mmConfirmHandler))
+	mux.HandleFunc("/api/mm/evidence", mmEvidenceHandler)
 	// Mid-conversation recall (recall.go): the cell hook's POST. Gated like
 	// every other agent-side write, because a firing records what it
 	// delivered (the per-job notes record) — it reads like a query and is not

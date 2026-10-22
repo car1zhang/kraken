@@ -243,6 +243,7 @@ describe("MentalModelPane", () => {
         mm={mm}
         onAddNote={() => Promise.resolve()}
         onRemove={() => Promise.resolve()}
+        onConfirm={() => Promise.resolve()}
         onOpenJob={() => {}}
       />,
     );

@@ -362,7 +362,8 @@ func CreateDreamJob(st *store.Store, slug string, since, until int64, clamped bo
 	if _, err := st.CreateJob(&store.Job{
 		Slug: slug, Repo: parsed.Repo, Base: parsed.Base,
 		Solo: parsed.Solo, Model: parsed.Model,
-		Body: parsed.Body,
+		Body:   parsed.Body,
+		Author: "kraken",
 	}); err != nil {
 		return nil, err
 	}
@@ -455,6 +456,14 @@ func dreamJobContent(slug string, since, until int64, clamped bool) string {
 // root, an unreadable project subtree, an entry that can't be stat'd — leaves
 // part of the window unseen and so cannot be reported as a quiet night.
 func anyTranscriptSince(sinceMS int64) (found, ok bool) {
+	return anyTranscriptSinceWhere(sinceMS, nil)
+}
+
+// anyTranscriptSinceWhere is anyTranscriptSince's walk with a project-dir
+// filter: a dir whose name skip reports true is never read (nil skips none).
+// The mind pass uses it to ignore kraken's own nightly cells
+// (anyOperatorTranscriptSince, mindpass.go).
+func anyTranscriptSinceWhere(sinceMS int64, skip func(projectDir string) bool) (found, ok bool) {
 	root := filepath.Join(util.Home(), ".claude", "projects")
 	projects, err := os.ReadDir(root)
 	if os.IsNotExist(err) {
@@ -465,7 +474,7 @@ func anyTranscriptSince(sinceMS int64) (found, ok bool) {
 	}
 	ok = true
 	for _, p := range projects {
-		if !p.IsDir() {
+		if !p.IsDir() || (skip != nil && skip(p.Name())) {
 			continue
 		}
 		entries, err := os.ReadDir(filepath.Join(root, p.Name()))

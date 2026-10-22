@@ -989,7 +989,14 @@ func cellSpawnEnv() []string {
 // kraken-owned "## Mid-run log" section, which is bookkeeping for the file,
 // not part of zeus' initial prompt.
 func jobPrompt(j *Job) string {
-	body := j.Body
+	return JobSpecText(j.Body)
+}
+
+// JobSpecText is jobPrompt's rule on a bare body string: the body up to the
+// "## Mid-run log" section, trimmed. The mind pass' evidence and the mm
+// source resolver's `job` arm use it so a job pointer resolves to exactly the
+// text zeus was prompted with.
+func JobSpecText(body string) string {
 	if i := strings.Index(body, "\n## Mid-run log"); i >= 0 {
 		body = body[:i]
 	} else if strings.HasPrefix(body, "## Mid-run log") {
@@ -2508,6 +2515,13 @@ func doneReorient(j *Job, branch, branchDesc string) string {
 	return "this job was marked done, but " + Operator() + " has reactivated it for adjustments — it was not truly finished. You are resumed in a fresh cell: same worktree path, on branch " + branch + " " + branchDesc + "." + prTail
 }
 
+// rebaseNoteText is the rebase instruction reactivatePrompt receives as
+// rebaseNote when a recreated branch has drifted behind base. Named so the
+// operator reader's pin (operator_denylist_test.go) drives the real text.
+func rebaseNoteText(branch, base string) string {
+	return "your branch " + branch + " is behind " + base + ". first run: git fetch origin && git rebase " + base + " — resolve any conflicts, verify the build still passes, and report the rebase result. then continue."
+}
+
 // reactivatePrompt assembles the resumed claude's prompt from three pure
 // inputs: reorient (the mode-specific re-orientation text — resume vs
 // recreate, done vs not), message (carl's optional steering), and rebaseNote
@@ -2703,7 +2717,7 @@ func ReactivateJob(j *Job, session, message string) error {
 			// locally-reset branch
 			branchFlag, startPoint = "-B", "origin/"+branch
 			if needsRebase {
-				rebaseNote = "your branch " + branch + " is behind " + base + ". first run: git fetch origin && git rebase " + base + " — resolve any conflicts, verify the build still passes, and report the rebase result. then continue."
+				rebaseNote = rebaseNoteText(branch, base)
 			}
 		} else {
 			// no usable remote path (never pushed, origin unreachable, local

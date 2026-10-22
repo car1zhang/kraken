@@ -105,17 +105,18 @@ func askContractV35DB(t *testing.T) string {
 // ---------------------------------------------------------------------------
 
 // Contract A `schemaVersion`: "a fresh database reports PRAGMA user_version = 36".
+// 37 since the nightly mind pass (schemaV37).
 func TestAskContractFreshDatabaseIsV36(t *testing.T) {
-	if schemaVersion != 36 {
-		t.Errorf("schemaVersion = %d, want 36", schemaVersion)
+	if schemaVersion != 37 {
+		t.Errorf("schemaVersion = %d, want 37", schemaVersion)
 	}
 	s := askContractOpen(t)
 	var v int
 	if err := s.db.QueryRow(`PRAGMA user_version`).Scan(&v); err != nil {
 		t.Fatal(err)
 	}
-	if v != 36 {
-		t.Errorf("fresh user_version = %d, want 36", v)
+	if v != 37 {
+		t.Errorf("fresh user_version = %d, want 37", v)
 	}
 }
 
@@ -133,8 +134,8 @@ func TestAskContractV35MigratesKeepingRowsAsPane(t *testing.T) {
 	if err := s.db.QueryRow(`PRAGMA user_version`).Scan(&v); err != nil {
 		t.Fatal(err)
 	}
-	if v != 36 {
-		t.Errorf("migrated user_version = %d, want 36", v)
+	if v != 37 {
+		t.Errorf("migrated user_version = %d, want 37", v)
 	}
 	list, err := s.ListThreads(1)
 	if err != nil {
@@ -202,8 +203,8 @@ func TestAskContractV36StepReplaysAsNoOp(t *testing.T) {
 	if err := s2.db.QueryRow(`PRAGMA user_version`).Scan(&v); err != nil {
 		t.Fatal(err)
 	}
-	if v != 36 {
-		t.Errorf("replayed user_version = %d, want 36", v)
+	if v != 37 {
+		t.Errorf("replayed user_version = %d, want 37", v)
 	}
 }
 
@@ -222,8 +223,8 @@ func TestAskContractReopenIsIdempotent(t *testing.T) {
 			t.Fatal(err)
 		}
 		s.Close()
-		if v != 36 {
-			t.Errorf("Open #%d user_version = %d, want 36", i+1, v)
+		if v != 37 {
+			t.Errorf("Open #%d user_version = %d, want 37", i+1, v)
 		}
 	}
 }

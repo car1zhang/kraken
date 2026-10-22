@@ -52,7 +52,7 @@ export type MMItem = {
   id: number;
   /** decision | reading | note. */
   kind: string;
-  /** question | artifact | artifact-element | code | agent-output | manual. */
+  /** question | artifact | artifact-element | code | agent-output | manual | capture | nightly. */
   source: string;
   slug: string;
   source_ref: string;
@@ -88,6 +88,13 @@ export type MMItem = {
    * source KIND string.
    */
   capture_source?: MMCaptureSource | null;
+  /**
+   * schema v37: `live` or `proposed`. A `proposed` row is one the nightly mind
+   * pass put up for carl's confirm — held out of the rules files and
+   * `kraken mm get` until confirmed. Optional: an older server omits it, and
+   * absent reads as live.
+   */
+  state?: string;
 };
 
 /** `jobs.CaptureSource` as `/api/mm` serves it — lib/mind.ts's CaptureSource. */
