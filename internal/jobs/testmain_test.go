@@ -14,6 +14,20 @@ func TestMain(m *testing.M) {
 		panic(err)
 	}
 	os.Setenv("KRAKEN_LOGS_DIR", dir)
+	// The operator's own ~/.kraken/env knobs reach every cell through the
+	// daemon's environment (main applies the file to its process env, and a
+	// cell pane inherits it), so a `go test` run inside a cell sees them
+	// too. The package's fixtures build their repos under a temp dir and
+	// never expect a knob to be set: with KRAKEN_REPOS_DIR pointing at the
+	// operator's home every SubmitJob fixture refused with "no repo under
+	// <home>", and the submit-serial tests, which wait inside the start seam
+	// that refusal never reaches, hung the whole package until the test
+	// binary's deadline. Unset all three so no operator knob the fixtures
+	// depend on leaks in; a test that wants one sets it with t.Setenv.
+	// internal/api's TestMain does the same for the same reason.
+	for _, knob := range []string{"KRAKEN_REPOS_DIR", "KRAKEN_BRANCH_PREFIX", "KRAKEN_OPERATOR"} {
+		os.Unsetenv(knob)
+	}
 	// Real bindAccount reads the usage snapshot and shells out to the
 	// keychain — no-op it for the whole package's test binary so any test
 	// that calls StartCell or ReactivateJob (now or in the future) never
