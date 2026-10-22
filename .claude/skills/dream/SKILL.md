@@ -207,57 +207,62 @@ re-derive": six scouts in one night each independently re-derived from raw a cos
 already held, because nothing in any brief said what was already known.
 
 **The scouts** are one subagent per transcript, each reading that session's reduced view plus its
-digest. They are read-only exploration — they change nothing in the repo and judge nothing — so they are
-unnamed subagents, not teammates. Give each one a scratch path **outside the repo** (`/tmp/…`, never
-a worktree-relative path) and require its findings there: a scout's report is long, and the reply
-channel truncates. Each brief also names that scout's OWN scratch subdirectory for working files
-(staged reduced views, notes) — two scouts staging into one shared directory have collided mid-run,
-and the collision recovery costs more than the namespace would have. Name those directories with
-SHORT slice handles under one root you create first — a short `/tmp/<handle>` root, never under
+digest. They are read-only exploration — they change nothing in the repo and judge nothing — so they
+are unnamed subagents, not teammates. Give each one a scratch path **outside the repo** and require
+its findings there: a scout's report is long, and the reply channel truncates. Inside a cell that
+path is under the CELL DIR — `<cellDir>/scratch/`, `<cellDir>` being the parent of the brief's SET
+ROOT (see Inside a kraken cell), beside `artifacts/` and outside the worktree — and only outside a
+cell is it `/tmp/…`; never a worktree-relative path either way. It is the cell dir rather than
+`/tmp` because an operator's own PreToolUse write hook can deny the `Write` tool everywhere but a
+fixed list of roots, and `~/.kraken/cells` is the one root such a list is likely to carry: on one
+machine `/tmp` was refused for two scouts' reports one night and for the lead's own counting script
+the next (the harness's per-session scratchpad was refused the same way), each costing a heredoc
+fallback that routes report prose through Bash. Each brief also names that scout's OWN scratch
+subdirectory for working files (staged reduced views, notes) — two scouts staging into one shared
+directory have collided mid-run, and the collision recovery costs more than the namespace would
+have. Name those directories with SHORT slice handles under one root you create first —
+`<cellDir>/scratch/work/<handle>` in a cell, a short `/tmp/<handle>` root outside one, never under
 the session-uuid scratchpad, or every path built on it re-carries the identifier — and **never
-hand-transcribe an opaque
-identifier — a session uuid, a 36-char random string — into a brief**: one brief carried five
-successive wrong transcriptions of its work-dir uuid, the attempt labelled "FINAL, copy this
-literally" among them, then cut off before its report rules; the scout burned four calls and a
-duplicated full reduce in the garbled dir, and the failure is silent to the lead. The paths that
-cannot avoid identifiers — the assigned transcript paths above all — go in a staged assignment
-file (copied bytes, not typed ones) that the brief names by its short path, exactly as zeus' own
-brief rides in a file rather than on the tmux command line. Tell each scout to stage
+hand-transcribe an opaque identifier — a session uuid, a 36-char random string — into a brief**: one
+brief carried five successive wrong transcriptions of its work-dir uuid, the attempt labelled
+"FINAL, copy this literally" among them, then cut off before its report rules; the scout burned four
+calls and a duplicated full reduce in the garbled dir, and the failure is silent to the lead. The
+paths that cannot avoid identifiers — the assigned transcript paths above all — go in a staged
+assignment file (copied bytes, not typed ones) that the brief names by its short path, exactly as
+zeus' own brief rides in a file rather than on the tmux command line. Tell each scout to stage
 running notes there AS IT READS: the one-shot report rule concentrates the run's entire value into
-the final call, and a scout that died on a connection error at the literal write boundary — its last words were an
-announcement that it had everything and was writing the report — cost ~30K output tokens of
-finished analysis with zero salvage, where its staged views survived and were the only thing the
-respawn could reuse (that pass did not yet know the transport-resume rule below). Notes are working
-files, not the report; the one-shot rule binds the report alone. And the shell-dialect rule from
-`.claude/skills/do/SKILL.md` step 4 binds YOU from your own first command, then goes into every
-scout brief — framed only as brief material, it was broken by the pass's own lead (a bare `===`
-echo aborting its second analysis command) minutes before the lead wrote it into five briefs, and
-by the next night's lead again; scouts hit the same aborts on their first command. Spawn them in
+the final call, and a scout that died on a connection error at the literal write boundary — its last
+words were an announcement that it had everything and was writing the report — cost ~30K output
+tokens of finished analysis with zero salvage, where its staged views survived and were the only
+thing the respawn could reuse (that pass did not yet know the transport-resume rule below). Notes
+are working files, not the report; the one-shot rule binds the report alone. And the shell-dialect
+rule from `.claude/skills/do/SKILL.md` step 4 binds YOU from your own first command, then goes into
+every scout brief — framed only as brief material, it was broken by the pass's own lead (a bare
+`===` echo aborting its second analysis command) minutes before the lead wrote it into five briefs,
+and by the next night's lead again; scouts hit the same aborts on their first command. Spawn them in
 waves rather than all at once; a few at a time, with the remainder running as slots free. Every
-transcript gets read; the pass simply takes as long as it takes. **A scout dead on a TRANSPORT
-error is resumed, not replaced**: a connection-closed or ENOTFOUND death leaves the subagent
-resumable, and `SendMessage` to its agent id (from the Agent call's spawn result, or `ListAgents`)
-continues it with its context intact and nothing re-paid — so fetch the messaging tools at the TOP
-of the fan-out, not mid-crisis, because a lead that has not loaded `SendMessage` has only
-"replace" available and cannot discover the cheaper move while stalled itself: one lead respawned
-two just-started scouts at full brief re-payment (~123K cache-write) before its first
-`ToolSearch`, then resumed every one of six later deaths at no loss. Any OTHER death — an output
-ceiling, a resume that does not take — is a respawn under the rule that follows (a hook-blocked
-report write is not a death: that case is specified below — report the refusal and stop). **A
-respawn — however the scout died — gets a FRESH report path** (`<name>-B.md`, then `-C` and so
-on), and you check
-the original path first — a killed scout may have finished its report before dying, and a respawn's
-heredoc fallback overwrites without the Write tool's read-first guard, so handing it the same path
-destroys the one copy of a finished report (a finished 22 KB report survived exactly this only
-because `Write` happened to refuse). "Finished" means it ends with its Coverage section — a scout
-killed mid-write leaves a non-empty, truncated report, the same on-disk shape as a complete one,
-so non-empty is not the test. For how
-to WAIT on that many report files, follow `.claude/skills/do/SKILL.md` step 4's "How to wait" bullet
-and the sub-bullets under it; it is the one specification of the protocol and it applies here
-unchanged. (Outside a cell that file may not exist. The protocol in one line: fetch `Monitor` and
-`SendMessage` in one `ToolSearch`, arm ONE background until-loop over every report path using `-s`
-not `-f`, end the turn, and treat an expiry as "one of them is missing" rather than as a reason to
-re-arm.)
+transcript gets read; the pass simply takes as long as it takes. **A scout dead on a TRANSPORT error
+is resumed, not replaced**: a connection-closed or ENOTFOUND death leaves the subagent resumable,
+and `SendMessage` to its agent id (from the Agent call's spawn result, or `ListAgents`) continues it
+with its context intact and nothing re-paid — so fetch the messaging tools at the TOP of the
+fan-out, not mid-crisis, because a lead that has not loaded `SendMessage` has only "replace"
+available and cannot discover the cheaper move while stalled itself: one lead respawned two
+just-started scouts at full brief re-payment (~123K cache-write) before its first `ToolSearch`, then
+resumed every one of six later deaths at no loss. Any OTHER death — an output ceiling, a resume that
+does not take — is a respawn under the rule that follows (a hook-blocked report write is not a
+death: that case is specified below — report the refusal and stop). **A respawn — however the scout
+died — gets a FRESH report path** (`<name>-B.md`, then `-C` and so on), and you check the original
+path first — a killed scout may have finished its report before dying, and a respawn's heredoc
+fallback overwrites without the Write tool's read-first guard, so handing it the same path destroys
+the one copy of a finished report (a finished 22 KB report survived exactly this only because
+`Write` happened to refuse). "Finished" means it ends with its Coverage section — a scout killed
+mid-write leaves a non-empty, truncated report, the same on-disk shape as a complete one, so
+non-empty is not the test. For how to WAIT on that many report files, follow
+`.claude/skills/do/SKILL.md` step 4's "How to wait" bullet and the sub-bullets under it; it is the
+one specification of the protocol and it applies here unchanged. (Outside a cell that file may not
+exist. The protocol in one line: fetch `Monitor` and `SendMessage` in one `ToolSearch`, arm ONE
+background until-loop over every report path using `-s` not `-f`, end the turn, and treat an expiry
+as "one of them is missing" rather than as a reason to re-arm.)
 
 **A scout needs an agent type that can write, and it must not be able to write the repo.** Spawn it
 `general-purpose` — or any type whose roster includes `Write`; never `Explore`, which has no `Write`
@@ -493,7 +498,9 @@ specific, and it is the only place the cell's real paths appear:
   record that in the report instead. And `--clear` reopens an entry: use it if you closed one in error
   while it is still in front of you, since once the window passes nobody can reach that row again.
 - **Scouts are unnamed subagents**, never teammates: they read and report, and change nothing in the
-  repo — they still write their own findings to the scratch path you give them. The crew rules in
+  repo — they still write their own findings to the scratch path you give them, which in a cell is
+  `<cellDir>/scratch/` (`<cellDir>` being the parent of the brief's SET ROOT; outside the worktree
+  and outside `artifacts/`, so nothing there is board-visible or committable). The crew rules in
   the brief govern any agent that changes the repo.
 - **Never `open`** (there is no browser in a cell).
 - **The phase ends with one line, then you stop.** Say exactly:
