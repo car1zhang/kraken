@@ -9,7 +9,7 @@ import (
 )
 
 // TestUserBlocksTeammateWrapper covers detection of the harness-wrapped
-// teammate-message envelope inside a user turn's text (see teammateBlock in
+// teammate-message envelope inside a user turn's text (see teammateBlocks in
 // read.go). userBlocks receives the raw content exactly as it appears in a
 // transcript's user record.
 func TestUserBlocksTeammateWrapper(t *testing.T) {
@@ -36,41 +36,68 @@ This came from another Claude session — not typed by your user, but very likel
 
 	const plainMsg = "please open a PR for this"
 
+	// The harness delivers every message queued for a teammate during its
+	// turn as ONE user record, one envelope per message, blank-line
+	// separated. Every envelope is a block; a single-match read kept only
+	// the first sender's words.
+	const bundledMsg = `<teammate-message teammate_id="team-lead" summary="Rename the flag">
+Please rename the flag to --verbose.
+</teammate-message>
+
+<teammate-message teammate_id="worker-b" color="green" summary="Tests pass">
+All unit tests pass.
+</teammate-message>
+
+<teammate-message teammate_id="worker-b" color="green" summary="Server port">
+The dev server listens on port 9000.
+</teammate-message>`
+
 	tests := []struct {
 		name    string
 		content string
-		want    block
+		want    []block
 	}{
 		{
 			name:    "idle notification collapses to one-line summary",
 			content: idleMsg,
-			want:    block{Kind: "teammate", Text: "idle (available)", From: "hermes-target-shape"},
+			want:    []block{{Kind: "teammate", Text: "idle (available)", From: "hermes-target-shape"}},
 		},
 		{
 			name:    "plain-text teammate payload kept verbatim",
 			content: textMsg,
-			want:    block{Kind: "teammate", Text: "Here's a status update: the migration is halfway done.", From: "athena-notes"},
+			want:    []block{{Kind: "teammate", Text: "Here's a status update: the migration is halfway done.", From: "athena-notes"}},
 		},
 		{
 			name:    "wrapper missing teammate_id falls back to plain user block",
 			content: noIDMsg,
-			want:    block{Kind: "user", Text: noIDMsg},
+			want:    []block{{Kind: "user", Text: noIDMsg}},
 		},
 		{
 			name:    "ordinary user text is untouched",
 			content: plainMsg,
-			want:    block{Kind: "user", Text: plainMsg},
+			want:    []block{{Kind: "user", Text: plainMsg}},
+		},
+		{
+			name:    "a record bundling several envelopes yields one block per envelope, in order",
+			content: bundledMsg,
+			want: []block{
+				{Kind: "teammate", Text: "Please rename the flag to --verbose.", From: "team-lead"},
+				{Kind: "teammate", Text: "All unit tests pass.", From: "worker-b"},
+				{Kind: "teammate", Text: "The dev server listens on port 9000.", From: "worker-b"},
+			},
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			blocks := userBlocks(tt.content)
-			if len(blocks) != 1 {
-				t.Fatalf("want 1 block, got %d: %v", len(blocks), blocks)
+			if len(blocks) != len(tt.want) {
+				t.Fatalf("want %d block(s), got %d: %v", len(tt.want), len(blocks), blocks)
 			}
-			if blocks[0] != tt.want {
-				t.Errorf("want %v, got %v", tt.want, blocks[0])
+			for i := range tt.want {
+				if blocks[i] != tt.want[i] {
+					t.Errorf("block %d: want %v, got %v", i, tt.want[i], blocks[i])
+				}
 			}
 		})
 	}

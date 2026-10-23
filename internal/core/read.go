@@ -894,8 +894,8 @@ func userBlocks(content any) []block {
 		if strings.TrimSpace(s) == "" || strings.HasPrefix(strings.TrimSpace(s), "<system-reminder>") {
 			return
 		}
-		if b, ok := teammateBlock(s); ok {
-			blocks = append(blocks, b)
+		if tb := teammateBlocks(s); len(tb) > 0 {
+			blocks = append(blocks, tb...)
 			return
 		}
 		blocks = append(blocks, block{Kind: "user", Text: s})
@@ -916,33 +916,39 @@ func userBlocks(content any) []block {
 	return blocks
 }
 
-// teammateBlock detects a harness-wrapped teammate message inside a user
-// text part and, if found, renders it as a "teammate" block. idle
+// teammateBlocks detects the harness-wrapped teammate messages inside a
+// user text part and renders each as a "teammate" block, in order. There
+// can be several: the harness delivers the messages queued for a teammate
+// while its turn ran as ONE user record holding one <teammate-message>
+// envelope per message. A single-match read keeps the first sender's
+// words and silently drops every later one, and a reader of the reduced
+// view then watches the agent act on messages the view never shows. idle
 // notifications (the JSON idle-poll heartbeat teams exchange) collapse to
 // a one-line summary; anything else is a real message and is kept
-// verbatim, since it's often markdown meant to be read as-is. Returns
-// ok=false — and the caller falls back to a plain "user" block — when the
-// wrapper tag is present but missing teammate_id, or absent entirely.
-func teammateBlock(s string) (block, bool) {
-	m := teammateMsgRe.FindStringSubmatch(s)
-	if m == nil {
-		return block{}, false
-	}
-	from, payload := m[1], strings.TrimSpace(m[2])
-	if from == "" {
-		return block{}, false
-	}
-	text := payload
-	var rec map[string]any
-	if err := json.Unmarshal([]byte(payload), &rec); err == nil {
-		if t, _ := rec["type"].(string); t == "idle_notification" {
-			text = "idle"
-			if reason, _ := rec["idleReason"].(string); reason != "" {
-				text = fmt.Sprintf("idle (%s)", reason)
+// verbatim, since it's often markdown meant to be read as-is. Returns nil —
+// and the caller falls back to a plain "user" block — when no envelope
+// carries a teammate_id; an id-less envelope beside a matched one is
+// skipped.
+func teammateBlocks(s string) []block {
+	var blocks []block
+	for _, m := range teammateMsgRe.FindAllStringSubmatch(s, -1) {
+		from, payload := m[1], strings.TrimSpace(m[2])
+		if from == "" {
+			continue
+		}
+		text := payload
+		var rec map[string]any
+		if err := json.Unmarshal([]byte(payload), &rec); err == nil {
+			if t, _ := rec["type"].(string); t == "idle_notification" {
+				text = "idle"
+				if reason, _ := rec["idleReason"].(string); reason != "" {
+					text = fmt.Sprintf("idle (%s)", reason)
+				}
 			}
 		}
+		blocks = append(blocks, block{Kind: "teammate", Text: text, From: from})
 	}
-	return block{Kind: "teammate", Text: text, From: from}, true
+	return blocks
 }
 
 func summarizeInput(input any) string {

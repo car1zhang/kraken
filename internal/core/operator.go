@@ -386,7 +386,7 @@ func operatorWords(t string, rec operatorLine, login string) (text, form string,
 			return "", "", false
 		}
 	}
-	if _, isTeammate := teammateBlock(t); isTeammate {
+	if len(teammateBlocks(t)) > 0 {
 		return "", "", false
 	}
 	if strings.HasPrefix(t, "<command-message>") || strings.HasPrefix(t, "<command-name>") {
