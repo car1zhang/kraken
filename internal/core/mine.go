@@ -957,8 +957,10 @@ func (r *reducer) midTurn(out reduceSink, text string) {
 		return
 	}
 	r.midTurnSeen[t] = struct{}{}
-	if b, ok := teammateBlock(t); ok {
-		writeReduced(out, "[teammate "+b.From+" mid-turn]", b.Text)
+	if tb := teammateBlocks(t); len(tb) > 0 {
+		for _, b := range tb {
+			writeReduced(out, "[teammate "+b.From+" mid-turn]", b.Text)
+		}
 		return
 	}
 	writeReduced(out, "[user mid-turn]", t)
@@ -1008,10 +1010,11 @@ func ReduceJSONLBytes(data []byte) []byte {
 // did to an agent, and mislabelling would quote KRAKEN's prompts back to him
 // as his own — confidently wrong about the one thing the reduction exists to
 // say. (Measured over 300 real transcripts: teammate traffic is 29% of user
-// blocks and 38% of their bytes.) Detection reuses read.go's teammateBlock,
+// blocks and 38% of their bytes.) Detection reuses read.go's teammateBlocks,
 // deliberately rather than a second regex — a divergent copy of that
 // envelope rule is exactly how this went wrong once — which also collapses
-// idle-poll heartbeats to a single "idle" line.
+// idle-poll heartbeats to a single "idle" line, and emits every envelope a
+// record bundles rather than the first alone.
 //
 // The dropped mass is tool RESULTS (whole files, whole command outputs,
 // inlined attachments) plus thinking, none of which a reader needs to
@@ -1050,13 +1053,16 @@ func ReduceTranscript(path string, since int64) ([]byte, error) {
 }
 
 // writeUserish appends one text part of a user record under the label that
-// says who actually spoke: [teammate <id>] when it carries another agent's
-// message envelope, [user] — meaning carl — otherwise. This is userBlocks'
+// says who actually spoke: one [teammate <id>] section per envelope when it
+// carries other agents' message envelopes (a record can bundle several; see
+// teammateBlocks), [user] — meaning carl — otherwise. This is userBlocks'
 // full treatment, both halves of it: the <system-reminder> drop AND the
-// teammate routing, via the same teammateBlock read.go's own reader uses.
+// teammate routing, via the same teammateBlocks read.go's own reader uses.
 func writeUserish(out reduceSink, text string) {
-	if b, ok := teammateBlock(text); ok {
-		writeReduced(out, "[teammate "+b.From+"]", b.Text)
+	if tb := teammateBlocks(text); len(tb) > 0 {
+		for _, b := range tb {
+			writeReduced(out, "[teammate "+b.From+"]", b.Text)
+		}
 		return
 	}
 	writeReduced(out, "[user]", text)

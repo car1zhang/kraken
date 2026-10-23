@@ -949,6 +949,58 @@ func TestReduceTranscriptDedupesDeliveredQueuedPrompt(t *testing.T) {
 	}
 }
 
+// TestReduceTranscriptEmitsEveryBundledEnvelope pins the other half of the
+// teammate routing: the harness delivers the messages queued for a teammate
+// during its turn as ONE user record carrying one envelope per message, and
+// the reduced view must show every one of them. With a first-match read the
+// view kept the first envelope and dropped the two behind it, so a reader
+// of the view saw the agent act on words that were nowhere in it. Both
+// delivery shapes are covered: a user record and a queued mid-turn record.
+func TestReduceTranscriptEmitsEveryBundledEnvelope(t *testing.T) {
+	projects := mineHome(t)
+	now := time.Now().UnixMilli()
+	since := now - int64(time.Hour/time.Millisecond)
+
+	bundled := "<teammate-message teammate_id=\"team-lead\" summary=\"Rename\">FIRST-ENVELOPE</teammate-message>\n\n" +
+		"<teammate-message teammate_id=\"worker-b\" color=\"green\" summary=\"Tests\">SECOND-ENVELOPE</teammate-message>\n\n" +
+		"<teammate-message teammate_id=\"worker-b\" color=\"green\" summary=\"Port\">THIRD-ENVELOPE</teammate-message>"
+	midTurn := "<teammate-message teammate_id=\"worker-c\">MID-TURN-FIRST</teammate-message>\n\n" +
+		"<teammate-message teammate_id=\"worker-d\">MID-TURN-SECOND</teammate-message>"
+
+	path := mineWrite(t, projects, "-Users-carl-Developer-monolith", "sess.jsonl",
+		mineUser(t, now-5000, bundled),
+		mineJSON(t, map[string]any{"type": "queue-operation", "timestamp": mineISO(now - 4000), "operation": "enqueue", "content": midTurn}),
+	)
+
+	out, err := ReduceTranscript(path, since)
+	if err != nil {
+		t.Fatalf("ReduceTranscript: %v", err)
+	}
+	got := string(out)
+
+	for _, want := range []string{
+		"[teammate team-lead]\nFIRST-ENVELOPE",
+		"[teammate worker-b]\nSECOND-ENVELOPE",
+		"[teammate worker-b]\nTHIRD-ENVELOPE",
+		"[teammate worker-c mid-turn]\nMID-TURN-FIRST",
+		"[teammate worker-d mid-turn]\nMID-TURN-SECOND",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("bundled envelope missing from the reduced view: %q\n%s", want, got)
+		}
+	}
+	// order within the bundle is the delivery order
+	if i, j := strings.Index(got, "FIRST-ENVELOPE"), strings.Index(got, "SECOND-ENVELOPE"); i < 0 || j < 0 || i > j {
+		t.Errorf("bundled envelopes emitted out of order:\n%s", got)
+	}
+	if strings.Contains(got, "teammate-message") {
+		t.Errorf("raw envelope leaked into the reduced view:\n%s", got)
+	}
+	if strings.Contains(got, "[user]") || strings.Contains(got, "[user mid-turn]") {
+		t.Errorf("a bundled teammate record was attributed to carl:\n%s", got)
+	}
+}
+
 // TestReduceTranscriptSeparatesTeammateFromUser is the label that matters
 // most: [user] means carl. A brief zeus sends hephaestus arrives inside a
 // user record wrapped in a <teammate-message> envelope, and emitting it as
