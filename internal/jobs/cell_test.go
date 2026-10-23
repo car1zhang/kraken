@@ -327,6 +327,50 @@ func TestPrHookCommandCarriesNonDefaultServeAddr(t *testing.T) {
 	}
 }
 
+// TestMergeServeAddrSettingsCarriesNonDefaultServeAddr: the cell settings'
+// env block carries KRAKEN_SERVE_ADDR when the spawning serve is bound off its
+// default, so every session in the worktree — zeus, teammates, side threads —
+// resolves its verbs to the same serve its hooks reach.
+func TestMergeServeAddrSettingsCarriesNonDefaultServeAddr(t *testing.T) {
+	SetHookServeAddr("127.0.0.1:9999")
+	t.Cleanup(func() { SetHookServeAddr("") })
+
+	out, err := mergeHookSettings(nil, "demo", "kraken")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var parsed map[string]any
+	if err := json.Unmarshal(out, &parsed); err != nil {
+		t.Fatal(err)
+	}
+	env, _ := parsed["env"].(map[string]any)
+	if got := env[serveAddrEnvVar]; got != "127.0.0.1:9999" {
+		t.Fatalf("env[%s] = %v, want 127.0.0.1:9999 (env: %v)", serveAddrEnvVar, got, env)
+	}
+	if env[teamsEnvVar] != "1" {
+		t.Fatalf("the agent-teams switch was lost: env = %v", env)
+	}
+}
+
+// TestMergeServeAddrSettingsOmitsAndClearsDefault: unset or default-bound, the
+// env block carries no KRAKEN_SERVE_ADDR — and a stale one left by an earlier
+// spawn under another serve is removed, the recall hook's replace semantics.
+func TestMergeServeAddrSettingsOmitsAndClearsDefault(t *testing.T) {
+	t.Cleanup(func() { SetHookServeAddr("") })
+	for _, addr := range []string{"", defaultServeAddr} {
+		SetHookServeAddr(addr)
+		parsed := map[string]any{"env": map[string]any{serveAddrEnvVar: "127.0.0.1:9999", "OTHER": "kept"}}
+		mergeServeAddrSettings(parsed)
+		env := parsed["env"].(map[string]any)
+		if _, set := env[serveAddrEnvVar]; set {
+			t.Fatalf("addr %q: stale %s kept: %v", addr, serveAddrEnvVar, env)
+		}
+		if env["OTHER"] != "kept" {
+			t.Fatalf("addr %q: a foreign env key was touched: %v", addr, env)
+		}
+	}
+}
+
 // TestPrHookCommandOmitsDefaultServeAddr: an addr equal to defaultServeAddr
 // must NOT be spelled out — matches the pre-E7 command shape exactly when
 // serve happens to be bound at its own default.
