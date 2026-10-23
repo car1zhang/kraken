@@ -23,7 +23,7 @@ func seedStackJob(t *testing.T, s *Store, slug string) *Job {
 	return j
 }
 
-func TestUpsertStackKeepsStatusAndAtOnReAdd(t *testing.T) {
+func TestUpsertStackKeepsStatusRefreshesAtOnReAdd(t *testing.T) {
 	s := openTest(t)
 	j := seedStackJob(t, s, "stack-a")
 
@@ -33,7 +33,8 @@ func TestUpsertStackKeepsStatusAndAtOnReAdd(t *testing.T) {
 	if err := s.SetStackStatus(j.ID, "http://127.0.0.1:7878", "up", 1500); err != nil {
 		t.Fatalf("SetStackStatus: %v", err)
 	}
-	// re-add with a new label and a later time: label changes, nothing else
+	// re-add with a new label and a later time: label and at take the new
+	// values (the cell re-registered its stack), status and probed_at are kept
 	if err := s.UpsertStack(j.ID, "http://127.0.0.1:7878", "web", 2000); err != nil {
 		t.Fatalf("UpsertStack re-add: %v", err)
 	}
@@ -45,8 +46,8 @@ func TestUpsertStackKeepsStatusAndAtOnReAdd(t *testing.T) {
 		t.Fatalf("rows = %d, want 1 (re-add must not duplicate)", len(got))
 	}
 	l := got[0]
-	if l.Label != "web" || l.Status != "up" || l.At != 1000 || l.ProbedAt != 1500 {
-		t.Fatalf("row = %+v, want label web, status up, at 1000, probed_at 1500", l)
+	if l.Label != "web" || l.Status != "up" || l.At != 2000 || l.ProbedAt != 1500 {
+		t.Fatalf("row = %+v, want label web, status up, at 2000 (refreshed), probed_at 1500", l)
 	}
 }
 
