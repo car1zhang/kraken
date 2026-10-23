@@ -197,10 +197,20 @@ A brief must not send a subagent to an artifact that cannot contain the answer. 
 raw file cannot show a scout: an inbound `SendMessage` leaves ZERO trace in a subagent sidecar —
 the sidecar records the effect and never the cause — so a sidecar-heavy assignment's brief says to
 cross-check the parent session's `SendMessage`/`Agent` calls before attributing a mid-run pivot to
-the agent's own judgment. Two more lines the brief owes every scout. A reduced view's LINES are
+the agent's own judgment. Three more lines the brief owes every scout. A reduced view's LINES are
 unbounded — a single line can be an entire inlined skill body — so a page size that worked on page
 one can blow the Read tool's token ceiling on page two: say to page large views in modest chunks
-(a few hundred lines) and to shrink the page on a ceiling error rather than switching to grep. And
+(a few hundred lines) and to shrink the page on a ceiling error rather than switching to grep.
+**Shapes, never values**: a scout scanning for where a credential or a person's identifier landed
+searches by SHAPE (a prefix, a length, a regex) and COUNTS or LOCATES rather than prints — `grep -c`,
+`grep -l`, `grep -n … | cut -d: -f1` (the file name over several files, the line number in one);
+never `grep -o`, `grep -ob` or a bare grep that echoes the matching line, since a tool result is a
+transcript record too, and paging a view with Read shows whatever is in it — and reports the class, the file and
+the record timestamp (or path and line for a file that is not a transcript); it never types a value
+it found into a command, a notes line or its report. A scout that built a python dict of the
+identifiers and the credential it was tracing copied all of them into a new transcript, from where
+the next night's `reduce` carried them into that pass's staged views: the dream pass had become the
+propagator its own evidence rule warns about, and nothing in the brief had said otherwise. And
 the brief carries a short **already-established list** — the known cross-cutting costs and facts
 from the watch store and {{operator}}'s mental model (`kraken mm get --q "<subject>"`, then `kraken mm show <id>`) that touch this scout's assignment — marked "measure, don't
 re-derive": six scouts in one night each independently re-derived from raw a cost kraken's memory
