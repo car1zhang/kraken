@@ -1930,6 +1930,15 @@ func teardownCell(j *Job, repo string, live map[string]bool, force bool) error {
 	if err := CloseThreadsForTeardown(j); err != nil {
 		fmt.Fprintf(os.Stderr, "kraken: closing %s's thread rows failed: %v\n", j.Slug, err)
 	}
+	// a parallel kraken serve the cell registered as a stack link did NOT die
+	// with the session: it is its own process, and left running it fires the
+	// nightly passes at midnight — jobs in its own store, real claude cells
+	// in the shared tmux server (stackstop.go). Stopped here, before the rows
+	// that name its port are deleted below; a dev server on a registered port
+	// is left running and logged.
+	if err := StopStackServesForTeardown(j); err != nil {
+		fmt.Fprintf(os.Stderr, "kraken: stopping %s's stack serves failed: %v\n", j.Slug, err)
+	}
 	// the cell's stack links (its manual-test URLs, jobstack.go) died with
 	// the session too — unlike threads they have no transcript to point at,
 	// so the rows are deleted outright and a reactivated job starts with

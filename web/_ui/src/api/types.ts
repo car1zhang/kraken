@@ -217,7 +217,7 @@ export interface StackLink {
   url: string;
   label: string;
   status: StackStatus;
-  /** unix millis, registration time */
+  /** unix millis, last registration time (a re-add refreshes it) */
   at: number;
 }
 

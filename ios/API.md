@@ -220,7 +220,7 @@ feature.
 
 `jobPR`: `url` (string, always), `state` (string, always: `open` \| `merged` \| `closed`). The PR number for display derives from the url's trailing `/pull/<n>`.
 
-`jobStackLink` (jobstack.go): `url` (string, always — `http`/`https` only, no credentials; the server refuses anything else), `label` (string, always, may be `""` — the cell's short name, capped at 24 runes server-side), `status` (string, always: `up` \| `down` \| `unknown` — the daemon's loopback probe's last verdict; `unknown` from registration and forever for a non-loopback host, which is never dialled; decode tolerantly, a future word is possible), `at` (number, always, unix millis — registration time). The chip label is `⇱ <label> :<port>` with the port taken from the url (scheme default when absent); a `down` link renders muted and struck through but stays clickable, since the probe can be one tick stale after a restart.
+`jobStackLink` (jobstack.go): `url` (string, always — `http`/`https` only, no credentials; the server refuses anything else), `label` (string, always, may be `""` — the cell's short name, capped at 24 runes server-side), `status` (string, always: `up` \| `down` \| `unknown` — the daemon's loopback probe's last verdict; `unknown` from registration and forever for a non-loopback host, which is never dialled; decode tolerantly, a future word is possible), `at` (number, always, unix millis — last registration time; a re-add refreshes it). The chip label is `⇱ <label> :<port>` with the port taken from the url (scheme default when absent); a `down` link renders muted and struck through but stays clickable, since the probe can be one tick stale after a restart.
 
 `webArtifact`: `name` (string, always — in store mode this may contain `/`
 for a nested path, e.g. `icon-variations/v2.png`), `url` (string, always).
@@ -1878,7 +1878,7 @@ The cell's write of its STACK LINKS — the URLs of whatever it spun up for manu
 
 Request: `{"slug": string, "op": "add" | "remove" | "clear", "url": string, "label": string}`.
 
-- `op: add` needs `url`, which must parse with scheme `http` or `https`, a non-empty host and no userinfo (400 `bad url: …` naming the rule otherwise). Re-adding a url the job already has UPDATES its label and keeps its `status` and `at`. The ninth distinct url is a 400 naming the cap (8 per job). `label` is optional, one-lined and truncated at 24 runes rather than refused. Refused 409 when the job has never started or is done — there is no cell to link a stack to.
+- `op: add` needs `url`, which must parse with scheme `http` or `https`, a non-empty host and no userinfo (400 `bad url: …` naming the rule otherwise). Re-adding a url the job already has UPDATES its label and its `at` (the last registration) and keeps its `status`. The ninth distinct url is a 400 naming the cap (8 per job). `label` is optional, one-lined and truncated at 24 runes rather than refused. Refused 409 when the job has never started or is done — there is no cell to link a stack to.
 - `op: remove` needs a token in `url`: matched against each link's url first, then its label; nothing matched is a 404.
 - `op: clear` takes neither and is a 200 even on an empty list.
 - The body is decoded with **unknown fields rejected**: `slug`, `op`, `url`, `label` and nothing else.
