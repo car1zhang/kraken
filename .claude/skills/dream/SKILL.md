@@ -276,9 +276,15 @@ same failure for review fleets; it applies to scout briefs identically. And the 
 do when BOTH paths are closed — `Write` refused and the heredoc blocked by a hook: report the
 refusal in the reply and stop, never trim or reword the findings until the hook passes. One more
 brief clause, and it binds you as much as any scout: `kraken.db` is read through the verbs —
-`kraken watchlist get`, `kraken feedback sweep`, `kraken mm get` — never by opening the file
+`kraken watchlist get`, `kraken feedback sweep`, `kraken mm get`, and for a row's state or a
+fixture's provenance `kraken stack get`, `kraken job raw` — never by opening the file
 (`kraken serve` is its single writer, and a second handle would run migrations; what follows is
-this pass's one narrower carve-out). Where a read genuinely has no verb, open it READ-ONLY and never
+this pass's one narrower carve-out). The clause goes into every REVIEWER brief you write as well,
+without the carve-out: a reviewer's questions all have a verb, and a reviewer with no verb for one
+says so in its report rather than opening the file — written for scouts alone, the clause reached
+no reviewer, and three reviewers in one round each opened the live database with
+`sqlite3 -readonly` to check fixture provenance against real rows, whose shapes then sat in their
+verdict files. Where a read genuinely has no verb, open it READ-ONLY and never
 otherwise — `sqlite3 -readonly`, or Python's `sqlite3.connect('file:<path>?mode=ro', uri=True)`,
 where `uri=True` is what guarantees the URI is PARSED rather than taken as a filename: sqlite
 honours `file:` URIs only when URI handling is on, and whether it is on by default depends on how
@@ -435,7 +441,9 @@ The move to the standalone store cuts the other way too: a watched observation i
 Anything in the kraken repo. But reach for **skill text first**: most findings are about how an
 agent was instructed, and a sentence is cheaper to get wrong than a function. Larger changes are
 allowed and sometimes right — a subagent definition, a brief, orchestration, real Go — and they
-carry the same obligations any other change would: tests, and the review the cell's brief specifies.
+carry the same obligations any other change would: tests, and the review the cell's brief specifies
+— whose reviewer briefs carry the `kraken.db` clause in the reviewer form the scout section above
+gives it (the verbs, no carve-out).
 
 Two hard fences: never `.claude/settings.json` (per-cell, gitignored, kraken-written — never a
 durable improvement), and never anything outside the kraken repo.
