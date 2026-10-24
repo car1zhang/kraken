@@ -265,7 +265,7 @@ var probeOnline = func() bool {
 // daemonState holds the scheduler's cross-tick dedup state. newDaemon constructs
 // one; tick runs a single scheduler pass.
 type daemonState struct {
-	Notified map[string]int64 // dedup key (err/repo file mtime, or "blocked:"/"health:" slug) → notified marker
+	Notified map[string]int64 // dedup key (err/repo file mtime, "blocked:"/"health:" slug, "teardownfail:" job, "suppressed:" retry key) → notified marker
 	Poked    map[string]int64 // "retry:" + slug → unix time last auto-retried
 	// Repaired marks a job's PR-repair pass as fully done for this process
 	// (slug → done) — see repairPRs. In-memory only, like Notified/Poked
@@ -1244,12 +1244,17 @@ func (d *daemonState) gateRetry(now time.Time, rkey string, checkOnline func() b
 	}
 	if !checkOnline() {
 		d.offline = true
-		// only log the suppression when a poke was actually due — the
-		// not-due-but-offline path above still consults the probe (to notice
-		// a reconnect promptly), and logging that every tick would just be
-		// "still offline" noise with nothing suppressed.
-		if pokeDue {
-			dlog("suppressed retry poke (%s) — offline", rkey)
+		// log the suppression once per retry key (a cell, or a standing agent)
+		// per outage. A poke that is due stays due for the whole outage,
+		// because Poked is stamped only by a poke that actually happens, so a
+		// per-tick log here would be one "still offline" line every due tick
+		// for as long as the outage lasts, with nothing new suppressed. The
+		// dedup key lives in Notified under the suppressedPokePrefix and is
+		// purged with the rest of the offline bookkeeping in clearOffline, so
+		// the next outage logs again.
+		if pokeDue && d.Notified[suppressedPokePrefix+rkey] == 0 {
+			d.Notified[suppressedPokePrefix+rkey] = now.Unix()
+			dlog("suppressed retry poke (%s) — offline; logged once until connectivity returns", rkey)
 		}
 		if d.Notified["offline"] == 0 {
 			d.Notified["offline"] = now.Unix()
@@ -1309,18 +1314,29 @@ func (d *daemonState) clearTeardownFailure(j *Job) {
 	}
 }
 
+// suppressedPokePrefix keys gateRetry's once-per-outage "suppressed retry
+// poke" log in d.Notified, one marker per retry key. clearOffline purges it
+// so the next outage logs again.
+const suppressedPokePrefix = "suppressed:"
+
 // clearOffline resets the offline dedup bookkeeping (the flag itself, the
-// "offline" Notified marker, and every backed-off "retry:" Poked key) and
-// returns the one back-online notification to fire. Shared by gateRetry's
-// reconnect path and tick's own tick-start check below — a stalled cell can
-// recover by some path OTHER than gateRetry (carl retries by hand, the turn
-// just finishes) while d.offline stays stuck true, and only checking at
-// tick-start (not only inside gateRetry, which only runs when a retryable
-// health reason exists this tick) catches that case before a much-later
-// stall would otherwise fire a spurious "back online" notification.
+// "offline" Notified marker, every suppression-log marker, and every
+// backed-off "retry:" Poked key) and returns the one back-online
+// notification to fire. Shared by gateRetry's reconnect path and tick's own
+// tick-start check below — a stalled cell can recover by some path OTHER
+// than gateRetry (carl retries by hand, the turn just finishes) while
+// d.offline stays stuck true, and only checking at tick-start (not only
+// inside gateRetry, which only runs when a retryable health reason exists
+// this tick) catches that case before a much-later stall would otherwise
+// fire a spurious "back online" notification.
 func (d *daemonState) clearOffline() (title, msg string) {
 	d.offline = false
 	delete(d.Notified, "offline")
+	for k := range d.Notified {
+		if strings.HasPrefix(k, suppressedPokePrefix) {
+			delete(d.Notified, k)
+		}
+	}
 	for k := range d.Poked {
 		if strings.HasPrefix(k, "retry:") {
 			delete(d.Poked, k)
