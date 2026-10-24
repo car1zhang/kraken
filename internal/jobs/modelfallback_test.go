@@ -12,8 +12,11 @@ func TestFableFallbackDecide(t *testing.T) {
 	const fableBanner = "zeus hit a usage limit: You've reached your Fable limit. Run /usage-credits to continue or switch models with /model."
 	const generic429 = `429 {"type":"error","error":{"type":"rate_limit_error","message":"This request would exceed your account's rate limit. Please try again later."}}`
 	const pid, sid = 4242, "sess-zeus"
+	// A hit two minutes old is past fableFallbackClassifyWait: the transcript
+	// arm has had its chance to name the window, so a still-unnamed 429
+	// decides on the snapshot. The young cases below set At themselves.
 	open := func(details string) LimitHit {
-		return LimitHit{Error: "rate_limit", Details: details, At: now.Unix() - 60, SessionID: sid}
+		return LimitHit{Error: "rate_limit", Details: details, At: now.Unix() - 120, SessionID: sid}
 	}
 	with := func(h LimitHit, f func(*LimitHit)) LimitHit { f(&h); return h }
 	withRec := func(r fallbackRecord, f func(*fallbackRecord)) fallbackRecord { f(&r); return r }
@@ -44,6 +47,22 @@ func TestFableFallbackDecide(t *testing.T) {
 		{"generic 429, fable not spent", open(generic429), fable, acct(0, 61, 82), fallbackRecord{}, fallbackNo},
 		{"generic 429, no snapshot row", open(generic429), fable, nil, fallbackRecord{}, fallbackNo},
 		{"generic 429, fable row already reset", open(generic429), fable, &core.AccountUsage{Models: []core.ModelWindow{{Name: "Fable", Percent: 100, ResetsAt: now.Add(-time.Hour).UnixMilli()}}}, fallbackRecord{}, fallbackNo},
+		// The hook arm lands seconds before the transcript arm names the
+		// window: a young unnamed 429 that the snapshot ALONE would switch
+		// waits for the banner (2026-10-23: two session limits switched on
+		// exactly this). Every other verdict is undelayed — a 429 with Fable
+		// room or no snapshot row still reaches rotation at once, a young
+		// Fable BANNER switches at once — and a hit at the wait's edge decides.
+		{"young generic 429, snapshot says fable spent", with(open(generic429), func(h *LimitHit) { h.At = now.Unix() - 3 }), fable, acct(0, 61, 100), fallbackRecord{}, fallbackWait},
+		{"young generic 429, fable not spent", with(open(generic429), func(h *LimitHit) { h.At = now.Unix() - 3 }), fable, acct(0, 61, 82), fallbackRecord{}, fallbackNo},
+		{"young generic 429, no snapshot row", with(open(generic429), func(h *LimitHit) { h.At = now.Unix() - 3 }), fable, nil, fallbackRecord{}, fallbackNo},
+		{"young generic 429, session spent too", with(open(generic429), func(h *LimitHit) { h.At = now.Unix() - 3 }), fable, acct(100, 61, 100), fallbackRecord{}, fallbackNo},
+		{"young generic 429, one second short of the wait", with(open(generic429), func(h *LimitHit) { h.At = now.Add(-fableFallbackClassifyWait + time.Second).Unix() }), fable, acct(0, 61, 100), fallbackRecord{}, fallbackWait},
+		{"generic 429 exactly at the wait", with(open(generic429), func(h *LimitHit) { h.At = now.Add(-fableFallbackClassifyWait).Unix() }), fable, acct(0, 61, 100), fallbackRecord{}, fallbackSwitch},
+		{"generic 429 stamped ahead of the clock", with(open(generic429), func(h *LimitHit) { h.At = now.Add(time.Hour).Unix() }), fable, acct(0, 61, 100), fallbackRecord{}, fallbackSwitch},
+		{"young fable banner, headroom", with(open(fableBanner), func(h *LimitHit) { h.At = now.Unix() - 3 }), fable, healthy, fallbackRecord{}, fallbackSwitch},
+		{"young session banner", with(open("You've hit your session limit · resets 4:20am (America/New_York)"), func(h *LimitHit) { h.At = now.Unix() - 3 }), fable, acct(0, 61, 100), fallbackRecord{}, fallbackNo},
+		{"young generic 429 on an already-switched process", with(open(generic429), func(h *LimitHit) { h.At = now.Unix() - 3 }), fable, healthy, switched(30*time.Second, true), fallbackAbsorb},
 		{"session spent too", open(fableBanner), fable, acct(100, 60, 100), fallbackRecord{}, fallbackNo},
 		{"weekly spent too", open(fableBanner), fable, acct(20, 100, 100), fallbackRecord{}, fallbackNo},
 		{"opus window spent too", open(fableBanner), fable, &core.AccountUsage{Models: []core.ModelWindow{{Name: "Fable", Percent: 100}, {Name: "Opus", Percent: 100}}}, fallbackRecord{}, fallbackNo},

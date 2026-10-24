@@ -51,6 +51,20 @@ const (
 	// fableFallbackPromptWindow bounds how long a switched process whose
 	// continue prompt never landed keeps being retried with the prompt alone.
 	fableFallbackPromptWindow = 30 * time.Minute
+	// fableFallbackClassifyWait is how long a fresh hit whose details name NO
+	// usage window (the StopFailure hook's raw 429) is held before the
+	// snapshot alone may decide the switch. The hook arm lands first, and the
+	// transcript arm folds the banner — which says WHICH window ran out —
+	// onto the same record within a tick or two (measured 16–18 s on
+	// 2026-10-23). Deciding off the snapshot inside that gap read two cells'
+	// SESSION limits as Fable exhaustion: the session row had not been
+	// re-polled since the window filled, so the switch went out, the pane ran
+	// one Opus turn straight into the same session banner, and the follow-on
+	// hit then went to rotation anyway — a /model typed for nothing, which
+	// also rewrote the operator's default model for new sessions. Past the
+	// wait a hit still naming no window decides on the snapshot as before:
+	// the hook-first hits of 2026-10-08 never got a banner at all.
+	fableFallbackClassifyWait = 90 * time.Second
 	// fableFallbackRetryGap spaces retries after a refused send (an open
 	// question prompt, a pane race), so a refusal costs one attempt per gap
 	// rather than one per tick.
@@ -123,6 +137,7 @@ const (
 	fallbackPrompt fallbackVerdict = "prompt" // already switched; the continue is owed until the pane runs
 	fallbackAbsorb fallbackVerdict = "absorb" // late re-delivery of a handled exhaustion: resolve silently
 	fallbackExpire fallbackVerdict = "expire" // switched, but no turn confirmed in the prompt window: resolve once per process, never rotate
+	fallbackWait   fallbackVerdict = "wait"   // a fresh hit naming no window: hold the tick for the transcript arm's banner, decide again next tick
 )
 
 // fableFallbackCandidate is the cheap half of the decision — no snapshot, no
@@ -227,6 +242,20 @@ func fableFallbackDecide(hit LimitHit, agentModel string, acct *core.AccountUsag
 	// one limit for the next.
 	if modelPercent(acct, "Opus", now) >= 100 {
 		return fallbackNo
+	}
+	// Past every gate on the snapshot's word alone — and when the hit names
+	// no window, that word is the only evidence. The hook arm's raw 429 is
+	// exactly that hit, and a snapshot polled minutes ago cannot tell a Fable
+	// exhaustion from a session or weekly window that filled since; the
+	// transcript arm's banner can, and it folds onto this record within a
+	// tick or two. Hold the switch for it. A hit still unnamed past the wait
+	// switches on the snapshot as before; every other verdict above is
+	// undelayed, so a plain 429 on an account with Fable room still reaches
+	// rotation on the tick it always did. A negative age (an At stamped
+	// ahead of this tick's clock) is past the wait, never inside it: a hold
+	// with no upper end is worse than a switch one tick early.
+	if age := now.Sub(time.Unix(hit.At, 0)); !banner && age >= 0 && age < fableFallbackClassifyWait {
+		return fallbackWait
 	}
 	return fallbackSwitch
 }
@@ -380,6 +409,16 @@ func (d *daemonState) tryFableFallback(hitKey, label, agentModel string, email f
 		}
 	}
 	switch verdict {
+	case fallbackWait:
+		// The hit stays unresolved and untouched; the next tick decides again
+		// with whatever the transcript arm has folded in by then. Logged once
+		// per hit (keyed on its At), not once per tick of the wait.
+		waitKey := "fable-wait:" + hitKey
+		if d.Poked[waitKey] != hit.At {
+			d.Poked[waitKey] = hit.At
+			dlogEvent("info", "limit-rescue-skipped", "%s: the 429 names no usage window yet — holding the Fable switch up to %s for the transcript arm's banner", label, fableFallbackClassifyWait)
+		}
+		return true
 	case fallbackAbsorb:
 		if last.ExpiredAt != 0 {
 			resolve("model-fallback-expired")
