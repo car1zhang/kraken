@@ -216,6 +216,12 @@ install: build install-completion install-serve
 # (That is belt and braces only — the updater now also prepends go's real
 # directory to the PATH it hands make, internal/util's PrependToolDir,
 # which is what actually makes a board-click build work.)
+# /usr/sbin:/sbin close the list because an EnvironmentVariables PATH REPLACES
+# launchd's default (/usr/bin:/bin:/usr/sbin:/sbin) rather than extending it:
+# without them the daemon has no lsof — discovery execs it bare for a pane's
+# cwd and for codex rollouts, and fails silently — and every cell pane, which
+# inherits this PATH through the daemon's tmux, loses it too, so an agent's
+# `lsof -i :PORT` probe reports a free port that is not.
 # ThrottleInterval keeps a losing single-instance guard from crash-looping
 # under KeepAlive.
 #
@@ -251,7 +257,7 @@ install-serve:
 	  '  <key>StandardOutPath</key><string>$(HOME)/.kraken/kraken.log</string>' \
 	  '  <key>StandardErrorPath</key><string>$(HOME)/.kraken/kraken.log</string>' \
 	  '  <key>EnvironmentVariables</key><dict>' \
-	  '    <key>PATH</key><string>$(HOME)/.local/bin:/usr/local/go/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>' \
+	  '    <key>PATH</key><string>$(HOME)/.local/bin:/usr/local/go/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>' \
 	  '    <key>LANG</key><string>en_US.UTF-8</string>' \
 	  '  </dict>' \
 	  '</dict></plist>' > $(PLIST).new
