@@ -478,6 +478,54 @@ func TestGateRetryOfflineSuppressesPokeAndNotifiesOnce(t *testing.T) {
 	}
 }
 
+// TestGateRetrySuppressionLoggedOncePerCellPerOutage pins the dedup behind
+// the "suppressed retry poke" log line. Poked is stamped only by a poke
+// that happens, so a due poke stays due for a whole outage; without the
+// marker the line repeats on every due tick until connectivity returns.
+// The marker is per retry key, so two stalled cells each log once, and
+// clearOffline purges it, so the next outage logs again.
+func TestGateRetrySuppressionLoggedOncePerCellPerOutage(t *testing.T) {
+	d := newDaemon()
+	now := time.Now()
+	off := &fakeProbe{seq: []bool{false}}
+
+	// tick 1: due poke, offline — marker set for this cell.
+	d.gateRetry(now, "retry:x", memoized(off))
+	first := d.Notified["suppressed:retry:x"]
+	if first == 0 {
+		t.Fatal("want a suppression marker after the first suppressed due poke")
+	}
+
+	// tick 2, later: still due (nothing stamped Poked), still offline — the
+	// marker is left exactly as it was, which is what makes the log fire once.
+	later := now.Add(time.Hour)
+	d.gateRetry(later, "retry:x", memoized(&fakeProbe{seq: []bool{false}}))
+	if got := d.Notified["suppressed:retry:x"]; got != first {
+		t.Fatalf("want the marker untouched on a repeat suppression, got %d want %d", got, first)
+	}
+
+	// a second stalled cell in the same outage gets its own marker.
+	d.gateRetry(later, "retry:y", memoized(&fakeProbe{seq: []bool{false}}))
+	if d.Notified["suppressed:retry:y"] == 0 {
+		t.Fatal("want a marker per retry key, not one for the whole outage")
+	}
+
+	// reconnect purges both, so the next outage logs afresh.
+	poke, _, _ := d.gateRetry(later, "retry:x", memoized(&fakeProbe{seq: []bool{true}}))
+	if !poke {
+		t.Fatal("want the reconnect tick's poke allowed through")
+	}
+	for _, k := range []string{"retry:x", "retry:y"} {
+		if _, ok := d.Notified["suppressed:"+k]; ok {
+			t.Fatalf("want the suppression marker for %s purged on reconnect", k)
+		}
+	}
+	d.gateRetry(later.Add(time.Hour), "retry:x", memoized(&fakeProbe{seq: []bool{false}}))
+	if d.Notified["suppressed:retry:x"] == 0 {
+		t.Fatal("want the next outage to set the marker again")
+	}
+}
+
 func TestGateRetryReconnectClearsOfflineAndPurgesBackoff(t *testing.T) {
 	d := newDaemon()
 	now := time.Now()
@@ -598,6 +646,8 @@ func TestDaemonStateClearOffline(t *testing.T) {
 	now := time.Now()
 	d.offline = true
 	d.Notified["offline"] = now.Unix()
+	d.Notified["suppressed:retry:a"] = now.Unix()
+	d.Notified["health:c|stalled"] = now.Unix() // non-offline key must survive the purge
 	d.Poked["retry:a"] = now.Unix()
 	d.Poked["blocked:b"] = now.Unix() // non-retry key must survive the purge
 
@@ -608,6 +658,12 @@ func TestDaemonStateClearOffline(t *testing.T) {
 	}
 	if _, ok := d.Notified["offline"]; ok {
 		t.Fatal("want the offline Notified key cleared")
+	}
+	if _, ok := d.Notified["suppressed:retry:a"]; ok {
+		t.Fatal("want the suppression-log marker purged")
+	}
+	if _, ok := d.Notified["health:c|stalled"]; !ok {
+		t.Fatal("want unrelated Notified keys preserved")
 	}
 	if _, ok := d.Poked["retry:a"]; ok {
 		t.Fatal("want retry: backoff purged")
