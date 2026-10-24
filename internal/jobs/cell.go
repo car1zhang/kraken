@@ -769,6 +769,44 @@ func withJobSlugEnv(j *Job, cmd string) string {
 	return p + jobSlugEnvPrefix(j) + strings.TrimPrefix(cmd, p)
 }
 
+// serveAddrEnvVar is the variable every agent-side `kraken` verb (questions,
+// load, watchlist, mm, stack, cell submit, …) reads through ServeBaseURL to
+// find its daemon, falling back to defaultServeAddr when it is unset.
+const serveAddrEnvVar = "KRAKEN_SERVE_ADDR"
+
+// mergeServeAddrSettings puts the serve's bound address into the cell
+// settings' `env` block when it differs from defaultServeAddr, and removes a
+// stale entry when it does not — the rule hookCommandFlags applies to the
+// cell's hook commands, applied to the agent-side verbs. It rides the settings
+// file rather than the zeus command string because Claude Code applies that
+// `env` block to every session started in the worktree — zeus, each tmux
+// teammate, each side thread — while a tmux pane takes HOME and every
+// variable except PATH and tmux's `update-environment` list from the tmux
+// SERVER, not from the client that issued `new-session` (PATH is the
+// exception cellSpawnEnv relies on), and Claude Code's teammate spawn
+// forwards its own variables (the account lane among them) but not kraken's,
+// so nothing kraken puts on zeus' own command reaches a teammate's pane. A
+// cell spawned by a
+// parallel serve (the manual-test recipe: an isolated HOME on another port)
+// otherwise runs its verbs against the machine's real daemon under a slug that
+// daemon may also hold, with only its hooks pointed at the right one. Replace
+// semantics, like the recall hook's: the key is kraken's, and a cell
+// re-spawned under a default-bound serve must not keep the old address. A
+// default-configured cell's settings stay byte-identical. Codex cells read no
+// settings.json and are not covered.
+func mergeServeAddrSettings(parsed map[string]any) {
+	env, ok := parsed["env"].(map[string]any)
+	if !ok {
+		env = map[string]any{}
+	}
+	if addr := currentHookServeAddr(); addr != "" && addr != defaultServeAddr {
+		env[serveAddrEnvVar] = addr
+	} else {
+		delete(env, serveAddrEnvVar)
+	}
+	parsed["env"] = env
+}
+
 // jobSlugEnvPrefix exports KRAKEN_JOB_SLUG='<slug>' for a cell's zeus. The CLI
 // reads it (cmdSend, as the X-Kraken-From-Cell header of a cross-node steer)
 // to name the sending cell; outside a cell the variable is absent. On the
@@ -1451,6 +1489,7 @@ func mergeHookSettings(existing []byte, slug, krakenBin string) ([]byte, error) 
 	parsed["hooks"] = hooks
 	mergeCellStatusLine(parsed, slug, krakenBin)
 	mergeTeammateSettings(parsed)
+	mergeServeAddrSettings(parsed)
 	out, err := json.MarshalIndent(parsed, "", "  ")
 	if err != nil {
 		return nil, err
