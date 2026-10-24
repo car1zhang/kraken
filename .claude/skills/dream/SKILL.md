@@ -440,6 +440,19 @@ carry the same obligations any other change would: tests, and the review the cel
 Two hard fences: never `.claude/settings.json` (per-cell, gitignored, kraken-written — never a
 durable improvement), and never anything outside the kraken repo.
 
+**A dream PR is opened under the do skill's PR step**: the Commit style and Body bullets of step 8
+("Open The PR") in `.claude/skills/do/SKILL.md`. Read those two bullets right before `gh pr create`;
+do not work from memory. They require one lowercase commit line with no body and no trailers, and a
+body of `## Summary` and `## Context` only, with no Claude Code signature and no "Generated with"
+footer. Two things this skill adds on top of them: a dream PR carries no session link, in the commit
+or the body; and `## Context` states the mechanism, with invented examples only, and never carries
+tonight's evidence — the do bullet's "error traces" is overruled here by **Findings never enter git**
+above.
+The harness's attribution reminder shows up again at exactly that step. A pass that has not just
+re-read the bullets pastes the footer and session link into the body file, while keeping them out of
+the commit (two of three consecutive passes did). After the create, read the body back
+(`gh pr view <n> --json body`) and, if either got in, clean it with `gh pr edit <n> --body-file <file>`.
+
 **One concern per PR.** A PR mixing a skill tweak with a refactor cannot be partially rejected, and
 {{operator}}'s review is the only thing standing between a judgment call and a merged mistake. The cell
 branch recycles after each merge, so several narrow PRs from one night cost nothing.
