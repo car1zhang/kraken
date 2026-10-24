@@ -1349,15 +1349,16 @@ var retiredRecallHookEvents = []string{"PostToolUse"}
 // second installation path (e.g. reactivation recreate alongside a preserved
 // StartCell install) can't duplicate the entry.
 //
-// It renders FIVE kraken groups across FIVE hook events plus the statusline:
-// the pr-hook group under PostToolUse, the bash-lint group under PreToolUse,
-// the limit-hook group under StopFailure (limitHookEntry, the usage-limit
+// It renders SIX kraken groups across FIVE hook events plus the statusline:
+// the pr-hook group under PostToolUse, the bash-lint and spawn-guard groups
+// under PreToolUse (matchers Bash and Agent), the limit-hook group under
+// StopFailure (limitHookEntry, the usage-limit
 // rescue), the handoff-hook group under SessionStart (handoffHookEntry,
 // matcher "compact" — added only when the slug resolves to a job, via
 // cellArtifactsForSlug), a recall group under each of recallHookEvents
 // (UserPromptSubmit), and the ctx-hook statusLine (mergeCellStatusLine). The
 // groups use two DIFFERENT merge rules and the difference is deliberate:
-// pr-hook, bash-lint and limit-hook append when their exact command is absent,
+// pr-hook, bash-lint, spawn-guard and limit-hook append when their exact command is absent,
 // while recall and handoff-hook REPLACE (drop every group running that verb,
 // append the current one) — for the reasons spelled out at the handoff block
 // and the recall loop below. It also REMOVES: retiredRecallHookEvents strips the recall group kraken used to
@@ -1378,6 +1379,12 @@ func mergeHookSettings(existing []byte, slug, krakenBin string) ([]byte, error) 
 	}
 	ensureHookGroup(hooks, "PostToolUse", prHookCommand(slug, krakenBin), krakenHookEntry(slug, krakenBin))
 	ensureHookGroup(hooks, "PreToolUse", bashLintCommand(krakenBin), bashLintHookEntry(krakenBin))
+	// The spawn guard (spawnguard.go): a second PreToolUse group, matcher
+	// Agent, refusing a teammate spawn made from a subdirectory — the one
+	// place the rest of this file's hooks can be lost wholesale, since a
+	// teammate started below the root loads none of them. Append-if-absent
+	// like bash-lint; the command is flagless and so its own identity test.
+	ensureHookGroup(hooks, "PreToolUse", spawnGuardCommand(krakenBin), spawnGuardHookEntry(krakenBin))
 	// The usage-limit hook (limithook.go): StopFailure fires when a turn dies
 	// on an API error, and the entry's matcher narrows it to the rate_limit
 	// error type — the bucket every 429 lands in, subscription plan limits
