@@ -35,10 +35,13 @@ const StackStatusUnknown = "unknown"
 
 const stackColumns = `job_id, url, label, status, at, probed_at`
 
-// UpsertStack registers url against jobID, or re-labels it when the row
-// already exists. A re-add keeps the row's status and registration time —
-// the cell saying the same URL twice is not a new stack, and resetting the
-// probe's verdict would flash a dead port green for a tick.
+// UpsertStack registers url against jobID, or re-registers it when the row
+// already exists: the label and `at` take the new values, the status is kept
+// — resetting the probe's verdict would flash a dead port green for a tick,
+// while `at` is the time the cell last said this url is its stack, which is
+// what teardown's stack-stop compares a listener's start time against (a
+// revision round restarts the parallel serve, and the re-add before the next
+// gate line is what makes the restarted serve the registered one).
 //
 // requireJob first: an unknown job is ErrNotFound rather than a row that
 // nothing will ever render (jobgoals.go's rule).
@@ -48,7 +51,7 @@ func (s *Store) UpsertStack(jobID int64, url, label string, at int64) error {
 	}
 	_, err := s.db.Exec(
 		`INSERT INTO job_stacks (job_id, url, label, status, at) VALUES (?, ?, ?, ?, ?)
-		 ON CONFLICT(job_id, url) DO UPDATE SET label = excluded.label`,
+		 ON CONFLICT(job_id, url) DO UPDATE SET label = excluded.label, at = excluded.at`,
 		jobID, url, label, StackStatusUnknown, at,
 	)
 	if err != nil {
@@ -123,6 +126,26 @@ func (s *Store) ListStacks(jobID int64) ([]StackLink, error) {
 		var l StackLink
 		if err := rows.Scan(&l.JobID, &l.URL, &l.Label, &l.Status, &l.At, &l.ProbedAt); err != nil {
 			return nil, fmt.Errorf("list stacks for job %d: %w", jobID, err)
+		}
+		out = append(out, l)
+	}
+	return out, rows.Err()
+}
+
+// ListAllStacks returns every job's stack links, for the one reader that has
+// to see across jobs: teardown's stack-stop, which must not stop a listener
+// on a port another job still registers. Ordered by job then rowid.
+func (s *Store) ListAllStacks() ([]StackLink, error) {
+	rows, err := s.db.Query(`SELECT ` + stackColumns + ` FROM job_stacks ORDER BY job_id, rowid`)
+	if err != nil {
+		return nil, fmt.Errorf("list all stacks: %w", err)
+	}
+	defer rows.Close()
+	var out []StackLink
+	for rows.Next() {
+		var l StackLink
+		if err := rows.Scan(&l.JobID, &l.URL, &l.Label, &l.Status, &l.At, &l.ProbedAt); err != nil {
+			return nil, fmt.Errorf("list all stacks: %w", err)
 		}
 		out = append(out, l)
 	}

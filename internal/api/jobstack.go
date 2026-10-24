@@ -35,7 +35,7 @@ type webStackLink struct {
 	URL    string `json:"url"`
 	Label  string `json:"label"`
 	Status string `json:"status"` // "up" | "down" | "unknown" (jobs.StackUp/Down/Unknown)
-	At     int64  `json:"at"`     // unix millis, registration time, stamped server-side
+	At     int64  `json:"at"`     // unix millis, last registration time (a re-add refreshes it), stamped server-side
 }
 
 // webStackReq is POST /api/job/stack's body. Op is one of add | remove |
