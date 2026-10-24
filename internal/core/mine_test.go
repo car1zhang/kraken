@@ -274,6 +274,84 @@ func TestMineTranscriptsReplayedRecordsNotCounted(t *testing.T) {
 	}
 }
 
+// TestMineTranscriptsHeadlessThreadOwnRecordsCounted: a headless ask thread
+// (`claude -p --fork-session`) replays its parent's records WITH their
+// session_id and writes its own records with NONE, so "a record with no
+// session_id inherits its neighbourhood's owner" handed every one of the
+// thread's own messages to the parent and digested the thread as zero spend,
+// while the job-tokens reader (no inheritance) counted them. An assistant
+// record with no session_id is the file's own call, and the undated-owner
+// records after it (a turn_duration) inherit own, not the replay's parent.
+func TestMineTranscriptsHeadlessThreadOwnRecordsCounted(t *testing.T) {
+	projects := mineHome(t)
+	now := time.Now().UnixMilli()
+	since := now - int64(6*time.Hour/time.Millisecond)
+	at := func(minsAgo int64) int64 { return now - minsAgo*60_000 }
+
+	withSession := func(line, sid string) string {
+		var m map[string]any
+		if err := json.Unmarshal([]byte(line), &m); err != nil {
+			t.Fatalf("reparse fixture: %v", err)
+		}
+		m["session_id"] = sid
+		return mineJSON(t, m)
+	}
+	usage := func(line, id string, out, cw, cr int64) string {
+		var m map[string]any
+		if err := json.Unmarshal([]byte(line), &m); err != nil {
+			t.Fatalf("reparse fixture: %v", err)
+		}
+		msg := m["message"].(map[string]any)
+		msg["id"] = id
+		msg["usage"] = map[string]any{"input_tokens": 1, "output_tokens": out,
+			"cache_creation_input_tokens": cw, "cache_read_input_tokens": cr}
+		return mineJSON(t, m)
+	}
+
+	lines := []string{
+		// the replayed parent: stamped with ITS session_id, as a fork writes it
+		withSession(usage(mineAssistant(t, at(120), "claude-fable-5-1",
+			mineToolUse("p1", "Bash", map[string]any{"command": "go vet ./..."})), "msg-p", 500, 9000, 0), "parent-session"),
+		withSession(mineUser(t, at(119), []any{mineToolResult("p1", false, "ok")}), "parent-session"),
+		mineJSON(t, map[string]any{"type": "system", "subtype": "turn_duration",
+			"durationMs": 99_000, "timestamp": mineISO(at(118))}), // no session_id: the parent's, by inheritance
+		// the thread's own records: NO session_id on any of them
+		usage(mineAssistant(t, at(60), "claude-opus-5",
+			mineToolUse("h1", "Glob", map[string]any{"pattern": "**/*.go"})), "msg-h1", 700, 200_000, 0),
+		mineUser(t, at(59), []any{mineToolResult("h1", false, "a.go")}),
+		usage(mineAssistant(t, at(58), "claude-opus-5", mineText("answer")), "msg-h2", 1_100, 2_000, 200_000),
+		mineJSON(t, map[string]any{"type": "system", "subtype": "turn_duration",
+			"durationMs": 1_000, "timestamp": mineISO(at(57))}), // no session_id: the thread's own, by inheritance
+	}
+	written := mineWrite(t, projects, "-Users-carl--kraken-cells-job-7", "headless-thread.jsonl", lines...)
+
+	res, err := MineTranscripts(since)
+	if err != nil {
+		t.Fatalf("MineTranscripts: %v", err)
+	}
+	d := mineFindDigest(t, res, "headless-thread.jsonl")
+
+	if d.Out != 1800 || d.CacheWrite != 202_000 || d.CacheRead != 200_000 {
+		t.Errorf("tokens = out %d cw %d cr %d, want the thread's own 1800/202000/200000 (the parent's 500/9000 replayed, not counted)", d.Out, d.CacheWrite, d.CacheRead)
+	}
+	// the motive was two readers disagreeing on these records, so pin the
+	// agreement itself: the job-tokens sum over the same file (no window;
+	// every own record here is inside it) reads the same four counters.
+	sum, _, err := SumTokensDelta(filepath.Dir(written), nil)
+	if err != nil {
+		t.Fatalf("SumTokensDelta: %v", err)
+	}
+	if sum.In != d.In || sum.Out != d.Out || sum.CacheWrite != d.CacheWrite || sum.CacheRead != d.CacheRead {
+		t.Errorf("SumTokensDelta = in %d out %d cw %d cr %d, digest = %d/%d/%d/%d — the two readers disagree on a headless thread's own records", sum.In, sum.Out, sum.CacheWrite, sum.CacheRead, d.In, d.Out, d.CacheWrite, d.CacheRead)
+	}
+	if d.ToolCounts["Glob"] != 1 || d.ToolCounts["Bash"] != 0 {
+		t.Errorf("ToolCounts = %v, want only the thread's own Glob:1", d.ToolCounts)
+	}
+	if len(d.TurnDurations) != 1 || d.TurnDurations[0] != 1_000 {
+		t.Errorf("TurnDurations = %v, want [1000] — the thread's own, inheriting own from its no-session_id assistant record; the parent's 99000 inherits the replay", d.TurnDurations)
+	}
+}
+
 // TestMineInputSummaryStripsShellBoilerplate: a command opening with
 // `VAR=<cell scratchpad path>; ` or `cd <worktree> && ` used to spend the
 // whole 100-rune signature window on the prefix, so 19 DISTINCT analysis
