@@ -13,7 +13,7 @@ import (
 
 // TestOperatorReaderDropsWholeKrakenPrompts pins the whole-record drops
 // against the REAL texts: the mind-thread capture seed and follow-up
-// (mindSeed, mindCaptureMessage) and the reactivation rebase note sent with
+// (the retired mindSeed/mindCaptureMessage, as literals) and the reactivation rebase note sent with
 // no message (reactivatePrompt). Each is typed into a pane as a human-origin
 // prompt, so only the reader's text rung keeps it out of the operator's
 // words — and a denylist CUT would not do, since it would keep the
@@ -27,12 +27,17 @@ func TestOperatorReaderDropsWholeKrakenPrompts(t *testing.T) {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	req := CaptureRequest{Slug: "demo", Text: "Docs are updated and the runbook is written."}
+	// The retired mind thread's seed and follow-up (job 674 removed mindSeed
+	// and mindCaptureMessage), as they rendered for this operator: transcripts
+	// written before the retirement still carry them, so the reader must still
+	// drop them whole.
+	const seed = "Carl Zhang highlighted this passage and sent it to you to become an item in their mental model:\n\n<<<passage\nDocs are updated and the runbook is written.\npassage>>>\n\nsource: {\"kind\":\"\"}\n\nThe item you build with them:\n- title: ≤ 120 runes, stated as a CLAIM (what is true), never a topic\n- scope: `universal` (true everywhere Carl Zhang works), or `repo` with `repo` (the checkout name) and `dir` (repo-relative, \"\" for the whole repo) — where the knowledge applies\n- kind: `decision`, `reading` or `note`\n- body: ≤ 8,000 runes — what Carl Zhang now knows, in their terms\n- quote: the passage above, verbatim; source: the source JSON above, verbatim\nFill those fields in SILENTLY. What Carl Zhang reads is your paraphrase of what they now understand — at most four sentences, in their terms, no field list, no mechanism explanation, no quote-back — and at most one question; they confirm, deny, or dig deeper, one point per turn. When they say finalize, run `kraken mm commit` with the item as JSON on stdin — {\"title\",\"scope\",\"repo\",\"dir\",\"kind\",\"body\",\"quote\",\"source\"} — and tell them the id in one line.\n"
+	const followUp = "Carl Zhang highlighted another passage for their mental model:\n\n<<<passage\nDocs are updated and the runbook is written.\npassage>>>\n\nsource: {\"kind\":\"\"}\n\nSame item contract as before: propose a title, scope, kind and body for it (or fold it into the item you are building, if it belongs there), and commit with `kraken mm commit` only when Carl Zhang says finalize.\n"
 	rebase, _ := reactivatePrompt("reorient", "", rebaseNoteText("kraken/demo-1", "origin/main"))
 	texts := []string{
-		mindSeed(req),
-		mindCaptureMessage(req),
-		"\n\n<pasted_content id=\"ab12\">\n" + mindCaptureMessage(req) + "\n</pasted_content id=\"ab12\">",
+		seed,
+		followUp,
+		"\n\n<pasted_content id=\"ab12\">\n" + followUp + "\n</pasted_content id=\"ab12\">",
 		rebase,
 		"the operator's own control line",
 		// The operator saying "highlighted" in their own words is kept: the

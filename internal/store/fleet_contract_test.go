@@ -23,8 +23,8 @@ import (
 // the nightly mind pass (schemaV37), 38 since the spawn links
 // (jobSpawnsTable).
 func TestContractFleetSchemaV34(t *testing.T) {
-	if schemaVersion != 38 {
-		t.Errorf("schemaVersion = %d, want 38", schemaVersion)
+	if schemaVersion != 39 {
+		t.Errorf("schemaVersion = %d, want 39", schemaVersion)
 	}
 	step, ok := migrations[34]
 	if !ok {
@@ -40,8 +40,8 @@ func TestContractFleetSchemaV34(t *testing.T) {
 	if err := s.db.QueryRow(`PRAGMA user_version`).Scan(&version); err != nil {
 		t.Fatal(err)
 	}
-	if version != 38 {
-		t.Errorf("fresh store user_version = %d, want 38", version)
+	if version != 39 {
+		t.Errorf("fresh store user_version = %d, want 39", version)
 	}
 	// the hook is idempotent over a jobs table that already has the column
 	tx, err := s.db.Begin()
@@ -135,8 +135,8 @@ func TestContractFleetV33MigratesInPlaceToReadonly(t *testing.T) {
 	if err := s.db.QueryRow(`PRAGMA user_version`).Scan(&version); err != nil {
 		t.Fatal(err)
 	}
-	if version != 38 {
-		t.Fatalf("migrated user_version = %d, want 38", version)
+	if version != 39 {
+		t.Fatalf("migrated user_version = %d, want 39", version)
 	}
 	j, err := s.GetJobBySlug("legacy-v33")
 	if err != nil {

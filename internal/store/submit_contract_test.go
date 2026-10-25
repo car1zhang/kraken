@@ -49,7 +49,7 @@ func contractTableColumns(t *testing.T, s *Store, table string) map[string]bool 
 	return cols
 }
 
-func contractUserVersion(t *testing.T, s *Store) int {
+func submitContractUserVersion(t *testing.T, s *Store) int {
 	t.Helper()
 	var v int
 	if err := s.db.QueryRow(`PRAGMA user_version`).Scan(&v); err != nil {
@@ -124,7 +124,7 @@ func TestSubmitContractMigration20FromV19(t *testing.T) {
 	if cols := contractTableColumns(t, s, "jobs"); !cols["ready"] {
 		t.Fatalf("the v19 fixture has no jobs.ready column — downgradeFreshDB needs a `target < 20` arm restoring what migration 20 removes")
 	}
-	if got := contractUserVersion(t, s); got != 19 {
+	if got := submitContractUserVersion(t, s); got != 19 {
 		t.Fatalf("fixture user_version = %d, want 19", got)
 	}
 	if err := s.Close(); err != nil {
@@ -138,7 +138,7 @@ func TestSubmitContractMigration20FromV19(t *testing.T) {
 	}
 	defer s2.Close()
 
-	if got := contractUserVersion(t, s2); got != schemaVersion {
+	if got := submitContractUserVersion(t, s2); got != schemaVersion {
 		t.Fatalf("user_version after migration = %d, want %d", got, schemaVersion)
 	}
 

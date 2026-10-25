@@ -8,6 +8,7 @@ package api
 
 import (
 	"bytes"
+	"compress/gzip"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -3175,6 +3176,10 @@ var webMMItemSpec = map[string]fieldSpec{
 	"capture_source": {kind: wireObject, required: true, nullable: true},
 	// schema v37: "live" or "proposed", always present.
 	"state": {kind: wireString, required: true},
+	// schema v39's provenance, omitempty: 0 means "none" on every one.
+	"run_id":        {kind: wireNumber, required: false},
+	"supersedes":    {kind: wireNumber, required: false},
+	"superseded_by": {kind: wireNumber, required: false},
 }
 
 // webMMShowSpec is GET /api/mm/show: the whole item plus the next rung of the
@@ -3204,6 +3209,10 @@ var webCaptureSourceSpec = map[string]fieldSpec{
 	// schema v37's mind-pass pointers
 	"qid":         {kind: wireString, required: false},
 	"feedback_id": {kind: wireNumber, required: false},
+	// schema v39's mind-run pointers
+	"mark_id":  {kind: wireNumber, required: false},
+	"saved_id": {kind: wireNumber, required: false},
+	"run_id":   {kind: wireNumber, required: false},
 }
 
 // webMMFlagSpec covers GET /api/mm/flags' elements: every store.MMFlag field,
@@ -3311,6 +3320,110 @@ func TestMMMindLayerWireShapes(t *testing.T) {
 		t.Fatalf("transcript turns status %d, body %s", rec.Code, rec.Body.String())
 	}
 	assertShape(t, "/api/job/transcript?turns=", rec.Body.Bytes(), jobTranscriptSpec)
+}
+
+// --- the mind runs (schema v39, mmrun.go) ---
+//
+// New paths and three omitempty item keys: additive, so apiContract stays 7.
+
+var webMMMarkSpec = map[string]fieldSpec{
+	"id":           {kind: wireNumber, required: true},
+	"job_id":       {kind: wireNumber, required: true},
+	"slug":         {kind: wireString, required: true},
+	"text":         {kind: wireString, required: true},
+	"source":       {kind: wireObject, required: true},
+	"created_at":   {kind: wireNumber, required: true},
+	"consumed_run": {kind: wireNumber, required: true},
+	"consumed_at":  {kind: wireNumber, required: true},
+}
+
+var webMindRunSpec = map[string]fieldSpec{
+	"id": {kind: wireNumber, required: true}, "job_id": {kind: wireNumber, required: true},
+	"slug": {kind: wireString, required: true}, "trigger": {kind: wireString, required: true},
+	"since": {kind: wireNumber, required: true}, "until": {kind: wireNumber, required: true},
+	"state": {kind: wireString, required: true}, "created_at": {kind: wireNumber, required: true},
+	"started_at": {kind: wireNumber, required: true}, "finished_at": {kind: wireNumber, required: true},
+	"note": {kind: wireString, required: true}, "prompt_sha": {kind: wireString, required: true},
+	"model": {kind: wireString, required: true}, "in_tokens": {kind: wireNumber, required: true},
+	"out_tokens": {kind: wireNumber, required: true}, "bundle_bytes": {kind: wireNumber, required: true},
+	"added": {kind: wireNumber, required: true}, "superseded": {kind: wireNumber, required: true},
+	"retired": {kind: wireNumber, required: true}, "flagged": {kind: wireNumber, required: true},
+	"excluded": {kind: wireNumber, required: true}, "folded": {kind: wireNumber, required: true},
+	"suppressed": {kind: wireNumber, required: true}, "refused": {kind: wireNumber, required: true},
+	"source_run": {kind: wireNumber, required: true}, "has_bundle": {kind: wireBool, required: true},
+}
+
+// TestMindRunWireShapes pins the mark, capture-alias, marks, runs and run
+// shapes, and the run route's gunzipped bundle.
+func TestMindRunWireShapes(t *testing.T) {
+	useTestStore(t)
+	st := jobs.ActiveStore()
+	mux := http.NewServeMux()
+	Register(mux)
+	do := func(method, path, body string) *httptest.ResponseRecorder {
+		rec := httptest.NewRecorder()
+		mux.ServeHTTP(rec, httptest.NewRequest(method, path, strings.NewReader(body)))
+		if rec.Code != http.StatusOK {
+			t.Fatalf("%s %s = %d %s", method, path, rec.Code, rec.Body.String())
+		}
+		return rec
+	}
+	mustCreateStoreJob(t, st, store.Job{Slug: "contract-mark", Repo: "monolith"})
+
+	rec := do(http.MethodPost, "/api/mm/mark", `{"slug":"contract-mark","text":"read this","source":{"kind":"manual"}}`)
+	assertShape(t, "POST /api/mm/mark", rec.Body.Bytes(), map[string]fieldSpec{
+		"id": {kind: wireNumber, required: true}, "pending": {kind: wireNumber, required: true}, "folded": {kind: wireBool, required: true},
+	})
+	rec = do(http.MethodPost, "/api/mm/capture", `{"slug":"contract-mark","text":"and this","source":{"kind":"manual"}}`)
+	assertShape(t, "POST /api/mm/capture", rec.Body.Bytes(), map[string]fieldSpec{
+		"tid": {kind: wireString, required: true}, "created": {kind: wireBool, required: true},
+		"mark_id": {kind: wireNumber, required: true}, "pending": {kind: wireNumber, required: true},
+	})
+
+	rec = do(http.MethodGet, "/api/mm/marks?slug=contract-mark&pending=1", "")
+	var marks struct {
+		Marks []json.RawMessage `json:"marks"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &marks); err != nil || len(marks.Marks) != 2 {
+		t.Fatalf("marks = %s (err %v), want two", rec.Body.String(), err)
+	}
+	assertShape(t, "webMMMark", marks.Marks[0], webMMMarkSpec)
+
+	runID, err := st.EnqueueMindRun(store.MindRun{Trigger: "daily", Since: 1, Until: 2, CreatedAt: 3})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var gz bytes.Buffer
+	zw := gzip.NewWriter(&gz)
+	zw.Write([]byte(`{"prompts":[]}`))
+	zw.Close()
+	if err := st.SetMindRunBlobs(runID, gz.Bytes(), `{"sessions":[]}`); err != nil {
+		t.Fatal(err)
+	}
+	rec = do(http.MethodGet, "/api/mm/runs", "")
+	var runs struct {
+		Runs []json.RawMessage `json:"runs"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &runs); err != nil || len(runs.Runs) != 1 {
+		t.Fatalf("runs = %s (err %v), want one", rec.Body.String(), err)
+	}
+	assertShape(t, "webMindRun", runs.Runs[0], webMindRunSpec)
+	if !strings.Contains(string(runs.Runs[0]), `"has_bundle":true`) {
+		t.Errorf("run = %s, want has_bundle true", runs.Runs[0])
+	}
+
+	rec = do(http.MethodGet, "/api/mm/run?id="+strconv.FormatInt(runID, 10)+"&blob=bundle", "")
+	var one struct {
+		Run  json.RawMessage `json:"run"`
+		Blob string          `json:"blob"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &one); err != nil {
+		t.Fatal(err)
+	}
+	assertShape(t, "GET /api/mm/run .run", one.Run, webMindRunSpec)
+	if one.Blob != `{"prompts":[]}` {
+		t.Errorf("bundle blob = %q, want the gunzipped JSON", one.Blob)
+	}
 }
 
 // webMMAnchorSpec covers the `anchor` object — its own spec because

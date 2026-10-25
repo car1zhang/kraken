@@ -249,9 +249,10 @@ type webThread struct {
 	// because it is the one piece of it a client RENDERS (the head's pill),
 	// and absence is what tells that client to render nothing at all.
 	Model string `json:"model,omitempty"`
-	// Role is "ask" or "mind" — the mind thread is the one that writes carl's
-	// mental model, and clients chip it. Never omitted: a pre-v33 row reads
-	// back as "ask" from the column default.
+	// Role is "ask" or "mind" — "mind" marks a mind thread from before
+	// schema v39 (mind runs write carl's mental model now, and no new mind
+	// thread can be branched); clients still chip it. Never omitted: a
+	// pre-v33 row reads back as "ask" from the column default.
 	Role      string `json:"role"`
 	CreatedAt int64  `json:"created_at"` // unix millis
 	ClosedAt  int64  `json:"closed_at,omitempty"`

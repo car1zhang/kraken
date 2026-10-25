@@ -224,6 +224,22 @@ func undoV37(t *testing.T, s *Store) {
 
 func downgradeFreshDB(t *testing.T, s *Store, target int) {
 	t.Helper()
+	// Reverse v39: the three mind-run tables go, then the three mm_items
+	// provenance columns, newest first. Shape-only: the proposed→live flip is
+	// not reversed, since no older shape can tell which rows it touched.
+	if target < 39 {
+		for _, stmt := range []string{`DROP TABLE mind_runs`, `DROP TABLE mind_run_blobs`, `DROP TABLE mm_marks`} {
+			if _, err := s.db.Exec(stmt); err != nil {
+				t.Fatalf("downgrade to v%d (undo v39) %q: %v", target, stmt, err)
+			}
+		}
+		for i := len(schemaV39Columns) - 1; i >= 0; i-- {
+			stmt := `ALTER TABLE mm_items DROP COLUMN ` + schemaV39Columns[i].column
+			if _, err := s.db.Exec(stmt); err != nil {
+				t.Fatalf("downgrade to v%d (undo v39) %q: %v", target, stmt, err)
+			}
+		}
+	}
 	// Reverse v38: the spawn-links table goes. Shape-only, like v35's arm.
 	if target < 38 {
 		if _, err := s.db.Exec(`DROP TABLE job_spawns`); err != nil {

@@ -3381,12 +3381,16 @@ button.spawn-chip.spawn-draft:hover { background: color-mix(in srgb, var(--ac) 1
 .mm-act:disabled { opacity: 0.35; }
 .mm-row .mm-rm { width: auto; font-size: 8.5px; }
 .mm-row .mm-rm:hover:not(:disabled) { color: var(--ac2); }
-/* A nightly mind-pass item awaiting confirm: .mm-dead's type scale in the
-   accent, and the confirm action beside drop. */
-.mm-proposed {
-  margin-left: 6px; font: 8.5px var(--mono); letter-spacing: 0.04em; color: var(--accent);
-}
-.mm-row .mm-confirm { color: var(--accent); }
+/* The runs and pending-marks sections: the flags block's layout, the item
+   row's frame, no warn tint. */
+.mm-runs, .mm-marks { margin-bottom: 12px; display: flex; flex-direction: column; gap: 6px; }
+.mm-run, .mm-mark { border: 1px solid var(--border); background: var(--b0); }
+.mm-mark { display: flex; align-items: stretch; }
+.mm-markbody { flex: 1; min-width: 0; padding: 6px 10px; display: flex; flex-direction: column; gap: 2px; }
+.mm-runtime { flex: none; font: 8.5px var(--mono); color: var(--muted); }
+.mm-replay { display: flex; flex-direction: column; gap: 3px; }
+.mm-diffadd { color: var(--ok); }
+.mm-difflost { color: var(--ac2); }
 .mm-quote { font: 9.5px/1.5 var(--mono); color: var(--body); overflow-wrap: anywhere; }
 .mm-ctxlbl { color: var(--muted); margin-right: 4px; }
 .mm-filter { width: 150px; }
@@ -3405,7 +3409,7 @@ button.spawn-chip.spawn-draft:hover { background: color-mix(in srgb, var(--ac) 1
 .mm-flag .mm-flagkeep:hover:not(:disabled) { color: var(--ok); }
 .mm-flagerr { color: var(--ac2); }
 
-/* ---- ◆ mind — the global capture button (components/chrome/MindButton) ----
+/* ---- ✓ read — the global capture button (components/chrome/MindButton) ----
    Fixed bottom-right ABOVE the goals dock (z 6, bottom 14px) and above every
    overlay (20/25/30) — it has to be reachable while an artifact or the steer
    modal is open, since that is where most highlighting happens — but under

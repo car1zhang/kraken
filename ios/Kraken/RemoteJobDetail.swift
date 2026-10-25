@@ -256,8 +256,8 @@ struct RemoteJobDetailView: View {
             NavigationStack {
                 // No feedback pencil: a note on another Mac's artifact is an
                 // owner-only write. The proxy urls never parse as a local
-                // artifact address, so the pager's save and ◆ mind controls
-                // stay away too — the mind is this phone's paired Mac's.
+                // artifact address, so the pager's save and ✓ read controls
+                // stay away too — read marks are this phone's paired Mac's.
                 ArtifactPagerView(
                     artifacts: job.artifacts ?? [], selected: artifact, baseURL: baseURL,
                     feedbackEnabled: false

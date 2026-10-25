@@ -44,11 +44,11 @@ type Thread struct {
 	SessionID     string
 	ParentSession string
 	ForkUUID      string
-	// TurnUUID is a mind thread's capture key: the uuid of zeus' last PROMPT
-	// record at branch time, which holds still across every tool call of the
-	// turn (core.LastTurnUUID). jobs.mindThreadFor matches on it; ForkUUID
-	// stays the overlay's inherited-history split for every role. "" for an
-	// ask thread and for a mind thread branched off a zeus with no prompt yet.
+	// TurnUUID was the retired mind thread's capture key: the uuid of zeus'
+	// last PROMPT record at branch time (core.LastTurnUUID). It is kept so
+	// existing mind rows read back unchanged; nothing branches a mind thread
+	// or matches on it any more, and a new thread records "". ForkUUID stays
+	// the overlay's inherited-history split for every role.
 	TurnUUID string
 	CWD      string
 	Pane     string

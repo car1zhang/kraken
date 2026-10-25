@@ -184,8 +184,8 @@ func mpcSnap(t *testing.T, s *Store, id int64) mpcItemSnap {
 // DEFAULT 'unknown'; and after it `nightly` is an accepted source.
 func TestMpcMigrateV37OverAnAgedV36Database(t *testing.T) {
 	s, dbPath := mpcOpenStore(t)
-	if v := mpcUserVersion(t, s); v != 38 {
-		t.Fatalf("fresh user_version = %d, want 38", v)
+	if v := mpcUserVersion(t, s); v != 39 {
+		t.Fatalf("fresh user_version = %d, want 39", v)
 	}
 	jobID, err := s.CreateJob(&Job{Slug: "pre-v37", Repo: "kraken", Body: "spec"})
 	if err != nil {
@@ -213,8 +213,8 @@ func TestMpcMigrateV37OverAnAgedV36Database(t *testing.T) {
 	}
 	defer s2.Close()
 
-	if v := mpcUserVersion(t, s2); v != 38 {
-		t.Errorf("migrated user_version = %d, want 38", v)
+	if v := mpcUserVersion(t, s2); v != 39 {
+		t.Errorf("migrated user_version = %d, want 39", v)
 	}
 	for _, id := range ids {
 		if got := mpcSnap(t, s2, id); got != before[id] {
@@ -253,15 +253,23 @@ func TestMpcMigrateV37IsReplayable(t *testing.T) {
 	}
 	prop := mpcAddItem(t, s, MMItem{Source: "nightly", State: "proposed", Content: "p", Quote: "q", CreatedAt: 5, JobID: jobID})
 	want := mpcSnap(t, s, prop)
-	mpcExec(t, s, `PRAGMA user_version = 36`)
-	if err := s.Close(); err != nil {
+	// The v37 hook is replayed on its own, inside a transaction, rather than
+	// by resetting user_version and reopening: a reopen now also runs v39,
+	// which flips every proposed row live on purpose and would hide what
+	// this test is about (v37's rebuild must not re-default state).
+	tx, err := s.db.Begin()
+	if err != nil {
 		t.Fatal(err)
 	}
-	s2, err := Open(dbPath)
-	if err != nil {
+	if err := migrateV37MindPass(tx); err != nil {
+		tx.Rollback()
 		t.Fatalf("replaying v37 over a v37 shape: %v", err)
 	}
-	defer s2.Close()
+	if err := tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	_ = dbPath
+	s2 := s
 	if got := mpcSnap(t, s2, prop); got != want {
 		t.Errorf("item after replay = %+v, want %+v", got, want)
 	}

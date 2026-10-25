@@ -533,8 +533,10 @@ func LastMessageUUID(path string) string {
 // LastTurnUUID returns the uuid of the transcript's last PROMPT record — a
 // `user` record whose content is a prompt carl (or a steer) typed, rather
 // than a tool result or something the harness wrote — or "" when there is
-// none (or the file cannot be read). It is the mind thread's "same turn"
-// key: every tool call zeus makes inside one turn appends records, so
+// none (or the file cannot be read). It was the retired mind thread's "same
+// turn" key and has no production caller any more; it is retained because
+// existing mind thread rows carry values it produced and its tests pin the
+// reader. Every tool call zeus makes inside one turn appends records, so
 // LastMessageUUID moves constantly mid-turn, while this one moves only when
 // a new prompt arrives.
 //
@@ -542,9 +544,10 @@ func LastMessageUUID(path string) string {
 // lastBlocksScanLimit (10 of 43 zeus transcripts measured on 2026-10-08
 // carried a prompt-to-prompt span over 4 MB, the longest 11.7 MB), and a
 // bounded tail then answers "" for exactly the turns carl reads artifacts
-// during, which branches one mind thread per capture. This runs once per
-// capture or branch, never on a tick, so it reads the whole file forward one
-// line at a time — BlocksAround's reader — and keeps the last prompt it saw.
+// during, which branched one mind thread per capture when this was the
+// capture key. It was never called on a tick, so it reads the whole file
+// forward one line at a time — BlocksAround's reader — and keeps the last
+// prompt it saw.
 //
 // parseBlocks (via userBlocks) already gives a tool_result-only user record
 // no block at all, drops a bare <system-reminder> injection, and parses a

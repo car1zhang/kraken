@@ -118,7 +118,10 @@ import (
 // Version 38 adds job_spawns: which job's cell filed which other job, one row
 // per child, stamped by kraken serve when a cell's own `kraken job draft` or
 // `kraken cell submit` carries its slug (see jobSpawnsTable).
-const schemaVersion = 38
+// Version 39 is mind runs: the mind_runs queue/record, its mind_run_blobs
+// side table, the mm_marks read marks, three provenance columns on mm_items,
+// and every proposed item flipped live (see schemaV39MindRuns).
+const schemaVersion = 39
 
 // schemaV1 creates all nine tables plus kv. Exact DDL (types, indexes) was
 // left to this package by the spec; shapes below mirror the spec's Data
@@ -2338,8 +2341,12 @@ type migrationStep struct {
 // (see schemaV37).
 // migrations[38] creates job_spawns (CREATE TABLE IF NOT EXISTS, no hook; see
 // jobSpawnsTable).
+// migrations[39] creates mind_runs, mind_run_blobs and mm_marks (CREATE TABLE
+// IF NOT EXISTS) and flips proposed items live in SQL; its hook,
+// migrateV39MindRuns, adds the three mm_items columns only when each is
+// missing (see schemaV39MindRuns).
 // Future schema changes append
-// migrations[39], migrations[40], ... rather than editing an existing
+// migrations[40], migrations[41], ... rather than editing an existing
 // schemaV<N> string (or hook) in place, so a database created under an older
 // binary still migrates forward correctly.
 var migrations = map[int]migrationStep{
@@ -2381,6 +2388,7 @@ var migrations = map[int]migrationStep{
 	36: {sql: schemaV36, hook: migrateV36AskThreads},
 	37: {sql: schemaV37, hook: migrateV37MindPass},
 	38: {sql: jobSpawnsTable},
+	39: {sql: schemaV39MindRuns, hook: migrateV39MindRuns},
 }
 
 // migrateV5Questions is migrations[5]'s Go hook: schemaV5's SQL has already
@@ -3564,3 +3572,107 @@ CREATE TABLE IF NOT EXISTS job_spawns (
 	via       TEXT    NOT NULL DEFAULT ''
 );
 `
+
+// schemaV39MindRuns is migration 39's SQL half: the mind run queue and record
+// (internal/jobs/mindrun.go), and the read marks a run consumes.
+//
+//   - mind_runs is one row per requested run. It is both the QUEUE (state
+//     queued → running → done|failed, claimed oldest first) and the RECORD
+//     (counts, report, prompt sha, model, token usage), so a run's history is
+//     the same row that scheduled it. job_id 0 is the daily catch-all, which
+//     belongs to no job. No FK and no cascade: a run outlives its job, the mm
+//     durability posture.
+//   - mind_run_blobs holds the run's large payloads — the gzipped evidence
+//     bundle, its manifest, the raw answer — beside the hot row rather than on
+//     it, the job_tokens/job_token_files split: the runs list is polled, and
+//     it must never sweep megabytes of bundles to answer. bundle_gz is the one
+//     nullable column, NULL once the retention prune ran (pruned_at says when).
+//   - mm_marks is one row per passage the operator marked as read. A mark is
+//     pending until a run consumes it (consumed_run, consumed_at), which
+//     happens once: the first run to carry it wins.
+//
+// The UPDATE flips every surviving proposal live: runs write live items
+// directly, so nothing is left to confirm them. It is idempotent, so it is
+// safe in the SQL half; the three mm_items columns are not (ADD COLUMN has no
+// IF NOT EXISTS) and run in migrateV39MindRuns. The mm_items CHECKs are left
+// as they are — no rebuild — since `proposed` stays an admissible value for
+// old rows and old clients.
+const schemaV39MindRuns = `
+CREATE TABLE IF NOT EXISTS mind_runs (
+	id           INTEGER PRIMARY KEY AUTOINCREMENT,
+	job_id       INTEGER NOT NULL DEFAULT 0,   -- 0 = the daily catch-all
+	slug         TEXT    NOT NULL DEFAULT '',  -- display slug at enqueue time
+	trigger_kind TEXT    NOT NULL CHECK(trigger_kind IN ('done','daily','replay')),
+	since_ms     INTEGER NOT NULL DEFAULT 0,   -- unix millis, window floor (inclusive)
+	until_ms     INTEGER NOT NULL DEFAULT 0,   -- unix millis, window ceiling (inclusive)
+	state        TEXT    NOT NULL DEFAULT 'queued' CHECK(state IN ('queued','running','done','failed')),
+	created_at   INTEGER NOT NULL DEFAULT 0,   -- unix millis
+	started_at   INTEGER NOT NULL DEFAULT 0,   -- unix millis; 0 = not started
+	finished_at  INTEGER NOT NULL DEFAULT 0,   -- unix millis; 0 = not finished
+	note         TEXT    NOT NULL DEFAULT '',
+	prompt_sha   TEXT    NOT NULL DEFAULT '',
+	model        TEXT    NOT NULL DEFAULT '',
+	in_tokens    INTEGER NOT NULL DEFAULT 0,
+	out_tokens   INTEGER NOT NULL DEFAULT 0,
+	bundle_bytes INTEGER NOT NULL DEFAULT 0,
+	added        INTEGER NOT NULL DEFAULT 0,
+	superseded   INTEGER NOT NULL DEFAULT 0,
+	retired      INTEGER NOT NULL DEFAULT 0,
+	flagged      INTEGER NOT NULL DEFAULT 0,
+	excluded     INTEGER NOT NULL DEFAULT 0,
+	folded       INTEGER NOT NULL DEFAULT 0,
+	suppressed   INTEGER NOT NULL DEFAULT 0,
+	refused      INTEGER NOT NULL DEFAULT 0,
+	report       TEXT    NOT NULL DEFAULT '',
+	source_run   INTEGER NOT NULL DEFAULT 0    -- a replay's original run; 0 otherwise
+);
+CREATE INDEX IF NOT EXISTS mind_runs_state ON mind_runs(state, created_at, id);
+CREATE INDEX IF NOT EXISTS mind_runs_job ON mind_runs(job_id, trigger_kind);
+CREATE TABLE IF NOT EXISTS mind_run_blobs (
+	run_id    INTEGER PRIMARY KEY,
+	bundle_gz BLOB    NULL,                    -- NULL once pruned
+	manifest  TEXT    NOT NULL DEFAULT '',
+	answer    TEXT    NOT NULL DEFAULT '',
+	pruned_at INTEGER NOT NULL DEFAULT 0       -- unix millis; 0 = bundle still held
+);
+CREATE TABLE IF NOT EXISTS mm_marks (
+	id           INTEGER PRIMARY KEY AUTOINCREMENT,
+	job_id       INTEGER NOT NULL DEFAULT 0,   -- 0 = a mark with no job
+	slug         TEXT    NOT NULL DEFAULT '',
+	text         TEXT    NOT NULL,
+	source_json  TEXT    NOT NULL DEFAULT '',
+	created_at   INTEGER NOT NULL DEFAULT 0,   -- unix millis
+	consumed_run INTEGER NOT NULL DEFAULT 0,   -- 0 = pending
+	consumed_at  INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS mm_marks_job ON mm_marks(job_id, consumed_run);
+UPDATE mm_items SET state = 'live' WHERE state = 'proposed' AND invalidated_at IS NULL;
+`
+
+// schemaV39Columns are migration 39's mm_items columns: the run that wrote an
+// item, the item it replaced, and the item that replaced it. Each is added by
+// migrateV39MindRuns only when missing (schemaV36Columns' shape).
+var schemaV39Columns = []struct{ column, ddl string }{
+	{"run_id", `ALTER TABLE mm_items ADD COLUMN run_id INTEGER NOT NULL DEFAULT 0`},
+	{"supersedes", `ALTER TABLE mm_items ADD COLUMN supersedes INTEGER NOT NULL DEFAULT 0`},
+	{"superseded_by", `ALTER TABLE mm_items ADD COLUMN superseded_by INTEGER NOT NULL DEFAULT 0`},
+}
+
+// migrateV39MindRuns is migrations[39]'s hook: each mm_items column is added
+// only when the table lacks it, so the step replays over a database whose
+// user_version was reset without its shape being reversed.
+func migrateV39MindRuns(tx *sql.Tx) error {
+	for _, c := range schemaV39Columns {
+		var n int
+		if err := tx.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('mm_items') WHERE name = ?`, c.column).Scan(&n); err != nil {
+			return fmt.Errorf("probe mm_items.%s: %w", c.column, err)
+		}
+		if n > 0 {
+			continue
+		}
+		if _, err := tx.Exec(c.ddl); err != nil {
+			return fmt.Errorf("add mm_items.%s: %w", c.column, err)
+		}
+	}
+	return nil
+}

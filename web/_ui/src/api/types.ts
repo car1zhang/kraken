@@ -30,7 +30,8 @@
 // drift. This is the one wire shape that lives outside this file, and the
 // import is type-only, so nothing is pulled into the bundle by it.
 import type { Goal } from "../lib/goals.ts";
-import type { MMFlag } from "../lib/mm.ts";
+import type { MMFlag, MMItem } from "../lib/mm.ts";
+import type { CaptureSource } from "../lib/mind.ts";
 // Same type-only inversion: the contract froze `Visibility` as a lib/fleet.ts
 // export (its VISIBILITIES tuple is the one spelling of the three words).
 import type { Visibility } from "../lib/fleet.ts";
@@ -901,11 +902,111 @@ export interface JobTranscript {
  */
 export type WebMMFlag = MMFlag;
 
-/** POST /api/mm/capture's answer: the mind thread the capture landed in. */
-export interface CaptureToMindResult {
-  tid: string;
-  /** false when an existing mind thread for this zeus turn received it. */
-  created: boolean;
+/**
+ * One mental-model item as `/api/mm` serves it (`webMMItem`). The shape lives
+ * in lib/mm.ts as `MMItem` (with the v39 `run_id`/`supersedes`/`superseded_by`
+ * keys); this is the name the API layer knows it by.
+ */
+export type WebMMItem = MMItem;
+
+/** POST /api/mm/mark's answer: the stored (or folded-onto) read mark. */
+export interface MarkReadResult {
+  id: number;
+  /** The job's unconsumed marks after this write. */
+  pending: number;
+  /** true when an identical pending mark from the last minute absorbed it. */
+  folded: boolean;
+}
+
+/**
+ * One mind run as `GET /api/mm/runs` serves it (`webMindRun`): every
+ * `store.MindRun` field in snake_case, never a blob. Times are unix MILLIS.
+ */
+export interface WebMindRun {
+  id: number;
+  /** 0 for the daily catch-all, which belongs to no job. */
+  job_id: number;
+  slug: string;
+  /** done | daily | replay. */
+  trigger: string;
+  since: number;
+  until: number;
+  /** queued | running | done | failed. */
+  state: string;
+  created_at: number;
+  started_at: number;
+  finished_at: number;
+  note: string;
+  prompt_sha: string;
+  model: string;
+  in_tokens: number;
+  out_tokens: number;
+  bundle_bytes: number;
+  added: number;
+  superseded: number;
+  retired: number;
+  flagged: number;
+  excluded: number;
+  folded: number;
+  suppressed: number;
+  refused: number;
+  /** The run a `replay` re-judged; 0 otherwise. */
+  source_run: number;
+  /** A bundle blob exists and has not been pruned — replay is possible. */
+  has_bundle: boolean;
+}
+
+/** One read mark as `GET /api/mm/marks` serves it (`webMMMark`). */
+export interface WebMMMark {
+  id: number;
+  /** 0 for a mark made with no job (a library snapshot, a Model-pane row). */
+  job_id: number;
+  slug: string;
+  text: string;
+  source: CaptureSource;
+  created_at: number;
+  /** 0 while pending. */
+  consumed_run: number;
+  consumed_at: number;
+}
+
+/** One operation a mind run answered (`jobs.MindOp`). */
+export interface WebMindOp {
+  /** add | supersede | retire | flag. */
+  op: string;
+  target?: number;
+  item?: {
+    title?: string;
+    kind?: string;
+    body?: string;
+    quote?: string;
+    scope?: string;
+    repo?: string;
+    dir?: string;
+  } | null;
+  quote?: string;
+  note?: string;
+}
+
+/** One candidate a run excluded, with the ladder rung that excluded it. */
+export interface WebMindExclusion {
+  rung: string;
+  quote: string;
+  why: string;
+}
+
+/** POST /api/mm/replay's answer (`jobs.MindReplay`). */
+export interface WebMindReplay {
+  source_run: number;
+  old_prompt_sha: string;
+  new_prompt_sha: string;
+  diff: {
+    ops_added: WebMindOp[] | null;
+    ops_lost: WebMindOp[] | null;
+    exclusions_changed: WebMindExclusion[] | null;
+  };
+  /** 0 on a dry run; the fresh `replay` run's id with `write`. */
+  new_run: number;
 }
 
 export type ThreadOp = "branch" | "kill" | "revive" | "rename" | "send";

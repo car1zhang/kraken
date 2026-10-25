@@ -70,106 +70,6 @@ func mpeItemCount(t *testing.T, st *store.Store) int {
 	return len(items)
 }
 
-const mpeLead = "sess-mind-lead"
-
-// mpeMindLead makes `mind_last_run.job` name an active mind job whose session
-// is mpeLead — what `mindLeadSession` reads.
-func mpeMindLead(t *testing.T, st *store.Store) {
-	t.Helper()
-	if _, err := st.CreateJob(&store.Job{Slug: "mind-2026-10-21", Repo: "kraken", Body: "b", State: "working", Session: mpeLead}); err != nil {
-		t.Fatal(err)
-	}
-	if err := st.SetKV("mind_last_run", `{"date":"2026-10-21","swept_to":1,"job":"mind-2026-10-21"}`); err != nil {
-		t.Fatal(err)
-	}
-}
-
-const mpeValidProposal = `{"title":"the board owns card order","scope":"universal","repo":"","dir":"","kind":"note","body":"b","quote":"the board owns card order","rung":"plain","source":{"kind":"transcript","session":"s1","uuid":"u1"}}`
-
-// ---------------------------------------------------------------------------
-// POST /api/mm/propose
-// ---------------------------------------------------------------------------
-
-// "`ErrNotMindLead` → 403 `{"error":"not the mind job's lead session"}`" —
-// with nothing stored, for every non-lead caller.
-func TestMPEProposeRoute403(t *testing.T) {
-	st := mpeStore(t)
-	mpeMindLead(t, st)
-	if _, err := st.CreateJob(&store.Job{Slug: "other-job", Repo: "kraken", Body: "b", State: "working", Session: "sess-other"}); err != nil {
-		t.Fatal(err)
-	}
-	mux := mpeMux()
-	for _, sess := range []string{"", "  ", "sess-unknown", "sess-other"} {
-		rec := mpeDo(t, mux, http.MethodPost, "/api/mm/propose", `{"session":"`+sess+`","items":[`+mpeValidProposal+`]}`)
-		if rec.Code != http.StatusForbidden {
-			t.Errorf("propose from %q = %d (%s), want 403", sess, rec.Code, rec.Body.String())
-			continue
-		}
-		if got := mpeObj(t, rec); !reflect.DeepEqual(got, map[string]any{"error": "not the mind job's lead session"}) {
-			t.Errorf("propose from %q body = %v", sess, got)
-		}
-	}
-	if n := mpeItemCount(t, st); n != 0 {
-		t.Fatalf("refused proposes stored %d items", n)
-	}
-}
-
-// "`ErrCommitInvalid` → 400 with the sentence" — and a batch with one bad item
-// stores nothing.
-func TestMPEProposeRoute400StoresNothing(t *testing.T) {
-	st := mpeStore(t)
-	mpeMindLead(t, st)
-	mux := mpeMux()
-	bad := strings.Replace(mpeValidProposal, `"kind":"note"`, `"kind":"reading"`, 1)
-	bad = strings.Replace(bad, `"quote":"the board owns card order"`, `"quote":"another quote"`, 1)
-	rec := mpeDo(t, mux, http.MethodPost, "/api/mm/propose", `{"session":"`+mpeLead+`","items":[`+mpeValidProposal+`,`+bad+`]}`)
-	if rec.Code != http.StatusBadRequest {
-		t.Fatalf("invalid batch = %d (%s), want 400", rec.Code, rec.Body.String())
-	}
-	if e, _ := mpeObj(t, rec)["error"].(string); strings.TrimSpace(e) == "" {
-		t.Fatalf("400 body %s carries no error sentence", rec.Body.String())
-	}
-	if n := mpeItemCount(t, st); n != 0 {
-		t.Fatalf("a refused batch stored %d items", n)
-	}
-}
-
-// "decoded with `DisallowUnknownFields`" — at the top level and inside an item
-// and its source; refused before anything is stored, even from the lead.
-func TestMPEProposeRouteRefusesUnknownKeys(t *testing.T) {
-	st := mpeStore(t)
-	mpeMindLead(t, st)
-	mux := mpeMux()
-	for _, body := range []string{
-		`{"session":"` + mpeLead + `","items":[` + mpeValidProposal + `],"bogus":1}`,
-		`{"session":"` + mpeLead + `","thread_session":"x","items":[` + mpeValidProposal + `]}`,
-		`{"session":"` + mpeLead + `","items":[` + strings.Replace(mpeValidProposal, `"rung":"plain"`, `"rung":"plain","state":"live"`, 1) + `]}`,
-		`{"session":"` + mpeLead + `","items":[` + strings.Replace(mpeValidProposal, `"uuid":"u1"`, `"uuid":"u1","bogus":2`, 1) + `]}`,
-	} {
-		rec := mpeDo(t, mux, http.MethodPost, "/api/mm/propose", body)
-		if rec.Code != http.StatusBadRequest {
-			t.Errorf("unknown key %s = %d (%s), want 400", body, rec.Code, rec.Body.String())
-		}
-	}
-	if n := mpeItemCount(t, st); n != 0 {
-		t.Fatalf("refused bodies stored %d items", n)
-	}
-}
-
-// The route takes a POST body; a GET reaches no handler that writes.
-// (Status code is a contract silence — see the report.)
-func TestMPEProposeRouteRefusesGET(t *testing.T) {
-	st := mpeStore(t)
-	mpeMindLead(t, st)
-	rec := mpeDo(t, mpeMux(), http.MethodGet, "/api/mm/propose?session="+mpeLead, "")
-	if rec.Code < 400 || rec.Code > 499 {
-		t.Fatalf("GET /api/mm/propose = %d (%s), want a 4xx refusal", rec.Code, rec.Body.String())
-	}
-	if n := mpeItemCount(t, st); n != 0 {
-		t.Fatalf("GET stored %d items", n)
-	}
-}
-
 // ---------------------------------------------------------------------------
 // POST /api/mm/confirm
 // ---------------------------------------------------------------------------
@@ -253,13 +153,12 @@ func TestMPEConfirmRouteAlreadyLiveIs200(t *testing.T) {
 
 // "registered `mirrorGated`"; "a `--mirror` serve answers 403 before the
 // handler (the gate wrapper)" — the shared gate's body, whatever the request.
-func TestMPEProposeAndConfirmAreMirrorGated(t *testing.T) {
+func TestMPEMarkAndConfirmAreMirrorGated(t *testing.T) {
 	st := mpeStore(t)
-	mpeMindLead(t, st)
 	SetMirrorMode(true)
 	mux := mpeMux()
 	for path, body := range map[string]string{
-		"/api/mm/propose": `{"session":"` + mpeLead + `","items":[` + mpeValidProposal + `]}`,
+		"/api/mm/mark":    `{"slug":"","text":"t","source":{"kind":"manual"}}`,
 		"/api/mm/confirm": `{"id":1}`,
 	} {
 		for _, b := range []string{body, `not json`, ``} {
@@ -274,7 +173,10 @@ func TestMPEProposeAndConfirmAreMirrorGated(t *testing.T) {
 		}
 	}
 	if n := mpeItemCount(t, st); n != 0 {
-		t.Fatalf("mirror-mode proposes stored %d items", n)
+		t.Fatalf("mirror-mode writes stored %d items", n)
+	}
+	if marks, err := st.ListMMMarks(0, false); err != nil || len(marks) != 0 {
+		t.Fatalf("mirror-mode marks stored %d rows (err %v)", len(marks), err)
 	}
 }
 

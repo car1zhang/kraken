@@ -5,13 +5,17 @@
 // read only as committed at HEAD (before any implementer edit). Boundaries
 // only; athena-logic owns the happy paths. Every module-scope identifier is
 // prefixed `mpe`.
+//
+// Job 674 (mind runs) retired the `proposed` chip and the confirm button and
+// renamed the `nightly` chip `pass`; the assertions pinning the retired
+// behaviour were rewritten to the new obligations (slice F).
 
 import { fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { MMModel } from "../../hooks/useMM.ts";
 import type { MMItem } from "../../lib/mm.ts";
-import { MentalModelPane, isProposed, matchesFilter } from "./MentalModelPane.tsx";
+import { MentalModelPane, matchesFilter } from "./MentalModelPane.tsx";
 
 function mpeItem(over: Record<string, unknown>): MMItem {
   return {
@@ -42,7 +46,7 @@ function mpeJSON(body: unknown): Response {
   });
 }
 
-function mpeRender(items: MMItem[], onConfirm = vi.fn(() => Promise.resolve())) {
+function mpeRender(items: MMItem[]) {
   const mm = {
     items,
     error: undefined,
@@ -55,11 +59,9 @@ function mpeRender(items: MMItem[], onConfirm = vi.fn(() => Promise.resolve())) 
       mm={mm}
       onAddNote={() => Promise.resolve()}
       onRemove={() => Promise.resolve()}
-      onConfirm={onConfirm}
       onOpenJob={() => {}}
     />,
   );
-  return onConfirm;
 }
 
 beforeEach(() => {
@@ -79,62 +81,39 @@ afterEach(() => {
   document.body.innerHTML = "";
 });
 
-describe("isProposed / matchesFilter — edges", () => {
-  // "`isProposed = (it) => it.state === "proposed"`" — an item with NO state
-  // key (every pre-v37 client payload) is not proposed.
-  it("treats an item with no state key as not proposed", () => {
-    const it0 = mpeItem({});
-    expect("state" in (it0 as object)).toBe(false);
-    expect(isProposed(it0)).toBe(false);
-    expect(matchesFilter(it0, "proposed")).toBe(false);
-  });
-
-  // Strict equality: no case folding, no trimming.
-  it("does not read a near-miss state as proposed", () => {
-    for (const state of ["Proposed", "PROPOSED", " proposed", "live", ""]) {
-      expect(isProposed(mpeItem({ state }))).toBe(false);
-      expect(matchesFilter(mpeItem({ state }), "proposed")).toBe(false);
+describe("matchesFilter — edges", () => {
+  // `pass` keys on the source alone: the state no longer matters.
+  it("matches pass on source nightly whatever the state", () => {
+    for (const state of ["proposed", "live", "", undefined]) {
+      expect(matchesFilter(mpeItem({ source: "nightly", state }), "pass")).toBe(true);
     }
   });
 
-  // "`nightly` matches `it.source === "nightly"`" — a capture row is not
-  // nightly, even when it is proposed.
-  it("does not match a capture row under the nightly filter", () => {
-    expect(matchesFilter(mpeItem({ source: "capture" }), "nightly")).toBe(false);
-    expect(matchesFilter(mpeItem({ source: "capture", state: "proposed" }), "nightly")).toBe(false);
+  // A capture row is not a pass row, even when it is proposed.
+  it("does not match a capture row under the pass filter", () => {
+    expect(matchesFilter(mpeItem({ source: "capture" }), "pass")).toBe(false);
+    expect(matchesFilter(mpeItem({ source: "capture", state: "proposed" }), "pass")).toBe(false);
   });
 });
 
-describe("MentalModelPane confirm — edges", () => {
-  // "a proposed row renders … a `confirm` button" — so a LIVE row renders none.
-  it("renders no confirm button on a live row", async () => {
-    mpeRender([mpeItem({ id: 21, title: "a live claim", state: "live" })]);
-    expect(await screen.findByText("a live claim")).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "confirm a live claim" })).toBeNull();
-  });
-
-  // "… enabled only while live and proposed" — a proposed row that has since
-  // been invalidated renders the button disabled, and clicking it calls
-  // nothing.
-  it("disables confirm on a proposed-but-invalidated row", async () => {
-    const onConfirm = mpeRender([
+describe("MentalModelPane — no confirm, pass chip edges", () => {
+  // An invalidated row the server still serves as proposed renders no
+  // confirm button either.
+  it("renders no confirm on a proposed-but-invalidated row", async () => {
+    mpeRender([
       mpeItem({ id: 22, title: "a dropped proposal", state: "proposed", source: "nightly", invalidated_at: 1_770_000_000_000 }),
     ]);
-    // the invalidated chip is where a dead row is guaranteed to be listed
     fireEvent.click(screen.getByRole("button", { name: /^invalidated\b/ }));
-    const btn = await screen.findByRole("button", { name: "confirm a dropped proposal" });
-    expect(btn).toBeDisabled();
-    fireEvent.click(btn);
-    expect(onConfirm).not.toHaveBeenCalled();
+    expect(await screen.findByText("a dropped proposal")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "confirm a dropped proposal" })).toBeNull();
   });
 
-  // "counts for both chips" — with no proposed rows the proposed chip counts 0.
-  it("counts zero on the proposed chip when nothing is proposed", () => {
+  // With no pass rows the pass chip counts 0.
+  it("counts zero on the pass chip when no run wrote anything", () => {
     mpeRender([
       mpeItem({ id: 23, title: "live one", state: "live" }),
       mpeItem({ id: 24, title: "stateless one" }),
-      mpeItem({ id: 25, title: "nightly but live", source: "nightly", state: "live" }),
     ]);
-    expect(screen.getByRole("button", { name: /^proposed\s+0$/ })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /^pass\s+0$/ })).toBeInTheDocument();
   });
 });

@@ -4,9 +4,11 @@
 // there for `useLibrary`'s reason; the pane runs a second, FILTERED instance of
 // the same hook while its filter box holds text, because a `?q=` result is a
 // different list rather than a view of the first. `useMMFlags` is the raised
-// contradiction flags the pane lists above its rows.
+// contradiction flags the pane lists above its rows; `useMMRuns` and
+// `useMMMarks` are the mind runs and the pending read marks it lists too.
 
-import { fetchMM, fetchMMFlags } from "../api/client.ts";
+import { fetchMM, fetchMMFlags, fetchMMMarks, fetchMMRuns } from "../api/client.ts";
+import type { WebMindRun, WebMMMark } from "../api/types.ts";
 import type { MMFlag, MMFlagsPage, MMItem, MMPage, MMQuery } from "../lib/mm.ts";
 import { usePoll } from "./usePoll.ts";
 
@@ -14,8 +16,8 @@ import { usePoll } from "./usePoll.ts";
  * 30s, the library poll's interval.
  *
  * Almost nothing writes this table on a click in this tab any more: a row is
- * committed by a mind thread (`kraken mm commit`), and the daemon's verify
- * pass invalidates or flags. The interval is what brings either in.
+ * written by a mind run inside kraken serve, and the daemon's verify pass
+ * invalidates or flags. The interval is what brings either in.
  */
 export const MM_POLL_MS = 30000;
 
@@ -81,6 +83,62 @@ export const useMMFlags = (active: boolean): MMFlagsModel => {
     flags: Array.isArray(data?.flags)
       ? data.flags.filter((f) => !f.resolution)
       : [],
+    error,
+    refetch,
+  };
+};
+
+export interface MMRunsModel {
+  runs: WebMindRun[];
+  /** True until the first response (or failure) lands. */
+  loading: boolean;
+  error: Error | undefined;
+  refetch: () => Promise<boolean>;
+}
+
+/**
+ * Poll the mind runs while `active` — every job's, or one job's when `slug`
+ * is given. The list never carries a blob; a run's report, answer or bundle
+ * is fetched on demand (`fetchMMRun`). Same tolerance rules as `useMM`.
+ */
+export const useMMRuns = (active: boolean, slug?: string): MMRunsModel => {
+  const { data, error, refetch } = usePoll<{ runs: WebMindRun[] }>(
+    (signal) => fetchMMRuns(slug, undefined, signal),
+    MM_POLL_MS,
+    { enabled: active },
+  );
+  return {
+    runs: Array.isArray(data?.runs) ? data.runs : [],
+    loading: data === undefined && error === undefined,
+    error,
+    refetch,
+  };
+};
+
+export interface MMMarksModel {
+  marks: WebMMMark[];
+  /** True until the first response (or failure) lands. */
+  loading: boolean;
+  error: Error | undefined;
+  refetch: () => Promise<boolean>;
+}
+
+/**
+ * Poll the PENDING read marks of every job while `active` — what the next
+ * mind runs will read. A consumed mark belongs to the run that read it and
+ * is not listed. Same tolerance rules as `useMM`.
+ */
+export const useMMMarks = (active: boolean): MMMarksModel => {
+  const { data, error, refetch } = usePoll<{ marks: WebMMMark[] }>(
+    (signal) => fetchMMMarks(undefined, true, signal),
+    MM_POLL_MS,
+    { enabled: active },
+  );
+  return {
+    // belt and braces: a mark a run has consumed is not pending, whatever
+    // the server's filter did
+    marks: Array.isArray(data?.marks) ? data.marks.filter((m) => !m.consumed_run) : [],
+    loading: data === undefined && error === undefined,
     error,
     refetch,
   };

@@ -2126,7 +2126,8 @@ struct ThreadChip: View {
         let color = thread.isLive ? KTheme.solved : KTheme.stopped
         let badge = threadOriginBadge(thread, boardNodeId: boardNodeId)
         HStack(spacing: 4) {
-            // A mind thread (the one ◆ mind captures route to) wears the
+            // A mind thread (legacy: ◆ mind captures routed to one before
+            // mind runs replaced it; now read-only history) wears the
             // diamond instead of the branch glyph — web's `mind` chip.
             Image(systemName: thread.isMind ? "diamond.fill" : "arrow.triangle.branch")
                 .font(.data(9, weight: .semibold))

@@ -89,7 +89,8 @@ export interface DocQuestionsProps {
   readOnly?: boolean;
   // The answered rows' → decision / ◆ decided mint was retired with the
   // board's other one-shot marks (PR 2, Q10): a decision now reaches the
-  // mental model by highlighting the answer and pressing ◆ mind.
+  // mental model by highlighting the answer and pressing ✓ read, which marks
+  // it for the job's next mind run.
 }
 
 /**

@@ -114,32 +114,6 @@ func edgeMLHasEvent(t *testing.T, st *store.Store, name string) bool {
 	return false
 }
 
-const edgeMLRepo = "edgerepo"
-
-// edgeMLCommitFixture: a store, a fake repo, a job on it and one live mind
-// thread whose session is returned.
-func edgeMLCommitFixture(t *testing.T) (*store.Store, *store.Job, string) {
-	t.Helper()
-	st := edgeMLStore(t)
-	edgeMLFakeRepo(t, edgeMLRepo)
-	j := edgeMLJob(t, st, "edge-ml-commit", edgeMLRepo, "sess-lead")
-	edgeMLThread(t, st, j.ID, "sess-mind", "mind", "live")
-	return st, j, "sess-mind"
-}
-
-func edgeMLValidCommit() MMCommit {
-	return MMCommit{
-		Title:  "the daemon owns the render",
-		Scope:  "repo",
-		Repo:   edgeMLRepo,
-		Dir:    "internal/jobs",
-		Kind:   "note",
-		Body:   "what carl now knows",
-		Quote:  "a quote",
-		Source: CaptureSource{Kind: "manual"},
-	}
-}
-
 // ---------------------------------------------------------------------------
 // ValidCaptureSource
 // ---------------------------------------------------------------------------
@@ -177,49 +151,11 @@ func TestMindLayerEdgeValidCaptureSourceRefusals(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// CaptureToMind — refusals reachable without tmux
-// ---------------------------------------------------------------------------
-
-// "Refusals in order …: `ErrCaptureNoCell` (job has no live cell …) → 409;
-// `ErrCaptureTooLong` …; `ErrCaptureBadSource` …; empty trimmed text →
-// `ErrCaptureBadSource`." With no live cell, NoCell is first, so it wins over
-// every later refusal the same request would also trip — and nothing is
-// written.
-func TestMindLayerEdgeCaptureNoCellWinsInOrder(t *testing.T) {
-	st := edgeMLStore(t)
-	sj := edgeMLJob(t, st, "edge-ml-capture-dead", "kraken", "sess-lead")
-	j := &Job{ID: sj.ID, Slug: sj.Slug, Repo: "kraken", Session: "sess-lead"}
-
-	reqs := []CaptureRequest{
-		{Slug: j.Slug, Text: "fine text", Source: CaptureSource{Kind: "manual"}},
-		{Slug: j.Slug, Text: strings.Repeat("x", 32_001), Source: CaptureSource{Kind: "manual"}},
-		{Slug: j.Slug, Text: "fine", Source: CaptureSource{Kind: "bogus"}},
-		{Slug: j.Slug, Text: "   \n\t ", Source: CaptureSource{Kind: "manual"}},
-	}
-	for _, req := range reqs {
-		_, err := CaptureToMind(j, req)
-		if !errors.Is(err, ErrCaptureNoCell) {
-			t.Errorf("CaptureToMind(dead cell, text %d runes, source %q) = %v, want ErrCaptureNoCell", len([]rune(req.Text)), req.Source.Kind, err)
-		}
-	}
-	// codex is "refused likewise".
-	cj := &Job{ID: sj.ID, Slug: sj.Slug, Repo: "kraken", Agent: "codex"}
-	if _, err := CaptureToMind(cj, reqs[0]); !errors.Is(err, ErrCaptureNoCell) {
-		t.Errorf("CaptureToMind(codex job) = %v, want ErrCaptureNoCell", err)
-	}
-	threads, err := st.ListThreads(sj.ID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(threads) != 0 {
-		t.Fatalf("a refused capture left %d thread rows", len(threads))
-	}
-}
-
-// The four sentinels are distinct (the API maps each separately).
+// The sentinels are distinct (the API maps each separately). The capture
+// router's and the commit gate's went with the mind thread (job 674); the
+// mark's, the replay's and the retired role's took their place.
 func TestMindLayerEdgeCaptureSentinelsAreDistinct(t *testing.T) {
-	errs := []error{ErrCaptureNoCell, ErrCaptureTooLong, ErrCaptureBadSource, ErrNotMindThread, ErrCommitInvalid, ErrFlagInvalid, ErrFlagNoItem, ErrFlagNoJob, ErrNotLead}
+	errs := []error{ErrCaptureTooLong, ErrCaptureBadSource, ErrCommitInvalid, ErrFlagInvalid, ErrFlagNoItem, ErrFlagNoJob, ErrNotLead, ErrMarkNoJob, ErrMindBundlePruned, ErrThreadRoleRetired}
 	for i, a := range errs {
 		if a == nil {
 			t.Fatalf("sentinel #%d is nil", i)
@@ -229,40 +165,6 @@ func TestMindLayerEdgeCaptureSentinelsAreDistinct(t *testing.T) {
 				t.Errorf("sentinel %q matches %q under errors.Is; each must be distinct", a, b)
 			}
 		}
-	}
-}
-
-// ---------------------------------------------------------------------------
-// mindThreadFor (pure)
-// ---------------------------------------------------------------------------
-
-// "Returns the live `mind` thread whose `TurnUUID == zeusUUID`, else nil; an
-// `ask` thread never matches; a closed thread never matches; an empty
-// `zeusUUID` never matches." (Amendment 13 moved the key from ForkUUID to
-// TurnUUID; the lead edited the field name here, sighted, nothing else.)
-func TestMindLayerEdgeMindThreadForRefusals(t *testing.T) {
-	ask := store.Thread{TID: "t1", Role: "ask", State: "live", TurnUUID: "u1"}
-	closed := store.Thread{TID: "t2", Role: "mind", State: "closed", TurnUUID: "u1"}
-	older := store.Thread{TID: "t3", Role: "mind", State: "live", TurnUUID: "u0"}
-	blank := store.Thread{TID: "t4", Role: "mind", State: "live", TurnUUID: ""}
-	noRole := store.Thread{TID: "t5", Role: "", State: "live", TurnUUID: "u1"}
-
-	if got := mindThreadFor(nil, "u1"); got != nil {
-		t.Errorf("mindThreadFor(nil) = %+v, want nil", *got)
-	}
-	if got := mindThreadFor([]store.Thread{ask, closed, older, noRole}, "u1"); got != nil {
-		t.Errorf("mindThreadFor(ask/closed/older/role-less) = %+v, want nil", *got)
-	}
-	// an empty zeusUUID never matches — not even a mind thread whose TurnUUID
-	// is itself empty.
-	if got := mindThreadFor([]store.Thread{blank}, ""); got != nil {
-		t.Errorf("mindThreadFor(empty uuid) matched %+v, want nil", *got)
-	}
-	// control: the one live mind thread on u1 is found among the decoys.
-	live := store.Thread{TID: "t9", Role: "mind", State: "live", TurnUUID: "u1"}
-	got := mindThreadFor([]store.Thread{ask, closed, older, blank, noRole, live}, "u1")
-	if got == nil || got.TID != "t9" {
-		t.Fatalf("mindThreadFor(with a live mind thread on u1) = %v, want t9", got)
 	}
 }
 
@@ -304,21 +206,25 @@ func TestMindLayerEdgeAskBriefNamesNoMindWrite(t *testing.T) {
 			t.Errorf("ask brief names %q; only the mind brief may", verb)
 		}
 	}
-	m := threadBrief(j, "t1", "why", "/tmp/wt-kraken", "mind")
-	if m == b {
-		t.Error("mind brief is byte-identical to the ask brief")
+	// job 674: a revived mind row is briefed as an ask thread
+	if m := threadBrief(j, "t1", "why", "/tmp/wt-kraken", "mind"); m != b {
+		t.Error("mind brief differs from the ask brief")
 	}
 }
 
-// "a role outside `ask`/`mind` → error before any spawn" — and no row.
+// "a role outside `ask` → error before any spawn" — and no row. `mind` is
+// refused with ErrThreadRoleRetired since job 674.
 func TestMindLayerEdgeBranchThreadWithRoleRefusesBadRole(t *testing.T) {
 	st := edgeMLStore(t)
 	sj := edgeMLJob(t, st, "edge-ml-badrole", "kraken", "sess-lead")
 	j := &Job{ID: sj.ID, Slug: sj.Slug, Repo: "kraken"}
-	for _, role := range []string{"", "Mind", "zeus", "mind "} {
+	for _, role := range []string{"", "Mind", "zeus", "mind ", "mind"} {
 		if _, err := BranchThreadWithRole(j, "t", "seed", "", role); err == nil {
 			t.Errorf("BranchThreadWithRole(role %q) = nil, want an error", role)
 		}
+	}
+	if _, err := BranchThreadWithRole(j, "t", "seed", "", "mind"); !errors.Is(err, ErrThreadRoleRetired) {
+		t.Errorf("BranchThreadWithRole(mind) = %v, want ErrThreadRoleRetired", err)
 	}
 	threads, err := st.ListThreads(sj.ID)
 	if err != nil {
@@ -329,173 +235,9 @@ func TestMindLayerEdgeBranchThreadWithRoleRefusesBadRole(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// CommitMMItem
-// ---------------------------------------------------------------------------
-
-// "Gate first: `threadSession` must name a thread row with `Role == "mind"`
-// and `State == "live"` …, else `ErrNotMindThread`" — an ask thread, a closed
-// mind thread, zeus' own session, an empty and an unknown session. The body is
-// deliberately ALSO invalid, so a validation-first implementation fails here.
-func TestMindLayerEdgeCommitGateRefusalsComeFirst(t *testing.T) {
-	st, j, _ := edgeMLCommitFixture(t)
-	edgeMLThread(t, st, j.ID, "sess-ask", "ask", "live")
-	edgeMLThread(t, st, j.ID, "sess-mind-closed", "mind", "closed")
-
-	invalid := edgeMLValidCommit()
-	invalid.Title = ""
-	invalid.Kind = "bogus"
-	for _, sess := range []string{"sess-ask", "sess-mind-closed", "sess-lead", "", "sess-nobody"} {
-		for _, c := range []MMCommit{edgeMLValidCommit(), invalid} {
-			id, err := CommitMMItem(st, c, sess)
-			if !errors.Is(err, ErrNotMindThread) {
-				t.Errorf("CommitMMItem(session %q, title %q) = %d, %v; want ErrNotMindThread", sess, c.Title, id, err)
-			}
-		}
-	}
-	if n := edgeMLItemCount(t, st); n != 0 {
-		t.Fatalf("refused commits stored %d items", n)
-	}
-}
-
-// The validation rules, each broken alone on an otherwise valid commit from a
-// live mind thread → `ErrCommitInvalid`, nothing stored.
-func TestMindLayerEdgeCommitValidationRefusals(t *testing.T) {
-	st, _, sess := edgeMLCommitFixture(t)
-	cases := []struct {
-		name string
-		mut  func(*MMCommit)
-	}{
-		{"title empty", func(c *MMCommit) { c.Title = "" }},
-		{"title whitespace", func(c *MMCommit) { c.Title = "  \t\n " }},
-		{"title 121 runes", func(c *MMCommit) { c.Title = strings.Repeat("é", 121) }},
-		{"body empty", func(c *MMCommit) { c.Body = "" }},
-		{"body 8001 runes", func(c *MMCommit) { c.Body = strings.Repeat("é", 8001) }},
-		{"kind empty", func(c *MMCommit) { c.Kind = "" }},
-		{"kind Decision", func(c *MMCommit) { c.Kind = "Decision" }},
-		{"kind question", func(c *MMCommit) { c.Kind = "question" }},
-		{"scope empty", func(c *MMCommit) { c.Scope = "" }},
-		{"scope global", func(c *MMCommit) { c.Scope = "global" }},
-		{"scope Repo", func(c *MMCommit) { c.Scope = "Repo" }},
-		{"repo scope, empty repo", func(c *MMCommit) { c.Repo = "" }},
-		{"repo scope, unresolvable repo", func(c *MMCommit) { c.Repo = "no-such-repo-anywhere" }},
-		{"dir leading slash", func(c *MMCommit) { c.Dir = "/internal/jobs" }},
-		{"dir is ..", func(c *MMCommit) { c.Dir = ".." }},
-		{"dir starts ..", func(c *MMCommit) { c.Dir = "../elsewhere" }},
-		{"dir inner ..", func(c *MMCommit) { c.Dir = "internal/../../etc" }},
-		{"dir trailing ..", func(c *MMCommit) { c.Dir = "internal/.." }},
-		{"source empty kind", func(c *MMCommit) { c.Source = CaptureSource{} }},
-		{"source unknown kind", func(c *MMCommit) { c.Source = CaptureSource{Kind: "code"} }},
-		{"source artifact without name", func(c *MMCommit) { c.Source = CaptureSource{Kind: "artifact", Slug: "s"} }},
-		{"source transcript without session", func(c *MMCommit) { c.Source = CaptureSource{Kind: "transcript", UUID: "u"} }},
-		{"source dir without repo", func(c *MMCommit) { c.Source = CaptureSource{Kind: "dir", Dir: "x"} }},
-	}
-	for _, tc := range cases {
-		c := edgeMLValidCommit()
-		tc.mut(&c)
-		id, err := CommitMMItem(st, c, sess)
-		if !errors.Is(err, ErrCommitInvalid) {
-			t.Errorf("%s: CommitMMItem = %d, %v; want ErrCommitInvalid", tc.name, id, err)
-		}
-	}
-	if n := edgeMLItemCount(t, st); n != 0 {
-		t.Fatalf("refused commits stored %d items", n)
-	}
-}
-
-// The boundaries that must be ACCEPTED: title of exactly 120 runes (multi-byte,
-// so a byte count would refuse it), the same padded with whitespace that the
-// trim removes, body of exactly 8,000 runes, the repo root (dir ""), and a dir
-// whose segment merely contains ".." without being one.
-func TestMindLayerEdgeCommitAcceptsBoundaries(t *testing.T) {
-	st, _, sess := edgeMLCommitFixture(t)
-	cases := []struct {
-		name string
-		mut  func(*MMCommit)
-	}{
-		{"title 120 runes", func(c *MMCommit) { c.Title = strings.Repeat("é", 120) }},
-		{"title 120 runes padded", func(c *MMCommit) { c.Title = "  " + strings.Repeat("é", 120) + "\n" }},
-		{"title 1 rune", func(c *MMCommit) { c.Title = "x" }},
-		{"body 8000 runes", func(c *MMCommit) { c.Body = strings.Repeat("é", 8000) }},
-		{"body 1 rune", func(c *MMCommit) { c.Body = "x" }},
-		{"repo root", func(c *MMCommit) { c.Dir = "" }},
-		{"dir with dots inside a segment", func(c *MMCommit) { c.Dir = "a..b/c" }},
-	}
-	for _, tc := range cases {
-		c := edgeMLValidCommit()
-		tc.mut(&c)
-		id, err := CommitMMItem(st, c, sess)
-		if err != nil || id <= 0 {
-			t.Errorf("%s: CommitMMItem = %d, %v; want a stored item", tc.name, id, err)
-		}
-	}
-}
-
-// "`universal` forces `Repo = Dir = ""`" — even when the commit names a repo
-// that does not resolve and a dir that would otherwise be refused: universal
-// scope discards both rather than validating them.
-func TestMindLayerEdgeCommitUniversalForcesRepoDirEmpty(t *testing.T) {
-	st, _, sess := edgeMLCommitFixture(t)
-	c := edgeMLValidCommit()
-	c.Scope = "universal"
-	c.Repo = edgeMLRepo
-	c.Dir = "internal/jobs"
-	id, err := CommitMMItem(st, c, sess)
-	if err != nil {
-		t.Fatalf("CommitMMItem(universal): %v", err)
-	}
-	got, err := st.GetMMItem(id)
-	if err != nil {
-		t.Fatalf("GetMMItem: %v", err)
-	}
-	if got.Scope != "universal" || got.Repo != "" || got.Dir != "" {
-		t.Fatalf("universal item stored scope=%q repo=%q dir=%q, want universal/''/''", got.Scope, got.Repo, got.Dir)
-	}
-}
-
-// ---------------------------------------------------------------------------
-// jobs.ReviseMMItem
-// ---------------------------------------------------------------------------
-
-// "Same gate and validation as commit; the item must exist and be live (else
-// error → 404/409)" — and a refused revise changes nothing.
-func TestMindLayerEdgeReviseRefusals(t *testing.T) {
-	st, j, sess := edgeMLCommitFixture(t)
-	edgeMLThread(t, st, j.ID, "sess-ask", "ask", "live")
-	id, err := CommitMMItem(st, edgeMLValidCommit(), sess)
-	if err != nil {
-		t.Fatalf("seed commit: %v", err)
-	}
-	before, _ := st.GetMMItem(id)
-
-	rev := edgeMLValidCommit()
-	rev.Title = "a revised claim"
-	if err := ReviseMMItem(st, id, rev, "sess-ask"); !errors.Is(err, ErrNotMindThread) {
-		t.Errorf("ReviseMMItem(ask thread) = %v, want ErrNotMindThread", err)
-	}
-	bad := rev
-	bad.Title = strings.Repeat("x", 121)
-	if err := ReviseMMItem(st, id, bad, sess); !errors.Is(err, ErrCommitInvalid) {
-		t.Errorf("ReviseMMItem(121-rune title) = %v, want ErrCommitInvalid", err)
-	}
-	if err := ReviseMMItem(st, id+1000, rev, sess); err == nil {
-		t.Error("ReviseMMItem(unknown id) = nil, want an error")
-	}
-	if after, _ := st.GetMMItem(id); !reflect.DeepEqual(after, before) {
-		t.Fatalf("refused revises changed the item:\n got %+v\nwant %+v", after, before)
-	}
-
-	if err := st.InvalidateMMItem(id, 1, "removed", ""); err != nil {
-		t.Fatalf("InvalidateMMItem: %v", err)
-	}
-	dead, _ := st.GetMMItem(id)
-	if err := ReviseMMItem(st, id, rev, sess); err == nil {
-		t.Error("ReviseMMItem(invalidated) = nil, want an error")
-	}
-	if after, _ := st.GetMMItem(id); !reflect.DeepEqual(after, dead) {
-		t.Fatalf("a revise of an invalidated item changed it:\n got %+v\nwant %+v", after, dead)
-	}
-}
+// (CommitMMItem's and ReviseMMItem's edge tests went with the two verbs in
+// job 674; the item rules they pinned live on in mmValidateItem, pinned by
+// mmfix_test.go's TestMMValidateItemRefusesBackslashDirAndFuzzyRepo.)
 
 // ---------------------------------------------------------------------------
 // FlagMMItem

@@ -6,53 +6,14 @@ package jobs
 // implementation line.
 
 import (
-	"errors"
 	"strings"
 	"testing"
 
 	"kraken/internal/store"
 )
 
-// Amendment 7: a mind thread may revise only a captured item. A legacy mark's
-// content is what the verify pass checks against its artifact or anchor, so a
-// revise would have the next pass invalidate it with a false reason.
-func TestReviseMMItemRefusesLegacyMark(t *testing.T) {
-	st := contractMLStore(t)
-	contractMLRepo(t, "kraken")
-	contractMLJobWithThread(t, st, "revise-legacy", "zeus-rl", "mind-rl", "mind", "live")
-	id, err := st.AddMMItem(store.MMItem{Kind: "note", Source: "manual", Content: "a legacy note", CreatedAt: 1})
-	if err != nil {
-		t.Fatalf("AddMMItem: %v", err)
-	}
-	c := contractMLCommit()
-	err = ReviseMMItem(st, id, c, "mind-rl")
-	if !errors.Is(err, ErrReviseLegacy) {
-		t.Fatalf("revise of a manual item: err = %v, want ErrReviseLegacy", err)
-	}
-	if !strings.Contains(err.Error(), "kraken mm commit") {
-		t.Errorf("the refusal must name `kraken mm commit` as the move: %q", err)
-	}
-	it, _ := st.GetMMItem(id)
-	if it.Content != "a legacy note" || it.Title != "" {
-		t.Errorf("a refused revise must leave the row alone: %+v", it)
-	}
-}
-
-// Amendment 11: the mind brief's one flag write is `mm flag --item`; raise and
-// dismiss stay in its forbidden list.
-func TestMindThreadBriefAllowsOnlyTheItemFlag(t *testing.T) {
-	contractMLEnv(t)
-	mind := threadBrief(&Job{Slug: "brief-flag"}, "t1", "a title", "/tmp/wt", "mind")
-	if !strings.Contains(mind, "kraken mm flag --item") {
-		t.Fatalf("the mind brief must name `kraken mm flag --item` as its one flag write:\n%s", mind)
-	}
-	// the forbidden list names both steps: "`mm flag raise`/`dismiss`"
-	for _, banned := range []string{"mm flag raise", "dismiss"} {
-		if !strings.Contains(mind, banned) {
-			t.Errorf("the mind brief must forbid %q by name:\n%s", banned, mind)
-		}
-	}
-}
+// (Amendments 7 and 11 pinned ReviseMMItem and the mind thread's brief, both
+// retired in job 674.)
 
 // Amendment 9: `index` and `root` are reserved by the files written beside the
 // per-dir ones, so those two dir slugs take a `-dir` suffix.
@@ -81,25 +42,32 @@ func TestMMRenderTitleEscapesCommentOpener(t *testing.T) {
 }
 
 // Amendment 12: a backslash in `dir` is an invalid escape inside the
-// double-quoted YAML glob the renderer emits, and the commit's `repo` must be
+// double-quoted YAML glob the renderer emits, and the item's `repo` must be
 // the checkout's exact directory name rather than ResolveRepo's substring
-// match, so a mind thread's near-miss is refused instead of filed elsewhere.
-func TestMMValidateCommitRefusesBackslashDirAndFuzzyRepo(t *testing.T) {
+// match, so a near-miss is refused instead of filed elsewhere. (The rule moved
+// from the retired mmValidateCommit to mmValidateItem, which a mind run's
+// items pass through, in job 674.)
+func TestMMValidateItemRefusesBackslashDirAndFuzzyRepo(t *testing.T) {
 	contractMLEnv(t)
 	contractMLRepo(t, "kraken")
-	c := contractMLCommit()
+	item := func() MMProposal {
+		return MMProposal{Title: "the daemon, not zeus, watches CI", Scope: "repo", Repo: "kraken",
+			Dir: "internal/jobs", Kind: "decision", Body: "kraken serve's PR tracker bumps zeus.",
+			Quote: "the daemon, not zeus, watches CI", Source: CaptureSource{Kind: "manual"}}
+	}
+	c := item()
 	c.Dir = `internal\jobs`
-	if err := mmValidateCommit(&c); err == nil {
+	if err := mmValidateItem(&c); err == nil {
 		t.Fatal("a dir with a backslash must be refused")
 	}
-	c = contractMLCommit()
+	c = item()
 	c.Repo = "krak"
-	if err := mmValidateCommit(&c); err == nil {
+	if err := mmValidateItem(&c); err == nil {
 		t.Fatal("a repo that is only a substring of the checkout name must be refused")
 	}
-	c = contractMLCommit()
+	c = item()
 	c.Repo = "KRAKEN"
-	if err := mmValidateCommit(&c); err != nil {
+	if err := mmValidateItem(&c); err != nil {
 		t.Fatalf("the checkout name is matched case-insensitively: %v", err)
 	}
 }

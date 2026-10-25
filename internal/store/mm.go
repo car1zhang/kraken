@@ -89,6 +89,12 @@ type MMItem struct {
 	// is stored as "live"). A proposed row is invisible to every consumer that
 	// lists live items — see ListMMItems — until ConfirmMMItem flips it.
 	State string
+
+	// The schema-v39 provenance columns. RunID is the mind run that wrote the
+	// item (0 for an item no run wrote). Supersedes is the item this one
+	// replaced, written at insert; SupersededBy is the item that replaced this
+	// one, written only by SupersedeMMItem. 0 means none for all three.
+	RunID, Supersedes, SupersededBy int64
 }
 
 // MMCodeAnchor is the 1:1 companion of a source=code item: where the lines
@@ -187,7 +193,8 @@ const mmItemColumns = `SELECT id, COALESCE(kind,''), COALESCE(source,''), COALES
 	COALESCE(invalidated_at,0), COALESCE(invalid_reason,''), COALESCE(invalid_detail,''),
 	COALESCE(title,''), COALESCE(scope,'repo'), COALESCE(repo,''), COALESCE(dir,''),
 	COALESCE(quote,''), COALESCE(source_json,''), COALESCE(thread_session,''),
-	COALESCE(revised_at,0), COALESCE(state,'live')
+	COALESCE(revised_at,0), COALESCE(state,'live'), COALESCE(run_id,0),
+	COALESCE(supersedes,0), COALESCE(superseded_by,0)
 	FROM mm_items`
 
 func scanMMItem(row interface{ Scan(...any) error }) (MMItem, error) {
@@ -196,7 +203,8 @@ func scanMMItem(row interface{ Scan(...any) error }) (MMItem, error) {
 		&it.Content, &it.Context, &it.SnapshotExt, &it.EpisodeID, &it.CreatedAt,
 		&it.InvalidatedAt, &it.InvalidReason, &it.InvalidDetail,
 		&it.Title, &it.Scope, &it.Repo, &it.Dir, &it.Quote, &it.SourceJSON,
-		&it.ThreadSession, &it.RevisedAt, &it.State)
+		&it.ThreadSession, &it.RevisedAt, &it.State, &it.RunID, &it.Supersedes,
+		&it.SupersededBy)
 	return it, err
 }
 
@@ -254,13 +262,13 @@ func (s *Store) AddMMItem(it MMItem) (int64, error) {
 		`INSERT INTO mm_items (kind, source, job_id, slug, source_ref, content, context,
 			content_sha, snapshot_ext, episode_id, created_at, invalidated_at,
 			invalid_reason, invalid_detail, title, scope, repo, dir, quote,
-			source_json, thread_session, revised_at, state)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			source_json, thread_session, revised_at, state, run_id, supersedes)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		it.Kind, it.Source, it.JobID, it.Slug, it.SourceRef, it.Content, it.Context,
 		SHA256Hex([]byte(it.Content)), it.SnapshotExt, it.EpisodeID, it.CreatedAt,
 		invalidatedAt, it.InvalidReason, it.InvalidDetail, it.Title, it.Scope,
 		it.Repo, it.Dir, it.Quote, it.SourceJSON, it.ThreadSession, it.RevisedAt,
-		it.State,
+		it.State, it.RunID, it.Supersedes,
 	)
 	if err != nil {
 		return 0, fmt.Errorf("add mm item (%s/%s): %w", it.Kind, it.Source, err)
@@ -730,6 +738,54 @@ func (s *Store) InvalidateMMItem(id, at int64, reason, detail string) error {
 	}
 	if err != nil {
 		return fmt.Errorf("invalidate mm item %d: %w", id, err)
+	}
+	return nil
+}
+
+// SupersedeMMItem closes oldID as replaced by newID: invalidated_at, reason
+// `superseded`, the detail, and superseded_by all stamped in one UPDATE.
+//
+// It is InvalidateMMItem with a named successor, and it differs in one
+// refusal on purpose: an already-invalidated oldID is ErrMMItemInvalidated
+// rather than a silent success, because the caller (a mind run's supersede)
+// has just inserted the replacement and must learn that it replaced nothing.
+// newID must exist; either id naming nothing is ErrNotFound. Neither row's
+// title, content or quote is touched — the old row keeps what carl knew, and
+// the new row is what he knows now.
+func (s *Store) SupersedeMMItem(oldID, newID, at int64, detail string) error {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return fmt.Errorf("supersede mm item %d: %w", oldID, err)
+	}
+	defer tx.Rollback()
+	var oldInvalidated int64
+	err = tx.QueryRow(`SELECT COALESCE(invalidated_at,0) FROM mm_items WHERE id = ?`, oldID).Scan(&oldInvalidated)
+	if errors.Is(err, sql.ErrNoRows) {
+		return fmt.Errorf("supersede mm item %d: %w", oldID, ErrNotFound)
+	}
+	if err != nil {
+		return fmt.Errorf("supersede mm item %d: %w", oldID, err)
+	}
+	var exists int64
+	err = tx.QueryRow(`SELECT id FROM mm_items WHERE id = ?`, newID).Scan(&exists)
+	if errors.Is(err, sql.ErrNoRows) {
+		return fmt.Errorf("supersede mm item %d: successor %d: %w", oldID, newID, ErrNotFound)
+	}
+	if err != nil {
+		return fmt.Errorf("supersede mm item %d: %w", oldID, err)
+	}
+	if oldInvalidated > 0 {
+		return fmt.Errorf("supersede mm item %d: %w", oldID, ErrMMItemInvalidated)
+	}
+	if _, err := tx.Exec(
+		`UPDATE mm_items SET invalidated_at = ?, invalid_reason = 'superseded', invalid_detail = ?, superseded_by = ?
+			WHERE id = ? AND invalidated_at IS NULL`,
+		at, detail, newID, oldID,
+	); err != nil {
+		return fmt.Errorf("supersede mm item %d: %w", oldID, err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("supersede mm item %d: %w", oldID, err)
 	}
 	return nil
 }

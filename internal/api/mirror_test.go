@@ -93,6 +93,11 @@ var mirrorGatedRoutes = []string{
 	// or invalidated by this test.
 	"/api/mm/decision", "/api/mm/artifact", "/api/mm/element", "/api/mm/code",
 	"/api/mm/note", "/api/mm/detail", "/api/mm/remove",
+	// The mind runs' writes (mmrun.go), POST-only and gated at registration.
+	// Safe in the mirror-off sweep: mark and its capture alias refuse the
+	// missing text (400) before any write, and mark/remove and replay trip
+	// DisallowUnknownFields on `slug`.
+	"/api/mm/mark", "/api/mm/capture", "/api/mm/mark/remove", "/api/mm/replay",
 	// Mid-conversation recall (recall.go), gated via mirrorGated at
 	// registration — a POST-only route, so there is no GET on the same path
 	// that a route wrapper would take down with it. It reads like a query and
@@ -127,7 +132,7 @@ var mirrorUploadsRoutes = []string{"/api/archive", "/api/unarchive", "/api/delet
 // existed only to move a job into or out of the queued column, and neither
 // has a reachable state left. A mux that still answered them would let a
 // stale client take a move the board cannot express.
-var retiredRoutes = []string{"/api/dequeue", "/api/start"}
+var retiredRoutes = []string{"/api/dequeue", "/api/start", "/api/mm/propose", "/api/mm/commit", "/api/mm/revise"}
 
 func postJSON(t *testing.T, mux http.Handler, path string, body []byte) *httptest.ResponseRecorder {
 	t.Helper()

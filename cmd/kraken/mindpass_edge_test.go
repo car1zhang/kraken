@@ -275,11 +275,15 @@ func mpeServer(t *testing.T, status int, body string) (*httptest.Server, *atomic
 
 func mpeAddr(srv *httptest.Server) string { return strings.TrimPrefix(srv.URL, "http://") }
 
-// `kraken mm confirm <id>` with a non-numeric id is refused LOCALLY — no
-// request reaches serve.
-func TestMpeMMConfirmNonNumericRefusedLocally(t *testing.T) {
-	srv, hits, _ := mpeServer(t, http.StatusOK, `{"ok":true,"id":1,"state":"live"}`)
-	for _, args := range [][]string{{"mm", "confirm", "abc"}, {"mm", "confirm"}} {
+// The mind-run verbs refuse a bad id or flag LOCALLY — no request reaches
+// serve.
+func TestMpeMMRunVerbsBadArgsRefusedLocally(t *testing.T) {
+	srv, hits, _ := mpeServer(t, http.StatusOK, `{}`)
+	for _, args := range [][]string{
+		{"mm", "run", "abc"}, {"mm", "run"}, {"mm", "run", "3", "--report", "--answer"},
+		{"mm", "replay", "abc"}, {"mm", "replay"}, {"mm", "replay", "3", "--force"},
+		{"mm", "runs", "--n", "x"}, {"mm", "runs", "--bogus"}, {"mm", "marks", "extra"},
+	} {
 		r := mpeExec(t, t.TempDir(), []string{"KRAKEN_SERVE_ADDR=" + mpeAddr(srv)}, "", args...)
 		if r.code == 0 {
 			t.Errorf("%v exited 0 (stdout %q)", args, r.stdout)
@@ -290,22 +294,22 @@ func TestMpeMMConfirmNonNumericRefusedLocally(t *testing.T) {
 	}
 }
 
-// "a 403 is a non-zero exit carrying the server sentence".
-func TestMpeMMPropose403CarriesTheServerSentence(t *testing.T) {
-	srv, hits, last := mpeServer(t, http.StatusForbidden, `{"error":"not the mind job's lead session"}`)
-	stdin := `[{"title":"t","scope":"universal","kind":"note","body":"b","quote":"q","rung":"r","source":{"kind":"transcript","session":"s","uuid":"u"}}]`
-	r := mpeExec(t, t.TempDir(), []string{"KRAKEN_SERVE_ADDR=" + mpeAddr(srv), "KRAKEN_THREAD_SESSION=sess-not-the-lead"}, stdin, "mm", "propose")
+// "a 4xx is a non-zero exit carrying the server sentence" — a replay of a
+// pruned bundle.
+func TestMpeMMReplay409CarriesTheServerSentence(t *testing.T) {
+	srv, hits, last := mpeServer(t, http.StatusConflict, `{"error":"mind run 3's bundle was pruned on 2026-01-01"}`)
+	r := mpeExec(t, t.TempDir(), []string{"KRAKEN_SERVE_ADDR=" + mpeAddr(srv)}, "", "mm", "replay", "3")
 	if r.code == 0 {
-		t.Fatalf("a 403 exited 0 (stdout %q)", r.stdout)
+		t.Fatalf("a 409 exited 0 (stdout %q)", r.stdout)
 	}
-	if !strings.Contains(r.stderr, "not the mind job's lead session") {
+	if !strings.Contains(r.stderr, "bundle was pruned") {
 		t.Fatalf("stderr %q does not carry the server sentence", r.stderr)
 	}
 	if hits.Load() != 1 {
 		t.Fatalf("serve hit %d times, want 1", hits.Load())
 	}
-	if got, _ := last.Load().(string); !strings.HasPrefix(got, "POST /api/mm/propose ") || !strings.Contains(got, `"session":"sess-not-the-lead"`) {
-		t.Fatalf("request = %q, want a POST to /api/mm/propose carrying the caller's session", got)
+	if got, _ := last.Load().(string); !strings.HasPrefix(got, "POST /api/mm/replay ") || !strings.Contains(got, `"write":false`) {
+		t.Fatalf("request = %q, want a POST to /api/mm/replay with write false", got)
 	}
 }
 

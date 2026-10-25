@@ -40,8 +40,11 @@ export interface MemoryViewProps {
   onAddNote: (text: string) => Promise<void>;
   /** Drop one mark by id — invalidates the row rather than deleting it. */
   onRemoveMM: (id: number) => Promise<void>;
-  /** Confirm one nightly `proposed` item so it goes live. Routed through the shared mutate. */
-  onConfirmMM: (id: number) => Promise<void>;
+  /**
+   * Accepted and ignored: mind runs write items live, so the pane has no
+   * confirm button any more. Kept optional so an older caller still compiles.
+   */
+  onConfirmMM?: (id: number) => Promise<void>;
   /** A raised flag's `open job`: the steer modal of that job. Optional. */
   onOpenJob?: (slug: string) => void;
   /**
@@ -60,7 +63,6 @@ export function MemoryView({
   mm,
   onAddNote,
   onRemoveMM,
-  onConfirmMM,
   onOpenJob,
   onOpenArtifact,
   onRemoveSaved,
@@ -105,7 +107,6 @@ export function MemoryView({
         mm={mm}
         onAddNote={onAddNote}
         onRemove={onRemoveMM}
-        onConfirm={onConfirmMM}
         onOpenJob={onOpenJob}
       />
     </main>

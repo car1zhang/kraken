@@ -1178,12 +1178,13 @@ func (d *daemonState) tick(mirror bool) (int, error) {
 	// — is exactly the class of side effect a read-only scheduler variant must
 	// never have.
 	//
-	// The mind pass (kickMind, mindpass.go) follows on the same cadence and
-	// the same gate, dream first.
+	// The mind runs (mindRunPass, mindrun.go) follow under the same gate: the
+	// daily run is queued and the oldest queued run started, never under
+	// --mirror. A mind run is a headless child, not a job, so it starts no cell.
 	//
-	// These two are the ONLY starts the daemon makes. Every other job on the
+	// The dream job is the ONLY start the daemon makes. Every other job on the
 	// board starts from carl's own submit, synchronously inside that request;
-	// a dream or mind job has no human in the loop by construction, so the
+	// a dream job has no human in the loop by construction, so the
 	// creator starts what it created, here, on the same tick it created it. The
 	// attempt is single-shot on purpose: a failure notifies loudly and leaves
 	// a DRAFT on the board, which carl can submit by hand, rather than a
@@ -1193,9 +1194,7 @@ func (d *daemonState) tick(mirror bool) (int, error) {
 		if created := kickDream(now); created != nil && d.startCreatedJob(created) {
 			cells++
 		}
-		if created := kickMind(now); created != nil && d.startCreatedJob(created) {
-			cells++
-		}
+		d.mindRunPass(ActiveStore(), now)
 	}
 	return cells, nil
 }

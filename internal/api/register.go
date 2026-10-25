@@ -115,17 +115,22 @@ func registerRoutes(mux routeMux) {
 	mux.HandleFunc("/api/mm/show", mmShowHandler)
 	mux.HandleFunc("/api/mm/source", mmSourceHandler)
 	mux.HandleFunc("/api/mm/flags", mmFlagsHandler)
+	// capture is the read mark's alias for shipped phones (mmrun.go)
 	mux.HandleFunc("/api/mm/capture", mirrorGated(mmCaptureHandler))
-	mux.HandleFunc("/api/mm/commit", mirrorGated(mmCommitHandler))
-	mux.HandleFunc("/api/mm/revise", mirrorGated(mmReviseHandler))
 	mux.HandleFunc("/api/mm/flag", mirrorGated(mmFlagHandler))
 	mux.HandleFunc("/api/mm/flag/raise", mirrorGated(mmFlagRaiseHandler))
 	mux.HandleFunc("/api/mm/flag/dismiss", mirrorGated(mmFlagDismissHandler))
 	mux.HandleFunc("/api/mm/flag/resolve", mirrorGated(mmFlagResolveHandler))
-	// The mind pass (schema v37, mmpropose.go / mmevidence.go): the nightly
-	// job's propose and the operator's confirm are gated writes, the evidence
-	// read is open.
-	mux.HandleFunc("/api/mm/propose", mirrorGated(mmProposeHandler))
+	// The mind runs (schema v39, mmrun.go): read marks, the run record and
+	// replay. Writes are POST-only and gated at registration; the three
+	// reads are open. confirm survives as a no-op-on-live route for old
+	// clients; the evidence read is open.
+	mux.HandleFunc("/api/mm/mark", mirrorGated(mmMarkHandler))
+	mux.HandleFunc("/api/mm/mark/remove", mirrorGated(mmMarkRemoveHandler))
+	mux.HandleFunc("/api/mm/marks", mmMarksHandler)
+	mux.HandleFunc("/api/mm/runs", mmRunsHandler)
+	mux.HandleFunc("/api/mm/run", mmRunHandler)
+	mux.HandleFunc("/api/mm/replay", mirrorGated(mmReplayHandler))
 	mux.HandleFunc("/api/mm/confirm", mirrorGated(mmConfirmHandler))
 	mux.HandleFunc("/api/mm/evidence", mmEvidenceHandler)
 	// Mid-conversation recall (recall.go): the cell hook's POST. Gated like

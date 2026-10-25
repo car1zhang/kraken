@@ -2450,10 +2450,20 @@ func ResumeTeardown(j *Job) error {
 	if err != nil {
 		return fmt.Errorf("job %s: %v", j.Slug, err)
 	}
+	// read before the final write, which clears the marker
+	resumingDone := j.Teardown == "done" || strings.HasPrefix(j.Teardown, "done:")
 	if err := teardownCell(j, repo, LiveSessions(), true); err != nil {
 		return err
 	}
-	return WriteJobFields(j, fields...)
+	if err := WriteJobFields(j, fields...); err != nil {
+		return err
+	}
+	// A resumed Done is a Done: it queues the job's mind run exactly as
+	// DoneJob does once the done write lands, never fatal.
+	if resumingDone {
+		enqueueDoneMindRun(j)
+	}
+	return nil
 }
 
 // DoneJob completes a started job: force-teardown the cell (whose final
@@ -2494,6 +2504,9 @@ func DoneJob(j *Job, outcome string) ([]string, error) {
 	if err := WriteJobFields(j, fields...); err != nil {
 		return msgs, fmt.Errorf("cell torn down, but state write failed: %v", err)
 	}
+	// The job's mind run: queued only once the done write landed, and never
+	// able to fail Done — a queue failure is one event (mindrun.go).
+	enqueueDoneMindRun(j)
 	return append(msgs, "done "+j.Slug+": cell torn down, state: done"), nil
 }
 

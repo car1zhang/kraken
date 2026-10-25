@@ -213,8 +213,15 @@ type webMMItem struct {
 	// breaking change, which apiContract 6 rules out.
 	CaptureSource *jobs.CaptureSource `json:"capture_source"`
 	// State is "live" or "proposed" (schema v37), always present: a proposed
-	// item is a mind-pass proposal awaiting POST /api/mm/confirm.
+	// item is a mind-pass proposal awaiting POST /api/mm/confirm. Mind runs
+	// write live rows only (v39 flipped every proposed row live).
 	State string `json:"state"`
+	// The schema-v39 provenance half, omitempty because 0 means "none" on
+	// every one: RunID is the mind run that wrote the row, Supersedes the
+	// item it replaced, SupersededBy the item that replaced it.
+	RunID        int64 `json:"run_id,omitempty"`
+	Supersedes   int64 `json:"supersedes,omitempty"`
+	SupersededBy int64 `json:"superseded_by,omitempty"`
 }
 
 func webMMAnchorFrom(a store.MMCodeAnchor) *webMMAnchor {
@@ -238,6 +245,7 @@ func webMMItemFrom(it store.MMItem, anchor *store.MMCodeAnchor) webMMItem {
 		Quote: it.Quote, ThreadSession: it.ThreadSession, RevisedAt: it.RevisedAt,
 		CaptureSource: mmParseSource(it.SourceJSON),
 		State:         it.State,
+		RunID:         it.RunID, Supersedes: it.Supersedes, SupersededBy: it.SupersededBy,
 	}
 	if out.State == "" {
 		out.State = "live"
@@ -249,8 +257,8 @@ func webMMItemFrom(it store.MMItem, anchor *store.MMCodeAnchor) webMMItem {
 }
 
 // mmParseSource decodes a row's source_json into the pointer the wire
-// carries. Empty and malformed both read as nil: the column is written only by
-// jobs.CommitMMItem from a validated struct, so a value that does not decode
+// carries. Empty and malformed both read as nil: the column is written only from a
+// validated struct (the mind run's applier, the one-shot writes), so a value that does not decode
 // is not something a client can act on, and failing the whole list over one
 // row's decoration would be the worse answer.
 func mmParseSource(raw string) *jobs.CaptureSource {
@@ -333,8 +341,8 @@ func mmDecode(w http.ResponseWriter, r *http.Request, into any, fields string) b
 	return mmDecodeLimit(w, r, into, fields, 1<<20)
 }
 
-// mmDecodeLimit is mmDecode with its own body cap — for POST /api/mm/propose,
-// whose legal 20-item batch can exceed the 1 MB every other mm route takes.
+// mmDecodeLimit is mmDecode with its own body cap, for a route whose legal
+// body can exceed the 1 MB every mm route takes today.
 func mmDecodeLimit(w http.ResponseWriter, r *http.Request, into any, fields string, limit int64) bool {
 	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, limit))
 	dec.DisallowUnknownFields()
@@ -1367,10 +1375,10 @@ func mmGetOnly(w http.ResponseWriter, r *http.Request) bool {
 }
 
 // ===========================================================================
-// The mind layer (schema v33): capture → mind thread → commit/revise, the
-// drill-down reads (show, source), and contradiction flags. Every judgement
-// lives in internal/jobs (capture routing, the commit gate and validation, the
-// flag lead rule); these handlers decode, call, and pick a status code.
+// The mind layer (schema v33): the drill-down reads (show, source) and
+// contradiction flags. Every judgement lives in internal/jobs (the flag lead
+// rule); these handlers decode, call, and pick a status code. The capture
+// route is the read mark's alias now (mmrun.go).
 // ===========================================================================
 
 // mmErr writes one error body, logging it under the route's action name.
@@ -1390,152 +1398,6 @@ func mmQueryID(w http.ResponseWriter, r *http.Request) (int64, bool) {
 		return 0, false
 	}
 	return id, true
-}
-
-// --- POST /api/mm/capture ---
-
-// mmCaptureHandler routes highlighted text to the job's mind thread: the
-// existing one forked at zeus' current last message, else a freshly branched
-// one (jobs.CaptureToMind decides). The board's thread chips change when a
-// thread is branched, so a success invalidates the board cache.
-func mmCaptureHandler(w http.ResponseWriter, r *http.Request) {
-	if !mmPost(w, r) {
-		return
-	}
-	var req jobs.CaptureRequest
-	if !mmDecode(w, r, &req, "slug, text and source") {
-		return
-	}
-	if !mmRequire(w, "slug", req.Slug) {
-		return
-	}
-	if jobs.ActiveStore() == nil {
-		mmErr(w, "mm-capture", http.StatusInternalServerError, "no store wired")
-		return
-	}
-	j, _, err := webJobFor(strings.TrimSpace(req.Slug))
-	if err != nil {
-		mmErr(w, "mm-capture", http.StatusNotFound, err.Error())
-		return
-	}
-	res, err := jobs.CaptureToMind(j, req)
-	if err != nil {
-		mmErr(w, "mm-capture", mmCaptureStatus(err), err.Error())
-		return
-	}
-	util.LogEvent("web", "info", "mm-capture", "mm-capture "+j.Slug+" "+res.TID)
-	webBoardCache.invalidate()
-	webJSON(w, http.StatusOK, res)
-}
-
-// mmCaptureStatus maps CaptureToMind's sentinels (slice B), falling back to
-// the side-thread mapping for whatever the branch/send half returns — those
-// are the same jobs/thread.go errors POST /api/threads already maps.
-func mmCaptureStatus(err error) int {
-	switch {
-	case errors.Is(err, jobs.ErrCaptureNoCell):
-		return http.StatusConflict
-	case errors.Is(err, jobs.ErrCaptureTooLong), errors.Is(err, jobs.ErrCaptureBadSource):
-		return http.StatusBadRequest
-	default:
-		return threadErrStatus(err)
-	}
-}
-
-// --- POST /api/mm/commit, /api/mm/revise ---
-
-type mmCommitReq struct {
-	ThreadSession string        `json:"thread_session"`
-	Item          jobs.MMCommit `json:"item"`
-}
-
-type mmReviseReq struct {
-	ThreadSession string        `json:"thread_session"`
-	ID            int64         `json:"id"`
-	Item          jobs.MMCommit `json:"item"`
-}
-
-// mmNotMindThread is the 403 body, spelled exactly once: a CLI or a mind
-// thread reading it should see the same sentence every time.
-const mmNotMindThread = "not a mind thread"
-
-// mmCommitHandler finalizes one item from a mind thread. The caller's thread
-// session is the whole authorization: jobs.CommitMMItem refuses any session
-// that is not a live mind thread's before it validates a single field.
-func mmCommitHandler(w http.ResponseWriter, r *http.Request) {
-	if !mmPost(w, r) {
-		return
-	}
-	var req mmCommitReq
-	if !mmDecode(w, r, &req, "thread_session and item") {
-		return
-	}
-	st := mmStore(w)
-	if st == nil {
-		return
-	}
-	id, err := jobs.CommitMMItem(st, req.Item, strings.TrimSpace(req.ThreadSession))
-	if err != nil {
-		switch {
-		case errors.Is(err, jobs.ErrNotMindThread):
-			mmErr(w, "mm-commit", http.StatusForbidden, mmNotMindThread)
-		case errors.Is(err, jobs.ErrCommitInvalid):
-			mmErr(w, "mm-commit", http.StatusBadRequest, err.Error())
-		default:
-			mmErr(w, "mm-commit", http.StatusInternalServerError, err.Error())
-		}
-		return
-	}
-	webJSON(w, http.StatusOK, map[string]any{"id": id})
-}
-
-// mmReviseHandler rewrites one live item from a mind thread. jobs'
-// ErrMMItemNotFound/ErrMMItemDead (not in the frozen contract, which names no
-// sentinel for these) map to 404/409, and ErrReviseLegacy (amendment 7: a
-// non-captured item is never revised) to 409 with jobs' own sentence, which
-// names `kraken mm commit` as the move; any other failure reads the item back so
-// an unforeseen path still tells 404 from 409 from a real server failure.
-func mmReviseHandler(w http.ResponseWriter, r *http.Request) {
-	if !mmPost(w, r) {
-		return
-	}
-	var req mmReviseReq
-	if !mmDecode(w, r, &req, "thread_session, id and item") {
-		return
-	}
-	if req.ID <= 0 {
-		mmErr(w, "mm-revise", http.StatusBadRequest, "missing id")
-		return
-	}
-	st := mmStore(w)
-	if st == nil {
-		return
-	}
-	err := jobs.ReviseMMItem(st, req.ID, req.Item, strings.TrimSpace(req.ThreadSession))
-	if err != nil {
-		switch {
-		case errors.Is(err, jobs.ErrNotMindThread):
-			mmErr(w, "mm-revise", http.StatusForbidden, mmNotMindThread)
-		case errors.Is(err, jobs.ErrCommitInvalid):
-			mmErr(w, "mm-revise", http.StatusBadRequest, err.Error())
-		case errors.Is(err, jobs.ErrMMItemNotFound), errors.Is(err, store.ErrNotFound):
-			mmErr(w, "mm-revise", http.StatusNotFound, "unknown mental-model item")
-		case errors.Is(err, jobs.ErrMMItemDead), errors.Is(err, jobs.ErrReviseLegacy):
-			mmErr(w, "mm-revise", http.StatusConflict, err.Error())
-		default:
-			it, gerr := st.GetMMItem(req.ID)
-			switch {
-			case errors.Is(gerr, store.ErrNotFound):
-				mmErr(w, "mm-revise", http.StatusNotFound, "unknown mental-model item")
-			case gerr == nil && it.InvalidatedAt != 0:
-				mmErr(w, "mm-revise", http.StatusConflict, err.Error())
-			default:
-				mmErr(w, "mm-revise", http.StatusInternalServerError, err.Error())
-			}
-		}
-		return
-	}
-	webJSON(w, http.StatusOK, map[string]any{"id": req.ID})
 }
 
 // --- the flags ---
@@ -1881,26 +1743,93 @@ func mmSourceHandler(w http.ResponseWriter, r *http.Request) {
 	if src == nil {
 		src = mmLegacySource(it)
 	}
+	webJSON(w, http.StatusOK, mmResolveSource(st, it, *src, true))
+}
+
+// mmResolveSource resolves one pointer. The mind run's two pointers come
+// first: a saved_id names a library snapshot, a mark_id names a read mark
+// whose own source is resolved (one level only — followMark false — so a
+// mark can never point the resolver round in a loop) with the mark's text
+// in front of it.
+func mmResolveSource(st *store.Store, it store.MMItem, src jobs.CaptureSource, followMark bool) mmSourceResp {
+	if src.SavedID > 0 {
+		return mmSavedSource(st, src)
+	}
+	if src.MarkID > 0 && followMark {
+		return mmMarkSource(st, it, src)
+	}
 	var resp mmSourceResp
 	switch src.Kind {
 	case "artifact":
-		resp = mmArtifactSource(st, it, *src)
+		resp = mmArtifactSource(st, it, src)
 	case "transcript":
-		resp = mmTranscriptSource(*src)
+		resp = mmTranscriptSource(src)
 	case "dir":
-		resp = mmDirSource(*src)
+		resp = mmDirSource(src)
 	case "code":
 		resp = mmCodeSource(st, it.ID)
 	case "job":
-		resp = mmJobSource(st, *src)
+		resp = mmJobSource(st, src)
 	case "feedback":
-		resp = mmFeedbackSource(st, *src)
+		resp = mmFeedbackSource(st, src)
 	case "question":
-		resp = mmQuestionSource(st, *src)
+		resp = mmQuestionSource(st, src)
 	default:
 		resp = mmSourceResp{Kind: src.Kind}
 	}
-	webJSON(w, http.StatusOK, resp)
+	return resp
+}
+
+// mmSavedSource serves a library snapshot (saved_artifacts) by id: the bytes
+// carl clicked save on. `changed` compares the snapshot's sha to the one the
+// pointer recorded, when it recorded one; a deleted library row answers
+// available:false.
+func mmSavedSource(st *store.Store, src jobs.CaptureSource) mmSourceResp {
+	kind := src.Kind
+	if kind == "" {
+		kind = "artifact"
+	}
+	resp := mmSourceResp{Kind: kind, Ext: strings.TrimPrefix(filepath.Ext(src.Name), ".")}
+	a, err := st.GetSavedArtifact(src.SavedID)
+	if err != nil || a == nil {
+		return resp
+	}
+	resp.Available, resp.Text = true, string(a.Snapshot)
+	if resp.Ext == "" {
+		resp.Ext = strings.TrimPrefix(filepath.Ext(a.Name), ".")
+	}
+	if ref := strings.ToLower(strings.TrimSpace(src.SHA)); ref != "" {
+		resp.Changed = !mmSHAMatches(store.SHA256Hex(a.Snapshot), ref)
+	}
+	return resp
+}
+
+// mmMarkSource serves a read mark: the mark's own text, then whatever its own
+// source pointer resolves to. A mark that no longer exists (removed while
+// pending) answers available:false; a mark whose own source is gone still
+// answers available:true, since the mark's text is itself the material.
+func mmMarkSource(st *store.Store, it store.MMItem, src jobs.CaptureSource) mmSourceResp {
+	resp := mmSourceResp{Kind: "mark"}
+	marks, err := st.ListMMMarks(0, false)
+	if err != nil {
+		return resp
+	}
+	for _, m := range marks {
+		if m.ID != src.MarkID {
+			continue
+		}
+		inner := mmSourceResp{Kind: "mark"}
+		if ms := mmParseSource(m.SourceJSON); ms != nil {
+			inner = mmResolveSource(st, it, *ms, false)
+		}
+		// the mark's text byte for byte, then a newline and its own source
+		text := m.Text
+		if inner.Available && inner.Text != "" {
+			text += "\n" + inner.Text
+		}
+		return mmSourceResp{Kind: inner.Kind, Available: true, Changed: inner.Changed, Text: text, Ext: inner.Ext}
+	}
+	return resp
 }
 
 // mmLegacySource synthesizes a pointer for a row that predates source_json.

@@ -320,7 +320,7 @@ export interface SteerOverlayProps {
   onOpenEditor?: (slug: string, node: string) => void;
   // The detail's ○ mark known and the questions panel's → decision were
   // retired with the board's one-shot marks (PR 2, Q10): text reaches the
-  // mental model through the ◆ mind button, and the transcript panel below is
+  // mental model through the ✓ read button, and the transcript panel below is
   // where most of zeus' prose can now be highlighted.
 }
 
@@ -1007,7 +1007,7 @@ function SteerBody({
       </div>
       <div
         className="panel-body answer-body"
-        // the job any selection inside this modal belongs to — the ◆ mind
+        // the job any selection inside this modal belongs to — the ✓ read
         // button's slug (lib/mind.ts selectionSlug); text with no finer source
         // (the detail, the spec) posts as `manual` against it
         data-mind-slug={jobSlug}
@@ -1073,7 +1073,7 @@ function SteerBody({
           {/* Q5: zeus' recent transcript, read-only — the one web surface
               where more than zeus' LAST text block can be read, and so the
               one where most of what zeus explains can be highlighted for the
-              ◆ mind button. Withheld for an archived job, whose synthetic
+              ✓ read button. Withheld for an archived job, whose synthetic
               slug no route answers for. */}
           {job && !job.archived ? <ZeusTranscriptPanel slug={jobSlug} operator={operator} /> : null}
           {/* Conditional rather than a `hidden={…}` wrapper like its siblings

@@ -986,15 +986,18 @@ actor APIClient {
         )
     }
 
-    /// Routes highlighted text to the job's mind thread — a fork of zeus that
-    /// turns it into a committed item. Answers the thread's tid; `created`
-    /// says whether this capture branched the thread or was sent to the live
-    /// one. A job with no live cell is a 409 whose message is surfaced as is.
-    func captureToMind(
-        baseURL: String, slug: String, home: String, name: String, text: String
-    ) async throws -> MMCaptured {
-        try await post(
-            baseURL: baseURL, path: "/api/mm/capture",
+    /// Records highlighted text in an artifact as a READ MARK for a mind
+    /// run: the job's next one (its Done run, else the daily catch-all)
+    /// reads it. No live cell is needed. Answers the mark's id and the job's
+    /// pending count; a job that no longer exists is a 404 whose message is
+    /// surfaced as is. This is the actor's one static verb taking a `URL`
+    /// base rather than `baseURL: String`; it rides the shared client's
+    /// authorized `post`.
+    static func markRead(
+        _ base: URL, slug: String, home: String, name: String, text: String
+    ) async throws -> MMMarkResult {
+        try await shared.post(
+            baseURL: base.absoluteString, path: "/api/mm/mark",
             body: MMCaptureRequest(
                 slug: slug, text: text,
                 source: WebCaptureSource(kind: "artifact", slug: slug, home: home, name: name)

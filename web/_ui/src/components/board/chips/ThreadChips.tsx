@@ -116,7 +116,7 @@ export function ThreadChips({
             <span className="dot" />
             {label}
             {t.role === "mind" ? (
-              <span className="thread-role mind" title="a mind thread — commits mental-model items">
+              <span className="thread-role mind" title="a mind thread from before mind runs — read-only history">
                 mind
               </span>
             ) : null}

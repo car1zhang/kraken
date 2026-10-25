@@ -11,7 +11,6 @@ import (
 	"strings"
 	"testing"
 
-	"kraken/internal/jobs"
 	"kraken/internal/store"
 )
 
@@ -140,14 +139,6 @@ func contractMLMindJob(t *testing.T, st *store.Store, slug, lead, mindSess strin
 		}
 	}
 	return id
-}
-
-func contractMLCommitBody() jobs.MMCommit {
-	return jobs.MMCommit{
-		Title: "the tracker bumps zeus on red CI", Scope: "repo", Repo: "kraken", Dir: "internal/jobs",
-		Kind: "decision", Body: "kraken serve's PR tracker watches CI, not zeus.", Quote: "the daemon watches CI",
-		Source: jobs.CaptureSource{Kind: "manual"},
-	}
 }
 
 // ---------------------------------------------------------------------------
@@ -323,55 +314,8 @@ func TestMindLayerMMSourceKinds(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// commit / revise / flag / resolve
+// flag / resolve (commit and revise were retired with the mind thread)
 // ---------------------------------------------------------------------------
-
-// "`POST /api/mm/commit`: body `{"thread_session", "item"}` ... success → 200
-// `{"id": <int>}`."
-func TestMindLayerMMCommitRoute(t *testing.T) {
-	st := contractMLEnv(t)
-	mux := contractMLMux()
-	contractMLRepo(t, "kraken")
-	contractMLMindJob(t, st, "commit-route", "zeus-c", "mind-c")
-	body := contractMLWant(t, contractMLDo(t, mux, http.MethodPost, "/api/mm/commit",
-		map[string]any{"thread_session": "mind-c", "item": contractMLCommitBody()}), 200, "POST /api/mm/commit")
-	n, ok := body["id"].(float64)
-	if !ok || n <= 0 {
-		t.Fatalf("commit body = %v, want {id:N}", body)
-	}
-	it, err := st.GetMMItem(int64(n))
-	if err != nil {
-		t.Fatalf("GetMMItem: %v", err)
-	}
-	if it.Source != "capture" || it.ThreadSession != "mind-c" || it.Title != contractMLCommitBody().Title {
-		t.Errorf("committed item = %+v", it)
-	}
-
-	// "`POST /api/mm/revise` ... success → 200 `{"id": <int>}`."
-	rev := contractMLCommitBody()
-	rev.Body = "revised body"
-	rb := contractMLWant(t, contractMLDo(t, mux, http.MethodPost, "/api/mm/revise",
-		map[string]any{"thread_session": "mind-c", "id": int64(n), "item": rev}), 200, "POST /api/mm/revise")
-	if rn, _ := rb["id"].(float64); rn != n {
-		t.Errorf("revise body = %v, want id %v", rb, n)
-	}
-	if it, _ := st.GetMMItem(int64(n)); it.Content != "revised body" || it.RevisedAt <= 0 {
-		t.Errorf("revised item = %+v", it)
-	}
-}
-
-// "`ErrNotMindThread` → 403 `{"error":"not a mind thread"}`".
-func TestMindLayerMMCommitRouteNonMind403Body(t *testing.T) {
-	st := contractMLEnv(t)
-	mux := contractMLMux()
-	contractMLRepo(t, "kraken")
-	contractMLMindJob(t, st, "commit-403", "zeus-403", "mind-403")
-	body := contractMLWant(t, contractMLDo(t, mux, http.MethodPost, "/api/mm/commit",
-		map[string]any{"thread_session": "zeus-403", "item": contractMLCommitBody()}), 403, "POST /api/mm/commit from zeus")
-	if body["error"] != "not a mind thread" {
-		t.Errorf("403 body = %v, want error \"not a mind thread\"", body)
-	}
-}
 
 // "`POST /api/mm/flag` ... success → 200 `{"id": <int>, "state":
 // "pending"|"raised"}`" / "`/api/mm/flag/dismiss` ... success → 200 `{"ok":
@@ -511,9 +455,8 @@ func TestMindLayerThreadsListCarriesRole(t *testing.T) {
 	}
 }
 
-// "`POST /api/mm/capture` ... unknown slug → 404; ... a non-POST → 405" and
-// "`ErrCaptureNoCell` (job has no live cell ...) → 409". The branch/send path
-// needs tmux and is not blind-testable (Test environment obligations).
+// POST /api/mm/capture is the read mark's alias now: unknown slug → 404, a
+// non-POST → 405, and a job with no live cell is a 200 mark, never a 409.
 func TestMindLayerCaptureRouteNoTmuxArms(t *testing.T) {
 	st := contractMLEnv(t)
 	mux := contractMLMux()
@@ -528,7 +471,14 @@ func TestMindLayerCaptureRouteNoTmuxArms(t *testing.T) {
 		t.Errorf("capture unknown slug = %d, want 404; body %s", rec.Code, rec.Body.String())
 	}
 	req["slug"] = "cap-draft"
-	if rec := contractMLDo(t, mux, http.MethodPost, "/api/mm/capture", req); rec.Code != http.StatusConflict {
-		t.Errorf("capture on a job with no live cell = %d, want 409; body %s", rec.Code, rec.Body.String())
+	body := contractMLWant(t, contractMLDo(t, mux, http.MethodPost, "/api/mm/capture", req), 200, "capture on a job with no live cell")
+	if body["tid"] != "" || body["created"] != false {
+		t.Errorf("capture alias body = %v, want tid \"\" and created false", body)
+	}
+	if n, _ := body["mark_id"].(float64); n <= 0 {
+		t.Errorf("capture alias body = %v, want a mark_id", body)
+	}
+	if p, _ := body["pending"].(float64); p != 1 {
+		t.Errorf("capture alias body = %v, want pending 1", body)
 	}
 }
