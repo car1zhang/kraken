@@ -1,6 +1,7 @@
 package jobs
 
 import (
+	"strings"
 	"testing"
 	"time"
 
@@ -128,6 +129,51 @@ func TestStandingAgentsCarryTheirModel(t *testing.T) {
 	for _, a := range standingAgents() {
 		if a.Model == "" {
 			t.Errorf("%s: standing agent has no Model — the Fable fallback can never fire for it", a.ID)
+		}
+	}
+}
+
+// The confirmation Claude Code 2.1.306 draws for `/model <id>`, as a pane
+// renders it (the banner that triggered the switch sits above it).
+const switchModelDialog = `  ⎿  You've reached your Fable limit. Run /usage-credits to continue or switch models with /model.
+✻ Done in 1s
+▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔
+   Switch model?
+   Your next response will be slower and use more tokens
+   This conversation is cached for the current model. Switching to Opus 5.5 means the full history gets re-read on your next message.
+   ❯ 1. Yes, switch to Opus 5.5
+     2. No, go back
+`
+
+func TestModelSwitchKeysPicksYes(t *testing.T) {
+	keys, ok := modelSwitchKeys(switchModelDialog)
+	if !ok {
+		t.Fatal("the switch-model dialog was not recognised")
+	}
+	if len(keys) != 1 || keys[0] != "Enter" {
+		t.Errorf("cursor on yes: keys = %v, want [Enter]", keys)
+	}
+	// cursor drawn on "No, go back": step up onto yes first
+	onNo := strings.Replace(switchModelDialog, "❯ 1. Yes", "  1. Yes", 1)
+	onNo = strings.Replace(onNo, "  2. No", "❯ 2. No", 1)
+	keys, ok = modelSwitchKeys(onNo)
+	if !ok {
+		t.Fatal("the dialog with the cursor on no was not recognised")
+	}
+	if len(keys) != 2 || keys[0] != "Up" || keys[1] != "Enter" {
+		t.Errorf("cursor on no: keys = %v, want [Up Enter]", keys)
+	}
+}
+
+func TestModelSwitchKeysIgnoresOtherPanes(t *testing.T) {
+	for name, text := range map[string]string{
+		"banner only":        "  ⎿  You've reached your Fable limit. Run /usage-credits to continue or switch models with /model.\n✻ Done in 1s\n",
+		"trust dialog":       "Is this a project you created or one you trust?\n ❯ 1. Yes, I trust this folder\n   2. No, exit\n",
+		"agent question":     "Switch model? I can keep going on the current one or try another.\n ❯ 1. Keep the current model\n   2. Try another\n",
+		"header, no options": "   Switch model?\n   Your next response will be slower and use more tokens\n",
+	} {
+		if keys, ok := modelSwitchKeys(text); ok {
+			t.Errorf("%s: recognised as the switch-model dialog, keys %v", name, keys)
 		}
 	}
 }

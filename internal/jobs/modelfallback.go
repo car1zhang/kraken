@@ -3,6 +3,7 @@ package jobs
 import (
 	"encoding/json"
 	"os"
+	"os/exec"
 	"regexp"
 	"strconv"
 	"strings"
@@ -20,6 +21,18 @@ import (
 // exactly that: `/model <opus>` into the stalled pane, then — on a LATER tick,
 // once the slash command has certainly finished — a one-line prompt to carry
 // on, re-sent until the pane shows a turn ran.
+//
+// Since Claude Code 2.1.306 the slash command does not finish on its own:
+// `/model <id>` draws a "Switch model?" confirmation (a cost warning with a
+// yes/no option list) and switches nothing until an option is picked. The
+// dialog is a question prompt, so SendToPeer's guard refuses every continue
+// prompt as "would answer it" until the prompt window expires, and the pane
+// stays parked on the dialog (measured 2026-10-24: twelve refusals in 30
+// minutes, then ten hours on the dialog, a hit resolved as expired and the
+// card reading question). So the tick after the switch answers that dialog
+// first — modelSwitchKeys, reading the cursor the way the trust dialog's
+// acceptor does — and an already-expired switch found still on its dialog is
+// re-armed for another prompt window, since nothing before was an attempt.
 //
 // It runs BEFORE the rotate/resume chain and pre-empts it, for two reasons.
 // It is strictly less disruptive — no rebind, no SIGKILL, so background tasks,
@@ -92,6 +105,48 @@ func namesOtherWindow(details string) bool {
 // which names none.
 func namesLimitWindow(details string) bool {
 	return fableBannerRe.MatchString(details) || namesOtherWindow(details)
+}
+
+// modelSwitchPromptHeader is the first line of the confirmation Claude Code
+// draws before honouring `/model <id>` (2.1.306 and later): the header, two
+// lines on the cost of the switch, then "❯ 1. Yes, switch to <tier>" and
+// "2. No, go back".
+const modelSwitchPromptHeader = "Switch model?"
+
+// modelSwitchKeys is the `tmux send-keys` sequence that picks the yes option
+// of a rendered switch-model confirmation, and false when text is not one —
+// the header alone is not enough, since a question the agent asked about
+// models could echo it; the yes option must be there to pick. It reads the
+// dialog with the trust acceptor's option reader and key logic, so the cursor
+// is read rather than assumed (trustAcceptKeys has that measurement).
+func modelSwitchKeys(text string) ([]string, bool) {
+	if !strings.Contains(text, modelSwitchPromptHeader) {
+		return nil, false
+	}
+	yes := false
+	for _, line := range strings.Split(text, "\n") {
+		if opt, ok := trustOptionLine(line); ok && strings.HasPrefix(opt, "Yes, switch") {
+			yes = true
+			break
+		}
+	}
+	if !yes {
+		return nil, false
+	}
+	return trustAcceptKeys(text), true
+}
+
+// answerModelSwitchPrompt picks yes on the switch-model confirmation when p's
+// pane is showing one, and reports whether it did. It bypasses SendToPeer on
+// purpose: that guard refuses a pane with a question open, and answering this
+// one question is the whole point.
+func answerModelSwitchPrompt(p *core.Peer) bool {
+	keys, ok := modelSwitchKeys(core.PaneTail(p.Pane, 30))
+	if !ok {
+		return false
+	}
+	args := append([]string{"send-keys", "-t", p.Pane}, keys...)
+	return exec.Command("tmux", args...).Run() == nil
 }
 
 // fallbackRecord is one agent's last switch: when, which process, when the
@@ -364,10 +419,26 @@ func (d *daemonState) tryFableFallback(hitKey, label, agentModel string, email f
 	}
 	last := readLastFallback(hitKey)
 	verdict := fableFallbackDecide(hit, agentModel, fallbackAccount(email()), last, p.PID, p.SessionID, now)
+	retryKey := "fable-retry:" + hitKey
+	// The switch is not done while its confirmation is up (the file comment
+	// has the measurement): answer it before any continue prompt, ahead of
+	// the retry gap — the refusals that set the gap were this dialog. An
+	// expired switch still on its dialog gets a fresh record and so a fresh
+	// prompt window: the hit stays unresolved and the next tick owes the
+	// continue, exactly as after a first switch.
+	if verdict == fallbackPrompt || (verdict == fallbackAbsorb && last.ExpiredAt != 0) {
+		if answerModelSwitchPrompt(p) {
+			if last.ExpiredAt != 0 {
+				recordLastFallback(hitKey, fallbackRecord{At: now.Unix(), PID: p.PID})
+			}
+			delete(d.Poked, retryKey)
+			dlogEvent("info", "limit-rescue", "%s: answered the switch-model confirmation for %s — continue prompt follows next tick", label, fableFallbackModel)
+			return true
+		}
+	}
 	// Inside the retry gap a refused /model hands the tick to the ordinary
 	// chain as before, while a refused continue prompt HOLDS it: that process
 	// is already on Opus, and rotating would kill it.
-	retryKey := "fable-retry:" + hitKey
 	if at := d.Poked[retryKey]; at != 0 && now.Sub(time.Unix(at, 0)) < fableFallbackRetryGap {
 		return verdict == fallbackPrompt
 	}
