@@ -336,7 +336,16 @@ in-window records — about half a transcript's lines carry no timestamp, so `wc
 double, and more when the window starts inside the file", never "N lines": a label that drops
 TIMESTAMPED sends the verifying scout to a record
 count that is ~2N even when the window covers the whole file, which re-derives the exact false
-finding. And phrase
+finding. Those same records also crash a scout's own scripts. A record with no timestamp has no
+`uuid` either (`api-request-blob`, `agent-setting`, `mode` and the other bookkeeping types), and
+several record types that DO carry a timestamp still have no `uuid` (`api-request`,
+`queue-operation`, `pr-link` and the other link and request types), so a script that indexes
+`r['timestamp']` or `r['uuid']`, even after filtering on the timestamp, stops with a `KeyError`
+partway through the file. Six scouts across two consecutive nights hit this, every one of them
+briefed with the half-the-lines sentence above, and each re-ran with `.get`. So every scout brief
+also says to read those keys with `r.get('timestamp')` and `r.get('uuid')` from the first script on.
+This is an instruction for how to write the script, not a hypothesis, so the pasted-sentence rule
+below does not apply to it. And phrase
 an anomaly as a question, not as a claim: "say what that shape means" got a scout to reject the
 implied reading and find the real cause, where "confirm that X" would have got X. The same sentence
 pasted into every brief is its own defect — when you suspect a cross-cutting cause, investigate it
