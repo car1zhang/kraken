@@ -377,12 +377,17 @@ func digestTranscript(path, project string, since int64) (SessionDigest, bool) {
 	// share of interrupt-bearing user records drop it too — so testing each
 	// record's own field left exactly those signals ungated on a fork, while
 	// the fixture that "covered" them stamped a session_id real records never
-	// have. A record with no session_id inherits its neighborhood's owner.
-	// Replay regions are contiguous runs of foreign-session_id records
-	// (though not always a prefix — both FFF…OOO and OOO…FFF occur), so
-	// positional inheritance assigns each undated-owner record correctly;
-	// a sidecar carries no session_id anywhere, lastSID stays "", and
-	// tokenRecordOwned treats absent as own — unchanged.
+	// have. A non-assistant record with no session_id inherits its
+	// neighborhood's owner; an ASSISTANT record with none is always the
+	// file's own call (see the switch in the loop — a headless ask thread
+	// stamps session_id only on its replayed records), and the undated-owner
+	// records that sit between the end of a replay and the fork's first own
+	// assistant record still inherit the replay's owner. Replay regions are
+	// contiguous runs of foreign-session_id records (though not always a
+	// prefix — both FFF…OOO and OOO…FFF occur), so positional inheritance
+	// assigns each undated-owner record correctly; a sidecar carries no
+	// session_id anywhere, lastSID stays "" or own, and tokenRecordOwned
+	// treats both as own — unchanged.
 	var lastSID string
 
 	sc := bufio.NewScanner(f)
@@ -441,10 +446,26 @@ func digestTranscript(path, project string, since int64) (SessionDigest, bool) {
 		// digestEmpty can read a fork's all-replayed window as non-empty —
 		// the honest shape, since the file does hold dated records.
 		sid := rec.SessionID
-		if sid == "" {
-			sid = lastSID
-		} else {
+		switch {
+		case sid != "":
 			lastSID = sid
+		case rec.Type == "assistant":
+			// An assistant record with no session_id is this file's OWN API
+			// call, never an inherited one: a headless ask thread (`claude -p
+			// --fork-session`) stamps session_id on every replayed parent
+			// record and on NONE of its own, so inheriting here handed every
+			// one of its messages to the parent and digested the thread as
+			// zero spend, while the job-tokens reader (SumTokensDelta, which
+			// has no inheritance) counted them — two readers of one file
+			// disagreeing on exactly these records. The rule is
+			// tokenRecordOwned's own "absent is owned". The undated-owner
+			// records that follow it inherit own until a record carrying a
+			// session_id says otherwise — a later replayed record always
+			// carries one, so it resets lastSID through the first arm.
+			sid = own
+			lastSID = own
+		default:
+			sid = lastSID
 		}
 		counted := inWindow && tokenRecordOwned(tokenRecord{SessionID: sid}, own)
 		if ts > 0 && inWindow {
