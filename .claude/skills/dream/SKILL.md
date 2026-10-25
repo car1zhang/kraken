@@ -39,6 +39,12 @@ paragraph while writing the rule against it, and was again saved only by its sty
 Every example string in a diff is INVENTED — a made-up name, a made-up ask — and if a real
 detail from tonight's evidence would make the example clearer, that is precisely the sign it
 must not be there: the real thing belongs in `00-dream-report.md`, the side that never travels.
+A test FIXTURE is an example string too: a limit banner, a prompt, a log line or a notice copied
+out of a transcript into a test case is the real thing, committed to git history and read by every
+future clone and transcript, and a made-up one pins the same parser — a pass that stripped every
+session id from its diffs by hand still shipped a real cell's banner, reset time and all, as a
+table case, because nothing had said a fixture counts. It does: invent its values — times, ids,
+names, numbers — and keep its fixed wording and shape.
 
 The corollary is freeing — because the local side never travels, the report and a watched fact can
 hold the real thing: actual quotes, real session ids, the prompt text as written. That is what makes
