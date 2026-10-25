@@ -1084,7 +1084,27 @@ const mineTextCap = 64 * 1024
 // one and the cookie's high-entropy tail was emitted verbatim (or, with one
 // inside the first 8 chars, the cookie never matched at all). None of the
 // three can START a match, so admitting them only extends redaction.
-var secretRE = regexp.MustCompile(`\b(?:xox[a-z]-[A-Za-z0-9%+/=.\-]{8,}|sk-[A-Za-z0-9_\-]{16,}|gh[pousr]_[A-Za-z0-9]{16,}|github_pat_[A-Za-z0-9_]{16,}|AKIA[0-9A-Z]{16}|eyJ[A-Za-z0-9_\-]{10,}\.[A-Za-z0-9_\-.]{20,})`)
+//
+// The last two arms are URL query parameters rather than vendor prefixes:
+// `verify?token=<hex>` is the one-time bearer token of a Supabase magic or
+// recovery link, which a cell that mints a link for a user prints whole into
+// the pane, and `refresh_token=<opaque>` is the long-lived half of the
+// session fragment a browser tool's page snapshot echoes after an
+// implicit-flow sign-in (`#access_token=<JWT>&…&refresh_token=…`); the JWT
+// half was already caught by the `eyJ` arm, the refresh token was not. Both
+// arms match from the parameter name, so the value is redacted whole and the
+// kept prefix (`verif…`, `refre…`) still hints at what kind of credential
+// sat there. Both value classes admit `.`, `/`, `+` and `=`, because a token
+// in either parameter may itself be a JWT or base64 — matching from the
+// name at an earlier position than the `eyJ` arm, a class that stopped at
+// `.` would redact only the JWT's header and emit its payload and signature
+// verbatim. They are URL and fragment shapes only: the JSON form of a token
+// endpoint's response (`"refresh_token":"…"`), a prefixed name
+// (`provider_refresh_token=`), and a `token=` that is not the first query
+// parameter are not matched, so these arms are not the whole refresh-token
+// story. A code line such as `refresh_token=self.refresh_token` is redacted
+// too — the safe direction for a backstop.
+var secretRE = regexp.MustCompile(`\b(?:xox[a-z]-[A-Za-z0-9%+/=.\-]{8,}|sk-[A-Za-z0-9_\-]{16,}|gh[pousr]_[A-Za-z0-9]{16,}|github_pat_[A-Za-z0-9_]{16,}|AKIA[0-9A-Z]{16}|eyJ[A-Za-z0-9_\-]{10,}\.[A-Za-z0-9_\-.]{20,}|verify\?token=[A-Za-z0-9_\-.%/+=]{20,}|refresh_token=[A-Za-z0-9_\-.%/+=]{8,})`)
 
 // mineRedactKeep is how many runes of a matched credential the marker keeps:
 // long enough to show the vendor prefix (`xoxc-`, `AKIAI`), short enough

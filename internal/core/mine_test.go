@@ -1142,6 +1142,22 @@ func TestRedactSecrets(t *testing.T) {
 		{"use sk-learn and deriveState()", "use sk-learn and deriveState()"},
 		{"branch sk-abcdefghijklmno stays", "branch sk-abcdefghijklmno stays"},
 		{"key sk-abcdefghijklmnop goes", "key sk-ab…[redacted] goes"},
+		// a minted magic link: the token is the credential, the host and the
+		// redirect target are not
+		{"https://x.supabase.co/auth/v1/verify?token=0123456789abcdef0123456789abcdef01234567&type=magiclink&redirect_to=https://app.example.com",
+			"https://x.supabase.co/auth/v1/verif…[redacted]&type=magiclink&redirect_to=https://app.example.com"},
+		// an implicit-flow session fragment echoed by a page snapshot: the
+		// access token falls to the JWT arm, the refresh token to its own
+		{"#access_token=eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.sig&expires_in=604800&refresh_token=AbCdEf123456&token_type=bearer",
+			"#access_token=eyJhb…[redacted]&expires_in=604800&refre…[redacted]&token_type=bearer"},
+		// a short query value is not a token
+		{"?refresh_token=abc&x=1", "?refresh_token=abc&x=1"},
+		// a JWT inside either parameter is redacted WHOLE: the arm matches
+		// from the name, ahead of the eyJ arm, so its class must admit `.`
+		// or the payload and signature would be emitted verbatim
+		{"/verify?token=eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.sig&type=recovery", "/verif…[redacted]&type=recovery"},
+		// a base64 refresh token with `/`, `+` and `=` padding
+		{"refresh_token=AbCd/Ef12+34==&token_type=bearer", "refre…[redacted]&token_type=bearer"},
 	}
 	for _, c := range cases {
 		if got := redactSecrets(c.in); got != c.want {
