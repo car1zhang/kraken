@@ -204,11 +204,24 @@ one can blow the Read tool's token ceiling on page two: say to page large views 
 **Shapes, never values**: a scout scanning for where a credential or a person's identifier landed
 searches by SHAPE (a prefix, a length, a regex) and COUNTS or LOCATES rather than prints — `grep -c`,
 `grep -l`, `grep -n … | cut -d: -f1` (the file name over several files, the line number in one);
-never `grep -o`, `grep -ob` or a bare grep that echoes the matching line, since a tool result is a
-transcript record too, and paging a view with Read shows whatever is in it — and reports the class, the file and
-the record timestamp (or path and line for a file that is not a transcript); it never types a value
-it found into a command, a notes line or its report. A scout that built a python dict of the
-identifiers and the credential it was tracing copied all of them into a new transcript, from where
+never an unredirected `grep -o`, `grep -ob` or a bare grep that echoes the matching line, since a
+tool result is a transcript record too, and paging a view with Read shows whatever is in it — and
+reports the class, the file and the record timestamp (or path and line for a file that is not a
+transcript); it never types a value it found into a command, a notes line or its report. The one
+case where typing it looks unavoidable — COUNTING or LOCATING a value already known, to ask whether
+it propagated — is done from a needle file instead: extract the value with its shape regex into a
+file in the scout's scratch dir (`grep -o -E '<shape>' <source> > needles.txt` — the one permitted
+`grep -o`, because it is redirected and prints nothing), then count behind a non-empty check that
+GATES the count:
+`[ -s needles.txt ] || echo 'no needles'; [ -s needles.txt ] && grep -c -F -f needles.txt <target>; true`
+— an empty needle file matches EVERY line under the tool shell's grep, so a shape that found
+nothing would read as total propagation, and the `; true` closes a zero
+count's exit 1 — and `grep -l -F -f needles.txt <files>` the same way; prefer the longest fragment
+the shape captures, and delete the file when done. The value is then on no command line, in no tool
+result and in no note. Say so in the brief: a scout asked whether a sibling's credential fragments
+had propagated typed both fragments into four of its own commands, under a brief that forbade
+exactly that, because nothing in it said how else to count them. A scout that built a python dict
+of the identifiers and the credential it was tracing copied all of them into a new transcript, from where
 the next night's `reduce` carried them into that pass's staged views: the dream pass had become the
 propagator its own evidence rule warns about, and nothing in the brief had said otherwise. And
 the brief carries a short **already-established list** — the known cross-cutting costs and facts
