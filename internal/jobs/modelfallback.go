@@ -110,19 +110,23 @@ func namesLimitWindow(details string) bool {
 // The confirmation Claude Code draws before honouring `/model <id>` (2.1.306
 // and later): modelSwitchPromptHeader is its first line, then two lines on
 // the cost of the switch, then the options "❯ 1. Yes, switch to <tier>" and
-// "2. No, go back" — modelSwitchYesPrefix is how the yes option starts.
+// "2. No, go back" — modelSwitchYesPrefix is how the yes option starts, and
+// modelSwitchTierWord is the tier name it must carry: the tier in
+// fableFallbackModel, the only one kraken ever switches to (a test holds the
+// two together).
 const (
 	modelSwitchPromptHeader = "Switch model?"
 	modelSwitchYesPrefix    = "Yes, switch"
+	modelSwitchTierWord     = "opus"
 )
 
 // modelSwitchKeys is the key sequence that picks the yes option of a rendered
 // switch-model confirmation, and false when text is not one. Three things
-// have to hold, because the header alone is not enough: a question the agent
-// asked about models could echo it. The header is there, an option line
-// starts with the yes prefix, and that option names Opus — the only tier
-// kraken ever switches to (fableFallbackModel), so a dialog the operator
-// opened by typing `/model <other tier>` into the pane is left for them. It
+// must hold: the header is there, an option line starts with the yes prefix,
+// and that option names Opus. The header alone is not enough, since a
+// question the agent asked about models could echo it, and the Opus check
+// leaves alone a dialog the operator opened by typing `/model <other tier>`
+// — Opus is the only tier kraken ever switches to (fableFallbackModel). It
 // reads the dialog with the trust acceptor's option reader and key logic, so
 // the cursor is read rather than assumed (trustAcceptKeys has that
 // measurement).
@@ -133,7 +137,7 @@ func modelSwitchKeys(text string) ([]string, bool) {
 	yes := false
 	for _, line := range strings.Split(text, "\n") {
 		opt, ok := trustOptionLine(line)
-		if ok && strings.HasPrefix(opt, modelSwitchYesPrefix) && strings.Contains(strings.ToLower(opt), "opus") {
+		if ok && strings.HasPrefix(opt, modelSwitchYesPrefix) && strings.Contains(strings.ToLower(opt), modelSwitchTierWord) {
 			yes = true
 			break
 		}
@@ -191,8 +195,9 @@ type fallbackRecord struct {
 	// expired, or was about to, was found still on its switch-model
 	// confirmation and the dialog was answered. Once per process: a pane
 	// that keeps drawing the dialog after its keys went in would otherwise
-	// re-arm on every re-delivery, and expire — and notify — every 40
-	// minutes for as long as it sits there.
+	// re-arm on every re-delivery, and expire — and notify — once per prompt
+	// window plus a re-delivery (about 40 minutes) for as long as it sits
+	// there.
 	Rearmed bool `json:"rearmed,omitempty"`
 }
 

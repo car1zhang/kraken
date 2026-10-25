@@ -148,6 +148,12 @@ const switchModelDialog = `  ⎿  You've reached your Fable limit. Run /usage-cr
 `
 
 func TestModelSwitchKeysPicksYes(t *testing.T) {
+	// The dialog check matches the yes option on the tier kraken switches to;
+	// moving fableFallbackModel to another tier has to move this word too, or
+	// the dialog is never answered and the pane parks on it again.
+	if !strings.Contains(fableFallbackModel, modelSwitchTierWord) {
+		t.Fatalf("modelSwitchTierWord %q is not the tier in fableFallbackModel %q", modelSwitchTierWord, fableFallbackModel)
+	}
 	keys, ok := modelSwitchKeys(switchModelDialog)
 	if !ok {
 		t.Fatal("the switch-model dialog was not recognised")
@@ -246,5 +252,56 @@ func TestFableFallbackRearmsAnExpiredSwitchOnce(t *testing.T) {
 	}
 	if got := readLimitHitByKey(hitKey).Outcome; got != "model-fallback-expired" {
 		t.Errorf("second re-delivery resolved as %q, want model-fallback-expired", got)
+	}
+}
+
+// A switch whose prompt window runs out on this very tick — a daemon that
+// slept through it — while the dialog is still up is re-armed rather than
+// expired: no ExpiredAt, no notification, the hit left open for the continue.
+func TestFableFallbackRearmsOnTheExpiringTick(t *testing.T) {
+	st, err := store.Open(filepath.Join(t.TempDir(), "kraken.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	UseStore(st)
+	t.Cleanup(func() { UseStore(nil); st.Close() })
+
+	answered := 0
+	orig := answerSwitchPrompt
+	answerSwitchPrompt = func(*core.Peer) bool { answered++; return true }
+	t.Cleanup(func() { answerSwitchPrompt = orig })
+
+	const banner = "zeus hit a usage limit: You've reached your Fable limit. Run /usage-credits to continue or switch models with /model."
+	now := time.Unix(1_790_820_000, 0)
+	hitKey := limitHitKey(509)
+	p := &core.Peer{PID: 4343, Pane: "%7", SessionID: "sess-2", Agent: "claude", Messageable: true}
+	d := newDaemon()
+
+	// Switched 31 minutes ago, continue never sent, nothing expired yet.
+	recordLastFallback(hitKey, fallbackRecord{At: now.Add(-31 * time.Minute).Unix(), PID: 4343})
+	hit := LimitHit{Error: "rate_limit", Details: banner, At: now.Add(-31 * time.Minute).Unix(), SessionID: "sess-2"}
+	if v := fableFallbackDecide(hit, core.ZeusModel, nil, readLastFallback(hitKey), 4343, "sess-2", now); v != fallbackExpire {
+		t.Fatalf("precondition: verdict = %q, want %q", v, fallbackExpire)
+	}
+	if !d.tryFableFallback(hitKey, "job", core.ZeusModel, func() string { return "" }, hit, func() *core.Peer { return p }, now) {
+		t.Fatal("the expiring tick with the dialog up was not handled")
+	}
+	if answered != 1 {
+		t.Fatalf("dialog answered %d times, want 1", answered)
+	}
+	rec := readLastFallback(hitKey)
+	if rec.At != now.Unix() || rec.PID != 4343 || !rec.Rearmed || rec.ExpiredAt != 0 {
+		t.Errorf("record = %+v, want a fresh {At: now, PID: 4343, Rearmed: true} with no ExpiredAt", rec)
+	}
+	if got := readLimitHitByKey(hitKey).Outcome; got != "" {
+		t.Errorf("hit resolved as %q on the re-arm tick; it must stay open", got)
+	}
+	for k := range d.Notified {
+		if strings.HasPrefix(k, "limit:fable-expire:") {
+			t.Errorf("an expiry notification %q was recorded on a tick that re-armed instead", k)
+		}
+	}
+	if v := fableFallbackDecide(hit, core.ZeusModel, nil, rec, 4343, "sess-2", now.Add(15*time.Second)); v != fallbackPrompt {
+		t.Errorf("verdict on the next tick = %q, want %q", v, fallbackPrompt)
 	}
 }
