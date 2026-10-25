@@ -237,9 +237,11 @@ SITS decides whether it can guard that command: it rides in the Agent call's pro
 opening sentence, ahead of any instruction to read a file — a brief file the scout is told to `cat`
 first cannot guard the `cat` itself, and two consecutive passes that kept the line inside the file
 measured ten of eleven scouts and three of three reviewers blocked on a bare `echo ======` in that
-very first command, while the pass that put it in the prompt body measured zero first-command
-blocks across twelve agents (nine scouts, three reviewers). Spawn them in waves rather than all
-at once; a few at a time, with the remainder running as slots free. Every
+very first command, while the pass that put it in the prompt body — and, in the same prompts, told
+every agent to fetch its brief with the Read tool rather than `cat` — measured zero first-command
+blocks across twelve agents (nine scouts, three reviewers); the two changes landed together, so
+that count cannot separate them, and the rule rests on the mechanism, not the number. Spawn them
+in waves rather than all at once; a few at a time, with the remainder running as slots free. Every
 transcript gets read; the pass simply takes as long as it takes. **A scout dead on a TRANSPORT
 error is resumed, not replaced**: a connection-closed or ENOTFOUND death leaves the subagent
 resumable, and `SendMessage` to its agent id (from the Agent call's spawn result, or `ListAgents`)
