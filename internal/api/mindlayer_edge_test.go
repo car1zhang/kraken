@@ -83,8 +83,6 @@ func edgeMLThread(t *testing.T, st *store.Store, jobID int64, session, role, sta
 	}
 }
 
-const edgeMLValidItem = `{"title":"a claim","scope":"universal","repo":"","dir":"","kind":"note","body":"b","quote":"q","source":{"kind":"manual"}}`
-
 // ---------------------------------------------------------------------------
 // POST /api/mm/capture
 // ---------------------------------------------------------------------------
@@ -132,13 +130,17 @@ func TestMindLayerEdgeCaptureRouteUnknownSlug(t *testing.T) {
 	}
 }
 
-// `ErrCaptureNoCell` → 409: a known job whose cell is not live.
-func TestMindLayerEdgeCaptureRouteDeadCellIs409(t *testing.T) {
+// The capture route is the read mark's alias: a known job whose cell is not
+// live is a 200 mark, never a 409.
+func TestMindLayerEdgeCaptureRouteDeadCellIsAMark(t *testing.T) {
 	st := edgeMLStore(t)
 	edgeMLJob(t, st, "edge-ml-cap-dead", "sess-lead")
 	rec := edgeMLDo(t, edgeMLMux(), http.MethodPost, "/api/mm/capture", `{"slug":"edge-ml-cap-dead","text":"some text","source":{"kind":"manual"}}`)
-	if rec.Code != http.StatusConflict {
-		t.Fatalf("POST /api/mm/capture (dead cell) = %d (%s), want 409", rec.Code, rec.Body.String())
+	if rec.Code != http.StatusOK {
+		t.Fatalf("POST /api/mm/capture (dead cell) = %d (%s), want 200", rec.Code, rec.Body.String())
+	}
+	if got := edgeMLJSON(t, rec); got["tid"] != "" || got["created"] != false {
+		t.Errorf("capture alias body = %v, want tid \"\" and created false", got)
 	}
 }
 
@@ -148,7 +150,7 @@ func TestMindLayerEdgeWriteRoutesAreMirrorGated(t *testing.T) {
 	edgeMLStore(t)
 	SetMirrorMode(true)
 	mux := edgeMLMux()
-	for _, path := range []string{"/api/mm/capture", "/api/mm/commit", "/api/mm/revise", "/api/mm/flag", "/api/mm/flag/raise", "/api/mm/flag/dismiss", "/api/mm/flag/resolve"} {
+	for _, path := range []string{"/api/mm/capture", "/api/mm/mark", "/api/mm/mark/remove", "/api/mm/replay", "/api/mm/flag", "/api/mm/flag/raise", "/api/mm/flag/dismiss", "/api/mm/flag/resolve"} {
 		for _, body := range []string{`{"slug":"nonexistent"}`, `not json`, ``} {
 			rec := edgeMLDo(t, mux, http.MethodPost, path, body)
 			if rec.Code != http.StatusForbidden {
@@ -159,92 +161,6 @@ func TestMindLayerEdgeWriteRoutesAreMirrorGated(t *testing.T) {
 				t.Errorf("mirror POST %s body = %q, want %q", path, got, "disabled in mirror mode")
 			}
 		}
-	}
-}
-
-// ---------------------------------------------------------------------------
-// POST /api/mm/commit
-// ---------------------------------------------------------------------------
-
-// "`ErrNotMindThread` → 403 `{"error":"not a mind thread"}`" — for an ask
-// thread, a closed mind thread, an empty and an unknown session; nothing stored.
-func TestMindLayerEdgeCommitRoute403(t *testing.T) {
-	st := edgeMLStore(t)
-	j := edgeMLJob(t, st, "edge-ml-commit", "sess-lead")
-	edgeMLThread(t, st, j.ID, "sess-ask", "ask", "live")
-	edgeMLThread(t, st, j.ID, "sess-mind-closed", "mind", "closed")
-	mux := edgeMLMux()
-	for _, sess := range []string{"sess-ask", "sess-mind-closed", "", "sess-unknown", "sess-lead"} {
-		rec := edgeMLDo(t, mux, http.MethodPost, "/api/mm/commit", `{"thread_session":"`+sess+`","item":`+edgeMLValidItem+`}`)
-		if rec.Code != http.StatusForbidden {
-			t.Errorf("commit from %q = %d (%s), want 403", sess, rec.Code, rec.Body.String())
-			continue
-		}
-		if got := edgeMLJSON(t, rec); !reflect.DeepEqual(got, map[string]any{"error": "not a mind thread"}) {
-			t.Errorf("commit from %q body = %v, want {\"error\":\"not a mind thread\"}", sess, got)
-		}
-	}
-	items, _ := st.ListMMItems(true)
-	if len(items) != 0 {
-		t.Fatalf("refused commits stored %d items", len(items))
-	}
-}
-
-// "`ErrCommitInvalid` → 400 with the reason" — from a live mind thread.
-func TestMindLayerEdgeCommitRoute400(t *testing.T) {
-	st := edgeMLStore(t)
-	j := edgeMLJob(t, st, "edge-ml-commit400", "sess-lead")
-	edgeMLThread(t, st, j.ID, "sess-mind", "mind", "live")
-	mux := edgeMLMux()
-	long := strings.Repeat("x", 121)
-	for _, item := range []string{
-		`{"title":"` + long + `","scope":"universal","kind":"note","body":"b","source":{"kind":"manual"}}`,
-		`{"title":"t","scope":"universal","kind":"note","body":"","source":{"kind":"manual"}}`,
-		`{"title":"t","scope":"everywhere","kind":"note","body":"b","source":{"kind":"manual"}}`,
-		`{"title":"t","scope":"universal","kind":"opinion","body":"b","source":{"kind":"manual"}}`,
-		`{"title":"t","scope":"repo","repo":"","kind":"note","body":"b","source":{"kind":"manual"}}`,
-		`{"title":"t","scope":"universal","kind":"note","body":"b","source":{"kind":"code"}}`,
-	} {
-		rec := edgeMLDo(t, mux, http.MethodPost, "/api/mm/commit", `{"thread_session":"sess-mind","item":`+item+`}`)
-		if rec.Code != http.StatusBadRequest {
-			t.Errorf("commit %s = %d (%s), want 400", item, rec.Code, rec.Body.String())
-			continue
-		}
-		if e, _ := edgeMLJSON(t, rec)["error"].(string); e == "" {
-			t.Errorf("400 for %s carries no error reason: %s", item, rec.Body.String())
-		}
-	}
-	items, _ := st.ListMMItems(true)
-	if len(items) != 0 {
-		t.Fatalf("refused commits stored %d items", len(items))
-	}
-}
-
-// /api/mm/revise: "unknown id → 404; invalidated item → 409".
-func TestMindLayerEdgeReviseRouteUnknownAndInvalidated(t *testing.T) {
-	st := edgeMLStore(t)
-	j := edgeMLJob(t, st, "edge-ml-revise", "sess-lead")
-	edgeMLThread(t, st, j.ID, "sess-mind", "mind", "live")
-	mux := edgeMLMux()
-
-	rec := edgeMLDo(t, mux, http.MethodPost, "/api/mm/revise", `{"thread_session":"sess-mind","id":424242,"item":`+edgeMLValidItem+`}`)
-	if rec.Code != http.StatusNotFound {
-		t.Errorf("revise unknown id = %d (%s), want 404", rec.Code, rec.Body.String())
-	}
-
-	id, err := st.AddMMItem(store.MMItem{Kind: "note", Source: "capture", Title: "old", Scope: "universal", Content: "old", CreatedAt: 1})
-	if err != nil {
-		t.Fatalf("AddMMItem: %v", err)
-	}
-	if err := st.InvalidateMMItem(id, 2, "removed", ""); err != nil {
-		t.Fatalf("InvalidateMMItem: %v", err)
-	}
-	rec = edgeMLDo(t, mux, http.MethodPost, "/api/mm/revise", `{"thread_session":"sess-mind","id":`+strconv.FormatInt(id, 10)+`,"item":`+edgeMLValidItem+`}`)
-	if rec.Code != http.StatusConflict {
-		t.Errorf("revise invalidated = %d (%s), want 409", rec.Code, rec.Body.String())
-	}
-	if got, _ := st.GetMMItem(id); got.Title != "old" {
-		t.Errorf("a refused revise rewrote the title to %q", got.Title)
 	}
 }
 

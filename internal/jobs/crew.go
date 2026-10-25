@@ -354,14 +354,10 @@ func zeusBrief(j *Job) string {
 // what it may never touch is the job's work and the job's repo state, which it
 // shares with a zeus that is still live in the very next window.
 //
-// role "mind" takes mindThreadBrief instead: the same not-zeus, hands-off-
-// the-worktree boundary, but a different job — turning what carl highlighted
-// into a mental-model item — and the ONE write the whole cell is allowed to
-// make to the mental model. Every other role is the ask brief, unchanged.
+// Every role gets this brief. A revived `mind` thread (a row from before the
+// mind thread was retired — mind runs write the mental model now) is briefed
+// as an ask thread: the commit verb its old brief named no longer exists.
 func threadBrief(j *Job, tid, title, worktree, role string) string {
-	if role == "mind" {
-		return mindThreadBrief(j, tid, title, worktree)
-	}
 	var b strings.Builder
 	fmt.Fprintf(&b, "You are side thread %s (%q) on kraken job %q. You are NOT zeus.\n", tid, title, j.Slug)
 	b.WriteString("Your conversation history was FORKED from zeus, the agent doing this job's actual work — so everything above this point is zeus' work, not yours, and none of it is yours to continue. Whatever task that history was in the middle of, you are not doing it. You never open PRs, never write artifacts, and never run `kraken` write verbs (questions set, feedback addressed, or any other).\n")
@@ -370,35 +366,6 @@ func threadBrief(j *Job, tid, title, worktree, role string) string {
 	b.WriteString("You exist to EXPLAIN and INVESTIGATE for " + op + ": read the code, trace what happened, run read-only queries, search the web, and answer clearly. You may write scratch files (outside the repo's tracked tree) and run whatever commands you need to answer well — your permissions are unrestricted, and the line is the job's work and the job's repo state, not the tooling.\n")
 	b.WriteString("Spawn no subagents at all — no Agent calls, no teammates. You are one agent answering questions in one pane.\n")
 	b.WriteString("Answer in your own pane: whatever you write here is what " + op + " reads. Lead every answer with its TLDR — the first sentence alone should carry it. You have no way to reach " + op + " anywhere else — no message to zeus, no file " + op + " watches, no notification.\n")
-	return b.String()
-}
-
-// mindThreadBrief is the mind thread's system prompt (threadBrief's "mind"
-// role). A mind thread is branched by CaptureToMind when carl highlights text
-// and presses the mind button; it is forked from zeus for the same reason an
-// ask thread is — it needs zeus' context to know what the passage meant — so
-// it carries the same overwrite-the-prior opening and the same hands-off rule
-// for the worktree zeus is still working in.
-//
-// What differs is the one write it exists to make. This thread is the only
-// AGENT-side writer of the mental model (carl's own surfaces — mark/note/drop,
-// the Zed task, the legacy one-shot routes — still write it), through `kraken
-// mm commit`/`revise`, gated server-side on the thread's own session
-// (CommitMMItem; ReviseMMItem refuses a non-captured item). The brief says so,
-// names the read verbs it may use to check for an existing item first, and
-// forbids every other kraken write but one: `mm flag --item` on a legacy mark
-// it finds wrong, since that mark cannot be revised. Raising and
-// dismissing flags belongs to the lead.
-func mindThreadBrief(j *Job, tid, title, worktree string) string {
-	op := Operator()
-	var b strings.Builder
-	fmt.Fprintf(&b, "You are mind thread %s (%q) on kraken job %q. You are NOT zeus.\n", tid, title, j.Slug)
-	b.WriteString("Your conversation history was FORKED from zeus, the agent doing this job's actual work — everything above this point is zeus' work, not yours, and none of it is yours to continue. You have it only so you know what the text " + op + " highlights MEANT.\n")
-	fmt.Fprintf(&b, "zeus is STILL LIVE in another window of this same tmux session, working in the very worktree you are sitting in: %s. Never edit, stage, commit, push, revert, stash, or reset its files, never run a git command that changes repo state, and never touch .git.\n", worktree)
-	b.WriteString("Your one job: turn each passage " + op + " sends you into ONE item in their mental model, with them. Each turn, paraphrase in AT MOST FOUR SENTENCES what you think " + op + "'s understanding is — the claim they hold, in their terms — and stop; they confirm, deny, or dig deeper, and you refine one point at a time. Never list the item's fields, never explain the mechanism, never quote the passage back: " + op + " reads four sentences of a turn and no more, so the title, scope, kind and body are yours to fill in silently from what they confirmed. When " + op + " says finalize (or commit, or push it), write it with `kraken mm commit` (the item JSON on stdin: a title that is a claim, not a topic; their quote and the source pointer verbatim) and report the id it prints in one line; to change an item you committed, `kraken mm revise <id>` the same way.\n")
-	b.WriteString("You are the ONLY writer of the mental model, " + op + "'s record of what they know — nothing else in this cell may write it. Before committing, check for an item that already says it: `kraken mm get --q \"<subject>\"`, then `kraken mm show <id>` on a hit. A hit whose `source` is `capture` may be revised in place with `kraken mm revise <id>` rather than duplicated. A hit with any other source is a legacy mark and is NEVER revised (the server refuses it): commit a new item that supersedes it, and if the old one is wrong, flag it with `kraken mm flag --item <id> --note \"<why>\"`.\n")
-	b.WriteString("Never run any other `kraken` write verb (questions, feedback, load, goals, job, cell, `mm flag raise`/`dismiss`, anything else — `mm flag --item` on a wrong legacy mark is your only flag), never steer or message zeus, never write artifacts, and spawn no agents at all — no Agent calls, no teammates.\n")
-	b.WriteString("Talk to " + op + " in your own pane: whatever you write here is what they read. Lead with the paraphrase; four sentences is the ceiling for a turn, one question at most, no headings, no bullets, no field lists.\n")
 	return b.String()
 }
 
@@ -436,13 +403,8 @@ func threadSeed(seed string) string {
 	return seed + threadPromptGuard()
 }
 
-// threadSeedFor is threadSeed by role. The ask guard forbids every kraken
-// write verb, which is exactly the one write a mind thread exists to make —
-// and a mind thread's seed (mindSeed) already states its own contract at the
-// same recency point — so a mind seed is staged as written.
+// threadSeedFor is threadSeed for any role: since the mind thread was retired
+// every new thread is an ask thread, and every seed carries the ask guard.
 func threadSeedFor(seed, role string) string {
-	if role == "mind" {
-		return seed
-	}
 	return threadSeed(seed)
 }

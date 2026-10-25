@@ -216,7 +216,9 @@ func TestGraphRemovalPipelineStagesDropGraph(t *testing.T) {
 	if IsPipelineStage("pr") {
 		t.Error(`IsPipelineStage("pr") = true, want false — the pr skill folded into do`)
 	}
-	want := []string{"aim", "do", "dream", "info", "mind"}
+	// `mind` left the set when the mind pass became a headless run with no
+	// cell (job 674): it is still embedded, but nothing badges it.
+	want := []string{"aim", "do", "dream", "info"}
 	if got := PipelineStages(); !reflect.DeepEqual(got, want) {
 		t.Errorf("PipelineStages() = %v, want %v", got, want)
 	}

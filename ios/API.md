@@ -295,7 +295,7 @@ independent, except that a headless thread is always `role: "ask"`):
 | `state` | string | always | `live` \| `closed`. `closed` = the tmux window is gone; the row (and the transcript it points at) survives, and `revive` resumes the same claude session |
 | `pane` | string | omitempty | the live thread's tmux pane, e.g. `%42` — usable with `GET /api/peers/capture`. Cleared on close (tmux recycles pane ids), so it is absent for a closed thread rather than stale |
 | `model` | string | omitempty | the tier this thread was branched on — `haiku` \| `sonnet` \| `opus` \| `fable`, the alias rather than the resolved id. Absent for a thread branched with no pick (and for every thread branched before the field existed), which falls back to the job's `model` and then kraken's default; a revive re-reads this row, so a thread never changes tier mid-conversation |
-| `role` | string | always | `ask` (an ordinary side thread — every row branched before schema v33 reads back as `ask`) \| `mind` (the job's mind thread, branched by `POST /api/mm/capture`: the one thread allowed to write the operator's mental model). Clients show a `mind` chip. Additive |
+| `role` | string | always | `ask` (an ordinary side thread — every row branched before schema v33 reads back as `ask`) \| `mind` (a mind thread from before schema v39, when capture branched a conversation that wrote the operator's mental model; no new one can be branched, and existing rows read back unchanged). Clients show a `mind` chip. Additive |
 | `created_at` | number | always | unix millis the thread was branched |
 | `closed_at` | number | omitempty | unix millis the thread was closed; absent (0) while live |
 | `kind` | string | always | `pane` \| `headless` (schema v36). Every thread from before headless threads existed is `pane`, in either role. A headless thread never has a `pane`; `closed` means it was closed, not that a window died. Not to be confused with `role`'s `ask`, which a pane thread carries too. Additive |
@@ -860,8 +860,8 @@ Every side-thread mutation, one body shape across all five ops
 | `title` | string | required for `branch`/`rename` | |
 | `text` | string | required for `send` and for a headless `branch`; optional for a pane `branch` | |
 | `model` | string | optional for `branch`, ignored by every other op | `haiku` \| `sonnet` \| `opus` \| `fable` — the tier the new thread's claude runs on, matched EXACTLY (not trimmed, not case-folded). Omit or send `""` for the pre-existing behaviour: the job's own `model`, then kraken's default. Anything else is a 400. The web board's branch overlay sends it; the iOS client has no picker, which is why `ThreadActionRequest` in Models.swift carries no `model` field |
-| `role` | string | optional for `branch`, ignored by every other op | `ask` (default when omitted or `""`) \| `mind`, matched exactly; anything else is a 400 `bad role — want ask or mind`, nothing spawned. Stored on the row and kept across a `revive`. Clients normally reach a mind thread through `POST /api/mm/capture` rather than this field |
-| `headless` | bool | optional for `branch`, ignored by every other op | how the thread runs, independent of `role`. With `role` `ask` (or omitted): absent or `true` opens a **headless** thread, `false` a **pane** thread exactly as before headless threads existed. With `role` `mind`: absent or `false` (a mind thread is always a pane); `true` is a 400 `a mind thread cannot be headless`. Additive |
+| `role` | string | optional for `branch`, ignored by every other op | `ask` (default when omitted or `""`), matched exactly. `mind` is retired since schema v39 and answers 409 with the server's retired-role message whatever `headless` says; anything else is a 400 `bad role — want ask`. Nothing is spawned on either refusal. Stored on the row and kept across a `revive` |
+| `headless` | bool | optional for `branch`, ignored by every other op | how the thread runs: absent or `true` opens a **headless** thread, `false` a **pane** thread exactly as before headless threads existed. Additive |
 
 - **`branch`** (headless, the default for `role` `ask`) — `{slug, op:"branch", title, text, model?, headless?: true}`:
   opens a headless thread whose origin is this node and asks `text` as its
@@ -1241,21 +1241,9 @@ Nine routes over the `mm_items` + `mm_code_anchors` tables
 (internal/api/mm.go), in the order register.go wires them: `mm`,
 `mm/snapshot`, then the seven writes `mm/decision`, `mm/artifact`,
 `mm/element`, `mm/code`, `mm/note`, `mm/detail`, `mm/remove`.
-**All additive — none of them bumps `apiContract`, which stays 6.** Every one
-is a NEW PATH, never a key added to, retyped in, or removed from an existing
-shape, so a client that predates them decodes nothing differently.
+**All additive — none of them bumps `apiContract`, which is 7 today.** Every one is a NEW PATH, never a key added to, retyped in, or removed from an existing shape, so a client that predates them decodes nothing differently.
 
-Schema v33 (the mind layer) adds ten more — `mm/show`, `mm/source`,
-`mm/flags` (reads) and `mm/capture`, `mm/commit`, `mm/revise`, `mm/flag`,
-`mm/flag/raise`, `mm/flag/dismiss`, `mm/flag/resolve` (writes) — plus
-`GET /api/job/transcript`, and ADDS keys to the `GET /api/mm` item (`title`,
-`scope`, `repo`, `dir`, `quote`, `thread_session`, `revised_at`,
-`capture_source`). Also additive, so still `apiContract` 6. Schema v37 (the
-mind pass) adds `mm/propose`, `mm/confirm` (writes) and `mm/evidence` (a read),
-and the item's `state` key — additive again. They are
-documented under "The mind layer" below. A client reaches only `capture`,
-`flags`, `flag/resolve`, `source` and `job/transcript`; `commit`, `revise`,
-`flag`, `flag/raise` and `flag/dismiss` are agent-side (`kraken mm …`).
+Schema v33 (the mind layer) added `mm/show`, `mm/source`, `mm/flags` (reads) and `mm/capture`, `mm/flag`, `mm/flag/raise`, `mm/flag/dismiss`, `mm/flag/resolve` (writes) plus `GET /api/job/transcript`, and added keys to the `GET /api/mm` item (`title`, `scope`, `repo`, `dir`, `quote`, `thread_session`, `revised_at`, `capture_source`). Schema v37 (the mind pass) added `mm/confirm` (a write) and `mm/evidence` (a read) and the item's `state` key. Schema v39 (the mind runs) adds `mm/mark`, `mm/mark/remove`, `mm/replay` (writes) and `mm/marks`, `mm/runs`, `mm/run` (reads), turns `mm/capture` into an alias of `mm/mark`, adds `run_id`, `supersedes` and `superseded_by` to the item, and REMOVES `mm/propose`, `mm/commit` and `mm/revise`, which now answer 404 like any unregistered path. None of this bumps `apiContract` (7): no shipped client ever called the three removed routes, and every new key is additive. All of it is documented under "The mind layer" and "The mind runs" below. A client reaches `capture`/`mark`, `marks`, `mark/remove`, `runs`, `run`, `replay`, `flags`, `flag/resolve`, `source` and `job/transcript`; `flag`, `flag/raise` and `flag/dismiss` are agent-side (`kraken mm …`).
 
 **Seven of the nine ARE modeled in `Models.swift` and `APIClient.swift`** — the
 phone has full parity with the board, writes included (the operator, gate R2: "I need
@@ -1345,7 +1333,7 @@ verbatim; the web Model pane binds its filter box to `q`.
 |---|---|---|---|
 | `id` | number | always | the row id — what `POST /api/mm/remove` and `GET /api/mm/snapshot` address |
 | `kind` | string | always | `decision`\|`reading`\|`note` |
-| `source` | string | always | `question`\|`artifact`\|`artifact-element`\|`code`\|`agent-output`\|`manual`\|`capture` (`capture` = committed by a mind thread, schema v33)\|`nightly` (proposed by the nightly mind pass, schema v37). Stays a STRING: the capture's source pointer rides `capture_source` below, because retyping this key would break every shipped build that decodes it as `String` |
+| `source` | string | always | `question`\|`artifact`\|`artifact-element`\|`code`\|`agent-output`\|`manual`\|`capture` (`capture` = committed by a mind thread, schema v33 to v38)\|`nightly` (proposed by the nightly mind job in schema v37 and v38, written live by a mind run since v39; the clients label it `pass`). Stays a STRING: the capture's source pointer rides `capture_source` below, because retyping this key would break every shipped build that decodes it as `String` |
 | `slug` | string | always | the job's DISPLAY slug at mark time, or `""` for the two sources that belong to no job (`code`, `manual`). Display only — the job may since have been renamed, archived or deleted |
 | `source_ref` | string | always | what was marked, per source: a `Q<n>` for a question, the artifact name for an artifact or element, `<repo>/<path>:<start>-<end>` for code, the first 16 hex of the text's sha256 for an agent detail, `""` for a note |
 | `content` | string | always | served WHOLE, never cut — it is what the operator read, and the invalidated view exists to show it back in full. For an artifact mark it is the source ref: an artifact's content is its snapshot, which rides its own route |
@@ -1353,7 +1341,7 @@ verbatim; the web Model pane binds its filter box to `q`.
 | `created_at` | number | always | unix millis |
 | `episode_id` | number | always | legacy: the knowledge-graph episode once minted with the item. Still always emitted, and `0` for every row created since the graph was removed (older rows keep their old value). Shipped iOS builds decode it non-optional, which is why the key stays; current builds decode it as `Int64?` and read nothing from it |
 | `invalidated_at` | number | omitempty | unix millis. **The absence of these three keys is the wire's only spelling of "live"** |
-| `invalid_reason` | string | omitempty | `removed` (the operator unmarked it), `content-changed`, `artifact-deleted`, `file-deleted` |
+| `invalid_reason` | string | omitempty | `removed` (the operator unmarked it), `content-changed`, `artifact-deleted`, `file-deleted`, `contradicted` (a flag resolved `drop`), and since schema v39 `superseded` (a mind run replaced it with the item `superseded_by` names) and `outdated` (a mind run retired it, the operator's quote in `invalid_detail`) |
 | `invalid_detail` | string | omitempty | free text |
 | `anchor` | object | omitempty | present on `source: "code"` only — the table below |
 | `title` | string | always | schema v33: the one-line claim the rules files carry; `""` on every legacy row (clients fall back to the first line of `content`) |
@@ -1361,12 +1349,15 @@ verbatim; the web Model pane binds its filter box to `q`.
 | `repo` | string | always | the repo a `repo`-scoped item belongs to; `""` for universal and legacy rows |
 | `dir` | string | always | repo-relative directory, `""` = the repo root |
 | `quote` | string | always | the verbatim text the operator highlighted when capturing; `""` on legacy rows |
-| `thread_session` | string | always | the mind thread's claude session that committed the item; `""` on legacy rows |
-| `revised_at` | number | always | unix millis of the last `POST /api/mm/revise`; `0` = never revised |
+| `thread_session` | string | always | the mind thread's claude session that committed the item (schema v33 to v38); `""` on every other row |
+| `revised_at` | number | always | unix millis of the item's last in-place revision, which only the retired `POST /api/mm/revise` ever made; `0` = never revised. A mind run never revises in place: it supersedes |
 | `capture_source` | object \| null | always | the parsed source pointer (`CaptureSource`, table below), or `null` when the row has none — every legacy row. Decode as optional |
-| `state` | string | always | schema v37: `live` \| `proposed`. A `proposed` item is a nightly mind-pass proposal (`source: "nightly"`) that no rules file, verify pass or live `kraken mm get` sees until `POST /api/mm/confirm` makes it `live`. iOS decodes `state` and renders no distinction yet (a proposed item reads as an ordinary one on the phone, and cannot be confirmed there) |
+| `state` | string | always | schema v37: `live` \| `proposed`. A `proposed` item was a nightly mind-pass proposal (`source: "nightly"`) that no rules file, verify pass or live `kraken mm get` saw until `POST /api/mm/confirm` made it `live`. Schema v39 flipped every remaining proposed row live and mind runs write live rows only, so new data never carries `proposed`; the key stays for shipped decoders |
+| `run_id` | number | omitempty | schema v39: the mind run that wrote the item (`GET /api/mm/run?id=`); absent on every item no run wrote |
+| `supersedes` | number | omitempty | schema v39: the item this one replaced; absent when it replaced none |
+| `superseded_by` | number | omitempty | schema v39: the item that replaced this one. Present only on a superseded item, which is also invalidated (`invalid_reason: "superseded"`) and renders dead |
 
-`CaptureSource` (the same object `POST /api/mm/capture` takes as `source`):
+`CaptureSource` (the same object `POST /api/mm/mark` and its alias `POST /api/mm/capture` take as `source`):
 
 | key | type | optionality | notes |
 |---|---|---|---|
@@ -1376,6 +1367,7 @@ verbatim; the web Model pane binds its filter box to `q`.
 | `repo` / `dir` | string | omitempty | `dir`: the repo (required) and repo-relative directory |
 | `item_id` | number | omitempty | `item`: the mental-model item the text was highlighted in |
 | `qid` / `feedback_id` | string / number | omitempty | `question`: the question's qid (with `slug`, both required); `feedback`: the feedback row id (required). A `job` pointer carries `slug` (required) and optionally `sha`, the sha256 hex of the spec text it was read from |
+| `mark_id` / `saved_id` / `run_id` | number | omitempty | schema v39, written by a mind run on the items it adds: `mark_id` names the read mark the item came from, `saved_id` the ★-saved library snapshot (`saved_artifacts` row) it is rooted in, `run_id` the run. `GET /api/mm/source` resolves `saved_id` and `mark_id` ahead of `kind` |
 
 `anchor`:
 
@@ -1439,46 +1431,9 @@ field, an over-long text, a non-absolute worktree, a file path that escapes it,
 over 1 MB, 500 (no store wired, or a store write failed). Re-removing an already-invalidated item is a **200**, and the earlier
 reason is left in place: the caller asked for it to be gone and it is gone.
 
-### The mind layer (schema v33) — all additive, `apiContract` stays 6
+### The mind layer (schema v33) — all additive, `apiContract` 7
 
-Capture routes highlighted text to the job's **mind thread** — a side thread
-(`role: "mind"`) forked from zeus — which drafts an item with the operator and
-finalizes it through `kraken mm commit`. The writes share the seven writes'
-decode discipline (1 MB cap → 413, `DisallowUnknownFields` → 400, nested
-objects included), are POST-only (405 otherwise) and are gated under
-`--mirror` (plain-text 403 `disabled in mirror mode`). The three GETs stay
-reachable under `--mirror`. Every error body is `{"error": string}`.
-
-#### `POST /api/mm/capture` → `{"tid": string, "created": bool}`
-
-Request `{slug, text, source}` — `source` is a `CaptureSource` (above). The
-server finds the job's LIVE mind thread forked at zeus' current last message
-and sends it the capture (`created: false`), or branches a new one
-(`created: true`); either way the client opens the thread overlay on `tid`.
-
-Errors: 400 `missing slug`, a text over 32,000 runes, an empty text, or an
-invalid source (unknown `kind`; an `artifact` with no `name`, a `transcript`
-with no `session`, a `dir` with no `repo`); 404 unknown slug; 409 no live cell
-or forkable zeus (codex jobs too) — show the message as a toast; 500 a store
-or spawn failure.
-
-#### `POST /api/mm/commit` → `{"id": number}`
-
-Request `{"thread_session": string, "item": {title, scope, repo, dir, kind, body, quote, source}}`.
-Agent-side only (`kraken mm commit`); no client UI sends it. 403
-`{"error":"not a mind thread"}` unless `thread_session` names a live mind
-thread; 400 with the reason for an invalid item (title 1–120 runes, body
-1–8,000 runes, kind `decision`\|`reading`\|`note`, scope `universal`\|`repo`
-with `repo` naming a resolvable repo and `dir` repo-relative). The item is
-stored with `source: "capture"`.
-
-#### `POST /api/mm/revise` → `{"id": number}`
-
-Request `{"thread_session": string, "id": number, "item": {…same as commit}}`.
-Same 403/400 as commit; 400 `missing id` for `id` ≤ 0; 404 unknown item; 409
-an invalidated item; 409 an item whose `source` is not `capture` (a legacy
-one-shot mark is never revised — the message names `kraken mm commit` as the
-move: commit a new item instead).
+The drill-down reads (`show`, `source`) and contradiction flags. Until schema v39, capture branched a **mind thread** — a side thread (`role: "mind"`) forked from zeus — that drafted an item with the operator and finalized it through `POST /api/mm/commit` (and `POST /api/mm/revise` for an in-place rewrite). Both routes are gone, capture is now an alias of the read mark (see "The mind runs" below), and no new mind thread can be branched. The writes share the seven writes' decode discipline (1 MB cap → 413, `DisallowUnknownFields` → 400, nested objects included), are POST-only (405 otherwise) and are gated under `--mirror` (plain-text 403 `disabled in mirror mode`). The GETs stay reachable under `--mirror`. Every error body is `{"error": string}`.
 
 #### `POST /api/mm/flag` → `{"id": number, "state": "pending"|"raised"}`
 
@@ -1506,27 +1461,9 @@ Request `{id, resolution}` with `resolution` `drop` \| `keep` (400 otherwise)
 `state` becomes `resolved`. 404 unknown flag; 409 a flag that is not `raised`.
 This is the Flags section's `drop item` / `keep` buttons.
 
-#### `POST /api/mm/propose` → `{"results": [...], "added": n, "folded": n, "suppressed": n, "refused": n}`
-
-Request `{"session": string, "items": [{title, scope, repo, dir, kind, body, quote, rung, source}]}`.
-Agent-side only (`kraken mm propose`, run by the nightly mind job's zeus); no
-client UI sends it. 403 `{"error":"not the mind job's lead session"}` unless
-`session` is the stamped lead session of the active job `mind_last_run`
-names. Every item is validated before any is stored (400 with the reason and
-the item index): commit's rules, plus `kind` `decision`\|`note`, `source.kind`
-`transcript`\|`job`\|`feedback`\|`question`, a non-empty `quote` (≤ 32,000
-runes) and `rung` ≤ 200 runes. Each result is `{index, id?, outcome, reason?}`
-with `outcome` `added` (a new `proposed` row, `source: "nightly"`) \|
-`folded` (a non-invalidated row with the same quote exists; `id` is it) \|
-`suppressed` (the quote was dropped or contradicted before) \| `refused`
-(`reason: "cap"` — at most 20 adds per call). One macOS notification when any
-were added.
-
 #### `POST /api/mm/confirm` → `{"ok": true, "id": number, "state": "live"}`
 
-Request `{"id": number}` — the operator's yes on a proposed item, which makes
-it `live`; an already-live item answers the same 200. 400 `missing id`; 404
-unknown item; 409 `{"error":"mm item is invalidated"}`.
+Request `{"id": number}` — the operator's yes on a proposed item, which makes it `live`; an already-live item answers the same 200. Kept for old clients: since schema v39 no item is proposed any more (mind runs write live rows, and v39 flipped the remaining proposed rows live), so in practice every call is the already-live 200. 400 `missing id`; 404 unknown item; 409 `{"error":"mm item is invalidated"}`. (`POST /api/mm/propose`, the nightly mind job's batch write, is gone since v39 and answers 404.)
 
 #### `GET /api/mm/evidence?since=<ms>[&until=<ms>]` → `MMEvidence`
 
@@ -1580,8 +1517,9 @@ a missing source is always a 200.
 | `question` | `<question text>\n\nanswer: <answer>` by `slug` + `qid`; a legacy `question` item with no qid is `available: false` |
 | anything else (`item`, `manual`, `agent-output`) | none — `available: false` |
 
-`ext` is the artifact's extension (`md`, `html`, …) or `""`. 400 bad id; 404
-unknown item.
+Two pointer fields outrank `kind` (schema v39). A pointer carrying `saved_id` resolves to that ★-saved library snapshot's bytes, `kind` as the pointer names it (`artifact` when it names none), `changed` true when the snapshot's sha differs from the pointer's `sha` (when one was recorded), and `available: false` when the library row has been deleted. A pointer carrying `mark_id` resolves to the read mark: `text` begins with the marked text byte for byte (no label), then a newline and whatever the mark's own source pointer resolves to (one level only), `kind`/`changed`/`ext` are the mark's source's, and `available` is true whenever the mark still exists (its text is itself the material) and false once it has been removed.
+
+`ext` is the artifact's extension (`md`, `html`, …) or `""`. 400 bad id; 404 unknown item.
 
 #### `GET /api/job/transcript?slug=&n=&turns=` → `{"session": string, "blocks": [TranscriptBlock]}` (api/transcript.go)
 
@@ -1594,8 +1532,63 @@ that many blocks, defaulting to 50 and clamped to 1…200. Each block is `{kind,
 text, from?, uuid}` — `/api/thread/read`'s block shape with `uuid` always
 present and no `inherited`. A job with no stamped session or no transcript yet
 answers `{"session": "", "blocks": []}`. 400 missing slug; 404 unknown slug. A
-read, so reachable under `--mirror`. Additive (`turns` is a new query
-parameter), so `apiContract` stays 6.
+read, so reachable under `--mirror`. Additive (`turns` is a new query parameter), so it does not bump `apiContract` (7).
+
+### The mind runs (schema v39) — all additive, `apiContract` 7
+
+A **mind run** is how kraken keeps the operator's mental model current without asking them to confirm anything. When the operator clicks Done on a job, kraken serve queues one run for that job; once a day it also queues a catch-all run over the conversations no job run covered. A run is one headless `claude -p` process with no tools: kraken gathers an **evidence bundle** (the operator's own prompts in the job's zeus and side-thread sessions, the job's spec when the operator wrote it, their feedback notes and typed answers, the job's ★-saved artifacts, its pending read marks, and every live item), hands it to the process on stdin under the mind skill, and gets back a JSON answer listing operations — `add` an item, `supersede` one (a new item replaces an old one, which is invalidated `superseded`), `retire` one (invalidated `outdated`), or `flag` a contradiction — plus every candidate it excluded and why. Kraken validates the operations and applies them itself; items land `live`, with `run_id` set.
+
+Every run leaves a **run record**: one `mind_runs` row (job, trigger, the time window it covered, state, counts, report, the prompt's sha, the model, token usage) plus three stored texts beside it — the bundle exactly as the process read it (gzip-compressed; dropped after 90 days), a manifest listing every session, transcript path, record uuid, mark, saved artifact and item that went into the bundle, and the process's raw answer. That record is what lets anyone open a run and see what it read and what it decided, follow an item back to the session it was quoted from, and **replay** a recorded bundle against today's skill to see whether the answer would change.
+
+A **read mark** is the operator highlighting text and pressing ✓ read: a pending `mm_marks` row the next run that covers it reads and then stamps consumed. Marks need no live cell and no job (a library snapshot or a Model-pane row has none).
+
+The writes are POST-only (405 otherwise), decode strictly (`DisallowUnknownFields` → 400, 1 MB cap → 413) and are gated under `--mirror` (plain-text 403 `disabled in mirror mode`); the reads stay open. Every error body is `{"error": string}`.
+
+#### `POST /api/mm/mark` → `{"id": number, "pending": number, "folded": bool}`
+
+Request `{slug, text, source}` — `source` is a `CaptureSource` (above); `slug` may be `""` for a mark with no job. Stores a pending read mark; `pending` is the job's count of pending marks after the write (every job-less pending mark when `slug` is empty), and `folded` is true when the same text with the same source was marked on the same job within the last minute, in which case that existing mark's id is answered and nothing new is stored. Errors: 400 an empty text, a text over 32,000 runes, or an invalid source; 404 a `slug` naming no job, active or archived. Never a 409: a job with no live cell (a draft, a done or an archived job) takes marks like any other.
+
+#### `POST /api/mm/capture` → `{"tid": "", "created": false, "mark_id": number, "pending": number}`
+
+The same request, decode and refusals as `POST /api/mm/mark`, kept for shipped phones whose decoder still reads the retired mind-thread answer (`MMCaptured{tid, created}`): `tid` and `created` are always present, always `""` and `false`, since no thread is ever branched. `mark_id` and `pending` are the mark's. Since schema v39 it never opens a thread.
+
+#### `GET /api/mm/marks[?slug=<slug>][&pending=1]` → `{"marks": [MMMark]}`
+
+Newest first; always an array. No `slug` lists every mark, job-less ones included; a `slug` naming no job is a 404. `pending=1` (or `true`) keeps only marks no run has consumed. Each `MMMark` is `{id, job_id, slug, text, source, created_at, consumed_run, consumed_at}` — `job_id` `0` for a job-less mark, `source` the parsed `CaptureSource` object, `consumed_run`/`consumed_at` `0` while pending, else the run that read it and when.
+
+#### `POST /api/mm/mark/remove` → `{"id": number}`
+
+Request `{"id": number}`. Deletes a pending mark. 400 `missing id`; 404 unknown mark; 409 a mark a run has already consumed (it is history: the run's manifest names it).
+
+#### `GET /api/mm/runs[?slug=<slug>][&n=N]` → `{"runs": [MindRun]}`
+
+Newest first, at most `n` (default 50, capped at 500 — a larger `n` reads as 500); no `slug` lists every job's runs and the daily ones. 400 a non-numeric `n`; 404 a `slug` naming no job. Never carries the report or any stored text.
+
+| key | type | optionality | notes |
+|---|---|---|---|
+| `id` | number | always | |
+| `job_id` / `slug` | number / string | always | the job the run covered; `0` / `""` for a daily catch-all run |
+| `trigger` | string | always | `done` (the job's Done click) \| `daily` (the catch-all) \| `replay` (a replay applied with `write: true`) |
+| `since` / `until` | number | always | unix millis: the window of conversation the run read. A job's next `done` run starts where the last one ended, so nothing is read twice |
+| `state` | string | always | `queued` \| `running` \| `done` \| `failed`; runs go one at a time, oldest first |
+| `created_at` / `started_at` / `finished_at` | number | always | unix millis, `0` = not yet |
+| `note` | string | always | why a run failed — `timed out …`, `mind answer <kind> (answer kept on the run row)` for an unparseable answer (the output itself stays in the answer blob, never in the note), `stale running row`, `a replay is never requeued` — or that a serve restart requeued it; `""` otherwise |
+| `prompt_sha` / `model` | string | always | the sha256 of the skill text the run ran under, and the model id |
+| `in_tokens` / `out_tokens` | number | always | usage the process reported |
+| `bundle_bytes` | number | always | the uncompressed bundle size |
+| `added` / `superseded` / `retired` / `flagged` / `excluded` / `folded` / `suppressed` / `refused` | number | always | what the run's operations came to: items added, items superseded, items retired, flags raised, candidates excluded, adds folded onto an existing item with the same quote, adds suppressed because the operator dropped that quote before, adds refused past the per-run cap |
+| `source_run` | number | always | for a `replay` run, the run whose bundle it re-read; `0` otherwise |
+| `has_bundle` | bool | always | the bundle is still stored (not pruned, and the run got far enough to write one) — i.e. a replay or `blob=bundle` can succeed |
+
+#### `GET /api/mm/run?id=N[&blob=report|manifest|answer|bundle]` → `{"run": MindRun, "blob": string}`
+
+One run plus, on request, one of its texts: `report` (the run's markdown report — proposed, superseded, retired, folded, excluded with rung and quote, flagged, coverage), `manifest` (the JSON manifest), `answer` (the process's raw stdout answer) or `bundle` (the bundle's JSON, decompressed). No `blob` answers `""`. A manifest or answer the run never wrote (it failed first) is `""`. 400 a bad id or an unknown blob name; 404 unknown run; 404 `bundle pruned` for `blob=bundle` once the bundle is past its 90 days, and 404 when the run never stored one.
+
+#### `POST /api/mm/replay` → `MindReplay`
+
+Request `{"id": number, "write": bool}`. Re-runs the model on run `id`'s stored bundle under the CURRENT skill text and model, synchronously (it can take as long as a run, up to 10 minutes), and compares the two answers. With `write: false` nothing is applied and no run row is created; with `write: true` the new answer is applied as a fresh run with `trigger: "replay"` and `source_run: id`. 400 `missing id`; 404 an unknown run or one that never stored a bundle; 409 a pruned bundle (the message names the prune date).
+
+`MindReplay` is `{source_run, old_prompt_sha, new_prompt_sha, old, new, diff: {ops_added, ops_lost, exclusions_changed}, new_run}`: `old`/`new` are the two answers (`{ops, excluded, coverage}` as the run produced them), `diff.ops_added`/`ops_lost` the operations only the new / only the old answer made, `diff.exclusions_changed` every new-answer exclusion whose quote the old answer did not exclude or excluded on another rung, then every old-answer exclusion whose quote the new answer no longer excludes, and `new_run` the applied run's id (`0` without `write`). The three `diff` arrays are always arrays.
 
 ---
 

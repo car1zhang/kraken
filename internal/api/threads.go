@@ -51,15 +51,14 @@ type threadsReq struct {
 	// no request can move a thread to another tier mid-conversation.
 	Model string `json:"model,omitempty"`
 	// Role is read by `branch` alone: "ask" (the default, an ordinary side
-	// thread) or "mind" (the thread that may write carl's mental model —
-	// normally branched by POST /api/mm/capture rather than by hand).
+	// thread) is the only role a NEW thread may take; "mind" is retired and
+	// answers 409 (existing mind rows still read back unchanged).
 	Role string `json:"role,omitempty"`
 	// Headless is read by `branch` alone and says how the thread RUNS, which
 	// is independent of Role. For role "ask", absent or true opens a
 	// headless ask thread (jobs.AskThread: no pane, one read-only `claude -p`
 	// per question); false opens a pane thread (jobs.BranchThreadWithRole),
-	// exactly as before headless threads existed. A mind thread is always a
-	// pane, so for role "mind" absent or false is the only accepted value.
+	// exactly as before headless threads existed.
 	Headless *bool `json:"headless,omitempty"`
 }
 
@@ -173,20 +172,19 @@ func threadsPost(w http.ResponseWriter, r *http.Request) {
 		if role == "" {
 			role = "ask"
 		}
-		if role != "ask" && role != "mind" {
-			webJSON(w, http.StatusBadRequest, map[string]string{"error": "bad role — want ask or mind"})
+		if role == "mind" {
+			// the mind thread is retired: marks feed the mind run instead
+			webJSON(w, http.StatusConflict, map[string]string{"error": jobs.ErrThreadRoleRetired.Error()})
 			return
 		}
-		// headless defaults per role: on for an ask thread, off (and only
-		// off) for a mind thread, which finalizes by running a `kraken mm`
-		// verb a headless run has no shell for
-		headless := role == "ask"
+		if role != "ask" {
+			webJSON(w, http.StatusBadRequest, map[string]string{"error": "bad role — want ask"})
+			return
+		}
+		// an ask thread is headless unless the request opts into a pane
+		headless := true
 		if req.Headless != nil {
 			headless = *req.Headless
-		}
-		if headless && role == "mind" {
-			webJSON(w, http.StatusBadRequest, map[string]string{"error": "a mind thread cannot be headless"})
-			return
 		}
 		var t store.Thread
 		var err error
@@ -303,7 +301,8 @@ func threadErrStatus(err error) int {
 		errors.Is(err, store.ErrThreadClosed),
 		errors.Is(err, jobs.ErrAskThreadCap),
 		errors.Is(err, store.ErrAskThreadPane),
-		errors.Is(err, store.ErrThreadKind):
+		errors.Is(err, store.ErrThreadKind),
+		errors.Is(err, jobs.ErrThreadRoleRetired):
 		return http.StatusConflict
 	case errors.Is(err, store.ErrNotFound):
 		return http.StatusNotFound

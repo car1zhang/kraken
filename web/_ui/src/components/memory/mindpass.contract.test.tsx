@@ -11,13 +11,19 @@
 //
 // Dimension: LOGIC — the stated happy paths. Boundaries are athena-edge's.
 // Every module-scope identifier declared here is prefixed `mpc`.
+//
+// Job 674 (mind runs) retired the `proposed` state, its chip, badge and
+// confirm button, and folded the `nightly` chip into `pass`; the assertions
+// that pinned them were rewritten to the new obligations (slice F) rather
+// than left failing: one `pass` chip over source `nightly`, no confirm, and
+// `SOURCE_LABEL.nightly` reading `pass`.
 
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { MMModel } from "../../hooks/useMM.ts";
 import type { MMItem } from "../../lib/mm.ts";
-import { MentalModelPane, isProposed, matchesFilter } from "./MentalModelPane.tsx";
+import { MentalModelPane, matchesFilter } from "./MentalModelPane.tsx";
 
 function mpcItem(over: Record<string, unknown>): MMItem {
   return {
@@ -58,7 +64,7 @@ function mpcJSON(body: unknown): Response {
   });
 }
 
-function mpcRender(items: MMItem[], onConfirm = vi.fn(() => Promise.resolve())) {
+function mpcRender(items: MMItem[]) {
   const refetch = vi.fn(() => Promise.resolve(true));
   const mm = { items, error: undefined, loaded: true, refetch } as unknown as MMModel;
   const view = render(
@@ -67,32 +73,20 @@ function mpcRender(items: MMItem[], onConfirm = vi.fn(() => Promise.resolve())) 
       mm={mm}
       onAddNote={() => Promise.resolve()}
       onRemove={() => Promise.resolve()}
-      onConfirm={onConfirm}
       onOpenJob={() => {}}
     />,
   );
-  return { ...view, onConfirm, refetch };
+  return { ...view, refetch };
 }
 
-describe("isProposed / matchesFilter", () => {
-  // "`export const isProposed = (it: MMItem) => it.state === "proposed"`"
-  it("reads proposed off the state", () => {
-    expect(isProposed(mpcItem({ state: "proposed" }))).toBe(true);
-    expect(isProposed(mpcItem({ state: "live" }))).toBe(false);
-    expect(isProposed(mpcItem({ state: undefined }))).toBe(false);
-  });
-
-  // "`nightly` matches `it.source === "nightly"`, `proposed` matches
-  // `isProposed(it)`"
-  it("matches the nightly and proposed filters", () => {
+describe("matchesFilter", () => {
+  // slice F: "`pass` (source `nightly`)"
+  it("matches the pass filter on source nightly", () => {
     const [prop, liveNightly, capture] = [mpcProp, mpcLiveNightly, mpcCapture];
     const f = matchesFilter as (it: MMItem, f: string) => boolean;
-    expect(f(prop, "nightly")).toBe(true);
-    expect(f(liveNightly, "nightly")).toBe(true);
-    expect(f(capture, "nightly")).toBe(false);
-    expect(f(prop, "proposed")).toBe(true);
-    expect(f(liveNightly, "proposed")).toBe(false);
-    expect(f(capture, "proposed")).toBe(false);
+    expect(f(prop, "pass")).toBe(true);
+    expect(f(liveNightly, "pass")).toBe(true);
+    expect(f(capture, "pass")).toBe(false);
     expect(f(capture, "all")).toBe(true);
   });
 });
@@ -121,65 +115,46 @@ describe("MentalModelPane — the mind pass", () => {
     document.body.innerHTML = "";
   });
 
-  // `FILTERS` gains `{key:"nightly", label:"nightly"}` and `{key:"proposed",
-  // label:"proposed"}`; "counts for both chips".
-  it("renders the nightly and proposed chips with their counts", async () => {
+  // slice F: chips `all, decisions, readings, notes, invalidated, pass`; no
+  // `nightly` or `proposed` chip.
+  it("renders the pass chip with its count and no nightly or proposed chip", async () => {
     mpcRender(mpcItems);
     await screen.findByText(mpcProposedTitle);
-    expect(screen.getByRole("button", { name: "nightly 2" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "proposed 1" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "pass 2" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /^nightly\b/ })).toBeNull();
+    expect(screen.queryByRole("button", { name: /^proposed\b/ })).toBeNull();
   });
 
   // Selecting a chip narrows the rows by `matchesFilter`.
-  it("narrows the rows to the proposed filter", async () => {
+  it("narrows the rows to the pass filter", async () => {
     mpcRender(mpcItems);
     await screen.findByText(mpcProposedTitle);
-    fireEvent.click(screen.getByRole("button", { name: "proposed 1" }));
+    fireEvent.click(screen.getByRole("button", { name: "pass 2" }));
     await waitFor(() => {
       expect(screen.queryByText(mpcCaptureTitle)).not.toBeInTheDocument();
     });
     expect(screen.getByText(mpcProposedTitle)).toBeInTheDocument();
-    expect(screen.queryByText(mpcLiveNightlyTitle)).not.toBeInTheDocument();
+    expect(screen.getByText(mpcLiveNightlyTitle)).toBeInTheDocument();
   });
 
-  // "a proposed row renders a `proposed` badge (`<span
-  // className="mm-proposed">proposed</span>`) and a `confirm` button
-  // (`className="mm-act mm-confirm"`, `aria-label=\`confirm ${title}\``) …,
-  // calling `onConfirm(id)` then refetching".
-  it("renders the badge and confirm on a proposed row and confirms by id", async () => {
-    const { container, onConfirm, refetch } = mpcRender(mpcItems);
+  // slice F: "no confirm button" — not even on a row the server still serves
+  // as `proposed`.
+  it("renders no proposed badge and no confirm button", async () => {
+    const { container } = mpcRender(mpcItems);
     await screen.findByText(mpcProposedTitle);
-
-    const badges = container.querySelectorAll("span.mm-proposed");
-    expect(badges.length).toBe(1);
-    expect(badges[0]!.textContent).toBe("proposed");
-
-    const btn = screen.getByRole("button", { name: `confirm ${mpcProposedTitle}` });
-    expect(btn).toHaveClass("mm-act");
-    expect(btn).toHaveClass("mm-confirm");
-    expect(btn).toBeEnabled();
-    expect(screen.queryByRole("button", { name: `confirm ${mpcLiveNightlyTitle}` })).toBeNull();
-    expect(screen.queryByRole("button", { name: `confirm ${mpcCaptureTitle}` })).toBeNull();
-    expect(container.querySelectorAll(".mm-confirm").length).toBe(1);
-
-    fireEvent.click(btn);
-    await waitFor(() => {
-      expect(onConfirm).toHaveBeenCalledWith(21);
-    });
-    expect(onConfirm).toHaveBeenCalledTimes(1);
-    // "then refetching" is not asserted: which refetch (mm.refetch, the
-    // filtered instance, or the integrator's mutate inside onConfirm) is not
-    // frozen — see the report's Silences.
-    void refetch;
+    expect(container.querySelectorAll("span.mm-proposed").length).toBe(0);
+    expect(container.querySelectorAll(".mm-confirm").length).toBe(0);
+    expect(screen.queryByRole("button", { name: `confirm ${mpcProposedTitle}` })).toBeNull();
   });
 
-  // `SOURCE_LABEL.nightly = "nightly"`.
-  it("labels a nightly row's source nightly", async () => {
+  // slice F: "`SOURCE_LABEL.nightly` renders `pass`".
+  it("labels a nightly row's source pass", async () => {
     const only = [mpcLiveNightly];
     const { container } = mpcRender(only);
     await screen.findByText(mpcLiveNightlyTitle);
-    const meta = container.querySelectorAll(".mm-meta");
+    const meta = container.querySelectorAll(".mm-row .mm-meta");
     expect(meta.length).toBe(1);
-    expect(meta[0]!.textContent).toContain("nightly");
+    expect(meta[0]!.textContent).toContain("pass");
+    expect(meta[0]!.textContent).not.toContain("nightly");
   });
 });

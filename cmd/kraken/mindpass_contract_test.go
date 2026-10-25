@@ -345,77 +345,59 @@ func mpcQuery(raw string) map[string]string {
 	return out
 }
 
-// `kraken mm propose`: "JSON ARRAY of proposals on stdin, or a single object
-// … posts `{"session": sid, "items": [...]}`; prints the server JSON verbatim
-// to stdout and `proposed N (M folded, S suppressed, R refused)` to stderr".
-// The session is `mmCallerSession`, which reads KRAKEN_THREAD_SESSION first.
-func TestMpcMMProposePostsTheBatch(t *testing.T) {
-	reply := `{"results":[{"index":0,"id":9,"outcome":"added"},{"index":1,"id":4,"outcome":"folded"}],"added":1,"folded":1,"suppressed":0,"refused":0}` + "\n"
-	item := map[string]any{"title": "t", "scope": "universal", "kind": "note", "body": "b", "quote": "q",
-		"rung": "r", "source": map[string]any{"kind": "job", "slug": "spec-job"}}
-	arr, _ := json.Marshal([]any{item, item})
-	one, _ := json.Marshal(item)
-	for _, c := range []struct {
-		name, stdin string
-		n           int
-	}{{"array", string(arr), 2}, {"object", string(one), 1}} {
-		t.Run(c.name, func(t *testing.T) {
-			seen, addr := mpcServe(t, reply)
-			stdout, stderr, code := mpcRunCLI(t, "mm", []string{"propose"},
-				[]string{"HOME=" + t.TempDir(), "KRAKEN_SERVE_ADDR=" + addr, "KRAKEN_THREAD_SESSION=lead-sess"}, c.stdin)
-			if code != 0 {
-				t.Fatalf("exit %d stderr %q", code, stderr)
-			}
-			if stdout != reply {
-				t.Errorf("stdout = %q, want the server JSON verbatim", stdout)
-			}
-			if !strings.Contains(stderr, "proposed 1 (1 folded, 0 suppressed, 0 refused)") {
-				t.Errorf("stderr = %q, want the propose summary", stderr)
+// `kraken mm propose|confirm|commit|revise` were retired with the nightly
+// mind job and the mind thread: each is now the unknown-op usage error, and
+// none reaches kraken serve.
+func TestMpcMMRetiredVerbsAreUnknownOps(t *testing.T) {
+	for _, op := range []string{"propose", "confirm", "commit", "revise"} {
+		t.Run(op, func(t *testing.T) {
+			seen, addr := mpcServe(t, `{}`)
+			_, stderr, code := mpcRunCLI(t, "mm", []string{op, "7"},
+				[]string{"HOME=" + t.TempDir(), "KRAKEN_SERVE_ADDR=" + addr}, "{}")
+			if code == 0 || !strings.Contains(stderr, "unknown op") {
+				t.Errorf("mm %s: exit %d stderr %q, want the unknown-op usage error", op, code, stderr)
 			}
 			seen.mu.Lock()
 			defer seen.mu.Unlock()
-			if seen.method != http.MethodPost || seen.path != "/api/mm/propose" {
-				t.Errorf("request = %s %s", seen.method, seen.path)
-			}
-			var body struct {
-				Session string           `json:"session"`
-				Items   []map[string]any `json:"items"`
-			}
-			if err := json.Unmarshal(seen.body, &body); err != nil {
-				t.Fatalf("request body %q: %v", seen.body, err)
-			}
-			if body.Session != "lead-sess" || len(body.Items) != c.n {
-				t.Errorf("request = session %q, %d items; want lead-sess, %d", body.Session, len(body.Items), c.n)
-			}
-			for _, it := range body.Items {
-				if it["quote"] != "q" || it["rung"] != "r" || it["title"] != "t" {
-					t.Errorf("item forwarded as %v", it)
-				}
+			if seen.path != "" {
+				t.Errorf("mm %s reached serve at %s", op, seen.path)
 			}
 		})
 	}
 }
 
-// `kraken mm confirm <id>`: "posts `{"id": id}`; prints `confirmed mm <id>`".
-func TestMpcMMConfirmPostsTheID(t *testing.T) {
-	seen, addr := mpcServe(t, `{"ok":true,"id":7,"state":"live"}`)
-	stdout, stderr, code := mpcRunCLI(t, "mm", []string{"confirm", "7"},
+// `kraken mm run <id> --answer` prints the blob text alone; `kraken mm replay
+// <id> --write` posts {"id","write":true} and prints the server JSON verbatim.
+func TestMpcMMRunAndReplayProxy(t *testing.T) {
+	seen, addr := mpcServe(t, `{"run":{"id":3},"blob":"{\"ops\":[]}"}`)
+	stdout, stderr, code := mpcRunCLI(t, "mm", []string{"run", "3", "--answer"},
 		[]string{"HOME=" + t.TempDir(), "KRAKEN_SERVE_ADDR=" + addr}, "")
 	if code != 0 {
-		t.Fatalf("exit %d stderr %q", code, stderr)
+		t.Fatalf("run: exit %d stderr %q", code, stderr)
 	}
-	// amended contract: the one-line result goes to stderr, stdout stays empty
-	// (the mm verb family reserves stdout for JSON).
-	if strings.TrimSpace(stderr) != "confirmed mm 7" || stdout != "" {
-		t.Errorf("stderr = %q stdout = %q, want confirmed mm 7 on stderr and stdout empty", stderr, stdout)
+	if stdout != "{\"ops\":[]}\n" {
+		t.Errorf("run stdout = %q, want the answer text", stdout)
+	}
+	seen.mu.Lock()
+	if seen.method != http.MethodGet || seen.path != "/api/mm/run" || seen.query != "id=3&blob=answer" {
+		t.Errorf("run request = %s %s?%s", seen.method, seen.path, seen.query)
+	}
+	seen.mu.Unlock()
+
+	reply := `{"source_run":3,"diff":{"ops_added":[],"ops_lost":[],"exclusions_changed":[]},"new_run":9}` + "\n"
+	seen, addr = mpcServe(t, reply)
+	stdout, stderr, code = mpcRunCLI(t, "mm", []string{"replay", "3", "--write"},
+		[]string{"HOME=" + t.TempDir(), "KRAKEN_SERVE_ADDR=" + addr}, "")
+	if code != 0 {
+		t.Fatalf("replay: exit %d stderr %q", code, stderr)
+	}
+	if stdout != reply {
+		t.Errorf("replay stdout = %q, want the server JSON verbatim", stdout)
 	}
 	seen.mu.Lock()
 	defer seen.mu.Unlock()
-	if seen.method != http.MethodPost || seen.path != "/api/mm/confirm" {
-		t.Errorf("request = %s %s", seen.method, seen.path)
-	}
 	var body map[string]any
-	if err := json.Unmarshal(seen.body, &body); err != nil || len(body) != 1 || body["id"] != float64(7) {
-		t.Errorf("request body = %s, want {\"id\":7}", seen.body)
+	if err := json.Unmarshal(seen.body, &body); err != nil || seen.path != "/api/mm/replay" || body["id"] != float64(3) || body["write"] != true {
+		t.Errorf("replay request = %s %s, want {id:3, write:true}", seen.path, seen.body)
 	}
 }

@@ -542,24 +542,20 @@ func TestAskEdgeBranchHeadlessRouting(t *testing.T) {
 	}
 }
 
-// TestAskEdgeBranchMindHeadless: role "mind" with headless true is 400
-// `a mind thread cannot be headless`; role "mind" with headless absent or
-// false keeps the pane path; role "ask" with headless true is the ask path.
+// TestAskEdgeBranchMindHeadless: role "mind" is retired — 409 with
+// jobs.ErrThreadRoleRetired's message whatever headless says, before any
+// cell check; role "ask" with headless true is the ask path.
 func TestAskEdgeBranchMindHeadless(t *testing.T) {
 	st, j, l := askEdgeEnv(t, false) // dead cell
 
-	askEdgeExpect(t, "mind + headless true", askEdgePostThreads(t, map[string]any{
-		"slug": askEdgeSlug, "op": "branch", "title": "ci red", "text": askEdgeQuestion, "role": "mind", "headless": true,
-	}), http.StatusBadRequest, "a mind thread cannot be headless")
-
-	for _, h := range []any{nil, false} {
+	for _, h := range []any{nil, false, true} {
 		req := map[string]any{"slug": askEdgeSlug, "op": "branch", "title": "ci red", "text": askEdgeQuestion, "role": "mind"}
 		if h != nil {
 			req["headless"] = h
 		}
 		rec := askEdgePostThreads(t, req)
-		if rec.Code != http.StatusConflict || !strings.Contains(askEdgeErr(t, rec), "has no live cell to branch") {
-			t.Fatalf("mind with headless %v on a dead cell: %d %s, want 409 with BranchThread's wording", h, rec.Code, rec.Body.String())
+		if rec.Code != http.StatusConflict || askEdgeErr(t, rec) != jobs.ErrThreadRoleRetired.Error() {
+			t.Fatalf("mind with headless %v: %d %s, want 409 with the retired-role error", h, rec.Code, rec.Body.String())
 		}
 	}
 

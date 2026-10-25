@@ -18,7 +18,7 @@ private enum ArtifactContent: Equatable {
 /// what, if anything, is selected right now.
 ///
 /// A reference type passed down rather than a value passed up, for the reason
-/// the ◆ mind control exists at all: the toolbar lives on the PAGER (one instance,
+/// the ✓ read control exists at all: the toolbar lives on the PAGER (one instance,
 /// see `showsFeedbackButton`) while the web view lives on a page, and the two
 /// are separated by a TabView that materializes up to three pages. The handle
 /// is claimed by whichever page is SELECTED, so the chrome always reads the
@@ -275,7 +275,7 @@ struct ArtifactView: View {
     /// nobody is listening: the note still lands, it just isn't mirrored
     /// anywhere until the next poll. SteerView presents this view that way.
     var onFeedbackCreated: ((ArtifactRef, String) -> Void)?
-    /// Handed down by the pager for the SELECTED page only, so the ◆ mind control
+    /// Handed down by the pager for the SELECTED page only, so the ✓ read control
     /// on its toolbar can read this document's selection. nil on the two
     /// off-screen neighbours — see `ArtifactWebViewHandle`.
     var webViewHandle: ArtifactWebViewHandle?
@@ -492,14 +492,12 @@ struct ArtifactPagerView: View {
     /// can't post a save and a remove of the same artifact past each other.
     @State private var bookmarkInFlight = false
 
-    /// A ◆ mind capture is in the air — the control disables.
+    /// A ✓ read mark is in the air — the control disables.
     @State private var capturing = false
-    /// The mind thread a capture landed in, presented over the artifact.
-    @State private var mindThread: WebThread?
-    /// The job slug that thread belongs to, captured with it.
-    @State private var mindSlug = ""
-    /// The server's refusal of a capture (no live cell, text too long),
-    /// shown as an alert — the one place this screen renders an error.
+    /// The brief confirmation a mark shows over the artifact, nil when none.
+    @State private var markToast: String?
+    /// The server's refusal of a mark (no such job, text too long), shown as
+    /// an alert — the one place this screen renders an error.
     @State private var captureError: String?
     /// The selected page's live WKWebView, for reading its selection.
     @State private var webHandle = ArtifactWebViewHandle()
@@ -561,17 +559,18 @@ struct ArtifactPagerView: View {
         .navigationTitle(pages[index].name)
         .navigationBarTitleDisplayMode(.inline)
         .task(id: baseURL) { await loadLibrary() }
-        .sheet(item: $mindThread) { thread in
-            NavigationStack {
-                ThreadDetailView(
-                    thread: thread,
-                    slug: mindSlug,
-                    baseURL: baseURL
-                )
+        .overlay(alignment: .top) {
+            if let markToast {
+                Text(markToast)
+                    .font(.data(11))
+                    .foregroundStyle(KTheme.accentInk)
+                    .padding(.horizontal, 12).padding(.vertical, 6)
+                    .background(KTheme.accent, in: Capsule())
+                    .padding(.top, 8)
             }
         }
         .alert(
-            "Couldn't send to the mind thread",
+            "Couldn't mark as read",
             isPresented: Binding(
                 get: { captureError != nil },
                 set: { if !$0 { captureError = nil } }
@@ -588,23 +587,23 @@ struct ArtifactPagerView: View {
         // document answers. See there for why the gap mattered.
         .task(id: selection) { await watchSelection() }
         .toolbar {
-            // ◆ mind, beside ☆ save — one control, on the pager's own bar,
+            // ✓ read, beside ☆ save — one control, on the pager's own bar,
             // for the reason the title and the bookmark are here (see
             // `showsFeedbackButton`): a per-page control would stack up to
             // three of them in one bar. Present wherever the page is a live
-            // artifact address (the capture names its job by that slug);
+            // artifact address (the mark names its job by that slug);
             // enabled only while the document holds a selection.
             if let ref = artifactParts(from: selection) {
                 ToolbarItem(placement: .topBarTrailing) {
                     Button {
                         Task { await capture(ref: ref, text: selectionInPage) }
                     } label: {
-                        Label("◆ mind", systemImage: "diamond")
+                        Label("✓ read", systemImage: "checkmark.circle")
                     }
                     .labelStyle(.iconOnly)
                     .disabled(selectionInPage.isEmpty || capturing)
                     .tint(KTheme.accent)
-                    .accessibilityLabel("send the selected text to the mind thread")
+                    .accessibilityLabel("mark the selected text as read for the next mind run")
                 }
             }
             // The save toggle lives HERE, on the pager's own bar, for exactly
@@ -753,9 +752,10 @@ struct ArtifactPagerView: View {
         await loadLibrary()
     }
 
-    // MARK: - the ◆ mind capture
+    // MARK: - the ✓ read mark
 
-    /// Routes the selection to the job's mind thread and opens that thread.
+    /// Records the selection as a read mark the job's next mind run reads,
+    /// and shows a brief confirmation — no sheet, no thread.
     ///
     /// `ref` and `text` are the values the button was PAINTED from, captured
     /// at the press, for `toggleBookmark`'s reason. The source is the
@@ -770,20 +770,21 @@ struct ArtifactPagerView: View {
         capturing = true
         defer { capturing = false }
         do {
-            let res = try await APIClient.shared.captureToMind(
-                baseURL: baseURL, slug: ref.slug, home: ref.home, name: ref.name, text: trimmed
+            guard let base = URL(string: baseURL) else {
+                throw KrakenError.message("invalid server address: \(baseURL)")
+            }
+            let res = try await APIClient.markRead(
+                base, slug: ref.slug, home: ref.home, name: ref.name, text: trimmed
             )
             selectionInPage = ""
             await webHandle.collapseSelection()
-            // A placeholder row until ThreadDetailView's own read lands: the
-            // tid is all the capture answers, and that view re-reads the
-            // thread by it. `model` stays nil rather than a guess.
-            mindSlug = ref.slug
-            mindThread = WebThread(
-                tid: res.tid, title: nil, state: "live", pane: nil, model: nil,
-                createdAt: Int64(Date().timeIntervalSince1970 * 1000),
-                closedAt: nil, role: "mind"
-            )
+            let message = "✓ marked for the next mind run · \(res.pending) pending"
+            markToast = message
+            Task {
+                try? await Task.sleep(for: .seconds(2))
+                // a second mark inside the window owns the chip now
+                if markToast == message { markToast = nil }
+            }
         } catch {
             captureError = (error as? KrakenError)?.errorDescription ?? error.localizedDescription
         }
@@ -798,8 +799,8 @@ struct ArtifactPagerView: View {
     private func watchSelection() async {
         // FIRST, before the first read: `selection` has already moved to the
         // new page while `selectionInPage` still holds the old page's text,
-        // and the two are paired by the ◆ mind control — so until this runs, a
-        // tap could send page A's selected text as a capture of artifact B. The
+        // and the two are paired by the ✓ read control — so until this runs, a
+        // tap could send page A's selected text as a mark of artifact B. The
         // handle does not close that window on its own: it is claimed inside
         // `updateUIView`, which never runs on a page whose content is still
         // loading or has failed, and a paging TabView keeps the swiped-away

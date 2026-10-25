@@ -4,12 +4,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	"kraken/internal/core"
 	"kraken/internal/util"
@@ -19,10 +19,11 @@ import (
 // model, proxying to kraken serve's /api/mm routes (internal/api/mm.go).
 //
 // The mind layer (schema v33) adds the AGENT side, below the original verbs:
-// `show`/`source` (the drill-down reads every agent may run), `commit`/
-// `revise` (a mind thread's only writes — the server refuses any other
-// caller), and `flag`/`flags` (any agent records a contradiction; only the
-// lead raises or dismisses one). Of the original verbs, `mark` records a
+// `show`/`source` (the drill-down reads every agent may run) and
+// `flag`/`flags` (any agent records a contradiction; only the lead raises or
+// dismisses one). The mind runs (schema v39) add `runs`/`run` (the run
+// record), `marks` (pending and consumed read marks) and `replay` (judge a
+// recorded bundle again under the current skill). Of the original verbs, `mark` records a
 // range of code carl has just read, `drop` unmarks one, `note` records
 // something he thought, `get` prints the model back, and `lsp` is the
 // long-running odd one out — a language server (mmlsp.go) that draws the marks
@@ -106,25 +107,6 @@ func cmdMM(args []string) {
 			util.Die("%v", err)
 		}
 		writeStdout(out)
-	case "commit":
-		if len(rest) != 0 {
-			util.Die("%s", mmCommitUsage)
-		}
-		line, err := runMMCommit(os.Stdin, mmCallerSession)
-		if err != nil {
-			util.Die("%v", err)
-		}
-		fmt.Fprintln(os.Stderr, line)
-	case "revise":
-		id, err := parseMMID(rest, mmReviseUsage)
-		if err != nil {
-			util.Die("%v", err)
-		}
-		line, err := runMMRevise(id, os.Stdin, mmCallerSession)
-		if err != nil {
-			util.Die("%v", err)
-		}
-		fmt.Fprintln(os.Stderr, line)
 	case "flag":
 		line, err := runMMFlag(rest, mmCallerSession)
 		if err != nil {
@@ -137,26 +119,30 @@ func cmdMM(args []string) {
 			util.Die("%v", err)
 		}
 		writeStdout(out)
-	case "propose":
-		if len(rest) != 0 {
-			util.Die("%s", mmProposeUsage)
-		}
-		out, line, err := runMMPropose(os.Stdin, mmCallerSession)
+	case "runs":
+		out, err := runMMRuns(rest)
 		if err != nil {
 			util.Die("%v", err)
 		}
 		writeStdout(out)
-		fmt.Fprintln(os.Stderr, line)
-	case "confirm":
-		id, err := parseMMID(rest, mmConfirmUsage)
+	case "run":
+		out, err := runMMRun(rest)
 		if err != nil {
 			util.Die("%v", err)
 		}
-		line, err := runMMConfirm(id)
+		writeStdout(out)
+	case "marks":
+		out, err := runMMMarks(rest)
 		if err != nil {
 			util.Die("%v", err)
 		}
-		fmt.Fprintln(os.Stderr, line)
+		writeStdout(out)
+	case "replay":
+		out, err := runMMReplay(rest)
+		if err != nil {
+			util.Die("%v", err)
+		}
+		writeStdout(out)
 	case "evidence":
 		out, err := runMMEvidence(rest)
 		if err != nil {
@@ -495,8 +481,8 @@ const mmGetUsage = "usage: kraken mm get [--all] [--file <path>] [--q <text>] [-
 // {"items": [...]} straight through, newest first.
 //
 // The DEFAULT is live items only, and `--all` is what widens it to include
-// the invalidated ones — and, since schema v37, the unconfirmed nightly
-// proposals. That way round because the common read is "what do I
+// the invalidated ones (superseded and retired items among them, since
+// mind runs invalidate rather than edit). That way round because the common read is "what do I
 // currently know", while the invalidated rows are a retrospective view — what
 // carl knew that has since stopped being true — and putting them in the
 // default answer would make every read carry claims the model has already
@@ -608,24 +594,24 @@ func mmWriteLine(raw []byte, created, already string) string {
 // ===========================================================================
 
 // mmOps is the op list every usage line names.
-const mmOps = "mark|drop|note|get|show|source|commit|revise|flag|flags|propose|confirm|evidence|lsp"
+const mmOps = "mark|drop|note|get|show|source|flag|flags|runs|run|marks|replay|evidence|lsp"
 
 const (
-	mmShowUsage   = "usage: kraken mm show <id>"
-	mmSourceUsage = "usage: kraken mm source <id>"
-	mmCommitUsage = "usage: kraken mm commit  (item JSON {title, scope, repo, dir, kind, body, quote, source} on stdin)"
-	mmReviseUsage = "usage: kraken mm revise <id>  (item JSON on stdin, same shape as commit)"
-	mmFlagUsage   = "usage: kraken mm flag [--item <id>] [--against <id>] --note \"<text>\" [--slug <slug>]  |  kraken mm flag raise|dismiss <id> --note \"<text>\""
-	mmFlagsUsage  = "usage: kraken mm flags [--state pending|raised|dismissed|resolved]"
-	// The mind pass' three verbs (schema v37).
-	mmProposeUsage  = "usage: kraken mm propose  (a JSON array of proposals {title, scope, repo, dir, kind, body, quote, rung, source} on stdin, or one object)"
-	mmConfirmUsage  = "usage: kraken mm confirm <id>"
+	mmShowUsage     = "usage: kraken mm show <id>"
+	mmSourceUsage   = "usage: kraken mm source <id>"
+	mmFlagUsage     = "usage: kraken mm flag [--item <id>] [--against <id>] --note \"<text>\" [--slug <slug>]  |  kraken mm flag raise|dismiss <id> --note \"<text>\""
+	mmFlagsUsage    = "usage: kraken mm flags [--state pending|raised|dismissed|resolved]"
 	mmEvidenceUsage = "usage: kraken mm evidence --since <ms> [--until <ms>]"
+	// The mind runs' verbs (schema v39).
+	mmRunsUsage   = "usage: kraken mm runs [--job <slug>] [--n N]"
+	mmRunUsage    = "usage: kraken mm run <id> [--report|--manifest|--answer|--bundle]"
+	mmMarksUsage  = "usage: kraken mm marks [--job <slug>] [--pending]"
+	mmReplayUsage = "usage: kraken mm replay <id> [--write]"
 )
 
-// mmThreadSessionEnv is the variable a mind thread's spawn command stages
-// (jobs.threadEnvPrefix), naming the thread's own claude session — the
-// identity /api/mm/commit authorizes against.
+// mmThreadSessionEnv is the variable a side thread's spawn command stages
+// (jobs.threadEnvPrefix), naming the thread's own claude session; `flag`
+// reads it first when it names its caller.
 const mmThreadSessionEnv = "KRAKEN_THREAD_SESSION"
 
 // mmCallerSession resolves which session is calling: the staged variable
@@ -667,83 +653,9 @@ func runMMRead(op string, args []string) ([]byte, error) {
 	return qfGet("/api/mm/" + op + "?id=" + strconv.FormatInt(id, 10))
 }
 
-// mmReadItem reads the item JSON a commit/revise carries on stdin. It is
-// forwarded as raw JSON rather than decoded here, so the server's strict
-// decode is the only judge of its keys — a local struct would silently drop
-// a key the server would have refused.
-func mmReadItem(stdin io.Reader, usage string) (json.RawMessage, error) {
-	if stdinIsInteractiveTTY(stdin) {
-		return nil, fmt.Errorf("%s (refusing to wait on an interactive terminal — pipe the JSON in)", usage)
-	}
-	data, err := io.ReadAll(stdin)
-	if err != nil {
-		return nil, fmt.Errorf("read stdin: %w", err)
-	}
-	data = []byte(strings.TrimSpace(string(data)))
-	if len(data) == 0 {
-		return nil, fmt.Errorf("%s (stdin was empty)", usage)
-	}
-	if !json.Valid(data) || data[0] != '{' {
-		return nil, fmt.Errorf("%s (stdin is not a JSON object)", usage)
-	}
-	return json.RawMessage(data), nil
-}
-
-// mmRequireSession resolves the commit/revise caller, failing BEFORE any HTTP
-// call when there is none: without a session the server can only answer 403,
-// and the useful sentence is which variable was missing.
-func mmRequireSession(session func() (string, bool)) (string, error) {
-	if s, ok := session(); ok && s != "" {
-		return s, nil
-	}
-	return "", fmt.Errorf("no thread session: $%s is unset and no claude/codex session was found above this process — only a mind thread may commit to the mental model", mmThreadSessionEnv)
-}
-
-// runMMCommit posts one finalized item and returns `committed mm <id>`.
-func runMMCommit(stdin io.Reader, session func() (string, bool)) (string, error) {
-	sid, err := mmRequireSession(session)
-	if err != nil {
-		return "", err
-	}
-	item, err := mmReadItem(stdin, mmCommitUsage)
-	if err != nil {
-		return "", err
-	}
-	raw, err := qfPost("/api/mm/commit", map[string]any{"thread_session": sid, "item": item})
-	if err != nil {
-		return "", err
-	}
-	return "committed mm " + strconv.FormatInt(mmResponseID(raw), 10), nil
-}
-
-// runMMRevise rewrites one live item and returns `revised mm <id>`.
-func runMMRevise(id int64, stdin io.Reader, session func() (string, bool)) (string, error) {
-	sid, err := mmRequireSession(session)
-	if err != nil {
-		return "", err
-	}
-	item, err := mmReadItem(stdin, mmReviseUsage)
-	if err != nil {
-		return "", err
-	}
-	if _, err := qfPost("/api/mm/revise", map[string]any{"thread_session": sid, "id": id, "item": item}); err != nil {
-		return "", err
-	}
-	return "revised mm " + strconv.FormatInt(id, 10), nil
-}
-
-// mmResponseID reads `id` out of a write's response, 0 when it cannot.
-func mmResponseID(raw []byte) int64 {
-	var resp struct {
-		ID int64 `json:"id"`
-	}
-	_ = json.Unmarshal(raw, &resp)
-	return resp.ID
-}
-
 // runMMFlag is `flag …` and its two sub-verbs `flag raise|dismiss <id>`. The
-// session is optional here, unlike commit: an unknown caller still records a
-// PENDING flag, and only the lead's session makes one raised.
+// session is optional: an unknown caller still records a PENDING flag, and
+// only the lead's session makes one raised.
 func runMMFlag(args []string, session func() (string, bool)) (string, error) {
 	sid, _ := session()
 	if len(args) > 0 && (args[0] == "raise" || args[0] == "dismiss") {
@@ -902,68 +814,148 @@ func cellSlugFromPath(dir string) string {
 	return strings.SplitN(filepath.ToSlash(rel), "/", 2)[0]
 }
 
-// --- the mind pass' verbs (schema v37) ---
+// --- the mind runs' verbs (schema v39) ---
 
-// mmProposeMaxBody is the client-side cap for `kraken mm propose` — keep
-// equal to internal/api's mmProposeMaxBody (the route's decode cap), which
-// this package cannot import.
-const mmProposeMaxBody = 8 << 20
+// mmReplayTimeout is how long `kraken mm replay` waits: the route runs the
+// model synchronously under jobs.MindRunTimeout (10 minutes), so the client
+// outlasts it by a minute to print the server's own answer, timeout included.
+const mmReplayTimeout = 11 * time.Minute
 
-// runMMPropose posts the night's proposals as the caller's session. stdin is
-// a JSON array of proposals or one object (wrapped into a one-item array);
-// each item is forwarded raw so the server's strict decode is the only judge
-// of its keys. Returns the server JSON verbatim for stdout and the summary
-// line for stderr.
-func runMMPropose(stdin io.Reader, session func() (string, bool)) ([]byte, string, error) {
-	sid, ok := session()
-	if !ok || strings.TrimSpace(sid) == "" {
-		return nil, "", fmt.Errorf("no session: $%s is unset and no claude/codex session was found above this process — only the mind job's zeus may propose", mmThreadSessionEnv)
-	}
-	if stdinIsInteractiveTTY(stdin) {
-		return nil, "", fmt.Errorf("%s (refusing to wait on an interactive terminal — pipe the JSON in)", mmProposeUsage)
-	}
-	data, err := io.ReadAll(stdin)
-	if err != nil {
-		return nil, "", fmt.Errorf("read stdin: %w", err)
-	}
-	data = []byte(strings.TrimSpace(string(data)))
-	if len(data) == 0 {
-		return nil, "", fmt.Errorf("%s (stdin was empty)", mmProposeUsage)
-	}
-	if !json.Valid(data) {
-		return nil, "", fmt.Errorf("%s (stdin is not JSON)", mmProposeUsage)
-	}
-	var items []json.RawMessage
-	switch data[0] {
-	case '[':
-		if err := json.Unmarshal(data, &items); err != nil {
-			return nil, "", fmt.Errorf("%s (stdin is not a JSON array of objects): %v", mmProposeUsage, err)
+// mmParseOpts walks args for the verb's flags. valued names take a value
+// (`--job x` or `--job=x`), bools take none; anything else, a missing value
+// or a repeated positional past maxPos is the usage error.
+func mmParseOpts(args []string, usage string, valued, bools []string, maxPos int) (map[string]string, []string, error) {
+	opts := map[string]string{}
+	var pos []string
+	has := func(set []string, n string) bool {
+		for _, s := range set {
+			if s == n {
+				return true
+			}
 		}
-	case '{':
-		items = []json.RawMessage{json.RawMessage(data)}
-	default:
-		return nil, "", fmt.Errorf("%s (stdin is neither an array nor an object)", mmProposeUsage)
+		return false
 	}
-	// The route's own cap: a legal 20-item batch can exceed the 1 MB every
-	// other verb is held to.
-	raw, err := qfPostLimit("/api/mm/propose", map[string]any{"session": strings.TrimSpace(sid), "items": items}, nil, qfHTTPTimeout, mmProposeMaxBody)
-	if err != nil {
-		return nil, "", err
+	for i := 0; i < len(args); i++ {
+		a := args[i]
+		if !strings.HasPrefix(a, "--") {
+			if len(pos) >= maxPos {
+				return nil, nil, fmt.Errorf("%s (unexpected argument %q)", usage, a)
+			}
+			pos = append(pos, a)
+			continue
+		}
+		name, raw, inline := strings.Cut(a, "=")
+		switch {
+		case has(valued, name):
+			v, next, err := mmFlagValue(args, i, name, raw, inline, usage)
+			if err != nil {
+				return nil, nil, err
+			}
+			i = next
+			opts[name] = v
+		case has(bools, name) && !inline:
+			opts[name] = "1"
+		default:
+			return nil, nil, fmt.Errorf("%s (unexpected argument %q)", usage, a)
+		}
 	}
-	var sum struct {
-		Added, Folded, Suppressed, Refused int
-	}
-	_ = json.Unmarshal(raw, &sum)
-	line := fmt.Sprintf("proposed %d (%d folded, %d suppressed, %d refused)", sum.Added, sum.Folded, sum.Suppressed, sum.Refused)
-	return raw, line, nil
+	return opts, pos, nil
 }
 
-// runMMConfirm flips one proposed item live and returns `confirmed mm <id>`.
-func runMMConfirm(id int64) (string, error) {
-	if _, err := qfPost("/api/mm/confirm", map[string]any{"id": id}); err != nil {
-		return "", err
+// runMMRuns is `runs [--job <slug>] [--n N]`: GET /api/mm/runs, verbatim.
+func runMMRuns(args []string) ([]byte, error) {
+	opts, _, err := mmParseOpts(args, mmRunsUsage, []string{"--job", "--n"}, nil, 0)
+	if err != nil {
+		return nil, err
 	}
-	return "confirmed mm " + strconv.FormatInt(id, 10), nil
+	q := url.Values{}
+	if s := strings.TrimSpace(opts["--job"]); s != "" {
+		q.Set("slug", s)
+	}
+	if n, ok := opts["--n"]; ok {
+		v, err := strconv.Atoi(strings.TrimSpace(n))
+		if err != nil || v < 1 {
+			return nil, fmt.Errorf("bad --n %q: want a whole number 1 or greater (%s)", n, mmRunsUsage)
+		}
+		q.Set("n", strconv.Itoa(v))
+	}
+	path := "/api/mm/runs"
+	if len(q) > 0 {
+		path += "?" + q.Encode()
+	}
+	return qfGet(path)
+}
+
+// runMMRun is `run <id> [--report|--manifest|--answer|--bundle]`. With a flag
+// it prints that blob's text alone; with none it prints the server's whole
+// answer — the run JSON, carrying the report (the default blob) beside it.
+func runMMRun(args []string) ([]byte, error) {
+	blobs := []string{"--report", "--manifest", "--answer", "--bundle"}
+	opts, pos, err := mmParseOpts(args, mmRunUsage, nil, blobs, 1)
+	if err != nil {
+		return nil, err
+	}
+	if len(opts) > 1 {
+		return nil, fmt.Errorf("%s (pick one of --report, --manifest, --answer, --bundle)", mmRunUsage)
+	}
+	id, err := parseMMID(pos, mmRunUsage)
+	if err != nil {
+		return nil, err
+	}
+	blob := "report"
+	for name := range opts {
+		blob = strings.TrimPrefix(name, "--")
+	}
+	raw, err := qfGet("/api/mm/run?id=" + strconv.FormatInt(id, 10) + "&blob=" + blob)
+	if err != nil || len(opts) == 0 {
+		return raw, err
+	}
+	var resp struct {
+		Blob string `json:"blob"`
+	}
+	if err := json.Unmarshal(raw, &resp); err != nil {
+		return nil, fmt.Errorf("decode kraken serve's answer: %w", err)
+	}
+	out := resp.Blob
+	if out != "" && !strings.HasSuffix(out, "\n") {
+		out += "\n"
+	}
+	return []byte(out), nil
+}
+
+// runMMMarks is `marks [--job <slug>] [--pending]`: GET /api/mm/marks.
+func runMMMarks(args []string) ([]byte, error) {
+	opts, _, err := mmParseOpts(args, mmMarksUsage, []string{"--job"}, []string{"--pending"}, 0)
+	if err != nil {
+		return nil, err
+	}
+	q := url.Values{}
+	if s := strings.TrimSpace(opts["--job"]); s != "" {
+		q.Set("slug", s)
+	}
+	if _, ok := opts["--pending"]; ok {
+		q.Set("pending", "1")
+	}
+	path := "/api/mm/marks"
+	if len(q) > 0 {
+		path += "?" + q.Encode()
+	}
+	return qfGet(path)
+}
+
+// runMMReplay is `replay <id> [--write]`: POST /api/mm/replay, the diff JSON
+// printed verbatim. Without --write the server applies nothing.
+func runMMReplay(args []string) ([]byte, error) {
+	opts, pos, err := mmParseOpts(args, mmReplayUsage, nil, []string{"--write"}, 1)
+	if err != nil {
+		return nil, err
+	}
+	id, err := parseMMID(pos, mmReplayUsage)
+	if err != nil {
+		return nil, err
+	}
+	_, write := opts["--write"]
+	return qfPostWith("/api/mm/replay", map[string]any{"id": id, "write": write}, nil, mmReplayTimeout)
 }
 
 // runMMEvidence is `evidence --since <ms> [--until <ms>]`: one GET, the

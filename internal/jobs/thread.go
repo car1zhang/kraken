@@ -637,9 +637,17 @@ func threadEnvPrefix(session, role string) string {
 	return "KRAKEN_THREAD_SESSION='" + shellSingleQuote(session) + "' KRAKEN_THREAD_ROLE='" + shellSingleQuote(role) + "' "
 }
 
-// validThreadRole is the closed set of thread roles, the threads.role CHECK
-// restated so a bad role is refused before any spawn work.
-func validThreadRole(role string) bool { return role == "ask" || role == "mind" }
+// validThreadRole is the set of roles a NEW thread may take: `ask` only.
+// `mind` is still a valid stored role (the threads.role CHECK and the store
+// keep it, so existing mind rows read back unchanged), but the mind thread is
+// retired — the mental model is written by mind runs (mindrun.go), never by a
+// forked thread — so branching one is refused with ErrThreadRoleRetired.
+func validThreadRole(role string) bool { return role == "ask" }
+
+// ErrThreadRoleRetired refuses BranchThreadWithRole(..., "mind") before any
+// fork: the mind thread was retired when mind runs took over the mental
+// model's writes.
+var ErrThreadRoleRetired = errors.New("the mind thread is retired: mark passages with ✓ read and a mind run reads them when the job is done")
 
 // threadModel resolves the model a thread's claude is spawned on, in the one
 // place both spawn paths share: carl's own pick for THIS thread when he made
@@ -710,14 +718,17 @@ func BranchThread(j *Job, title, seed, model string) (store.Thread, error) {
 	return BranchThreadWithRole(j, title, seed, model, "ask")
 }
 
-// BranchThreadWithRole is BranchThread with the thread's role named: "ask"
-// (carl's question thread, every thread before the mental-model rework) or
-// "mind" (the job's mind thread, the only AGENT-side writer of the mental
-// model, which CaptureToMind branches). The role is stored on the row and staged into the
-// pane's env prefix and brief; anything else is refused before any spawn work.
+// BranchThreadWithRole is BranchThread with the thread's role named. Only
+// "ask" (carl's question thread) may be branched: "mind" is refused with
+// ErrThreadRoleRetired and anything else as a bad role, both before any spawn
+// work. The role is stored on the row and staged into the pane's env prefix
+// and brief.
 func BranchThreadWithRole(j *Job, title, seed, model, role string) (store.Thread, error) {
+	if role == "mind" {
+		return store.Thread{}, ErrThreadRoleRetired
+	}
 	if !validThreadRole(role) {
-		return store.Thread{}, fmt.Errorf("bad thread role %q: want ask or mind", role)
+		return store.Thread{}, fmt.Errorf("bad thread role %q: want ask", role)
 	}
 	if err := refuseCodexThread(j, "branch"); err != nil {
 		return store.Thread{}, err
@@ -760,19 +771,12 @@ func BranchThreadWithRole(j *Job, title, seed, model, role string) (store.Thread
 	// taken a turn), an unreadable file, or a truncated tail all leave the
 	// anchor blank rather than failing a spawn carl asked for.
 	//
-	// A mind thread records a second anchor beside it, the TURN key
-	// (core.LastTurnUUID, zeus' last prompt record): CaptureToMind matches
-	// captures to a mind thread on it, and it must not move while zeus makes
-	// tool calls inside one turn. ForkUUID itself stays the last record for
-	// every role — the thread overlay splits inherited history on it, and a
-	// prompt-anchored split would render the whole of zeus' turn as the
-	// thread's own conversation.
+	// ForkUUID is the last record of any kind — the thread overlay splits
+	// inherited history on it. TurnUUID was the retired mind thread's capture
+	// key; a new thread records none.
 	forkUUID, turnUUID := "", ""
 	if path, perr := core.ReadTranscriptPath(zeus); perr == nil {
 		forkUUID = core.LastMessageUUID(path)
-		if role == "mind" {
-			turnUUID = core.LastTurnUUID(path)
-		}
 	}
 	// the tid reservation: allocate and insert in one transaction, so two
 	// concurrent branches can never agree on a tid and stomp each other's

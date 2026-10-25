@@ -251,7 +251,7 @@ export interface ArtifactOverlayProps {
   onRemoveSaved: (id: number) => Promise<void>;
   // The head's ✓ read / mark selection button and the body's per-table ✓s
   // were retired with the board's one-shot marks (PR 2, Q10). The body now
-  // carries `data-mind-*` attributes instead, and the global ◆ mind button
+  // carries `data-mind-*` attributes instead, and the global ✓ read button
   // (components/chrome/MindButton.tsx) reads them off a selection.
   /** See Overlay.tsx. Feedback rides the board payload, so this invalidates. */
   mutate: Mutate;
@@ -551,8 +551,8 @@ function ArtifactBody({
   }, [savingLib, saved, saveParts, onRemoveSaved, onSaveArtifact, url]);
 
   /**
-   * The sha256 (hex) of the artifact bytes this viewer loaded — what a ◆ mind
-   * capture's `artifact` source records, so the server can later say whether
+   * The sha256 (hex) of the artifact bytes this viewer loaded — what a ✓ read
+   * mark's `artifact` source records, so the server can later say whether
    * the artifact has `changed` since. Hashed from the fetched TEXT re-encoded
    * as UTF-8, which equals the file's bytes for any valid UTF-8 file; a page
    * or image the viewer never fetches as text (.svg/.pdf/.png …) has no sha,
@@ -561,7 +561,7 @@ function ArtifactBody({
   const sha = useArtifactSHA(text);
 
   /**
-   * What the rendered body stamps for the ◆ mind button (lib/mind.ts): every
+   * What the rendered body stamps for the ✓ read button (lib/mind.ts): every
    * body mode — markdown, raw, the iframe wrapper, an image — is an `artifact`
    * source. A library snapshot (no {slug, home, name} in its url) still
    * names the artifact, with no slug: the capture then has no job to fork and
@@ -1098,7 +1098,7 @@ function ArtifactBodyContent({
   artifacts: WebArtifact[];
   /** Open a resolved artifact ref in this viewer (ArtifactBody's seq lookup). */
   onOpenRef: (hit: ArtifactRefHit) => void;
-  /** The ◆ mind source every body mode carries — empty for another node's. */
+  /** The ✓ read source every body mode carries — empty for another node's. */
   mindAttrs: MindAttrs | Record<string, never>;
 }) {
   // Above the branches because it is a hook, and memoised because this is the
@@ -1177,7 +1177,7 @@ function ArtifactBodyContent({
     lastSweep.current = { md, key };
   }, [md, artifacts, mdMounted]);
 
-  // Every branch's `#panel-body` carries the ◆ mind button's artifact source
+  // Every branch's `#panel-body` carries the ✓ read button's artifact source
   // (see ArtifactBody's `mindAttrs`) — the iframe WRAPPER included, since a
   // selection inside the frame's own document resolves up through the frame
   // element into it (lib/mind.ts crosses that boundary).

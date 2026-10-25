@@ -537,8 +537,7 @@ func TestAskContractBranchHeadlessDispatch(t *testing.T) {
 
 	for _, body := range []string{
 		`{"slug":"codex-job","op":"branch","title":"why is CI red","headless":false}`,
-		`{"slug":"codex-job","op":"branch","title":"why is CI red","role":"mind"}`,
-		`{"slug":"codex-job","op":"branch","title":"why is CI red","role":"mind","headless":false}`,
+		`{"slug":"codex-job","op":"branch","title":"why is CI red","role":"ask","headless":false}`,
 	} {
 		rec := askContractPostThreads(t, body)
 		msg := askContractErr(t, rec)
@@ -548,17 +547,19 @@ func TestAskContractBranchHeadlessDispatch(t *testing.T) {
 	}
 }
 
-// Contract C `POST /api/threads branch`: "With role: "mind": … headless: true
-// → 400 {"error":"a mind thread cannot be headless"}".
-func TestAskContractBranchMindHeadlessRefused(t *testing.T) {
+// The mind thread is retired (mind runs, schema v39): role "mind" is 409
+// with jobs.ErrThreadRoleRetired's message whatever headless says.
+func TestAskContractBranchMindRoleRetired(t *testing.T) {
 	st := askContractEnv(t)
 	askContractJob(t, st, askContractSlug, "readonly", "")
-	rec := askContractPostThreads(t, fmt.Sprintf(`{"slug":%q,"op":"branch","title":"t","text":"q","role":"mind","headless":true}`, askContractSlug))
-	if rec.Code != http.StatusBadRequest {
-		t.Fatalf("mind+headless = %d %s, want 400", rec.Code, rec.Body)
-	}
-	if m := askContractObj(t, "refusal", rec.Body.Bytes()); !reflect.DeepEqual(m, map[string]any{"error": "a mind thread cannot be headless"}) {
-		t.Errorf("mind+headless body = %v, want {\"error\":\"a mind thread cannot be headless\"}", m)
+	for _, h := range []string{``, `,"headless":true`, `,"headless":false`} {
+		rec := askContractPostThreads(t, fmt.Sprintf(`{"slug":%q,"op":"branch","title":"t","text":"q","role":"mind"%s}`, askContractSlug, h))
+		if rec.Code != http.StatusConflict {
+			t.Fatalf("mind%s = %d %s, want 409", h, rec.Code, rec.Body)
+		}
+		if m := askContractObj(t, "refusal", rec.Body.Bytes()); !reflect.DeepEqual(m, map[string]any{"error": jobs.ErrThreadRoleRetired.Error()}) {
+			t.Errorf("mind%s body = %v, want the retired-role error", h, m)
+		}
 	}
 }
 

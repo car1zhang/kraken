@@ -250,7 +250,7 @@ Commands:
                       share the slug the active one answers; --archived
                       picks the archived one (by its archived name or its
                       original slug).
-  k mm mark|drop|note|get|show|source|commit|revise|flag|flags|lsp ...
+  k mm mark|drop|note|get|show|source|flag|flags|runs|run|marks|replay|evidence|lsp ...
                       YOUR verbs for the mental model — what you have read,
                       decided and noted — proxied the same way as 'k questions'.
                       mark/drop/note are your own: for your shell and the
@@ -271,16 +271,24 @@ Commands:
                       The mind layer's AGENT-side verbs: get also takes
                       --q <text> --repo <r> --dir <d> --scope universal|repo;
                       show <id> prints one item, source <id> the material
-                      behind it (available:false still exits 0); commit and
-                      revise <id> post an item JSON from stdin as a mind
-                      thread ($KRAKEN_THREAD_SESSION, else the calling
-                      claude's session — refused before any HTTP when there
-                      is neither); flag [--item <id>] [--against <id>]
+                      behind it (available:false still exits 0); flag
+                      [--item <id>] [--against <id>]
                       --note "..." [--slug <slug>] records a contradiction
                       (slug defaults to the cell this runs in); flag
                       raise|dismiss <id> --note "..." is the lead's verdict;
                       flags [--state pending|raised|dismissed|resolved]
                       lists them.
+                      The mind runs (one headless pass per Done click plus
+                      a daily catch-all): runs [--job <slug>] [--n N] lists
+                      them as JSON; run <id> prints one run, and with
+                      --report|--manifest|--answer|--bundle just that text;
+                      marks [--job <slug>] [--pending] lists read marks;
+                      replay <id> [--write] judges a recorded bundle again
+                      under the current skill and prints the diff (--write
+                      applies the new answer as a fresh run).
+                      evidence --since <ms> [--until <ms>] prints the
+                      documents you authored in that window (job specs,
+                      feedback notes, typed answers) as JSON.
   k watchlist get|add|update|remove ...
                       cell-side verb the nightly dream pass uses to track
                       recurring observations, proxied the same way. A watch

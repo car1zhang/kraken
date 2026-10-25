@@ -946,12 +946,13 @@ function ThreadBody({
         <span className="panel-title" id="thread-tid">
           {tid ? "⑂ " + tid : "⑂ branch — " + jobSlug}
         </span>
-        {/* A mind thread (forked by the ◆ mind button) is the one writer of
-            the mental model; the chip says which kind of thread this is. */}
+        {/* A mind thread is legacy: the ◆ mind button forked one before mind
+            runs replaced it, and no new one can be opened. The chip says
+            which kind of thread this is. */}
         {tid && rec?.role === "mind" ? (
           <span
             className="thread-role mind"
-            title="a mind thread — drafts and commits mental-model items"
+            title="a mind thread from before mind runs — read-only history"
           >
             mind
           </span>

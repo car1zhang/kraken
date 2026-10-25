@@ -1,12 +1,13 @@
-// ◆ mind — the board's one capture control.
+// ✓ read — the board's one capture control.
 //
 // Mounted once by App over every view. It is lit whenever a non-empty text
 // selection exists — in the board's own document or inside a same-origin
 // artifact iframe (an html/svg card) — and a press posts that text, the job it
 // belongs to and its SOURCE (read off the `data-mind-*` attributes the reading
-// surfaces stamp, lib/mind.ts) to `POST /api/mm/capture`. The server routes it
-// to the job's mind thread — a fork of zeus at its current turn, created on
-// the first capture of that turn — and this opens the thread overlay on it.
+// surfaces stamp, lib/mind.ts) to `POST /api/mm/mark`. The server stores it as
+// a pending READ MARK that the job's next mind run (its Done run, else the
+// daily catch-all) reads; this toasts the job's pending count and opens
+// nothing.
 //
 // The selection is WATCHED, never read at click time: pressing anywhere
 // collapses a selection, which is why the button's mousedown is prevented and
@@ -14,18 +15,13 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 
-import { ApiError, captureToMind } from "../../api/client.ts";
+import { ApiError, markRead } from "../../api/client.ts";
 import {
   resolveSelectionSource,
   selectionSlug,
   type CaptureSource,
 } from "../../lib/mind.ts";
 import { showToast } from "../overlays/Toast.tsx";
-
-export interface MindButtonProps {
-  /** The capture landed in mind thread `tid` of `slug`: open it. */
-  onOpened: (slug: string, tid: string) => void;
-}
 
 /** The selection the button would post, frozen at the last selectionchange. */
 interface Pending {
@@ -75,7 +71,7 @@ function readSelection(doc: Document): Pending | null {
 const isShortcut = (ev: KeyboardEvent) =>
   (ev.metaKey || ev.ctrlKey) && ev.shiftKey && ev.key.toLowerCase() === "m";
 
-export function MindButton({ onOpened }: MindButtonProps) {
+export function MindButton() {
   const [pending, setPending] = useState<Pending | null>(null);
   const [busy, setBusy] = useState(false);
   const btn = useRef<HTMLButtonElement | null>(null);
@@ -89,26 +85,26 @@ export function MindButton({ onOpened }: MindButtonProps) {
     if (!p || busy) return;
     setBusy(true);
     try {
-      const res = await captureToMind(p.slug, p.text, p.source);
+      const res = await markRead(p.slug, p.text, p.source);
       try {
         p.doc.getSelection?.()?.removeAllRanges();
       } catch {
         /* the frame went away mid-flight */
       }
       setPending(null);
-      onOpened(p.slug, res.tid);
+      showToast(`✓ marked for the next mind run · ${res.pending} pending`);
     } catch (e) {
-      // 409 (no live cell / no forkable zeus), 404 (no such job), 400 (a
-      // source the server refused): the server's own sentence, as a toast
+      // 404 (no such job), 400 (empty, too long, or a source the server
+      // refused): the server's own sentence, as a toast
       showToast(
         e instanceof ApiError
           ? e.message
-          : "◆ mind failed: " + (e instanceof Error ? e.message : String(e)),
+          : "✓ read failed: " + (e instanceof Error ? e.message : String(e)),
       );
     } finally {
       setBusy(false);
     }
-  }, [busy, onOpened]);
+  }, [busy]);
   captureRef.current = () => void capture();
 
   useEffect(() => {
@@ -213,14 +209,14 @@ export function MindButton({ onOpened }: MindButtonProps) {
       aria-keyshortcuts="Meta+Shift+M"
       title={
         pending
-          ? `capture the selection into ${pending.slug || "?"}'s mind thread (⌘⇧M)`
-          : "highlight text anywhere, then press to capture it into the mental model (⌘⇧M)"
+          ? `mark the selection as read${pending.slug ? ` on ${pending.slug}` : ""} — the next mind run reads it (⌘⇧M)`
+          : "highlight text anywhere, then press to mark it as read for the next mind run (⌘⇧M)"
       }
       // The press must not collapse the selection it is about to post.
       onMouseDown={(e) => e.preventDefault()}
       onClick={() => void capture()}
     >
-      ◆ mind <span className="mind-key">⌘⇧M</span>
+      ✓ read <span className="mind-key">⌘⇧M</span>
     </button>
   );
 }

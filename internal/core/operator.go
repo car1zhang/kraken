@@ -37,6 +37,15 @@ type OperatorOptions struct {
 	Login        string
 	Before       int
 	After        int
+	// Sessions, when non-empty, keeps only records whose Session is in the
+	// set — a mind run for one job reads that job's zeus and thread sessions
+	// and nothing else. ExcludeSessions drops records whose Session is in it,
+	// applied after Sessions — the daily run's "sessions no job run swept".
+	// Both filter RECORDS, never files: Scanned and Skipped still count every
+	// transcript walked, so a sweep's coverage numbers mean the same thing
+	// with or without a filter.
+	Sessions        []string
+	ExcludeSessions []string
 }
 
 // OperatorResult is one sweep's answer. Records is never nil.
@@ -590,6 +599,7 @@ func OperatorProse(opts OperatorOptions) (*OperatorResult, error) {
 	for _, p := range paths {
 		operatorFile(p, opts, seen, res)
 	}
+	res.Records = filterOperatorSessions(res.Records, opts.Sessions, opts.ExcludeSessions)
 	sort.SliceStable(res.Records, func(i, j int) bool {
 		a, b := res.Records[i], res.Records[j]
 		if a.TS != b.TS {
@@ -601,6 +611,34 @@ func OperatorProse(opts OperatorOptions) (*OperatorResult, error) {
 		return a.UUID < b.UUID
 	})
 	return res, nil
+}
+
+// filterOperatorSessions applies OperatorOptions.Sessions then
+// ExcludeSessions. Both empty returns recs untouched, so an unfiltered sweep
+// is byte for byte what it was before the options existed. Never nil.
+func filterOperatorSessions(recs []OperatorRecord, keep, drop []string) []OperatorRecord {
+	if len(keep) == 0 && len(drop) == 0 {
+		return recs
+	}
+	set := func(xs []string) map[string]bool {
+		m := make(map[string]bool, len(xs))
+		for _, x := range xs {
+			m[x] = true
+		}
+		return m
+	}
+	keepSet, dropSet := set(keep), set(drop)
+	out := make([]OperatorRecord, 0, len(recs))
+	for _, r := range recs {
+		if len(keepSet) > 0 && !keepSet[r.Session] {
+			continue
+		}
+		if dropSet[r.Session] {
+			continue
+		}
+		out = append(out, r)
+	}
+	return out
 }
 
 // operatorFile scans one root transcript: the reducer runs over every line

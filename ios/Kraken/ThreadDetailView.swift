@@ -14,7 +14,8 @@ import Observation
 // thread; an ask thread (`kind: "headless"`) has no pane, so it gets no
 // Terminal mode — only the conversation, its answering/note status and the
 // composer. The kind VALUE is "headless", not "ask": `role: "ask"` already
-// names carl's question thread (versus the mind thread) on this wire, and
+// names carl's question thread (versus the legacy, read-only mind thread
+// that mind runs replaced) on this wire, and
 // the two are orthogonal.
 
 @Observable

@@ -2,8 +2,6 @@ package jobs
 
 import (
 	"context"
-	"encoding/json"
-	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -107,81 +105,8 @@ func contractMLJobWithThread(t *testing.T, st *store.Store, slug, lead, threadSe
 	return id
 }
 
-// ---------------------------------------------------------------------------
-// mindThreadFor
-// ---------------------------------------------------------------------------
-
-// "Returns the live `mind` thread whose `TurnUUID == zeusUUID`, else nil; an
-// `ask` thread never matches; a closed thread never matches; an empty
-// `zeusUUID` never matches." (Amendment 13 moved the key from ForkUUID to
-// TurnUUID; the lead edited the field name here, sighted, nothing else.)
-func TestMindLayerMindThreadForMatches(t *testing.T) {
-	threads := []store.Thread{
-		{TID: "t1", Role: "mind", State: "closed", TurnUUID: "u-now"},
-		{TID: "t2", Role: "ask", State: "live", TurnUUID: "u-now"},
-		{TID: "t3", Role: "mind", State: "live", TurnUUID: "u-old"},
-		{TID: "t4", Role: "mind", State: "live", TurnUUID: "u-now"},
-		{TID: "t5", Role: "mind", State: "live", TurnUUID: ""},
-	}
-	got := mindThreadFor(threads, "u-now")
-	if got == nil || got.TID != "t4" {
-		t.Fatalf("mindThreadFor(u-now) = %+v, want t4 (the live mind thread at this turn)", got)
-	}
-	if g := mindThreadFor(threads, "u-old"); g == nil || g.TID != "t3" {
-		t.Errorf("mindThreadFor(u-old) = %+v, want t3", g)
-	}
-	if g := mindThreadFor(threads, "u-newer"); g != nil {
-		t.Errorf("mindThreadFor(u-newer) = %+v, want nil (no thread forked at this turn)", g)
-	}
-	if g := mindThreadFor(threads, ""); g != nil {
-		t.Errorf("mindThreadFor(\"\") = %+v, want nil", g)
-	}
-	// only an ask thread and a closed mind thread at the uuid → nil
-	if g := mindThreadFor(threads[:2], "u-now"); g != nil {
-		t.Errorf("mindThreadFor over {closed mind, live ask} = %+v, want nil", g)
-	}
-	if g := mindThreadFor(nil, "u-now"); g != nil {
-		t.Errorf("mindThreadFor(nil) = %+v, want nil", g)
-	}
-}
-
-// ---------------------------------------------------------------------------
-// mindSeed / mindCaptureMessage
-// ---------------------------------------------------------------------------
-
-// "Both contain the quoted text verbatim and the source serialized as JSON; the
-// seed additionally states the item contract (a `title` ≤ 120 runes ..., `scope`
-// `universal` or `repo` + `dir`, `kind` ∈ decision/reading/note, `body` ≤ 8,000
-// runes, "finalize" → `kraken mm commit` with the JSON on stdin)".
-func TestMindLayerMindSeedCarriesQuoteAndSource(t *testing.T) {
-	req := CaptureRequest{
-		Slug: "seed-job",
-		Text: "The daemon, not zeus, watches CI — and \"bumps\" the pane.",
-		Source: CaptureSource{
-			Kind: "artifact", Slug: "seed-job", Home: "cell", Name: "50-components.md", SHA: "abc123",
-		},
-	}
-	src, err := json.Marshal(req.Source)
-	if err != nil {
-		t.Fatalf("marshal source: %v", err)
-	}
-	seed := mindSeed(req)
-	msg := mindCaptureMessage(req)
-	for label, s := range map[string]string{"mindSeed": seed, "mindCaptureMessage": msg} {
-		if !strings.Contains(s, req.Text) {
-			t.Errorf("%s lacks the quoted text verbatim:\n%s", label, s)
-		}
-		if !strings.Contains(s, string(src)) {
-			t.Errorf("%s lacks the source serialized as JSON %s:\n%s", label, src, s)
-		}
-	}
-	for _, want := range []string{"title", "120", "scope", "universal", "repo", "dir", "kind",
-		"decision", "reading", "note", "body", "finalize", "kraken mm commit"} {
-		if !strings.Contains(seed, want) {
-			t.Errorf("mindSeed lacks %q (the item contract):\n%s", want, seed)
-		}
-	}
-}
+// (mindThreadFor and mindSeed/mindCaptureMessage were retired with the mind
+// thread in job 674; their tests went with them.)
 
 // ---------------------------------------------------------------------------
 // threadEnvPrefix / threadSpawnCommand
@@ -235,160 +160,24 @@ func TestMindLayerThreadSpawnCommandBeginsWithPrefixes(t *testing.T) {
 // threadBrief
 // ---------------------------------------------------------------------------
 
-// "For `role == "mind"` the text names `kraken mm commit`, `kraken mm revise`,
-// `kraken mm show`, `kraken mm get` ... for `role == "ask"` it is the
-// pre-existing brief (names none of `mm commit`/`mm revise`)."
+// Job 674 retired the mind thread: a revived `mind` row is briefed exactly as
+// an ask thread, and neither brief names the retired commit/revise verbs.
+// (The commit/revise tests went with CommitMMItem and ReviseMMItem.)
 func TestMindLayerThreadBriefPerRole(t *testing.T) {
 	contractMLEnv(t)
 	j := &Job{Slug: "brief-role"}
-	mind := threadBrief(j, "t1", "a mind title", "/tmp/wt", "mind")
-	for _, want := range []string{"kraken mm commit", "kraken mm revise", "kraken mm show", "kraken mm get"} {
-		if !strings.Contains(mind, want) {
-			t.Errorf("mind brief lacks %q:\n%s", want, mind)
-		}
+	mind := threadBrief(j, "t1", "a title", "/tmp/wt", "mind")
+	ask := threadBrief(j, "t1", "a title", "/tmp/wt", "ask")
+	if mind != ask {
+		t.Errorf("mind brief differs from the ask brief:\n%s", mind)
 	}
-	ask := threadBrief(j, "t1", "an ask title", "/tmp/wt", "ask")
 	for _, banned := range []string{"mm commit", "mm revise"} {
 		if strings.Contains(ask, banned) {
 			t.Errorf("ask brief names %q:\n%s", banned, ask)
 		}
 	}
-	if !strings.Contains(ask, "an ask title") {
+	if !strings.Contains(ask, "a title") {
 		t.Errorf("ask brief lost its title:\n%s", ask)
-	}
-	if mind == ask {
-		t.Errorf("mind and ask briefs are identical")
-	}
-}
-
-// ---------------------------------------------------------------------------
-// CommitMMItem / ReviseMMItem
-// ---------------------------------------------------------------------------
-
-func contractMLCommit() MMCommit {
-	return MMCommit{
-		Title: "the daemon, not zeus, watches CI",
-		Scope: "repo", Repo: "kraken", Dir: "internal/jobs",
-		Kind:   "decision",
-		Body:   "kraken serve's PR tracker bumps zeus on failing checks.",
-		Quote:  "the daemon, not zeus, watches CI",
-		Source: CaptureSource{Kind: "artifact", Slug: "commit-job", Home: "cell", Name: "00-overview.md", SHA: "deadbeef"},
-	}
-}
-
-// "`CommitMMItem`: Gate first: `threadSession` must name a thread row with
-// `Role == "mind"` and `State == "live"` ... Creates the item with `Source =
-// "capture"`, `JobID`/`Slug` of the thread's job, `Content = Body`, `SourceJSON`
-// = the source's JSON, `ThreadSession = threadSession`, `CreatedAt = now`".
-func TestMindLayerCommitMMItemCreatesFromLiveMindThread(t *testing.T) {
-	st := contractMLStore(t)
-	contractMLRepo(t, "kraken")
-	jobID := contractMLJobWithThread(t, st, "commit-job", "zeus-sess", "mind-sess", "mind", "live")
-	c := contractMLCommit()
-	id, err := CommitMMItem(st, c, "mind-sess")
-	if err != nil {
-		t.Fatalf("CommitMMItem: %v", err)
-	}
-	it, err := st.GetMMItem(id)
-	if err != nil {
-		t.Fatalf("GetMMItem: %v", err)
-	}
-	if it.Source != "capture" {
-		t.Errorf("Source = %q, want capture", it.Source)
-	}
-	if it.JobID != jobID || it.Slug != "commit-job" {
-		t.Errorf("job/slug = %d/%q, want %d/commit-job (the thread's job)", it.JobID, it.Slug, jobID)
-	}
-	if it.Content != c.Body || it.Title != c.Title || it.Kind != c.Kind || it.Quote != c.Quote {
-		t.Errorf("item = %+v, want content/title/kind/quote from %+v", it, c)
-	}
-	if it.Scope != "repo" || it.Repo != "kraken" || it.Dir != "internal/jobs" {
-		t.Errorf("scope/repo/dir = %q/%q/%q", it.Scope, it.Repo, it.Dir)
-	}
-	if it.ThreadSession != "mind-sess" {
-		t.Errorf("ThreadSession = %q, want mind-sess", it.ThreadSession)
-	}
-	if it.CreatedAt <= 0 {
-		t.Errorf("CreatedAt = %d, want now", it.CreatedAt)
-	}
-	var src CaptureSource
-	if err := json.Unmarshal([]byte(it.SourceJSON), &src); err != nil {
-		t.Fatalf("SourceJSON %q is not JSON: %v", it.SourceJSON, err)
-	}
-	if src != c.Source {
-		t.Errorf("SourceJSON decodes to %+v, want %+v", src, c.Source)
-	}
-	if it.InvalidatedAt != 0 {
-		t.Errorf("a fresh commit is invalidated")
-	}
-}
-
-// "`universal` forces `Repo = Dir = ""`".
-func TestMindLayerCommitUniversalClearsRepoAndDir(t *testing.T) {
-	st := contractMLStore(t)
-	contractMLRepo(t, "kraken")
-	contractMLJobWithThread(t, st, "commit-uni", "zeus-sess", "mind-uni", "mind", "live")
-	c := contractMLCommit()
-	c.Scope = "universal"
-	id, err := CommitMMItem(st, c, "mind-uni")
-	if err != nil {
-		t.Fatalf("CommitMMItem universal: %v", err)
-	}
-	it, err := st.GetMMItem(id)
-	if err != nil {
-		t.Fatalf("GetMMItem: %v", err)
-	}
-	if it.Scope != "universal" || it.Repo != "" || it.Dir != "" {
-		t.Errorf("universal item scope/repo/dir = %q/%q/%q, want universal/''/''", it.Scope, it.Repo, it.Dir)
-	}
-}
-
-// The gate's positive/negative pair on the same body: only the live mind
-// thread's session commits — "`threadSession` must name a thread row with
-// `Role == "mind"` and `State == "live"` ... else `ErrNotMindThread`".
-func TestMindLayerCommitGateIsTheMindThreadSession(t *testing.T) {
-	st := contractMLStore(t)
-	contractMLRepo(t, "kraken")
-	contractMLJobWithThread(t, st, "commit-gate", "zeus-gate", "mind-gate", "mind", "live")
-	if _, err := CommitMMItem(st, contractMLCommit(), "zeus-gate"); !errors.Is(err, ErrNotMindThread) {
-		t.Errorf("commit from zeus' own session err = %v, want ErrNotMindThread", err)
-	}
-	if _, err := CommitMMItem(st, contractMLCommit(), "mind-gate"); err != nil {
-		t.Errorf("commit from the live mind thread: %v", err)
-	}
-}
-
-// "`ReviseMMItem`: Same gate and validation as commit; the item must exist and
-// be live ...; applies `store.ReviseMMItem` with `At = now`".
-func TestMindLayerReviseMMItemFromMindThread(t *testing.T) {
-	st := contractMLStore(t)
-	contractMLRepo(t, "kraken")
-	contractMLJobWithThread(t, st, "revise-job", "zeus-rev", "mind-rev", "mind", "live")
-	id, err := CommitMMItem(st, contractMLCommit(), "mind-rev")
-	if err != nil {
-		t.Fatalf("CommitMMItem: %v", err)
-	}
-	before, _ := st.GetMMItem(id)
-	c := contractMLCommit()
-	c.Title = "revised: the tracker bumps zeus"
-	c.Body = "revised body"
-	c.Quote = "revised quote"
-	c.Dir = "internal/api"
-	if err := ReviseMMItem(st, id, c, "mind-rev"); err != nil {
-		t.Fatalf("ReviseMMItem: %v", err)
-	}
-	it, err := st.GetMMItem(id)
-	if err != nil {
-		t.Fatalf("GetMMItem: %v", err)
-	}
-	if it.Title != c.Title || it.Content != c.Body || it.Quote != c.Quote || it.Dir != "internal/api" {
-		t.Errorf("revised item = %+v, want %+v", it, c)
-	}
-	if it.RevisedAt <= 0 {
-		t.Errorf("RevisedAt = %d, want now", it.RevisedAt)
-	}
-	if it.CreatedAt != before.CreatedAt || it.SourceJSON != before.SourceJSON || it.ThreadSession != before.ThreadSession {
-		t.Errorf("revise moved created_at/source_json/thread_session: before %+v after %+v", before, it)
 	}
 }
 

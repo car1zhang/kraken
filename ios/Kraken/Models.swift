@@ -1585,7 +1585,8 @@ struct WebThread: Decodable, Identifiable {
 
     var id: String { tid }
 
-    /// A mind thread: the one a capture routes highlighted text to.
+    /// A mind thread: legacy — captures routed to one before mind runs
+    /// replaced it; existing rows are read-only history.
     var isMind: Bool { role == "mind" }
 
     /// An ask thread: no pane, one headless claude per question.
@@ -2529,9 +2530,16 @@ struct WebMMItem: Decodable, Identifiable {
     /// `source` above is already the string provenance — `capture` for an
     /// item a mind thread committed.
     let captureSource: WebCaptureSource?
-    /// "live" or "proposed" (schema v37): a proposed item is a nightly mind
-    /// pass proposal awaiting confirm. Absent on older servers.
+    /// "live" or "proposed" (schema v37). Mind runs write every item live, so
+    /// "proposed" survives only on rows from before them. Absent on older
+    /// servers.
     let state: String?
+    /// The mind run that wrote this item (schema v39); absent means none.
+    let runId: Int?
+    /// The item this one replaced; that row is invalidated `superseded`.
+    let supersedes: Int?
+    /// The item that replaced this one.
+    let supersededBy: Int?
 
     /// Live is the ABSENCE of `invalidated_at`, per the paragraph above. Every
     /// predicate in the app tests this rather than a stamp's value, so a
@@ -2553,16 +2561,19 @@ struct WebMMItem: Decodable, Identifiable {
         case revisedAt = "revised_at"
         case captureSource = "capture_source"
         case state
+        case runId = "run_id"
+        case supersedes
+        case supersededBy = "superseded_by"
     }
 }
 
 // Where a captured quote came from — `jobs.CaptureSource` / web's
 // `CaptureSource` (lib/mind.ts). Encodable because the artifact viewer's
-// ◆ mind sends one; JSONEncoder omits every nil, so an artifact capture goes
+// ✓ read sends one; JSONEncoder omits every nil, so an artifact mark goes
 // out as exactly `{kind, slug, home, name}`.
 struct WebCaptureSource: Codable, Equatable {
-    /// artifact | transcript | dir | item | manual, plus the nightly mind
-    /// pass' job | feedback | question (schema v37; their `qid` /
+    /// artifact | transcript | dir | item | manual, plus the retired nightly
+    /// mind cell's job | feedback | question (schema v37; their `qid` /
     /// `feedback_id` keys are not decoded here).
     let kind: String
     var slug: String? = nil
@@ -2582,18 +2593,21 @@ struct WebCaptureSource: Codable, Equatable {
     }
 }
 
-// POST /api/mm/capture — highlighted text routed to the job's mind thread.
+// POST /api/mm/mark — highlighted text recorded as a read mark for the next
+// mind run (the body `/api/mm/capture` took, which is now its alias).
 struct MMCaptureRequest: Encodable {
     let slug: String
     let text: String
     let source: WebCaptureSource
 }
 
-// What /api/mm/capture answers: the mind thread's tid, and whether this
-// capture branched it (`created`) or was sent to the live one.
-struct MMCaptured: Decodable {
-    let tid: String
-    let created: Bool
+// What /api/mm/mark answers: the stored (or folded-onto) mark's id and the
+// job's pending-mark count after the write. `folded` is Optional so a server
+// that ever drops the key still decodes.
+struct MMMarkResult: Codable {
+    let id: Int
+    let pending: Int
+    let folded: Bool?
 }
 
 // One contradiction flag, as GET /api/mm/flags lists it. Every field is the

@@ -83,69 +83,20 @@ func mpcRepo(t *testing.T, name string) {
 	t.Setenv("KRAKEN_REPOS_DIR", repos)
 }
 
-// mpcMindLead stands up the mind job the propose gate reads: a working row with
-// a lead session, named by the `mind_last_run` kv row (`MindRun`'s JSON tags:
-// date, swept_to, job).
-func mpcMindLead(t *testing.T, st *store.Store) string {
-	t.Helper()
-	const lead = "mind-lead-sess"
-	if _, err := st.CreateJob(&store.Job{Slug: "mind-2026-10-21", Repo: "kraken", State: "working", Session: lead, Body: "x", Author: "kraken"}); err != nil {
-		t.Fatal(err)
-	}
-	if err := st.SetKV("mind_last_run", `{"date":"2026-10-21","swept_to":1761000000000,"job":"mind-2026-10-21"}`); err != nil {
-		t.Fatal(err)
-	}
-	return lead
-}
-
 func mpcNum(v any) int64 {
 	f, _ := v.(float64)
 	return int64(f)
 }
 
-// ---------------------------------------------------------------------------
-// POST /api/mm/propose
-// ---------------------------------------------------------------------------
-
-// "body `{"session": string, "items": [MMProposal…]}` … else 200 with
-// `MMProposeSummary`" — `{results:[{index, id, outcome, reason?}], added,
-// folded, suppressed, refused}`.
-func TestMpcProposeRouteAnswersTheSummary(t *testing.T) {
-	st := mpcEnv(t)
-	mpcRepo(t, "kraken")
-	lead := mpcMindLead(t, st)
-	known, err := st.AddMMItem(store.MMItem{Kind: "note", Source: "capture", Content: "c", Quote: "a quote carl already holds", CreatedAt: 5})
-	if err != nil {
-		t.Fatal(err)
-	}
+// POST /api/mm/propose was retired with the nightly mind job (mind runs,
+// schema v39): the route is unregistered, so it answers the mux's 404.
+func TestMpcProposeRouteIsGone(t *testing.T) {
+	mpcEnv(t)
 	mux := mpcMux()
-	body := map[string]any{
-		"session": lead,
-		"items": []map[string]any{{
-			"title": "the tracker owns CI", "scope": "repo", "repo": "kraken", "dir": "internal/jobs",
-			"kind": "decision", "body": "Carl said the daemon watches CI, not zeus.", "quote": "a quote carl already holds",
-			"rung": "rung 2", "source": map[string]any{"kind": "transcript", "session": "s", "uuid": "u"},
-		}},
-	}
-	got := mpcWant(t, mpcDo(t, mux, http.MethodPost, "/api/mm/propose", body), 200, "POST /api/mm/propose")
-	for _, k := range []string{"results", "added", "folded", "suppressed", "refused"} {
-		if _, ok := got[k]; !ok {
-			t.Errorf("summary lacks %q: %v", k, got)
+	for _, path := range []string{"/api/mm/propose", "/api/mm/commit", "/api/mm/revise"} {
+		if rec := mpcDo(t, mux, http.MethodPost, path, map[string]any{}); rec.Code != http.StatusNotFound {
+			t.Errorf("POST %s = %d, want 404", path, rec.Code)
 		}
-	}
-	if mpcNum(got["added"]) != 0 || mpcNum(got["folded"]) != 1 || mpcNum(got["suppressed"]) != 0 || mpcNum(got["refused"]) != 0 {
-		t.Errorf("counts = %v, want one fold", got)
-	}
-	res, _ := got["results"].([]any)
-	if len(res) != 1 {
-		t.Fatalf("results = %v", got["results"])
-	}
-	r := res[0].(map[string]any)
-	if mpcNum(r["index"]) != 0 || r["outcome"] != "folded" || mpcNum(r["id"]) != known {
-		t.Errorf("results[0] = %v, want {index 0, outcome folded, id %d}", r, known)
-	}
-	if _, ok := r["reason"]; ok {
-		t.Errorf("results[0] carries a reason on a fold: %v", r)
 	}
 }
 

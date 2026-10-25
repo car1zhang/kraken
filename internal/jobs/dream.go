@@ -461,8 +461,6 @@ func anyTranscriptSince(sinceMS int64) (found, ok bool) {
 
 // anyTranscriptSinceWhere is anyTranscriptSince's walk with a project-dir
 // filter: a dir whose name skip reports true is never read (nil skips none).
-// The mind pass uses it to ignore kraken's own nightly cells
-// (anyOperatorTranscriptSince, mindpass.go).
 func anyTranscriptSinceWhere(sinceMS int64, skip func(projectDir string) bool) (found, ok bool) {
 	root := filepath.Join(util.Home(), ".claude", "projects")
 	projects, err := os.ReadDir(root)

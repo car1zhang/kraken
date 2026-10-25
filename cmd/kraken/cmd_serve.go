@@ -227,6 +227,13 @@ func runNightlyBackups(st *store.Store) {
 			} else {
 				last = now
 				util.LogEvent("serve", "info", "backup", "nightly backup written to "+backupsDir())
+				// the mind runs' bundles go after 90 days, only once a backup
+				// that still holds them is on disk; a failed prune is logged
+				// and retried on the next backup, never fatal (a successful
+				// one is logged by jobs.PruneMindRunBundles itself)
+				if _, perr := jobs.PruneMindRunBundles(st, now); perr != nil {
+					util.LogEvent("serve", "error", "mind-run-pruned", "mind run bundle prune failed: "+perr.Error())
+				}
 			}
 		}
 		time.Sleep(time.Hour)

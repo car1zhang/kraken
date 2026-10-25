@@ -33,8 +33,9 @@ var ErrThreadNotClosed = errors.New("store: thread is not closed")
 
 // ErrThreadKind is returned by a thread write whose Kind is neither "" (read
 // as "pane"), "pane" nor "headless", and by one that pairs Kind "headless"
-// with Role "mind": a mind thread finalizes by running `kraken mm commit`,
-// and a headless run has no shell to run it with.
+// with Role "mind": `mind` rows are only the retired mind thread's history
+// (no new one is branched since mind runs replaced it), and every one of them
+// was a pane thread, so a headless mind row names a shape that never existed.
 var ErrThreadKind = errors.New("store: thread kind must be pane or headless")
 
 // ErrAskThreadPane is returned when a headless row would be stored with a tmux

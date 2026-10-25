@@ -65,7 +65,7 @@ func cmdMine(args []string) {
 
 const (
 	mineUsage         = "usage: k mine digest|reduce|operator|around ..."
-	mineOperatorUsage = "usage: k mine operator --since <unix-millis> [--until <unix-millis>] [--login <name>] [--before N] [--after N]"
+	mineOperatorUsage = "usage: k mine operator --since <unix-millis> [--until <unix-millis>] [--login <name>] [--session <id>]... [--before N] [--after N]"
 	mineAroundUsage   = "usage: k mine around <transcript path> <uuid> [--radius N] [--raw]"
 )
 
@@ -120,6 +120,13 @@ func runMineOperator(args []string, stdout, stderr *os.File) error {
 			}
 		case "--login":
 			opts.Login = value
+		case "--session":
+			// repeatable: each one adds a session to the keep set
+			if s := strings.TrimSpace(value); s != "" {
+				opts.Sessions = append(opts.Sessions, s)
+			} else {
+				return fmt.Errorf("--session needs a session id\n%s", mineOperatorUsage)
+			}
 		case "--before", "--after":
 			v, perr := strconv.Atoi(strings.TrimSpace(value))
 			if perr != nil {

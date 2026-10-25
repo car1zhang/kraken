@@ -1,25 +1,50 @@
 // MODEL mode — the second pane of the memory view, beside LIBRARY.
 //
-// The mental model is one row per thing carl knows. Since the mind layer
-// (schema v33) a row is COMMITTED by a mind thread — carl highlights text
-// anywhere on the board, the ◆ mind button forks zeus into a mind thread, and
-// that thread runs `kraken mm commit` — so most rows carry a one-line `title`
-// (a claim), a `scope` (`universal`, or a repo plus a repo-relative dir), the
-// highlighted `quote` and a `capture_source` pointer. Rows from before the
-// rework carry none of those and headline their content's first line.
+// The mental model is one row per thing carl knows. Since schema v39 most
+// rows are written by a MIND RUN: one headless pass inside kraken serve that
+// reads a finished job's conversations, its ★-saved artifacts and the read
+// marks carl made with the ✓ read button (or, once a day, whatever no job run
+// swept) and writes items straight in — adding new ones, and superseding or
+// retiring ones carl's newer words contradict. Such rows carry a one-line
+// `title` (a claim), a `scope` (`universal`, or a repo plus a repo-relative
+// dir), the `quote` it rests on and the `run_id` that wrote it. Rows from
+// before the mind layer carry none of those and headline their content's
+// first line.
 //
-// Above the rows sits the FLAGS section: contradictions an agent noticed
-// (`kraken mm flag`) and zeus raised to carl. Each offers `drop item` (the
-// item is invalidated, reason `contradicted`), `keep` (the flag closes), and
-// `open job` (the steer modal of the job whose zeus raised it).
+// Above the rows sit three sections. FLAGS: contradictions raised to carl,
+// each offering `drop item` (the item is invalidated, reason `contradicted`),
+// `keep` (the flag closes) and `open job`. RUNS: the last mind runs, each
+// expandable to its report and raw answer, with a dry-run `replay` that
+// judges the recorded input again under the current mind skill and shows
+// what would change. PENDING MARKS: what the next runs will read, each
+// removable until a run consumes it.
 //
 // Nothing here is a local latch: the lists are the server's, every write is
 // followed by a refetch, and the row's next state is whatever that says.
 
 import { useEffect, useMemo, useState } from "react";
 
-import { fetchMMSource, resolveMMFlag } from "../../api/client.ts";
-import { useMM, useMMFlags, type MMModel } from "../../hooks/useMM.ts";
+import {
+  fetchMMRun,
+  fetchMMSource,
+  removeMMMark,
+  replayMMRun,
+  resolveMMFlag,
+} from "../../api/client.ts";
+import type {
+  WebMindExclusion,
+  WebMindOp,
+  WebMindReplay,
+  WebMindRun,
+  WebMMMark,
+} from "../../api/types.ts";
+import {
+  useMM,
+  useMMFlags,
+  useMMMarks,
+  useMMRuns,
+  type MMModel,
+} from "../../hooks/useMM.ts";
 import type { MMCaptureSource, MMFlag, MMItem, MMSourceView } from "../../lib/mm.ts";
 import { age } from "../../lib/format.ts";
 import { useRenderedMD } from "../../hooks/useRenderedMD.ts";
@@ -27,17 +52,11 @@ import { shortDate } from "../../lib/dates.ts";
 
 /**
  * The kind chips. Four are a KIND (every item has exactly one) and the rest
- * cut across them — an invalidated reading is still a reading, and a nightly
- * or proposed item is still a decision or a note.
+ * cut across them — an invalidated reading is still a reading, and an item a
+ * mind run wrote (`pass`, source `nightly` on the wire) is still a decision or
+ * a note.
  */
-export type MMKindFilter =
-  | "all"
-  | "decision"
-  | "reading"
-  | "note"
-  | "invalidated"
-  | "nightly"
-  | "proposed";
+export type MMKindFilter = "all" | "decision" | "reading" | "note" | "invalidated" | "pass";
 
 const FILTERS: { key: MMKindFilter; label: string }[] = [
   { key: "all", label: "all" },
@@ -45,21 +64,17 @@ const FILTERS: { key: MMKindFilter; label: string }[] = [
   { key: "reading", label: "readings" },
   { key: "note", label: "notes" },
   { key: "invalidated", label: "invalidated" },
-  { key: "nightly", label: "nightly" },
-  { key: "proposed", label: "proposed" },
+  { key: "pass", label: "pass" },
 ];
 
 /** How long the filter box waits after the last keystroke before it asks. */
 const FILTER_DEBOUNCE_MS = 250;
 
+/** How many runs the RUNS section lists. */
+const RUNS_SHOWN = 10;
+
 /** Live is the ABSENCE of the key — the wire has no boolean to read. */
 const isLive = (it: MMItem) => !it.invalidated_at;
-
-/**
- * A nightly mind-pass item still waiting for carl's confirm. Held out of the
- * rules files and `kraken mm get` until then; an absent `state` is live.
- */
-export const isProposed = (it: MMItem) => it.state === "proposed";
 
 export function matchesFilter(it: MMItem, f: MMKindFilter): boolean {
   switch (f) {
@@ -67,10 +82,8 @@ export function matchesFilter(it: MMItem, f: MMKindFilter): boolean {
       return true;
     case "invalidated":
       return !isLive(it);
-    case "nightly":
+    case "pass":
       return it.source === "nightly";
-    case "proposed":
-      return isProposed(it);
     default:
       return it.kind === f;
   }
@@ -169,21 +182,17 @@ const SOURCE_LABEL: Record<string, string> = {
   "agent-output": "agent",
   manual: "manual",
   capture: "mind",
-  nightly: "nightly",
+  nightly: "pass",
 };
 
 function MMRow({
   it,
   removing,
   onRemove,
-  confirming,
-  onConfirm,
 }: {
   it: MMItem;
   removing: boolean;
   onRemove: (id: number) => void;
-  confirming: boolean;
-  onConfirm: (id: number) => void;
 }) {
   const [open, setOpen] = useState(false);
   // The `source` drill-down: null = not asked, "loading" while in flight.
@@ -191,15 +200,14 @@ function MMRow({
     null,
   );
   const live = isLive(it);
-  const proposed = isProposed(it);
   const title = itemTitle(it);
   const scope = scopeLabel(it);
   const capSrc = captureSource(it);
   /**
    * A legacy marked SELECTION expands as markdown (its content is a span of an
    * artifact's markdown source); a committed item's body is prose the mind
-   * thread wrote, which is markdown too, and so is a nightly item's body,
-   * written by the mind pass. A code reading's content is source in some
+   * thread wrote, which is markdown too, and so is a pass item's body,
+   * written by a mind run. A code reading's content is source in some
    * other language and stays verbatim.
    */
   const asMD =
@@ -243,7 +251,6 @@ function MMRow({
               {KIND_LABEL[it.kind] ?? it.kind}
             </span>
             <span className="mm-headline">{title}</span>
-            {proposed ? <span className="mm-proposed">proposed</span> : null}
           </span>
           {live ? null : (
             <span className="mm-dead">
@@ -260,6 +267,9 @@ function MMRow({
             {it.source_ref && it.source !== "artifact" && it.source !== "capture"
               ? ` · ${it.source_ref}`
               : ""}
+            {it.run_id ? ` · run #${it.run_id}` : ""}
+            {it.supersedes ? ` · supersedes #${it.supersedes}` : ""}
+            {it.superseded_by ? ` · superseded by #${it.superseded_by}` : ""}
             {it.created_at ? ` · ${age(Math.floor(it.created_at / 1000))}` : ""}
             {it.revised_at ? " · revised" : ""}
           </span>
@@ -274,17 +284,6 @@ function MMRow({
         >
           source
         </button>
-        {proposed ? (
-          <button
-            className="mm-act mm-confirm"
-            title="confirm this proposed item — it goes live in the mental model"
-            aria-label={`confirm ${title}`}
-            disabled={confirming || !live}
-            onClick={() => onConfirm(it.id)}
-          >
-            confirm
-          </button>
-        ) : null}
         <button
           className="mm-act mm-rm"
           title="drop this item — the row stays, invalidated"
@@ -425,6 +424,232 @@ function FlagRow({
   );
 }
 
+/** `HH:MM` local, the runs list's time column; "" for a zero stamp. */
+function clock(ms: number): string {
+  if (!ms) return "";
+  const d = new Date(ms);
+  if (Number.isNaN(d.getTime())) return "";
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
+/** What a run covered: its job, or the once-a-day sweep of everything else. */
+export function runSubject(r: WebMindRun): string {
+  if (r.job_id && r.slug) return r.slug;
+  if (r.trigger === "daily" || !r.job_id) return "daily catch-all";
+  return r.slug || `job ${r.job_id}`;
+}
+
+/** The run's counts line: `+added · N rewritten · N retired · N excluded`. */
+export function runCounts(r: WebMindRun): string {
+  return `+${r.added ?? 0} · ${r.superseded ?? 0} rewritten · ${r.retired ?? 0} retired · ${r.excluded ?? 0} excluded`;
+}
+
+/** One answered op as one line: `supersede #68 — <title or quote>`. */
+function opLine(o: WebMindOp): string {
+  const what = (o.item?.title ?? "").trim() || (o.quote ?? "").trim() || (o.note ?? "").trim();
+  return `${o.op}${o.target ? ` #${o.target}` : ""}${what ? ` — ${what}` : ""}`;
+}
+
+function exclusionLine(x: WebMindExclusion): string {
+  return `${x.rung}: «${x.quote}»${x.why ? ` — ${x.why}` : ""}`;
+}
+
+/** A dry-run replay's diff, rendered as three lists plus the two prompt shas. */
+function ReplayDiff({ d }: { d: WebMindReplay }) {
+  const added = d.diff?.ops_added ?? [];
+  const lost = d.diff?.ops_lost ?? [];
+  const moved = d.diff?.exclusions_changed ?? [];
+  const same = d.old_prompt_sha === d.new_prompt_sha;
+  return (
+    <div className="mm-replay" aria-label="replay diff">
+      <div className="mm-ctx">
+        prompt {short(d.old_prompt_sha)}
+        {same ? " (unchanged)" : ` → ${short(d.new_prompt_sha)}`}
+        {d.new_run ? ` · written as run #${d.new_run}` : " · dry run, nothing written"}
+      </div>
+      {!added.length && !lost.length && !moved.length ? (
+        <div className="mm-ctx">no difference: the current skill answers the same</div>
+      ) : (
+        <>
+          {added.map((o, i) => (
+            <div key={"a" + i} className="mm-ctx mm-diffadd">
+              + {opLine(o)}
+            </div>
+          ))}
+          {lost.map((o, i) => (
+            <div key={"l" + i} className="mm-ctx mm-difflost">
+              − {opLine(o)}
+            </div>
+          ))}
+          {moved.map((x, i) => (
+            <div key={"x" + i} className="mm-ctx">
+              ~ excluded {exclusionLine(x)}
+            </div>
+          ))}
+        </>
+      )}
+    </div>
+  );
+}
+
+type Loadable<T> = null | "loading" | { error: string } | T;
+
+/** One mind run: what it covered, its counts, and on expand its record. */
+function RunRow({ r }: { r: WebMindRun }) {
+  const [open, setOpen] = useState(false);
+  const [record, setRecord] = useState<Loadable<{ report: string; answer: string }>>(null);
+  const [replay, setReplay] = useState<Loadable<WebMindReplay>>(null);
+
+  const toggle = async () => {
+    const next = !open;
+    setOpen(next);
+    if (!next || (record !== null && record !== "loading" && !("error" in record))) return;
+    setRecord("loading");
+    try {
+      const [rep, ans] = await Promise.all([fetchMMRun(r.id, "report"), fetchMMRun(r.id, "answer")]);
+      setRecord({ report: rep.blob ?? "", answer: ans.blob ?? "" });
+    } catch (e) {
+      setRecord({ error: e instanceof Error ? e.message : String(e) });
+    }
+  };
+
+  const runReplay = async () => {
+    if (replay === "loading") return;
+    setReplay("loading");
+    try {
+      setReplay(await replayMMRun(r.id));
+    } catch (e) {
+      setReplay({ error: e instanceof Error ? e.message : String(e) });
+    }
+  };
+
+  const reportHTML = useRenderedMD(
+    record && record !== "loading" && !("error" in record) && record.report
+      ? record.report
+      : undefined,
+  );
+
+  const unfinished = r.state !== "done";
+  return (
+    <div className="mm-run" data-run-id={String(r.id)}>
+      <div className="mm-rowtop">
+        <button
+          className="mm-open"
+          aria-expanded={open}
+          title={open ? "collapse" : "show this run's report and answer"}
+          onClick={() => void toggle()}
+        >
+          <span className="mm-rowhead">
+            <span className="mm-runtime">{clock(r.created_at)}</span>
+            <span className="mm-headline">{runSubject(r)}</span>
+            <span className="mm-meta">
+              {r.trigger} · run #{r.id}
+              {unfinished ? ` · ${r.state}` : ""}
+            </span>
+          </span>
+          <span className="mm-meta">
+            {r.state === "done" ? runCounts(r) : r.note || r.state}
+            {r.created_at ? ` · ${age(Math.floor(r.created_at / 1000))}` : ""}
+          </span>
+        </button>
+        <button
+          className="mm-act mm-replaybtn"
+          disabled={!r.has_bundle || replay === "loading"}
+          title={
+            r.has_bundle
+              ? "judge this run's recorded input again under the current mind skill — a dry run, nothing is written"
+              : "this run's recorded input is gone (pruned, or never recorded), so it cannot be replayed"
+          }
+          onClick={() => void runReplay()}
+        >
+          {replay === "loading" ? "replaying…" : "replay"}
+        </button>
+      </div>
+      {open ? (
+        <div className="mm-frozen">
+          {record === "loading" || record === null ? (
+            <div className="mm-ctx">loading the run's record…</div>
+          ) : "error" in record ? (
+            <div className="mm-ctx">couldn't load the run: {record.error}</div>
+          ) : (
+            <>
+              <span className="mm-ctxlbl">report</span>
+              {record.report ? (
+                <div className="mm-frozenmd md" dangerouslySetInnerHTML={reportHTML} />
+              ) : (
+                <div className="mm-ctx">no report (the run did not finish)</div>
+              )}
+              <span className="mm-ctxlbl">answer</span>
+              {record.answer ? (
+                <pre className="mm-frozentext">{record.answer}</pre>
+              ) : (
+                <div className="mm-ctx">no answer recorded</div>
+              )}
+              <div className="mm-ctx">
+                {r.model ? `${r.model} · ` : ""}
+                {r.prompt_sha ? `prompt ${short(r.prompt_sha)} · ` : ""}
+                {`${r.in_tokens ?? 0} in / ${r.out_tokens ?? 0} out tokens`}
+                {r.source_run ? ` · replay of run #${r.source_run}` : ""}
+              </div>
+            </>
+          )}
+        </div>
+      ) : null}
+      {replay !== null && replay !== "loading" ? (
+        <div className="mm-frozen">
+          {"error" in replay ? (
+            <div className="mm-ctx">replay failed: {replay.error}</div>
+          ) : (
+            <ReplayDiff d={replay} />
+          )}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+/** Where a mark's text came from, in a few words. */
+function markWhere(m: WebMMMark): string {
+  const s = m.source;
+  const parts: string[] = [m.slug || "no job"];
+  if (s?.kind === "artifact" && s.name) parts.push(s.name);
+  else if (s?.kind && s.kind !== "manual") parts.push(s.kind);
+  return parts.join(" · ");
+}
+
+/** One pending read mark, removable until a run consumes it. */
+function MarkRow({
+  m,
+  busy,
+  onRemove,
+}: {
+  m: WebMMMark;
+  busy: boolean;
+  onRemove: (id: number) => void;
+}) {
+  return (
+    <div className="mm-mark" data-mark-id={String(m.id)}>
+      <div className="mm-markbody">
+        <span className="mm-meta">{markWhere(m)}</span>
+        <span className="mm-quote">«{m.text}»</span>
+        <span className="mm-meta">
+          {m.created_at ? age(Math.floor(m.created_at / 1000)) : ""}
+        </span>
+      </div>
+      <button
+        className="mm-act mm-markrm"
+        disabled={busy}
+        title="remove this mark — no run will read it"
+        aria-label={`remove mark ${m.id}`}
+        onClick={() => onRemove(m.id)}
+      >
+        remove
+      </button>
+    </div>
+  );
+}
+
 export interface MentalModelPaneProps {
   /**
    * Hidden rather than unmounted: the filter and any half-typed note are
@@ -439,10 +664,10 @@ export interface MentalModelPaneProps {
   /** Drop one item by id (invalidates it — nothing here deletes). */
   onRemove: (id: number) => Promise<void>;
   /**
-   * Confirm one `proposed` item (the nightly mind pass') so it goes live.
-   * Routed through the same mutate + refetch as `onRemove`.
+   * Accepted and ignored: mind runs write items live, so there is no confirm
+   * button any more. Kept optional so an older caller still compiles.
    */
-  onConfirm: (id: number) => Promise<void>;
+  onConfirm?: (id: number) => Promise<void>;
   /** Open the steer modal of a flag's job. Absent hides `open job`. */
   onOpenJob?: (slug: string) => void;
 }
@@ -452,7 +677,6 @@ export function MentalModelPane({
   mm,
   onAddNote,
   onRemove,
-  onConfirm,
   onOpenJob,
 }: MentalModelPaneProps) {
   const [filter, setFilter] = useState<MMKindFilter>("all");
@@ -465,9 +689,10 @@ export function MentalModelPane({
   const [removing, setRemoving] = useState<ReadonlySet<number>>(
     () => new Set<number>(),
   );
-  const [confirming, setConfirming] = useState<ReadonlySet<number>>(
+  const [unmarking, setUnmarking] = useState<ReadonlySet<number>>(
     () => new Set<number>(),
   );
+  const [markErr, setMarkErr] = useState<string | null>(null);
   const [resolving, setResolving] = useState<ReadonlySet<number>>(
     () => new Set<number>(),
   );
@@ -490,6 +715,8 @@ export function MentalModelPane({
   const source: MMModel = askedQ !== "" ? filtered : mm;
 
   const flags = useMMFlags(!hidden);
+  const runs = useMMRuns(!hidden);
+  const marks = useMMMarks(!hidden);
 
   const counts = useMemo(() => {
     const c: Record<MMKindFilter, number> = {
@@ -498,16 +725,14 @@ export function MentalModelPane({
       reading: 0,
       note: 0,
       invalidated: 0,
-      nightly: 0,
-      proposed: 0,
+      pass: 0,
     };
     for (const it of source.items) {
       if (it.kind === "decision" || it.kind === "reading" || it.kind === "note") {
         c[it.kind]++;
       }
       if (!isLive(it)) c.invalidated++;
-      if (it.source === "nightly") c.nightly++;
-      if (isProposed(it)) c.proposed++;
+      if (it.source === "nightly") c.pass++;
     }
     return c;
   }, [source.items]);
@@ -538,23 +763,22 @@ export function MentalModelPane({
     });
   };
 
-  const confirm = async (id: number) => {
-    if (confirming.has(id)) return;
-    setConfirming((prev) => new Set(prev).add(id));
-    // the integrator routes this through the shared mutate `remove` rides,
-    // which parks a refusal in the clock corner rather than rejecting; the
-    // refetch here is what moves the row whatever the caller did
+  const unmark = async (id: number) => {
+    if (unmarking.has(id)) return;
+    setUnmarking((prev) => new Set(prev).add(id));
+    setMarkErr(null);
     try {
-      await onConfirm(id);
-      await refetchBoth();
-    } finally {
-      // a rejection must not leave the button disabled until remount
-      setConfirming((prev) => {
-        const next = new Set(prev);
-        next.delete(id);
-        return next;
-      });
+      await removeMMMark(id);
+    } catch (e) {
+      // 409 once a run consumed it between the poll and the press
+      setMarkErr(e instanceof Error ? e.message : String(e));
     }
+    await marks.refetch();
+    setUnmarking((prev) => {
+      const next = new Set(prev);
+      next.delete(id);
+      return next;
+    });
   };
 
   const resolve = async (id: number, resolution: "drop" | "keep") => {
@@ -595,7 +819,7 @@ export function MentalModelPane({
         ? `nothing matches “${askedQ}”`
         : mm.items.length
           ? "nothing in that filter"
-          : "nothing captured yet — highlight text anywhere and press ◆ mind, or + note here; the nightly pass proposes items for you to confirm";
+          : "nothing captured yet — highlight text anywhere and press ✓ read, or + note here; when you click Done on a job, a mind run reads its conversations and your marks and writes items here";
 
   return (
     <section className="graph-lib mm-pane" hidden={hidden}>
@@ -677,6 +901,46 @@ export function MentalModelPane({
             ))}
           </div>
         ) : null}
+        <div className="mm-runs" aria-label="mind runs">
+            <div className="graph-lbl mm-flagslbl">runs</div>
+            <div className="mm-ctx">
+              A run is one pass of the mind skill over what you said and kept — a
+              finished job&apos;s conversations, ★ saves and ✓ read marks, or once a
+              day whatever no job run covered — writing items straight into this
+              model. Replay judges a run&apos;s recorded input again under the
+              current skill without writing anything.
+            </div>
+            {runs.error ? (
+              <div className="mm-ctx mm-flagerr">
+                couldn&apos;t load the runs: {runs.error.message}
+              </div>
+            ) : null}
+            {!runs.error && !runs.loading && !runs.runs.length ? (
+              <div className="mm-ctx">no runs yet</div>
+            ) : null}
+            {runs.runs.slice(0, RUNS_SHOWN).map((r) => (
+              <RunRow key={r.id} r={r} />
+            ))}
+          </div>
+        {marks.marks.length || markErr ? (
+          <div className="mm-marks" aria-label="pending marks">
+            <div className="graph-lbl mm-flagslbl">
+              pending marks · {marks.marks.length}
+            </div>
+            <div className="mm-ctx">
+              text you marked with ✓ read that no run has read yet
+            </div>
+            {markErr ? <div className="mm-ctx mm-flagerr">{markErr}</div> : null}
+            {marks.marks.map((m) => (
+              <MarkRow
+                key={m.id}
+                m={m}
+                busy={unmarking.has(m.id)}
+                onRemove={(id) => void unmark(id)}
+              />
+            ))}
+          </div>
+        ) : null}
         {rows.length ? (
           rows.map((it) => (
             <MMRow
@@ -684,8 +948,6 @@ export function MentalModelPane({
               it={it}
               removing={removing.has(it.id)}
               onRemove={(id) => void remove(id)}
-              confirming={confirming.has(it.id)}
-              onConfirm={(id) => void confirm(id)}
             />
           ))
         ) : (

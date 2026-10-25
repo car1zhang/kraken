@@ -44,7 +44,6 @@ import {
   openTmux,
   removeFromLibrary,
   removeMM,
-  confirmMM,
   retryJob,
   saveToLibrary,
   unarchiveJob,
@@ -287,7 +286,7 @@ export function App() {
   );
   // The board's one-shot marks (✓ read, mark selection, table ✓, ○ mark
   // known, → decision) were retired in PR 2 (Q10): capture goes through the
-  // ◆ mind button below into a mind thread, which commits the item itself.
+  // ✓ read button below as a read mark, which a mind run turns into items.
   const addNote = useCallback(
     (text: string) => afterMM(() => addMMNote(text)),
     [afterMM],
@@ -296,12 +295,6 @@ export function App() {
   // this is "I no longer know this", never a delete.
   const dropMark = useCallback(
     (id: number) => afterMM(() => removeMM(id)),
-    [afterMM],
-  );
-  // Confirms a nightly `proposed` item so it goes live — the same mutate +
-  // refetch the drop rides.
-  const confirmMark = useCallback(
-    (id: number) => afterMM(() => confirmMM(id)),
     [afterMM],
   );
 
@@ -446,7 +439,6 @@ export function App() {
         mm={mm}
         onAddNote={addNote}
         onRemoveMM={dropMark}
-        onConfirmMM={confirmMark}
         // a raised flag's `open job` — the steer modal of the job whose zeus
         // raised it, which stacks over the memory view like any overlay
         onOpenJob={(slug) => openSteer(slug, "steer")}
@@ -586,17 +578,9 @@ export function App() {
         boardNodeID={board.board?.node_id}
       />
 
-      {/* ◆ mind — once, over every view. A capture lands in a mind thread:
-          the thread overlay opens on it, and the artifact viewer (z-index
-          30, above the thread overlay's 25) is closed first for the reason
-          onAskBranched gives — a thread opened underneath it is invisible. */}
-      <MindButton
-        onOpened={(slug, tid) => {
-          setArtifact(null);
-          setThread({ slug, tid });
-          void board.refetch();
-        }}
-      />
+      {/* ✓ read — once, over every view. A press records a read mark for
+          the next mind run and toasts; it opens nothing. */}
+      <MindButton />
 
       <UsageOverlay
         open={usageOpen}

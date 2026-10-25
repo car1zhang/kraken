@@ -31,8 +31,8 @@ func TestSkillsFSContainsExpectedSkills(t *testing.T) {
 		// so a `pr` dir here would be a stale copy nothing points at.
 		"do":    "do",
 		"dream": "dream",
-		// `mind` is the fifth pipeline skill: the nightly mental-model pass,
-		// dream's sibling with its own job and its own closing line.
+		// `mind` is embedded but governs no cell: it is the system prompt a
+		// headless mind run reads (internal/jobs/mindrun.go's MindPrompt).
 		"mind": "mind",
 		// `load` governs no phase — it is the ladders zeus looks a rung up in
 		// mid-phase — so TestSkillsOwnTheCellContract has nothing to say about
@@ -74,8 +74,9 @@ func TestSkillsFSContainsExpectedSkills(t *testing.T) {
 // that names no phase, on every auto-handoff the daemon types. `direct` is a
 // modifier typed WITH a phase (`/direct do`) or ahead of one, and the phase
 // skill it is then followed in tandem with is the real stage: a `direct`
-// stage would badge every quick job with a word that is not a phase.
-var nonStageSkills = map[string]bool{"load": true, "handoff": true, "direct": true}
+// stage would badge every quick job with a word that is not a phase. `mind`
+// is the system prompt of a headless mind run, which has no cell to badge.
+var nonStageSkills = map[string]bool{"load": true, "handoff": true, "direct": true, "mind": true}
 
 // TestPipelineStageSetMatchesEmbeddedSkills holds jobs.PipelineStages'
 // literal set in lockstep with the embedded bundle, in BOTH directions:
@@ -351,19 +352,9 @@ func TestSkillsOwnTheCellContract(t *testing.T) {
 			// the never-hard-wrap rule; see the same token on aim above
 			"ONE source line",
 		}},
-		// mind owns the nightly mental-model pass end to end: the two
-		// evidence readers and the context widener, the one propose call,
-		// the report, and its own closing line. Zeus' brief names none of
-		// it (TestZeusBriefDoesNotRestateSkills bans the closing line and
-		// the report's filename there).
-		{"mind", []string{
-			"Inside A Kraken Cell", "<cellDir>/artifacts/", "mind swept:",
-			"00-mind-report.md", "kraken mm propose",
-			"kraken mine operator", "kraken mine around", "kraken mm evidence",
-			"Never declare the job done", "Use `0` where a count is zero",
-			// the never-hard-wrap rule; see the same token on aim above
-			"ONE source line",
-		}},
+		// mind is absent on purpose: it is no longer a cell phase but the
+		// system prompt of a headless mind run (job 674), so it has no cell
+		// contract to own.
 		// handoff owns the self/spawn/resume procedure and the two queued
 		// commands that make a self-handoff land after the turn ends. The
 		// brief says nothing about any of it (carl or the daemon types the
@@ -517,7 +508,8 @@ func TestWaitProtocolPointersResolve(t *testing.T) {
 				"agent improvises the wait instead", anchor)
 		}
 	}
-	for _, skill := range []string{"aim", "info", "dream", "mind"} {
+	// mind is not listed: a mind run has no tools and fans nothing out.
+	for _, skill := range []string{"aim", "info", "dream"} {
 		src := readEmbedded(t, skill+"/SKILL.md")
 		if !strings.Contains(src, ".claude/skills/do/SKILL.md") {
 			t.Errorf(".claude/skills/%s/SKILL.md no longer points at do/SKILL.md for the wait protocol "+

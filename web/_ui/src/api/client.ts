@@ -13,7 +13,10 @@
 import type {
   BackgroundUploadResult,
   CaptureResult,
-  CaptureToMindResult,
+  MarkReadResult,
+  WebMindReplay,
+  WebMindRun,
+  WebMMMark,
   JobTranscript,
   DraftResult,
   DreamReports,
@@ -364,12 +367,60 @@ export const fetchMMSource = (id: number, signal?: AbortSignal) =>
   getJSON<MMSourceView>(`/api/mm/source?id=${id}`, signal);
 
 /**
- * Route highlighted text to the job's mind thread — forked from zeus' current
- * turn, or the live one already forked from it. 409 when the job has no live
- * cell to fork; the caller shows the server's sentence.
+ * Record highlighted text as a READ MARK for a mind run: the job's next
+ * mind run (its Done run, else the daily catch-all) reads it. No live cell is
+ * needed and `slug` may be "" for text that belongs to no job. 404 when the
+ * slug names no job; the caller shows the server's sentence.
  */
-export const captureToMind = (slug: string, text: string, source: CaptureSource) =>
-  postJSON<CaptureToMindResult>("/api/mm/capture", { slug, text, source });
+export async function markRead(
+  slug: string,
+  text: string,
+  source: CaptureSource,
+): Promise<MarkReadResult> {
+  return postJSON<MarkReadResult>("/api/mm/mark", { slug, text, source });
+}
+
+/** Mind runs, newest first — the list only, never a blob. */
+export const fetchMMRuns = (slug?: string, n?: number, signal?: AbortSignal) => {
+  const p = new URLSearchParams();
+  if (slug) p.set("slug", slug);
+  if (n && n > 0) p.set("n", String(n));
+  const s = p.toString();
+  return getJSON<{ runs: WebMindRun[] }>("/api/mm/runs" + (s ? "?" + s : ""), signal);
+};
+
+/** One run whole, plus one of its blobs as text (the server's default when omitted). */
+export const fetchMMRun = (
+  id: number,
+  blob?: "report" | "manifest" | "answer" | "bundle",
+  signal?: AbortSignal,
+) =>
+  getJSON<{ run: WebMindRun; blob: string }>(
+    `/api/mm/run?id=${id}` + (blob ? `&blob=${encodeURIComponent(blob)}` : ""),
+    signal,
+  );
+
+/** Read marks, newest first; every job's when `slug` is empty. */
+export const fetchMMMarks = (slug?: string, pending?: boolean, signal?: AbortSignal) => {
+  const p = new URLSearchParams();
+  if (slug) p.set("slug", slug);
+  if (pending) p.set("pending", "1");
+  const s = p.toString();
+  return getJSON<{ marks: WebMMMark[] }>("/api/mm/marks" + (s ? "?" + s : ""), signal);
+};
+
+/** Delete one PENDING mark; 409 once a run has consumed it. */
+export const removeMMMark = async (id: number): Promise<void> => {
+  await postJSON("/api/mm/mark/remove", { id });
+};
+
+/**
+ * Judge a recorded run's bundle again under the current mind skill. A dry run
+ * (the default) writes nothing and answers the diff; `write` applies the new
+ * answer as a fresh `replay` run. 409 when the bundle has been pruned.
+ */
+export const replayMMRun = (id: number, write = false) =>
+  postJSON<WebMindReplay>("/api/mm/replay", { id, write });
 
 /**
  * zeus' last `turns` transcript TURNS — each of carl's prompts and everything
@@ -419,7 +470,10 @@ export const addMMNote = (text: string, context = "") =>
 /** Drop one mark by the id the list served. Invalidates; never deletes. */
 export const removeMM = (id: number) => postJSON("/api/mm/remove", { id });
 
-/** Confirm a `proposed` item (the nightly mind pass') so it goes live. */
+/**
+ * Confirm a `proposed` item (a legacy row from before mind runs) so it goes
+ * live. No board surface calls it any more; the route stays for old clients.
+ */
 export const confirmMM = (id: number) => postJSON<{ ok: true }>("/api/mm/confirm", { id });
 
 // ------------------------------------------------------------ threads
@@ -432,8 +486,9 @@ export const confirmMM = (id: number) => postJSON<{ ok: true }>("/api/mm/confirm
  *
  * `headless` is read by BRANCH alone too: true (or absent, for an `ask` role)
  * asks for a headless ask thread, false for a pane thread. It is orthogonal to
- * `role` — a mind thread is always a pane, and the server refuses `role: "mind"`
- * with `headless: true`. It rides the body only when the caller passes it,
+ * `role`. A NEW mind thread cannot be branched at all since mind runs replaced
+ * it (the server answers `role: "mind"` with a 409); existing mind threads are
+ * read-only history, and were always panes. It rides the body only when the caller passes it,
  * since the spread copies only the keys `extra` holds.
  */
 export const threadOp = (

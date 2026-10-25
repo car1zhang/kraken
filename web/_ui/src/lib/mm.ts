@@ -4,9 +4,9 @@
 // A LEAF module — no React, no fetch, no imports at all. The board's one-shot
 // marks (the artifact viewer's ✓ read / mark selection, the per-table ✓ sweep
 // `decorateMMTables`, the steer detail's ○ mark known, the questions panel's
-// ◆ decision) are RETIRED (Q10): capture now goes through the mind button
-// (lib/mind.ts, components/chrome/MindButton.tsx) into a mind thread that
-// commits the item. `artifactReadMatch` and `selectionText` stay exported
+// ◆ decision) are RETIRED (Q10): capture now goes through the ✓ read button
+// (lib/mind.ts, components/chrome/MindButton.tsx), which records a read mark
+// the next mind run reads. `artifactReadMatch` and `selectionText` stay exported
 // because they are still pure and still pinned by their own tests; no board
 // surface calls them any more.
 
@@ -89,12 +89,20 @@ export type MMItem = {
    */
   capture_source?: MMCaptureSource | null;
   /**
-   * schema v37: `live` or `proposed`. A `proposed` row is one the nightly mind
-   * pass put up for carl's confirm — held out of the rules files and
+   * schema v37: `live` or `proposed`. A `proposed` row is a legacy one the
+   * retired nightly mind cell put up for carl's confirm (mind runs write
+   * every item live) — held out of the rules files and
    * `kraken mm get` until confirmed. Optional: an older server omits it, and
    * absent reads as live.
    */
   state?: string;
+  // ---- schema v39, mind runs. omitempty on the wire: absent means 0.
+  /** The mind run that wrote this item. */
+  run_id?: number;
+  /** The item this one replaced (that row is invalidated `superseded`). */
+  supersedes?: number;
+  /** The item that replaced this one. */
+  superseded_by?: number;
 };
 
 /** `jobs.CaptureSource` as `/api/mm` serves it — lib/mind.ts's CaptureSource. */

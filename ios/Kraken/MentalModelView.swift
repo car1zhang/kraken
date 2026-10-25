@@ -140,6 +140,8 @@ func mmSourceLabel(_ source: String) -> String {
     case "code": return "code"
     case "agent-output": return "agent"
     case "manual": return "manual"
+    // an item a mind run wrote — the board's `pass` chip and label
+    case "nightly": return "pass"
     default: return source
     }
 }
@@ -454,7 +456,7 @@ struct MentalModelList: View {
     private var emptyMessage: String {
         if !vm.loaded { return "loading…" }
         if vm.items.isEmpty {
-            return "Nothing in the mental model yet — select text in an artifact and tap ◆ mind, or + note here."
+            return "Nothing in the mental model yet — select text in an artifact and tap ✓ read, or + note here. When you mark a job Done, a mind run reads its conversations and your marks and writes items here."
         }
         return "nothing in that filter"
     }
@@ -727,8 +729,9 @@ struct MMRowView: View {
                     .foregroundStyle(KTheme.text2)
                     .fixedSize(horizontal: false, vertical: true)
             }
-            // The highlighted text a capture started from — what carl was
-            // looking at, as distinct from the claim the mind thread wrote.
+            // The quote the item rests on — what carl said or highlighted, as
+            // distinct from the claim a mind run (or, on a legacy row, a mind
+            // thread) wrote.
             if let quote = item.quote, !quote.isEmpty {
                 Text(quote)
                     .font(.voice(11))

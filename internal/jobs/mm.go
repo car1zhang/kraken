@@ -342,7 +342,8 @@ func mmVerifyArtifacts(st *store.Store, at int64) error {
 
 // mmVerifyCapture is the artifact half's rule for a CAPTURED item (Q6): a
 // change to the artifact it was captured from does NOT invalidate it. A
-// captured item is carl's own statement, finalized with the mind thread —
+// captured item is carl's own statement (finalized with the mind thread while
+// it existed; no new captured item is written since mind runs replaced it) —
 // the passage was where it came from, not what it claims — so an edited or
 // deleted source is a question for carl rather than a verdict: one flag,
 // raised (RaisedBy "verify"), with drop/keep on the board.
