@@ -98,12 +98,12 @@ func oneLine(s string) string { return strings.Join(strings.Fields(s), " ") }
 // is a two-value closed set carl's UI writes, and "" is a meaningful member of
 // it (clear the judgement).
 //
-// class is deliberately NOT validated, and that is a decision rather than an
-// oversight: nothing queries on it, it is descriptive metadata the sweep
-// attaches for carl to read, and a new kind of observation is exactly the sort
-// of thing the dream loop should be able to name without a schema change and a
-// binary rebuild. The doc comment on WatchItem.Class lists today's classes as
-// guidance, not as a constraint.
+// class is NOT validated here: nothing queries on it, and it is descriptive
+// metadata the sweep attaches for the operator to read. The API layer is where
+// the constraint lives (watchClasses in internal/api/watchlist.go refuses any
+// word outside today's five), so a new kind of observation is a one-list change
+// there rather than a schema change. The doc comment on WatchItem.Class lists
+// the same five.
 var validWatchState = map[string]bool{"watching": true, "shipped": true, "declined": true}
 
 var validWatchVerdict = map[string]bool{"": true, "fine": true, "fix": true}
@@ -185,10 +185,15 @@ func scanWatchItem(row interface{ Scan(...any) error }) (WatchItem, error) {
 // they are carl's, written later only via SetWatchVerdict — so a fresh row
 // always starts unjudged, exactly as AddFeedback starts a row unaddressed.
 func (s *Store) AddWatchItem(w WatchItem) (int64, bool, error) {
-	if w.State == "" {
-		w.State = "watching"
-	} else if err := validateWatchState(w.State); err != nil {
-		return 0, false, err
+	// The empty-state default is applied at the INSERT below and nowhere
+	// earlier: filled in here, it reached the fold's COALESCE as "watching"
+	// and reset every stateless re-add of a shipped row to watching, which is
+	// the opposite of the leave-alone rule the fold documents (measured on a
+	// row shipped at PR open, then re-sighted the next night).
+	if w.State != "" {
+		if err := validateWatchState(w.State); err != nil {
+			return 0, false, err
+		}
 	}
 	now := time.Now().UnixMilli()
 
@@ -228,6 +233,9 @@ func (s *Store) AddWatchItem(w WatchItem) (int64, bool, error) {
 		return id, true, nil
 	}
 
+	if w.State == "" {
+		w.State = "watching"
+	}
 	res, err := s.db.Exec(
 		`INSERT INTO watch_items (observation, src, dst, predicate, class, state,
 			sightings, first_seen, last_seen, evidence, suggested_fix, pr_url,
