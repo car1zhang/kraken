@@ -1,11 +1,13 @@
 package jobs
 
 import (
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
 	"kraken/internal/core"
+	"kraken/internal/store"
 )
 
 func TestFableFallbackDecide(t *testing.T) {
@@ -167,13 +169,82 @@ func TestModelSwitchKeysPicksYes(t *testing.T) {
 
 func TestModelSwitchKeysIgnoresOtherPanes(t *testing.T) {
 	for name, text := range map[string]string{
-		"banner only":        "  ⎿  You've reached your Fable limit. Run /usage-credits to continue or switch models with /model.\n✻ Done in 1s\n",
-		"trust dialog":       "Is this a project you created or one you trust?\n ❯ 1. Yes, I trust this folder\n   2. No, exit\n",
-		"agent question":     "Switch model? I can keep going on the current one or try another.\n ❯ 1. Keep the current model\n   2. Try another\n",
-		"header, no options": "   Switch model?\n   Your next response will be slower and use more tokens\n",
+		"banner only":          "  ⎿  You've reached your Fable limit. Run /usage-credits to continue or switch models with /model.\n✻ Done in 1s\n",
+		"trust dialog":         "Is this a project you created or one you trust?\n ❯ 1. Yes, I trust this folder\n   2. No, exit\n",
+		"agent question":       "Switch model? I can keep going on the current one or try another.\n ❯ 1. Keep the current model\n   2. Try another\n",
+		"header, no options":   "   Switch model?\n   Your next response will be slower and use more tokens\n",
+		"operator's own tier":  strings.Replace(switchModelDialog, "Yes, switch to Opus 5.5", "Yes, switch to Sonnet 5", 1),
+		"agent question, yes":  "Switch model? I could move to Haiku for the rest of this.\n ❯ 1. Yes, switch to Haiku\n   2. No, stay\n",
+		"header scrolled away": "   This conversation is cached for the current model.\n   ❯ 1. Yes, switch to Opus 5.5\n     2. No, go back\n",
 	} {
 		if keys, ok := modelSwitchKeys(text); ok {
 			t.Errorf("%s: recognised as the switch-model dialog, keys %v", name, keys)
 		}
+	}
+}
+
+// A switch that expired while its dialog was still up is answered and
+// re-armed for one more prompt window, with the hit left unresolved so the
+// next tick owes the continue — and a second expiry on the same process is
+// not re-armed again, however long the pane keeps drawing the dialog.
+func TestFableFallbackRearmsAnExpiredSwitchOnce(t *testing.T) {
+	st, err := store.Open(filepath.Join(t.TempDir(), "kraken.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	UseStore(st)
+	t.Cleanup(func() { UseStore(nil); st.Close() })
+
+	answered := 0
+	orig := answerSwitchPrompt
+	answerSwitchPrompt = func(*core.Peer) bool { answered++; return true }
+	t.Cleanup(func() { answerSwitchPrompt = orig })
+
+	const banner = "zeus hit a usage limit: You've reached your Fable limit. Run /usage-credits to continue or switch models with /model."
+	now := time.Unix(1_790_820_000, 0)
+	hitKey := limitHitKey(508)
+	p := &core.Peer{PID: 4242, Pane: "%9", SessionID: "sess-1", Agent: "claude", Messageable: true}
+	find := func() *core.Peer { return p }
+	noEmail := func() string { return "" }
+	d := newDaemon()
+	d.Poked["fable-retry:"+hitKey] = now.Add(-30 * time.Second).Unix() // a refused continue inside the retry gap
+
+	// An expired switch; the transcript arm re-delivers the banner as a fresh hit.
+	recordLastFallback(hitKey, fallbackRecord{At: now.Add(-2 * time.Hour).Unix(), PID: 4242, ExpiredAt: now.Add(-90 * time.Minute).Unix()})
+	hit := LimitHit{Error: "rate_limit", Details: banner, At: now.Unix(), SessionID: "sess-1"}
+	if !d.tryFableFallback(hitKey, "job", core.ZeusModel, noEmail, hit, find, now) {
+		t.Fatal("re-delivery on an expired switch with the dialog up was not handled")
+	}
+	if answered != 1 {
+		t.Fatalf("dialog answered %d times, want 1", answered)
+	}
+	rec := readLastFallback(hitKey)
+	if rec.At != now.Unix() || rec.PID != 4242 || !rec.Rearmed || rec.ExpiredAt != 0 || rec.PromptedAt != 0 {
+		t.Errorf("record after the re-arm = %+v, want a fresh {At: now, PID: 4242, Rearmed: true}", rec)
+	}
+	if got := readLimitHitByKey(hitKey).Outcome; got != "" {
+		t.Errorf("hit resolved as %q after the re-arm; it must stay open so the next tick owes the continue", got)
+	}
+	if _, gap := d.Poked["fable-retry:"+hitKey]; gap {
+		t.Error("the retry gap set by the refused continue was not cleared")
+	}
+	// The next tick reads the re-armed record as a switch owing its continue.
+	if v := fableFallbackDecide(hit, core.ZeusModel, nil, rec, 4242, "sess-1", now.Add(15*time.Second)); v != fallbackPrompt {
+		t.Errorf("verdict on the tick after the re-arm = %q, want %q", v, fallbackPrompt)
+	}
+
+	// The re-armed window runs out too, with the dialog still drawn: no second re-arm.
+	rec.ExpiredAt = now.Add(31 * time.Minute).Unix()
+	recordLastFallback(hitKey, rec)
+	later := now.Add(45 * time.Minute)
+	hit2 := LimitHit{Error: "rate_limit", Details: banner, At: later.Unix(), SessionID: "sess-1"}
+	if !d.tryFableFallback(hitKey, "job", core.ZeusModel, noEmail, hit2, find, later) {
+		t.Fatal("re-delivery after the second expiry was not handled")
+	}
+	if answered != 1 {
+		t.Errorf("dialog answered %d times in total, want 1: a second expiry must not re-arm", answered)
+	}
+	if got := readLimitHitByKey(hitKey).Outcome; got != "model-fallback-expired" {
+		t.Errorf("second re-delivery resolved as %q, want model-fallback-expired", got)
 	}
 }
