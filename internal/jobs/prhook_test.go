@@ -394,7 +394,7 @@ func TestPrHookTellsTheModelWhenAPRIsNotAttached(t *testing.T) {
 		}
 	})
 	t.Run("500 says the pr is not recorded yet and never claims no notice will come", func(t *testing.T) {
-		stdout, _ := run(t, http.StatusInternalServerError, `{"error":"boom"}`)
+		stdout, stderr := run(t, http.StatusInternalServerError, `{"error":"boom"}`)
 		ctx := decode(t, stdout)
 		for _, part := range []string{url, "NOT recorded", "answered HTTP 500: boom", "branch poll", "do not assume"} {
 			if !strings.Contains(ctx, part) {
@@ -403,6 +403,32 @@ func TestPrHookTellsTheModelWhenAPRIsNotAttached(t *testing.T) {
 		}
 		if strings.Contains(ctx, "no merge or CI notice") {
 			t.Errorf("an unrecorded PR on the cell branch WILL get its notices once serve is back: %q", ctx)
+		}
+		// the stderr trace gives the same reason the context does: serve
+		// ANSWERED, so "serve unreachable" would contradict the context
+		// text printed beside it.
+		if !strings.Contains(stderr, "PR NOT RECORDED") || !strings.Contains(stderr, "answered HTTP 500") || strings.Contains(stderr, "unreachable") {
+			t.Errorf("stderr = %q, want a PR NOT RECORDED line naming the HTTP 500, never 'unreachable'", stderr)
+		}
+	})
+	t.Run("404 says no job and promises no pickup", func(t *testing.T) {
+		stdout, stderr := run(t, http.StatusNotFound, `{"error":"no such job"}`)
+		ctx := decode(t, stdout)
+		for _, part := range []string{url, "NOT recorded", "knows no job hook-ctx", "no such job", "final message"} {
+			if !strings.Contains(ctx, part) {
+				t.Errorf("additionalContext %q does not say %q", ctx, part)
+			}
+		}
+		// serve is up and has no job by this slug: no per-job branch poll
+		// exists to pick the PR up, so the "not recorded YET" promise of the
+		// outage arm must not be made here.
+		for _, banned := range []string{"branch poll", "once kraken serve accepts it", "not recorded the unrecorded"} {
+			if strings.Contains(ctx, banned) {
+				t.Errorf("a 404 must not promise a later pickup: %q", ctx)
+			}
+		}
+		if !strings.Contains(stderr, "PR NOT RECORDED") || !strings.Contains(stderr, "knows no job hook-ctx") || strings.Contains(stderr, "unreachable") {
+			t.Errorf("stderr = %q, want a PR NOT RECORDED line naming the unknown job", stderr)
 		}
 	})
 	t.Run("200 adds nothing to the model's context", func(t *testing.T) {

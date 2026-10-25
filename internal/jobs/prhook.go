@@ -437,8 +437,9 @@ func AttachJobPR(j *Job, url string) (attached bool, err error) {
 // there is no local fallback — the PR shipped, but kraken doesn't know
 // about it until serve comes back and the daemon's branch-list poll
 // notices. Always returns (never os.Exit(1)); every outcome is a single
-// stderr line: attached, NOT attached (the 409), or NOT RECORDED (any other
-// answer, serve unreachable included). The stderr line is a trace only: on
+// stderr line: attached, NOT attached (the 409), or NOT RECORDED (every other
+// answer, carrying the reason — serve did not answer, serve knows no job by
+// this slug, or serve answered HTTP N). The stderr line is a trace only: on
 // exit 0 Claude Code hands a PostToolUse hook's stderr to no model and shows
 // it in no prompt, so a cell whose PR was refused went on telling the
 // operator the PR was "ready for your merge" and planning its next step
@@ -446,14 +447,20 @@ func AttachJobPR(j *Job, url string) (attached bool, err error) {
 // the PR at all. So when any URL was not attached, the same fact also goes to
 // STDOUT as Claude Code's hook JSON (`hookSpecificOutput.additionalContext`),
 // which lands in the model's context at the end of the tool call. The text
-// differs by arm, because the two arms mean different things: a 409 is a PR
-// kraken will never track on its own (the daemon's branch poll lists the
-// job's OWN repo), while a transport failure or a non-200 is a PR kraken has
-// not recorded YET — one on the cell branch is picked up by that same branch
-// poll once serve accepts it — so the first tells the agent to say so in its
-// final message and the second tells it not to assume a merge or CI notice
-// until the board shows the PR. An attached PR prints nothing to stdout; the
-// ordinary case stays silent.
+// differs by arm, because the three arms mean different things: a 409 is a
+// PR kraken will never track on its own (the daemon's branch poll lists the
+// job's OWN repo); a 404 means serve is up and knows no job by this slug —
+// not even a former one, since the route resolves renamed slugs before it
+// answers — so no per-job poll exists to pick the PR up and the context
+// promises no notice; and a transport failure or any other non-200 is a PR
+// kraken has not recorded YET — one on the cell branch is picked up by that
+// same branch poll once serve accepts it — so the first two tell the agent to
+// say so in its final message and the third tells it to say the PR was
+// opened and not to assume a merge or CI notice until the board shows it. A
+// store read error on a real job answers the same 404 (webJobFor returns nil
+// on any load failure) — rare, and the context text hedges for it with "if
+// that is right". An attached PR prints nothing
+// to stdout; the ordinary case stays silent.
 func PrHook(slug string) {
 	raw, err := io.ReadAll(os.Stdin)
 	if err != nil {
@@ -474,7 +481,7 @@ func PrHook(slug string) {
 			// really made
 		}
 	}
-	var refused, unrecorded []string
+	var refused, unrecorded, unknown []string
 	for _, url := range extractPRURLs(raw, prefix) {
 		status, body := postPRAttachStatus(slug, url)
 		switch status {
@@ -489,16 +496,30 @@ func PrHook(slug string) {
 				reason = url + " — " + reason // serve's own text normally opens with the URL
 			}
 			refused = append(refused, reason+" (NOT attached to job "+slug+")")
+		case http.StatusNotFound:
+			// serve answered, and knows no job by this slug — the route
+			// resolves former slugs (webJobFor) before answering, so this is
+			// no active job and no renamed one either: nothing will record
+			// this PR under that name later, since the daemon's branch poll
+			// runs per JOB and there is no job to poll for. A hook running
+			// under a slug serve does not know is a misconfigured cell, not
+			// an outage, and the two must not share the "not recorded YET"
+			// promise below.
+			fmt.Fprintf(os.Stderr, "pr-hook %s: PR NOT RECORDED (kraken serve knows no job %s): %s\n", slug, slug, url)
+			unknown = append(unknown, url+" was NOT recorded: kraken serve knows no job "+slug+" (HTTP 404: "+core.TruncateOneLine(serveErrorText(body), 200)+")")
 		default:
-			fmt.Fprintf(os.Stderr, "pr-hook %s: PR NOT RECORDED (serve unreachable): %s\n", slug, url)
 			why := "kraken serve did not answer"
 			if status != 0 {
 				why = "kraken serve answered HTTP " + strconv.Itoa(status) + ": " + core.TruncateOneLine(serveErrorText(body), 200)
 			}
+			// the stderr line carries the same reason the context does: the
+			// old fixed "(serve unreachable)" was false for every answered
+			// non-200 and contradicted the context text printed beside it.
+			fmt.Fprintf(os.Stderr, "pr-hook %s: PR NOT RECORDED (%s): %s\n", slug, why, url)
 			unrecorded = append(unrecorded, url+" was NOT recorded for job "+slug+" ("+why+")")
 		}
 	}
-	if out := prHookContext(refused, unrecorded); out != "" {
+	if out := prHookContext(refused, unrecorded, unknown); out != "" {
 		fmt.Fprintln(os.Stdout, out)
 	}
 }
@@ -514,11 +535,15 @@ func PrHook(slug string) {
 // the one route that would have tracked it (the hook has already fired for
 // this one); an unrecorded PR is not tracked yet, and one on the cell branch
 // in the job's own repo is picked up by the daemon's branch poll once serve
-// accepts it, so the agent must not assume notices until the board shows it.
+// accepts it, so the agent must not assume notices until the board shows it;
+// and a PR serve answered 404 for is neither — serve is up and knows no job
+// by that slug, so no poll will ever pick it up, and promising the branch
+// poll there (as the unrecorded arm once did for every non-200) told the
+// model to expect a notice that could not come.
 // Nothing to say (every URL attached) returns "", and the caller prints
 // nothing; a marshal failure does the same, mirroring RunRecallHook's check.
-func prHookContext(refused, unrecorded []string) string {
-	if len(refused)+len(unrecorded) == 0 {
+func prHookContext(refused, unrecorded, unknown []string) string {
+	if len(refused)+len(unrecorded)+len(unknown) == 0 {
 		return ""
 	}
 	var parts []string
@@ -531,6 +556,11 @@ func prHookContext(refused, unrecorded []string) string {
 		parts = append(parts, strings.Join(unrecorded, "; ")+
 			". kraken has not recorded the unrecorded PR(s) yet: one on the cell branch in the job's own repo is picked up by the daemon's branch poll once kraken serve accepts it, "+
 			"so do not assume a merge or CI notice until the board shows the PR, and say in your final message that it was opened.")
+	}
+	if len(unknown) > 0 {
+		parts = append(parts, strings.Join(unknown, "; ")+
+			". kraken serve is up but answered 404 (no such job) for this cell's slug — if that is right, nothing will record this PR or send a merge or CI notice for it under that name. "+
+			"Do not wait on one — say in your final message that the PR was opened, with its URL, and that kraken is not tracking it.")
 	}
 	out, err := json.Marshal(hookStdout{Specific: hookStdoutSpecific{
 		HookEventName:     "PostToolUse",

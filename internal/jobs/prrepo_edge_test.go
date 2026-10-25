@@ -323,27 +323,37 @@ func TestEdgePrHook409IsNotReportedAsUnreachableOrAttached(t *testing.T) {
 	}
 }
 
-func TestEdgePrHook500KeepsUnreachableLine(t *testing.T) {
+func TestEdgePrHook500NamesTheStatus(t *testing.T) {
 	url := "https://github.com/carl/kraken/pull/8"
 	stderr := prEdgeHook(t, "edge-500", url, http.StatusInternalServerError, `{"error":"boom"}`)
-	want := "pr-hook edge-500: PR NOT RECORDED (serve unreachable): " + url
+	want := "pr-hook edge-500: PR NOT RECORDED (kraken serve answered HTTP 500: boom): " + url
 	if !strings.Contains(stderr, want) {
 		t.Fatalf("stderr = %q, want it to carry %q", stderr, want)
 	}
 	if strings.Contains(stderr, "outside the job's repo") {
 		t.Errorf("500 reported as an outside-repo refusal: %q", stderr)
 	}
+	if strings.Contains(stderr, "unreachable") {
+		t.Errorf("serve ANSWERED: the stderr trace must not call it unreachable: %q", stderr)
+	}
 }
 
-func TestEdgePrHookOtherNon200KeepsUnreachableLine(t *testing.T) {
-	// 404 (unknown slug at serve) and 400 are "any other non-200" too.
-	for _, status := range []int{http.StatusNotFound, http.StatusBadRequest} {
-		url := "https://github.com/carl/kraken/pull/10"
-		stderr := prEdgeHook(t, "edge-non200", url, status, `{"error":"x"}`)
-		want := "pr-hook edge-non200: PR NOT RECORDED (serve unreachable): " + url
-		if !strings.Contains(stderr, want) {
-			t.Errorf("status %d: stderr = %q, want it to carry %q", status, stderr, want)
-		}
+func TestEdgePrHookOtherNon200NamesTheReason(t *testing.T) {
+	// 400 is "any other non-200": the line names the status and serve's
+	// text. 404 is its own arm: serve is up and knows no job by this slug.
+	url := "https://github.com/carl/kraken/pull/10"
+	stderr := prEdgeHook(t, "edge-non200", url, http.StatusBadRequest, `{"error":"x"}`)
+	want := "pr-hook edge-non200: PR NOT RECORDED (kraken serve answered HTTP 400: x): " + url
+	if !strings.Contains(stderr, want) {
+		t.Errorf("400: stderr = %q, want it to carry %q", stderr, want)
+	}
+	stderr = prEdgeHook(t, "edge-non200", url, http.StatusNotFound, `{"error":"no such job"}`)
+	want = "pr-hook edge-non200: PR NOT RECORDED (kraken serve knows no job edge-non200): " + url
+	if !strings.Contains(stderr, want) {
+		t.Errorf("404: stderr = %q, want it to carry %q", stderr, want)
+	}
+	if strings.Contains(stderr, "unreachable") {
+		t.Errorf("serve ANSWERED: the stderr trace must not call it unreachable: %q", stderr)
 	}
 }
 

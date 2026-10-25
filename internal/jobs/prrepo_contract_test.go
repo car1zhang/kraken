@@ -242,7 +242,7 @@ func TestPrHook_409UnparseableBodyPrintsRawTrimmed(t *testing.T) {
 func TestPrHook_OtherNon200PrintsNotRecorded(t *testing.T) {
 	addr := logicServer(t, http.StatusInternalServerError, `{"error":"boom"}`)
 	stderr, db := logicRunHook(t, "hook-500", addr)
-	want := "pr-hook hook-500: PR NOT RECORDED (serve unreachable): " + logicHookURL
+	want := "pr-hook hook-500: PR NOT RECORDED (kraken serve answered HTTP 500: boom): " + logicHookURL
 	if !strings.Contains(stderr, want) {
 		t.Fatalf("stderr = %q, want it to contain %q", stderr, want)
 	}
@@ -260,7 +260,7 @@ func TestPrHook_TransportFailurePrintsNotRecorded(t *testing.T) {
 	addr := ln.Addr().String()
 	ln.Close()
 	stderr, db := logicRunHook(t, "hook-down", addr)
-	want := "pr-hook hook-down: PR NOT RECORDED (serve unreachable): " + logicHookURL
+	want := "pr-hook hook-down: PR NOT RECORDED (kraken serve did not answer): " + logicHookURL
 	if !strings.Contains(stderr, want) {
 		t.Fatalf("stderr = %q, want it to contain %q", stderr, want)
 	}
