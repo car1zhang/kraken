@@ -617,7 +617,13 @@ func stampBinding(j *Job, trigger, slug, email string, now time.Time) {
 		return
 	}
 	j.AccountSlug, j.AccountEmail, j.AccountAt = slug, email, at
-	dlogEvent("info", "bind-done", "bind (%s): bound to %s (%s)", trigger, slug, email)
+	// Neither the email nor the slot: the event log is grepped by agents
+	// inside cells (for their own slug, which the trigger carries) and
+	// whatever they read lands in transcripts that outlive the log. A pool
+	// slot is usually named util.Slugify(<email>), so the slug reads as the
+	// address with its punctuation dashed. Both are stamped on the row, one
+	// `k account` (or the board's account chip) away.
+	dlogEvent("info", "bind-done", "bind (%s): bound to a pool slot (the job row names it)", trigger)
 }
 
 // accountEnvPrefix is the WHOLE delivery mechanism for a binding: the
