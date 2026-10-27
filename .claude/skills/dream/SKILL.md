@@ -199,11 +199,21 @@ exactly what `reduce` drops, so a question about where output tokens went, what 
 returned, or what {{operator}} steered mid-turn CANNOT be answered from the artifact the scout was given — and
 every scout worth reading last night was one that ignored a "sparingly" and went to the raw JSONL
 anyway. Seven of them, independently; four of the night's best findings exist only because of it.
-A brief must not send a subagent to an artifact that cannot contain the answer. One more thing the
-raw file cannot show a scout: an inbound `SendMessage` leaves ZERO trace in a subagent sidecar —
-the sidecar records the effect and never the cause — so a sidecar-heavy assignment's brief says to
-cross-check the parent session's `SendMessage`/`Agent` calls before attributing a mid-run pivot to
-the agent's own judgment. Three more lines the brief owes every scout. A reduced view's LINES are
+A brief must not send a subagent to an artifact that cannot contain the answer. One more thing about
+the raw file: an inbound `SendMessage` to an in-process subagent DOES land in its sidecar, as a
+`user` record whose text opens `The coordinator sent a message while you were working:` (it carries
+no `<teammate-message>` envelope, so the reduced view labels it `[user]` and the opening phrase is
+what says it is the coordinator's and not {{operator}}'s; one that QUEUED behind a running turn is
+instead an `attachment` of type `queued_command` whose `origin.kind` is `coordinator` and whose
+`prompt` carries the bare message without that phrase, so it reduces as `[user mid-turn]`
+indistinguishable from {{operator}}'s own mid-turn steer — attribute a `[user mid-turn]` line to
+{{operator}} only after checking that record's `origin` in the raw JSONL; a message to a NAMED
+teammate lands in that teammate's root transcript inside a `<teammate-message>` envelope and reduces
+as `[teammate <id>]`) — the record carries the message, not the sender's reasoning, so a
+sidecar-heavy assignment's brief says to read those records as the cause of a mid-run pivot and to
+cross-check the parent session's `SendMessage`/`Agent` calls only for what they add; a brief that
+calls the sidecar traceless sends the scout to the parent for a record it already holds. Three more
+lines the brief owes every scout. A reduced view's LINES are
 unbounded — a single line can be an entire inlined skill body — so a page size that worked on page
 one can blow the Read tool's token ceiling on page two: say to page large views in modest chunks
 (a few hundred lines) and to shrink the page on a ceiling error rather than switching to grep.
