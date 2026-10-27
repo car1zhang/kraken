@@ -1290,6 +1290,9 @@ func mindRunFailer(st *store.Store, run store.MindRun) func(error) error {
 		if ferr := st.FailMindRun(run.ID, time.Now().UnixMilli(), err.Error()); ferr != nil {
 			dlogErr("mind run %d: fail write: %v", run.ID, ferr)
 		}
+		if run.Trigger == "daily" {
+			rewindMindDaily(st, run)
+		}
 		util.LogEvent("jobs", "error", "mind-run-failed", fmt.Sprintf("mind run %d (%s %s) failed: %v", run.ID, run.Trigger, run.Slug, err))
 		who := run.Slug
 		if run.JobID == 0 || who == "" {
@@ -1426,6 +1429,33 @@ func enqueueDoneMindRun(j *Job) {
 	if _, err := EnqueueMindRunForJob(ActiveStore(), j, "done", time.Now()); err != nil {
 		util.LogEvent("jobs", "error", "mind-run-enqueue-failed", fmt.Sprintf("%s: mind run not queued: %v", j.Slug, err))
 	}
+}
+
+// rewindMindDaily moves the daily watermark's `until` back to a FAILED daily
+// run's `since`, so tomorrow's run covers the window this one never judged.
+// kickMindDaily advances the watermark when it ENQUEUES, whatever the run's
+// outcome, and a daily run that died — the first production day's daily run
+// failed on a DNS outage at its first request — left a window of root
+// sessions that no later run would ever list. The date is left alone, so the
+// rewind never re-queues a run today: a failure that repeats (the outage
+// still on) would otherwise re-enqueue every tick. A missing or unreadable
+// watermark is left as it is, since there is then nothing to rewind.
+func rewindMindDaily(st *store.Store, run store.MindRun) {
+	raw, err := st.GetKV(mindDailyKVKey)
+	if err != nil {
+		return
+	}
+	var prev mindDaily
+	if json.Unmarshal([]byte(raw), &prev) != nil || prev.Until == 0 || prev.Until <= run.Since {
+		return
+	}
+	prev.Until = run.Since
+	data, _ := json.Marshal(prev)
+	if err := st.SetKV(mindDailyKVKey, string(data)); err != nil {
+		dlogErr("mind daily watermark rewind failed: %v", err)
+		return
+	}
+	util.LogEvent("jobs", "info", "mind-daily-rewound", fmt.Sprintf("mind run %d failed — the daily watermark is back at %s, so the next daily run re-covers its window", run.ID, time.UnixMilli(run.Since).Format(time.RFC3339)))
 }
 
 // mindDaily is the daily run's watermark.
