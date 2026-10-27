@@ -473,6 +473,7 @@ func TestEdgeMRRunNonJSONAnswerKeepsRawStdout(t *testing.T) {
 	out := "I refuse to answer in JSON.\nSecond line of prose."
 	edgeMRLaunch(t, func(ctx context.Context, stdin string) (string, string, error) { return out, "", nil })
 	run := edgeMRDaily(t, st)
+	edgeMRPendingMark(t, st, "a mark, so the bundle has something to judge and the launcher is reached")
 	if err := RunMindRun(st, run); err == nil {
 		t.Fatal("RunMindRun with a non-JSON answer = nil error")
 	}
@@ -504,6 +505,7 @@ func TestEdgeMRRunUnknownOpFailsWholeRun(t *testing.T) {
 	out := `{"ops":[{"op":"add","item":{"title":"t","scope":"universal","kind":"note","body":"b","quote":"fine claim","rung":"rung 2","source":{"kind":"transcript","session":"s","uuid":"u"}},"quote":"fine claim"},{"op":"merge","target":1,"quote":"q"}],"excluded":[],"coverage":{}}`
 	edgeMRLaunch(t, func(ctx context.Context, stdin string) (string, string, error) { return out, "", nil })
 	run := edgeMRDaily(t, st)
+	edgeMRPendingMark(t, st, "a mark, so the bundle has something to judge and the launcher is reached")
 	if err := RunMindRun(st, run); err == nil {
 		t.Fatal("RunMindRun with an unknown op = nil error")
 	}
@@ -531,6 +533,7 @@ func TestEdgeMRRunTimeoutFailsWithTimedOut(t *testing.T) {
 		}
 	})
 	run := edgeMRDaily(t, st)
+	edgeMRPendingMark(t, st, "a mark, so the bundle has something to judge and the launcher is reached")
 	start := time.Now()
 	if err := RunMindRun(st, run); err == nil {
 		t.Fatal("RunMindRun past MindRunTimeout = nil error")
