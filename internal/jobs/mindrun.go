@@ -1281,7 +1281,57 @@ func RunMindRun(st *store.Store, run store.MindRun) error {
 	if err := storeMindBlobs(st, run.ID, data, man); err != nil {
 		return fail(err)
 	}
+	if mindBundleEmpty(bundle) {
+		return finishEmptyMindRun(st, run, man, fail)
+	}
 	return runMindOn(st, run, string(data), man, fail)
+}
+
+// mindBundleEmpty reports a bundle with nothing for the model to judge: no
+// operator prompt, no operator-authored spec (BuildMindBundle sets Spec only
+// for an operator- or unknown-authored job, and a blank body counts as none),
+// no feedback note, no typed answer, no ★-saved artifact and no read mark.
+// The live items ride every bundle as context, never as candidates, so they
+// do not count. A bundle that is empty because its evidence could NOT be
+// read — Truncated names a reader that failed or a size cap that evicted
+// every prompt — is not empty: it launches as before, so the loss stays
+// visible in a run that was judged, not folded into a run that said there
+// was nothing. Six of the first day's thirteen runs were the empty shape —
+// an agent-filed job whose pane the operator never typed into, a dream job —
+// and each launched a claude -p that re-primed the skill and the whole model
+// to answer an empty ops list.
+func mindBundleEmpty(b MindBundle) bool {
+	return len(b.Prompts) == 0 && (b.Spec == nil || strings.TrimSpace(b.Spec.Body) == "") &&
+		len(b.Feedback) == 0 && len(b.Answers) == 0 && len(b.Saved) == 0 && len(b.Marks) == 0 &&
+		len(b.Truncated) == 0
+}
+
+// mindEmptyAnswer is the answer an unlaunched run records: what the model
+// returns for a bundle with nothing in it, so a replay's diff reads as empty.
+const mindEmptyAnswer = `{"ops":[],"excluded":[],"coverage":{}}`
+
+// finishEmptyMindRun closes a run whose bundle holds nothing to judge as done
+// without launching: zero counts, the empty answer, a report that says so,
+// no model (none ran), and the prompt sha the run WOULD have judged under,
+// so the calibration record still says which skill text was current. The
+// bundle and manifest are already stored, so the record stays replayable like
+// any other run's, and there is no mark to consume because an empty bundle
+// carries none.
+func finishEmptyMindRun(st *store.Store, run store.MindRun, man MindManifest, fail func(error) error) error {
+	who := run.Slug
+	if run.JobID == 0 && who == "" {
+		who = "daily catch-all"
+	}
+	_, sha, _ := MindPrompt() // an unreadable skill leaves the sha empty, as a failed launch would
+	if err := st.SetMindRunAnswer(run.ID, mindEmptyAnswer); err != nil {
+		return fail(fmt.Errorf("answer write: %w", err))
+	}
+	report := fmt.Sprintf("# Mind run %d — %s (%s): nothing to judge\n\nThe bundle carried no operator prompt, no operator-authored spec, no feedback note, no typed answer, no saved artifact and no read mark, so no claude was launched.\n", run.ID, who, run.Trigger)
+	if err := st.FinishMindRun(run.ID, store.MindRunFinish{At: time.Now().UnixMilli(), Report: report, PromptSHA: sha, BundleBytes: int64(man.Bytes)}); err != nil {
+		return fail(err)
+	}
+	util.LogEvent("jobs", "info", "mind-run-done", fmt.Sprintf("mind run %d (%s %s): nothing to judge, not launched", run.ID, run.Trigger, run.Slug))
+	return nil
 }
 
 // mindRunFailer is how every path closes a run as failed: the row gets the
@@ -1774,6 +1824,24 @@ func ReplayMindRun(st *store.Store, id int64, write bool, now time.Time) (MindRe
 		if err := st.SetMindRunBlobs(nid, blobs.BundleGz, blobs.Manifest); err != nil {
 			return MindReplay{}, fail(err)
 		}
+	}
+
+	// a recorded bundle with nothing to judge is replayed the way it would
+	// run now — no launch, the empty answer, the current prompt's sha — which
+	// for a run recorded before empty bundles stopped launching shows any
+	// ops that launch produced as lost, the drift a replay exists to show
+	var stored MindBundle
+	if json.Unmarshal(data, &stored) == nil && mindBundleEmpty(stored) {
+		_, sha, _ := MindPrompt()
+		rep.NewPromptSHA = sha
+		rep.New = MindAnswer{Ops: []MindOp{}, Excluded: []MindExclusion{}, Coverage: map[string]any{}}
+		rep.Diff = diffMindAnswers(rep.Old, rep.New)
+		if write {
+			if err := finishEmptyMindRun(st, newRun, man, fail); err != nil {
+				return rep, err
+			}
+		}
+		return rep, nil
 	}
 
 	out, model, sha, lerr := mindLaunch(mindRunJob(st, run), string(data))
