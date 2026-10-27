@@ -208,16 +208,17 @@ unbounded — a single line can be an entire inlined skill body — so a page si
 one can blow the Read tool's token ceiling on page two: say to page large views in modest chunks
 (a few hundred lines) and to shrink the page on a ceiling error rather than switching to grep.
 **Shapes, never values**: a scout scanning for where a credential or a person's identifier landed
-— and a pool-slot slug IS a person's identifier, since most are an email address with its
-punctuation turned into dashes, so a brief that says "slugs are fine in the report" means job slugs
-and has to say so: briefed with the bare word, one scout redacted a slot slug as an identifier while
-two others typed slot slugs into their reports as slugs —
 searches by SHAPE (a prefix, a length, a regex) and COUNTS or LOCATES rather than prints — `grep -c`,
 `grep -l`, `grep -n … | cut -d: -f1` (the file name over several files, the line number in one);
 never an unredirected `grep -o`, `grep -ob` or a bare grep that echoes the matching line, since a
 tool result is a transcript record too, and paging a view with Read shows whatever is in it — and
 reports the class, the file and the record timestamp (or path and line for a file that is not a
-transcript); it never types a value it found into a command, a notes line or its report. The one
+transcript); it never types a value it found into a command, a notes line or its report. A pool-slot
+slug IS a person's identifier — most are an email address with its punctuation turned into dashes —
+so a brief that says "slugs are fine in the report" means job slugs and has to say so, and has to say
+that a slot is named by the job bound to it or by an ordinal the scout assigns in its report, never
+by its slug: briefed with the bare word, scouts have both redacted a slot slug as an identifier and
+typed one into a report as a slug. The one
 case where typing it looks unavoidable — COUNTING or LOCATING a value already known, to ask whether
 it propagated — is done from a needle file instead: extract the value with its shape regex into a
 file in the scout's scratch dir (`grep -o -E '<shape>' <source> > needles.txt` — the one permitted
