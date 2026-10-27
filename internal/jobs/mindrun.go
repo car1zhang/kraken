@@ -1127,9 +1127,12 @@ func mmValidateItem(c *MMProposal) error {
 // ---------------------------------------------------------------------------
 
 // MindRunReport renders a finished run as markdown: a headline, then the
-// sections Proposed, Superseded, Retired, Folded, Excluded, Flagged and
-// Coverage in that order, each saying None when it is empty. One line per
-// entry, never hard-wrapped.
+// sections Added (every add the answer asked for — the ones that landed, and
+// the ones suppressed or refused, each prefixed with why), Superseded,
+// Retired, Folded, Excluded, Flagged and Coverage in that order, each saying
+// None when it is empty. One line per entry, never hard-wrapped. The first
+// section was "Proposed" while the confirm gate existed; an add lands live
+// now, and a heading that said otherwise read as a gate that was not there.
 func MindRunReport(run store.MindRun, ans MindAnswer, apply MindApply, man MindManifest) string {
 	c := apply.Counts
 	who := run.Slug
@@ -1149,7 +1152,7 @@ func MindRunReport(run store.MindRun, ans MindAnswer, apply MindApply, man MindM
 			b.WriteString("- " + l + "\n")
 		}
 	}
-	var proposed, superseded, retired, folded, flagged []string
+	var added, superseded, retired, folded, flagged []string
 	for _, r := range apply.Results {
 		if r.Index < 0 || r.Index >= len(ans.Ops) {
 			continue
@@ -1161,11 +1164,11 @@ func MindRunReport(run store.MindRun, ans MindAnswer, apply MindApply, man MindM
 		}
 		switch r.Outcome {
 		case "added":
-			proposed = append(proposed, fmt.Sprintf("#%d %s — “%s”", r.ID, title, quote))
+			added = append(added, fmt.Sprintf("#%d %s — “%s”", r.ID, title, quote))
 		case "suppressed":
-			proposed = append(proposed, fmt.Sprintf("suppressed (dropped before, #%d): %s — “%s”", r.ID, title, quote))
+			added = append(added, fmt.Sprintf("suppressed (dropped before, #%d): %s — “%s”", r.ID, title, quote))
 		case "refused":
-			proposed = append(proposed, fmt.Sprintf("refused (%s): %s — “%s”", r.Reason, title, quote))
+			added = append(added, fmt.Sprintf("refused (%s): %s — “%s”", r.Reason, title, quote))
 		case "superseded":
 			superseded = append(superseded, fmt.Sprintf("#%d → #%d %s — “%s”", op.Target, r.ID, title, quote))
 		case "retired":
@@ -1196,7 +1199,7 @@ func MindRunReport(run store.MindRun, ans MindAnswer, apply MindApply, man MindM
 		v, _ := json.Marshal(ans.Coverage[k])
 		coverage = append(coverage, k+": "+mindOneLine(string(v)))
 	}
-	section("Proposed", proposed)
+	section("Added", added)
 	section("Superseded", superseded)
 	section("Retired", retired)
 	section("Folded", folded)
@@ -1543,7 +1546,12 @@ func (d *daemonState) mindRunPass(st *store.Store, now time.Time) {
 	if !mindRunning.CompareAndSwap(false, true) {
 		return
 	}
-	run, err := st.ClaimNextMindRun(now.UnixMilli())
+	// claimed at the clock, not at the tick's `now`: a Done that lands inside
+	// the tick enqueues after `now` was read, and the row then carried a
+	// started_at several seconds BEFORE its created_at (measured 4–7 s on four
+	// of the first day's runs), which breaks any queue-latency read off the
+	// ledger
+	run, err := st.ClaimNextMindRun(time.Now().UnixMilli())
 	if err != nil || run == nil {
 		if err != nil {
 			dlogErr("mind run claim failed: %v", err)
