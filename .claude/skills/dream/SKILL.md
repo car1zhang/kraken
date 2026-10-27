@@ -213,7 +213,12 @@ searches by SHAPE (a prefix, a length, a regex) and COUNTS or LOCATES rather tha
 never an unredirected `grep -o`, `grep -ob` or a bare grep that echoes the matching line, since a
 tool result is a transcript record too, and paging a view with Read shows whatever is in it — and
 reports the class, the file and the record timestamp (or path and line for a file that is not a
-transcript); it never types a value it found into a command, a notes line or its report. The one
+transcript); it never types a value it found into a command, a notes line or its report. A pool-slot
+slug IS a person's identifier — most are an email address with its punctuation turned into dashes —
+so a brief that says "slugs are fine in the report" means job slugs and has to say so, and has to say
+that a slot is named by the job bound to it or by an ordinal the scout assigns in its report, never
+by its slug: briefed with the bare word, scouts have both redacted a slot slug as an identifier and
+typed one into a report as a slug. The one
 case where typing it looks unavoidable — COUNTING or LOCATING a value already known, to ask whether
 it propagated — is done from a needle file instead: extract the value with its shape regex into a
 file in the scout's scratch dir (`grep -o -E '<shape>' <source> > needles.txt` — the one permitted
