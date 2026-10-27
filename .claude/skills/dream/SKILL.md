@@ -45,6 +45,14 @@ future clone and transcript, and a made-up one pins the same parser — a pass t
 session id from its diffs by hand still shipped a real cell's banner, reset time and all, as a
 table case, because nothing had said a fixture counts. It does: invent its values — times, ids,
 names, numbers — and keep its fixed wording and shape.
+The PR BODY is the diff's neighbour and gets the same rule: `## Summary` says what the change does
+and why in the terms of the skill or code it amends, and a `## Context` — do step 8 allows one for
+motivation — holds at most the watch row id(s) and the merged PR the change follows, never the
+incident: a pass wrote four bodies that retold the night's evidence in anonymised form ("two leads
+in one day, each …", "a scout … typed both fragments"), after telling its reviewers the bodies
+would be Summary-only, so no reviewer saw them and the one surface the operator reads first
+carried what the report was built to keep local. If the motivation needs a sentence, it is the one
+in the skill text being shipped; the rest is in the report, where it already is.
 
 The corollary is freeing — because the local side never travels, the report and a watched fact can
 hold the real thing: actual quotes, real session ids, the prompt text as written. That is what makes
