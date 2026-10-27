@@ -655,19 +655,24 @@ func (d *daemonState) tick(mirror bool) (int, error) {
 				// mirror never finishes a real teardown (worktree removal,
 				// tmux kill-session) — a surviving teardown: marker is left
 				// exactly as found, for the real daemon/serve to resume.
-				if mirror {
+				// And a marker whose teardown THIS process is still running
+				// (the board's Done between its session kill and its final
+				// write) is not interrupted: skip it this tick. The finisher
+				// then claims the job and re-reads its row before resuming,
+				// because j is the tick's head-of-loop snapshot and a Done
+				// can finish inside the tick's own latency — the marker it
+				// resumed on would already be cleared (teardowninflight.go).
+				// The marker logged is the FRESH row's, read before the
+				// resume's final write clears it: the one word that tells a
+				// genuine interrupted teardown from a resume racing the
+				// board's own Done.
+				if !resumeTeardownWanted(j, mirror) {
 					continue
 				}
-				// Read the marker BEFORE the resume: ResumeTeardown's final
-				// state write clears j.Teardown on this same struct, so the
-				// log line below printed an empty "()" on every one of its
-				// firings and could not say WHICH marker it finished — the
-				// one word that tells a genuine interrupted teardown from a
-				// resume racing the board's own Done.
-				marker := j.Teardown
-				if err := ResumeTeardown(j); err != nil {
+				marker, resumed, err := finishInterruptedTeardown(j, reloadJob, ResumeTeardown)
+				if err != nil {
 					d.noteTeardownFailure(j, err)
-				} else {
+				} else if resumed {
 					d.clearTeardownFailure(j)
 					dlog("%s: finished interrupted teardown (%s)", j.Slug, marker)
 				}
