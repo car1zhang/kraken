@@ -2402,6 +2402,18 @@ func KillJob(j *Job) ([]string, error) {
 			return msgs, err
 		}
 	}
+	// claimed before the intent write and held to the return, so the daemon's
+	// finisher never resumes a teardown this process is still running, and a
+	// second Done or Kill of the same job is refused instead of run alongside
+	// (teardowninflight.go)
+	release, ok := claimTeardown(j.ID)
+	if !ok {
+		return msgs, errTeardownInProgress(j)
+	}
+	defer release()
+	if err := refuseStaleTeardown(j, "kill", reloadJob); err != nil {
+		return msgs, err
+	}
 	if err := WriteJobFields(j, "teardown", "kill"); err != nil {
 		return msgs, fmt.Errorf("teardown-intent write failed: %v — not tearing down", err)
 	}
@@ -2489,6 +2501,19 @@ func DoneJob(j *Job, outcome string) ([]string, error) {
 		if err := guardSelfTeardown(s, own); err != nil {
 			return msgs, err
 		}
+	}
+	// claimed before the intent write and held to the return: the session
+	// kill inside teardownCell is what makes the daemon's finisher read this
+	// job as an interrupted teardown, and without the claim a tick in that
+	// span ran a second teardown and a second mind run; a second Done of the
+	// same job is refused instead of run alongside (teardowninflight.go)
+	release, ok := claimTeardown(j.ID)
+	if !ok {
+		return msgs, errTeardownInProgress(j)
+	}
+	defer release()
+	if err := refuseStaleTeardown(j, "done", reloadJob); err != nil {
+		return msgs, err
 	}
 	if err := WriteJobFields(j, "teardown", "done:"+outcome); err != nil {
 		return msgs, fmt.Errorf("teardown-intent write failed: %v — not tearing down", err)
