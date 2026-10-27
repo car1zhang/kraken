@@ -14,8 +14,8 @@ import (
 // teardown that DIED mid-way and resumes it; but the board's own Done kills
 // the session as its first destructive step and clears the marker as its
 // last, and a tick landing in between reads exactly that shape. Measured
-// 2026-10-26 over every log on one machine: 45 of 46 firings of the finisher
-// landed within five seconds of the matching board Done — the finisher has
+// over this machine's logs, nearly every firing of the finisher landed
+// within seconds of a board Done — the finisher has
 // almost never finished a real interrupted teardown, and each firing ran a
 // second teardownCell against a tree the first was still removing, plus
 // (since the mind run queues on Done) a second mind run over the same
