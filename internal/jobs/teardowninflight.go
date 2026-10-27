@@ -14,12 +14,11 @@ import (
 // teardown that DIED mid-way and resumes it; but the board's own Done kills
 // the session as its first destructive step and clears the marker as its
 // last, and a tick landing in between reads exactly that shape. Measured
-// over this machine's logs, nearly every firing of the finisher landed
-// within seconds of a board Done — the finisher has
-// almost never finished a real interrupted teardown, and each firing ran a
-// second teardownCell against a tree the first was still removing, plus
-// (since the mind run queues on Done) a second mind run over the same
-// bundle.
+// over one machine's logs, nearly every firing of the finisher landed within
+// seconds of a board Done — the finisher has almost never finished a real
+// interrupted teardown, and each firing ran a second teardownCell against a
+// tree the first was still removing, plus (since the mind run queues on
+// Done) a second mind run over the same bundle.
 //
 // The gate is in-process on purpose: Done, Kill and the tick all run inside
 // the one `kraken serve`, so a claim here covers every live teardown, and a
