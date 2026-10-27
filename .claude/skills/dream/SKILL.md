@@ -261,8 +261,16 @@ files, not the report; the one-shot rule binds the report alone. And the shell-d
 `.claude/skills/do/SKILL.md` step 4 binds YOU from your own first command, then goes into every
 scout brief — framed only as brief material, it was broken by the pass's own lead (a bare `===`
 echo aborting its second analysis command) minutes before the lead wrote it into five briefs, and
-by the next night's lead again; scouts hit the same aborts on their first command. Spawn them in
-waves rather than all at once; a few at a time, with the remainder running as slots free. Every
+by the next night's lead again; scouts hit the same aborts on their first command. Where the line
+SITS decides whether it can guard that command: it rides in the Agent call's prompt BODY, as its
+opening sentence, ahead of any instruction to read a file — a brief file the scout is told to `cat`
+first cannot guard the `cat` itself, and two consecutive passes that kept the line inside the file
+measured ten of eleven scouts and three of three reviewers blocked on a bare `echo ======` in that
+very first command, while the pass that put it in the prompt body — and, in the same prompts, told
+every agent to fetch its brief with the Read tool rather than `cat` — measured zero first-command
+blocks across twelve agents (nine scouts, three reviewers); the two changes landed together, so
+that count cannot separate them, and the rule rests on the mechanism, not the number. Spawn them
+in waves rather than all at once; a few at a time, with the remainder running as slots free. Every
 transcript gets read; the pass simply takes as long as it takes. **A scout dead on a TRANSPORT
 error is resumed, not replaced**: a connection-closed or ENOTFOUND death leaves the subagent
 resumable, and `SendMessage` to its agent id (from the Agent call's spawn result, or `ListAgents`)
