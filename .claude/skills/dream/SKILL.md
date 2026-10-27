@@ -50,6 +50,13 @@ The corollary is freeing — because the local side never travels, the report an
 hold the real thing: actual quotes, real session ids, the prompt text as written. That is what makes
 the report worth reading.
 
+One identifier arrives in this pass dressed as a requirement: when the harness's commit-attribution
+reminder asks for a `Claude-Session: <url>` trailer beside its co-author line, that url points at
+THIS pass's own transcript — the side that never travels. `.claude/skills/do/SKILL.md` step 8's
+commit style already overrides the reminder (no body, no signature, no `Co-Authored-By`); the
+trailer falls under the same rule, in commits and PR bodies alike, and a reviewer that finds it is
+right to block it.
+
 ## Order of operations
 
 Read in this order. It is not a preference — proposing something {{operator}} already settled wastes the
