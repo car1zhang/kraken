@@ -74,7 +74,7 @@ Print ONE JSON object and nothing else on stdout — no prose before or after it
 {"ops": [...], "excluded": [...], "coverage": {...}}
 ```
 
-`ops` is a list of operations, applied in order; at most 20 of them may insert a row (`add` and `supersede` together — kraken refuses the rest with `cap`, so put the strongest first). Each operation:
+`ops` is a list of operations, applied in order; at most 20 of them may insert a row (`add` and `supersede` together — kraken refuses the rest with `cap`, so put the strongest first). kraken validates EVERY operation before it applies ANY, and one invalid operation voids the whole answer: a `title` over 120 runes, a `body` over 8000 runes, an empty `quote`, a `repo` that is not a checkout's exact directory name, a `target` that does not exist — then nothing lands, every other operation in the answer is lost with it, and the run is recorded as failed. So count a title's runes before you print the answer, and shorten a claim that does not fit rather than send it long; the live items in the bundle show the length that fits. Each operation:
 
 | `op` | Fields |
 |---|---|
@@ -89,7 +89,7 @@ An `item`:
 |---|---|
 | `kind` | `decision` (rung 4), `note` (rungs 5 and 6), or `reading` (only with a `mark_id` or `saved_id` in `source`, above) |
 | `scope` | `repo` by default — with `repo` the checkout the session worked in (the record's `repo`, else the run's `repo`) and `dir` the repo-relative directory the claim names when it names one (`""` for the whole repo); `universal` only for a statement about {{operator}} themselves, their process, or how agents should treat them |
-| `title` | at most 120 runes, a CLAIM in {{operator}}'s terms naming the resolved thing, never the pronoun and never a topic: "trade mappings belong in dispatch groups, not areas", not "the mapping" |
+| `title` | at most 120 runes — a hard cap, counted, and one title over it refuses the whole answer — a CLAIM in {{operator}}'s terms naming the resolved thing, never the pronoun and never a topic: "trade mappings belong in dispatch groups, not areas", not "the mapping" |
 | `body` | at most 4 sentences: the claim with its referent spelled out, the root (the session and the agent output it replied to, the pasted traceback, the saved artifact by name, the item id), and the rung |
 | `quote` | {{operator}}'s sentence verbatim — the record text, pasted material trimmed to the lines that carry the claim, the mark's text, the saved document's lines. Never paraphrased: the quote is what kraken folds on and what it suppresses, byte for byte. A quote {{operator}} dropped before comes back `suppressed` and writes nothing — that is their verdict, never something to reword around |
 | `source` | the pointer: `{"kind": "transcript", "session": …, "uuid": …}` for a prompt; `{"kind": "job", "slug": …, "sha": …}` for a spec; `{"kind": "feedback", "slug": …, "feedback_id": …}`; `{"kind": "question", "slug": …, "qid": …}`; for a mark, the mark's own `source` as given (it carries `mark_id`); for a saved artifact `{"kind": "artifact", "slug": …, "name": …, "sha": …, "saved_id": …}` |
