@@ -233,7 +233,17 @@ propagator its own evidence rule warns about, and nothing in the brief had said 
 the brief carries a short **already-established list** — the known cross-cutting costs and facts
 from the watch store and {{operator}}'s mental model (`kraken mm get --q "<subject>"`, then `kraken mm show <id>`) that touch this scout's assignment — marked "measure, don't
 re-derive": six scouts in one night each independently re-derived from raw a cost kraken's memory
-already held, because nothing in any brief said what was already known.
+already held, because nothing in any brief said what was already known. And it names the shared
+transcript helper: before the fan-out, copy `.claude/skills/dream/assets/tl.py` out of the worktree
+into the night's scratch root (`/tmp/<root>/lib/tl.py`, so no scout path points into the repo) and
+tell every scout to run it with `python3 -I` — one line per record with timestamp, type, model,
+tool call or result head and usage; `--since/--until`, `--grep`, `--errors` (is_error results
+named by their tool), `--stats` (counts, plus usage per message id with the input and cache
+counters from a message's first record and output from its last, a fork's replayed parent records
+excluded) and `--selftest` — before it writes a parser of its own. Two consecutive passes measured every
+scout writing its own transcript parser from scratch, 31% of the scouts' output going to the calls
+that ran them, and six of one night's twenty-nine is_error results being those parsers' own crashes
+on records without a timestamp.
 
 **The scouts** are one subagent per transcript, each reading that session's reduced view plus its
 digest. They are read-only exploration — they change nothing in the repo and judge nothing — so they are
