@@ -1439,7 +1439,14 @@ func enqueueDoneMindRun(j *Job) {
 // sessions that no later run would ever list. The date is left alone, so the
 // rewind never re-queues a run today: a failure that repeats (the outage
 // still on) would otherwise re-enqueue every tick. A missing or unreadable
-// watermark is left as it is, since there is then nothing to rewind.
+// watermark is left as it is, since there is then nothing to rewind, and a
+// watermark already at or before the run's since is never moved, since a
+// rewind must never advance it. When a LATER daily run was already queued
+// before this one failed (a run straddling midnight, a laptop asleep
+// mid-run), the rewind re-covers that newer run's window too: the next run
+// judges it twice, and the byte-exact fold absorbs the repeats. Coverage is
+// chosen over the tokens on purpose — a window judged twice costs one
+// oversized run, a window judged never is gone.
 func rewindMindDaily(st *store.Store, run store.MindRun) {
 	raw, err := st.GetKV(mindDailyKVKey)
 	if err != nil {
