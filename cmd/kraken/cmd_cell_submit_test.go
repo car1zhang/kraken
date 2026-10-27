@@ -4,6 +4,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 )
@@ -38,5 +39,14 @@ func TestCellSubmitOutlivesTheProxyDeadline(t *testing.T) {
 	}
 	if took := time.Since(start); took < delay {
 		t.Fatalf("submit returned after %s, before the %s start finished", took, delay)
+	}
+}
+
+// A submit that does time out names the deadline that fired, not the proxy
+// family's: a caller who waited 90 s must not read "did not respond within 5s".
+func TestCellSubmitTimeoutNamesItsOwnDeadline(t *testing.T) {
+	err := qfTimeoutError(fakeTimeoutNetErr{}, cellSubmitHTTPTimeout)
+	if !strings.Contains(err.Error(), cellSubmitHTTPTimeout.String()) || strings.Contains(err.Error(), "within "+qfHTTPTimeout.String()) {
+		t.Fatalf("submit timeout error names the wrong deadline: %v", err)
 	}
 }
