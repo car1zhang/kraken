@@ -1285,15 +1285,22 @@ func RunMindRun(st *store.Store, run store.MindRun) error {
 }
 
 // mindBundleEmpty reports a bundle with nothing for the model to judge: no
-// operator prompt, no operator-authored spec, no feedback note, no typed
-// answer, no ★-saved artifact and no read mark. The live items ride every
-// bundle as context, never as candidates, so they do not count. Six of the
-// first day's thirteen runs were this shape — an agent-filed job whose pane
-// the operator never typed into, a dream job — and each launched a claude -p
-// that re-primed the skill and the whole model to answer an empty ops list.
+// operator prompt, no operator-authored spec (BuildMindBundle sets Spec only
+// for an operator- or unknown-authored job, and a blank body counts as none),
+// no feedback note, no typed answer, no ★-saved artifact and no read mark.
+// The live items ride every bundle as context, never as candidates, so they
+// do not count. A bundle that is empty because its evidence could NOT be
+// read — Truncated names a reader that failed or a size cap that evicted
+// every prompt — is not empty: it launches as before, so the loss stays
+// visible in a run that was judged, not folded into a run that said there
+// was nothing. Six of the first day's thirteen runs were the empty shape —
+// an agent-filed job whose pane the operator never typed into, a dream job —
+// and each launched a claude -p that re-primed the skill and the whole model
+// to answer an empty ops list.
 func mindBundleEmpty(b MindBundle) bool {
 	return len(b.Prompts) == 0 && (b.Spec == nil || strings.TrimSpace(b.Spec.Body) == "") &&
-		len(b.Feedback) == 0 && len(b.Answers) == 0 && len(b.Saved) == 0 && len(b.Marks) == 0
+		len(b.Feedback) == 0 && len(b.Answers) == 0 && len(b.Saved) == 0 && len(b.Marks) == 0 &&
+		len(b.Truncated) == 0
 }
 
 // mindEmptyAnswer is the answer an unlaunched run records: what the model
@@ -1811,8 +1818,10 @@ func ReplayMindRun(st *store.Store, id int64, write bool, now time.Time) (MindRe
 		}
 	}
 
-	// a recorded bundle with nothing to judge is replayed the way it ran:
-	// no launch, the empty answer, the current prompt's sha
+	// a recorded bundle with nothing to judge is replayed the way it would
+	// run now — no launch, the empty answer, the current prompt's sha — which
+	// for a run recorded before empty bundles stopped launching shows any
+	// ops that launch produced as lost, the drift a replay exists to show
 	var stored MindBundle
 	if json.Unmarshal(data, &stored) == nil && mindBundleEmpty(stored) {
 		_, sha, _ := MindPrompt()

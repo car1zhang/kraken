@@ -23,7 +23,9 @@ func TestMindBundleEmpty(t *testing.T) {
 	}{
 		{"nothing", MindBundle{}, true},
 		{"items only", MindBundle{Items: []MindBundleItem{{}}}, true},
-		{"agent spec body is still empty", MindBundle{Spec: &MMEvidenceJob{Author: "agent", Body: "   "}}, true},
+		{"blank spec body", MindBundle{Spec: &MMEvidenceJob{Author: "agent", Body: "   "}}, true},
+		{"a spec body counts whoever wrote it (the author filter is BuildMindBundle's)", MindBundle{Spec: &MMEvidenceJob{Author: "agent", Body: "text"}}, false},
+		{"evidence that could not be read is not nothing", MindBundle{Truncated: []string{"operator reader: 1 transcripts or projects could not be read in full"}}, false},
 		{"a prompt", MindBundle{Prompts: []core.OperatorRecord{{}}}, false},
 		{"an operator spec", MindBundle{Spec: &MMEvidenceJob{Author: "operator", Body: "build it"}}, false},
 		{"a feedback note", MindBundle{Feedback: []MMEvidenceFeedback{{}}}, false},
