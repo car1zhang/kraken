@@ -1045,7 +1045,10 @@ func TestContractMRBuildMindBundleSpecByAuthor(t *testing.T) {
 // RunMindRun end to end
 // ---------------------------------------------------------------------------
 
-var contractMRSections = []string{"Proposed", "Superseded", "Retired", "Folded", "Excluded", "Flagged", "Coverage"}
+// "Added", not "Proposed": the contract named the retired confirm gate's
+// heading, and the first production run's report read as a gate that was not
+// there — amended as a contract defect after the fact.
+var contractMRSections = []string{"Added", "Superseded", "Retired", "Folded", "Excluded", "Flagged", "Coverage"}
 
 // contractMRSectionLines returns the line index of each section heading, in
 // contract order, failing when one is missing or out of order.
@@ -1209,7 +1212,7 @@ func TestContractMRRunMindRunEndToEnd(t *testing.T) {
 		t.Errorf("report does not open with a headline: %q", lines[0])
 	}
 	if !strings.Contains(contractMRSectionBody(lines, idx, 0), "dispatch groups own trades") {
-		t.Errorf("Proposed section lacks the added title:\n%s", r.Report)
+		t.Errorf("Added section lacks the added title:\n%s", r.Report)
 	}
 	if !strings.Contains(contractMRSectionBody(lines, idx, 4), "THREAD-PROMPT why twenty") {
 		t.Errorf("Excluded section lacks the excluded quote:\n%s", r.Report)
@@ -1273,7 +1276,8 @@ func TestContractMRRunMindRunStampsUsage(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 // "sections in order Proposed, Superseded, Retired, Folded, Excluded, Flagged,
-// Coverage, each present with None when empty; opens with a one-line headline".
+// Coverage, each present with None when empty; opens with a one-line headline"
+// — the first heading amended to Added (see contractMRSections).
 func TestContractMRMindRunReportEmptySectionsSayNone(t *testing.T) {
 	run := store.MindRun{ID: 3, JobID: 4, Slug: "rep", Trigger: "done", Since: 1, Until: 2, State: "running"}
 	rep := MindRunReport(run, MindAnswer{Ops: []MindOp{}, Excluded: []MindExclusion{}, Coverage: map[string]any{}},
