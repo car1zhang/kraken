@@ -208,6 +208,10 @@ unbounded — a single line can be an entire inlined skill body — so a page si
 one can blow the Read tool's token ceiling on page two: say to page large views in modest chunks
 (a few hundred lines) and to shrink the page on a ceiling error rather than switching to grep.
 **Shapes, never values**: a scout scanning for where a credential or a person's identifier landed
+— and a pool-slot slug IS a person's identifier, since most are an email address with its
+punctuation turned into dashes, so a brief that says "slugs are fine in the report" means job slugs
+and has to say so: briefed with the bare word, one scout redacted a slot slug as an identifier while
+two others typed slot slugs into their reports as slugs —
 searches by SHAPE (a prefix, a length, a regex) and COUNTS or LOCATES rather than prints — `grep -c`,
 `grep -l`, `grep -n … | cut -d: -f1` (the file name over several files, the line number in one);
 never an unredirected `grep -o`, `grep -ob` or a bare grep that echoes the matching line, since a
