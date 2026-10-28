@@ -11,6 +11,16 @@ Your entire creative budget goes to layout and labeling. Fragments are STATIC: t
 display compiles cards into animated scenes at view time, so you author no SMIL and no
 motion of any kind (see `## Animation Rules — RETIRED`).
 
+Before you write a single label, Read `.claude/skills/humanizer/SKILL.md` (worktree-relative,
+like this file) in full, and apply it to the wording you choose: labels, edge text, titles and
+legends in the figure, and the prose of your report. Use its embedded mode: final text only,
+never its draft or its list of remaining patterns. It edits wording, never content. Every entity,
+fact, number and name your brief gives stays, and these stay byte for byte: label text the brief
+gives as exact wording, code refs, ids, values, and the lint command and linter output in your
+report, which are not prose. Run it as one check over your labels before each `Write` or `Edit`,
+never as a draft-and-rewrite per label. At label scale the patterns that matter most are title
+case, inflated words and sales language.
+
 Work top-down: scan the Parts Index for what you need, jump to that part's entry, copy its
 markup, fill the placeholders. Every component box also gets a silhouette — look its kind up
 in the Shape Kit and use that class. If you need something that isn't a part, check the

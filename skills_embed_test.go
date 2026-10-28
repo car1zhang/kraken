@@ -84,6 +84,24 @@ func TestSkillsFSContainsExpectedSkills(t *testing.T) {
 // is in.
 var nonStageSkills = map[string]bool{"load": true, "handoff": true, "direct": true, "mind": true, "humanizer": true}
 
+// TestHermesReadsHumanizer pins the operator's rule that every hermes reads
+// the humanizer skill. The contract is the load-bearing copy, since every
+// hermes brief must send its renderer there and the renderer must read it in
+// full; the aim and info brief lists name it as well so a lead writing a brief
+// sees the requirement. The path must resolve in the bundle, or the
+// instruction points at nothing.
+func TestHermesReadsHumanizer(t *testing.T) {
+	const path = ".claude/skills/humanizer/SKILL.md"
+	if _, err := fs.ReadFile(jobs.SkillsFS, strings.TrimPrefix(path, ".claude/skills/")); err != nil {
+		t.Fatalf("%s is not in the embedded bundle: %v", path, err)
+	}
+	for _, file := range []string{"aim/assets/hermes-contract.md", "aim/SKILL.md", "info/SKILL.md"} {
+		if !strings.Contains(readEmbedded(t, file), path) {
+			t.Errorf("%s no longer names %s — hermes would render labels without the humanizer pass", file, path)
+		}
+	}
+}
+
 // TestHumanizerSkillVendored pins the vendored humanizer skill: the file the
 // brief sends every cell to must exist in the bundle, and the MIT license and
 // the provenance note must ride beside it, since the skill is copied from

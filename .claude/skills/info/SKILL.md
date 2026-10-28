@@ -115,7 +115,9 @@ short form, with /info's overrides:
   instruction to Read it in full before writing any markup and to compose only from it — never its
   contents pasted inline, which is /aim's rule and not an /info override: a re-typed contract
   silently diverges from the file and from the other teammates' copies, and the file is already
-  materialized in the teammate's own cwd. Then the diagram's exact content, a card-unique
+  materialized in the teammate's own cwd. It also carries the path
+  `.claude/skills/humanizer/SKILL.md` with an instruction to Read it in full and apply it to every
+  label and to the report's prose, as /aim's brief does. Then the diagram's exact content, a card-unique
   `arrow-<id>` marker id and path-id prefix, the fragment output path — with /aim's two
   fragment-write clauses: **Read an existing output file before writing it** (Write refuses
   otherwise), and on first authorship **write incrementally** (`Write` the opening section, `Edit`
