@@ -540,6 +540,19 @@ specific, and it is the only place the cell's real paths appear:
   (`K transcripts, T partial`): a partial scan must never be silent.
   Use `0` where a count is zero — never omit the clause. Kraken derives blocked from your
   silence and shows your last words on the board.
+- **A wake after the closing line does not reopen the pass.** A PR watcher bump (kraken typing a
+  failing check or a new review comment into the pane), a merge notice or a compaction can land
+  after `dream swept:` went out. Twice, on consecutive nights, the compaction summary of a session
+  whose last act was that line listed the line as still pending. The transcript, not the summary,
+  says whether the line went out — and the line counts only as your own assistant text with real
+  counts and a real path in it, never the template quoted in a tool result. If it did go out,
+  handle only what the wake itself asks (a failing check, a review comment), and never recount,
+  rewrite the report or re-run a step on the summary's say-so. End the turn with the closing line
+  COPIED verbatim from the transcript, with the PR urls and owed-action clauses that followed it,
+  counts unchanged unless the wake's own work opened a PR or wrote a row — then the same line with
+  only those counts moved, recounted under the report section's rule, and the report updated to
+  match. Your last words are still the card's detail text, so the line has to stand again, as the
+  same line.
 - Never declare the job done — accepting is {{operator}}'s move, never yours.
 - `solo: true` on the job means no subagents at all: run the mechanical pass and read what you can
   yourself, and say in the report that the semantic pass was skipped.
