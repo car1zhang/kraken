@@ -397,7 +397,9 @@ func dreamJobContent(slug string, since, until int64, clamped bool) string {
 		"Read `.claude/skills/dream/SKILL.md` **by path** from this worktree and follow it\n" +
 		"end to end. Read it by path rather than invoking `/dream`: a personal skill of the\n" +
 		"same name shadows the repo-owned copy, and the repo-owned copy is the one that\n" +
-		"knows about cells.\n" +
+		"knows about cells. Read it **with the Read tool, whole** — one call — never through\n" +
+		"`cat`: the file is larger than a shell result may be, so a `cat` comes back as a\n" +
+		"pointer to a saved copy you then page in several more calls.\n" +
 		"\n" +
 		"## The sweep window\n" +
 		"\n" +
