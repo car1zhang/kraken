@@ -285,7 +285,13 @@ the cell's brief wins wherever it is more specific:
   on the board; {{operator}} reads the artifacts and messages back directly, and each reply is the next
   round. A decision that genuinely cannot be defaulted may use `AskUserQuestion` — kraken surfaces
   the options as buttons — but that is for blockers, not for the routine uncertainty that belongs
-  inline. Never declare the job done; accepting is {{operator}}'s move.
+  inline. Never declare the job done; accepting is {{operator}}'s move. **Price the gate before the
+  line, and never clear it while the menu stands**: the go-deeper menu is a state only {{operator}} can
+  move, so the card reads blocked and carries an estimate — `kraken load set <slug>` at the load
+  skill's "/info round, go-deeper pick" row (the brief's state map carries the same pair), re-set at
+  every round's closing line, unless another state-map row prices that close higher. `kraken load
+  clear` means "working, nothing needed", and an /info lead that cleared because its renderer had
+  stopped and nothing was running left a blocked card with no badge.
 - An /info job never gets a `/do`, has no phase 2, and never opens a PR — {{operator}} accepts the
   artifacts straight from the board instead.
 - `solo: true` on the job means no teammates and no subagents at all: prose only — no diagram cards
