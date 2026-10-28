@@ -503,6 +503,20 @@ const zeusBriefCeiling = 13_500
 // note has for itself. Restate the measurement on every change that touches
 // the brief; do not trust the last one written down, including this one.
 //
+// RESTATED 2026-10-28 for the humanizer pass, under the ratchet-down
+// condition above: the ceiling did NOT move. One clause joined the
+// mental-model sentence (edit the draft against
+// .claude/skills/humanizer/SKILL.md with skill-fixed formats kept verbatim,
+// and carry that pass into teammate briefs), funded by trims in that same
+// sentence — the flag-source parenthetical, and word-level cuts to the
+// guardrail aside, the flag clause and the raise clause. Of the two flag sources that
+// parenthetical named, aim/info/do still state the teammate report, and the
+// recall notes block needs no pointer since its own header labels pending
+// flags for the lead to raise or dismiss. Measured: 13,488 -> 13,491 at the
+// 48-char slug, leaving **9** under the ceiling, interpolation count
+// unchanged at nine. Nine bytes is arithmetic, not headroom: the next clause
+// here has to be funded by a trim or a move, as this one was.
+//
 // However much headroom the latest restatement records — read the live number
 // from the test log, never from prose here — the way to fund a new clause is
 // unchanged: look for a trim in the paragraph the clause belongs to first
@@ -1052,6 +1066,31 @@ func TestZeusBriefNamesDirect(t *testing.T) {
 			if !strings.Contains(brief, want) {
 				t.Errorf("%s (solo=%v) brief missing %q — a `/direct` spec would then be run with the "+
 					"full crew, which is the spend the skill exists to avoid", j.Slug, j.Solo, want)
+			}
+		}
+	}
+}
+
+// TestZeusBriefNamesHumanizer pins the one clause that makes every cell use
+// the vendored humanizer skill. The skill's SKILL.md is upstream's, byte for
+// byte, so nothing inside it can say when a cell applies it; the brief is the
+// only place that does, and it is in context every turn, in every phase and
+// in a job that runs none. The teammate half is pinned too, since operator
+// prose a teammate writes would otherwise skip the pass.
+func TestZeusBriefNamesHumanizer(t *testing.T) {
+	for _, j := range []*Job{{Slug: "humanizer-plain"}, {Slug: "humanizer-solo", Solo: true}} {
+		brief := zeusBrief(j)
+		for _, want := range []string{
+			"edit the draft against `.claude/skills/humanizer/SKILL.md`",
+			// the humanizer bans one-line closers, bold labels and dashes,
+			// which are exactly the shapes of the skills' fixed closing lines
+			// (`manual test ready: …`) and PR titles
+			"(skill-fixed formats stay verbatim)",
+			"and that edit pass into every teammate brief",
+		} {
+			if !strings.Contains(brief, want) {
+				t.Errorf("%s (solo=%v) brief missing %q — cells would ship operator-facing text "+
+					"without the humanizer pass", j.Slug, j.Solo, want)
 			}
 		}
 	}

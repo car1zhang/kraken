@@ -15,7 +15,8 @@ import (
 // skillsFS embeds kraken's kraken-owned skill bundle — the five pipeline
 // skills (info, aim, do, dream, mind) plus the three phase-less skills,
 // load (a reference), handoff (a compaction with a written record) and
-// direct (the one-agent override over aim/info/do) — so
+// direct (the one-agent override over aim/info/do), plus humanizer, a
+// third-party writing-edit skill vendored unchanged (humanizer/UPSTREAM.md) — so
 // every cell gets them without a runtime dependency on carl's personal
 // ~/.claude/skills bank. jobs cannot import this package (the util ← core ←
 // jobs ← api ← web dependency chain runs the other way) — so root embeds

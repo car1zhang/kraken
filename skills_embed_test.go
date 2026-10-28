@@ -48,6 +48,9 @@ func TestSkillsFSContainsExpectedSkills(t *testing.T) {
 		// itself — so the phase skill's read is the stage signal, and direct
 		// must not be one.
 		"direct": "direct",
+		// `humanizer` is vendored from github.com/blader/humanizer unchanged;
+		// TestHumanizerSkillVendored pins the files that ride beside it.
+		"humanizer": "humanizer",
 	}
 	for dir, wantName := range want {
 		data, err := fs.ReadFile(skillsFS, ".claude/skills/"+dir+"/SKILL.md")
@@ -76,7 +79,45 @@ func TestSkillsFSContainsExpectedSkills(t *testing.T) {
 // skill it is then followed in tandem with is the real stage: a `direct`
 // stage would badge every quick job with a word that is not a phase. `mind`
 // is the system prompt of a headless mind run, which has no cell to badge.
-var nonStageSkills = map[string]bool{"load": true, "handoff": true, "direct": true, "mind": true}
+// `humanizer` is an edit pass zeus' brief applies to every operator-facing
+// text in every phase, so a read of it says nothing about which phase a cell
+// is in.
+var nonStageSkills = map[string]bool{"load": true, "handoff": true, "direct": true, "mind": true, "humanizer": true}
+
+// TestHermesReadsHumanizer pins the operator's rule that every hermes reads
+// the humanizer skill. The contract is the load-bearing copy, since every
+// hermes brief must send its renderer there and the renderer must read it in
+// full; the aim and info brief lists name it as well so a lead writing a brief
+// sees the requirement. The path must resolve in the bundle, or the
+// instruction points at nothing.
+func TestHermesReadsHumanizer(t *testing.T) {
+	const path = ".claude/skills/humanizer/SKILL.md"
+	if _, err := fs.ReadFile(jobs.SkillsFS, strings.TrimPrefix(path, ".claude/skills/")); err != nil {
+		t.Fatalf("%s is not in the embedded bundle: %v", path, err)
+	}
+	for _, file := range []string{"aim/assets/hermes-contract.md", "aim/SKILL.md", "info/SKILL.md"} {
+		if !strings.Contains(readEmbedded(t, file), path) {
+			t.Errorf("%s no longer names %s — hermes would render labels without the humanizer pass", file, path)
+		}
+	}
+}
+
+// TestHumanizerSkillVendored pins the vendored humanizer skill: the file the
+// brief sends every cell to must exist in the bundle, and the MIT license and
+// the provenance note must ride beside it, since the skill is copied from
+// github.com/blader/humanizer unchanged and the license requires its notice.
+func TestHumanizerSkillVendored(t *testing.T) {
+	skill := readEmbedded(t, "humanizer/SKILL.md")
+	if lic := readEmbedded(t, "humanizer/LICENSE"); !strings.Contains(lic, "MIT License") {
+		t.Errorf("humanizer/LICENSE is not the upstream MIT notice")
+	}
+	if up := readEmbedded(t, "humanizer/UPSTREAM.md"); !strings.Contains(up, "github.com/blader/humanizer") {
+		t.Errorf("humanizer/UPSTREAM.md no longer names the upstream repo")
+	}
+	if strings.Contains(skill, "{{operator}}") {
+		t.Errorf("humanizer/SKILL.md carries {{operator}} — it is upstream's text, and installSkills would rewrite it in every cell copy")
+	}
+}
 
 // TestPipelineStageSetMatchesEmbeddedSkills holds jobs.PipelineStages'
 // literal set in lockstep with the embedded bundle, in BOTH directions:
@@ -610,7 +651,7 @@ func TestJobsSkillsFSWiredByInit(t *testing.T) {
 	for _, e := range entries {
 		names[e.Name()] = true
 	}
-	for _, want := range []string{"info", "aim", "do", "dream", "mind", "load", "handoff", "direct"} {
+	for _, want := range []string{"info", "aim", "do", "dream", "mind", "load", "handoff", "direct", "humanizer"} {
 		if !names[want] {
 			t.Errorf("jobs.SkillsFS root missing skill dir %q, got %v", want, names)
 		}
