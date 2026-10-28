@@ -28,7 +28,7 @@ import (
 // manual-test gate, and revisions are pushed to it), so a Read of a
 // `pr/SKILL.md` in an older transcript no longer matches and the badge
 // falls back to the signal before it — `do`, the phase that job was
-// actually in. `load`, `handoff` and `direct` are
+// actually in. `load`, `handoff`, `direct` and `humanizer` are
 // deliberately absent: `load` is a reference skill (no phase, no cell
 // section — see skills.go's SkillsFS comment) consulted mid-phase, so a
 // `load` hit would overwrite the real phase with a lookup; `handoff` is a
@@ -38,7 +38,9 @@ import (
 // modifier over aim/info/do (one agent, no crew) that a job reads FIRST and
 // then follows in tandem with the phase skill it modifies, so the phase
 // skill's read is the real signal and a `direct` stage would badge every
-// quick job with a word that is not a phase. Every other skill a cell might touch
+// quick job with a word that is not a phase; `humanizer` is a vendored
+// writing-edit pass the brief applies in every phase, so its read names none.
+// Every other skill a cell might touch
 // (personal skills, a target repo's own project skills) is ignored by virtue
 // of not being in this set. Kept as a literal rather than derived from SkillsFS,
 // which is nil whenever root's init hasn't run (unit tests of this package);
@@ -55,7 +57,7 @@ var pipelineStageSet = map[string]bool{
 // IsPipelineStage reports whether a skill name is one of the four
 // phase-governing pipeline skills. Exported for the root package's
 // skills-embed test, which holds this set in lockstep with the embedded
-// bundle (every embedded skill except `load`, `handoff`, `direct` and `mind`
+// bundle (every embedded skill except `load`, `handoff`, `direct`, `mind` and `humanizer`
 // must be a stage, and a stage cannot outlive its skill).
 func IsPipelineStage(name string) bool { return pipelineStageSet[name] }
 

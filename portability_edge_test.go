@@ -309,10 +309,18 @@ func TestEdgeEmbeddedSkillsHaveNoMalformedPlaceholder(t *testing.T) {
 	}
 }
 
-// Contract: "pronouns they/them" for the operator in the skills.
+// Contract: "pronouns they/them" for the operator in the skills. The vendored
+// humanizer skill is exempt: it is upstream's text byte for byte
+// (humanizer/UPSTREAM.md), it never refers to the operator, and its
+// before/after examples quote third-party sentences ("He said the project is
+// on track") whose pronouns are the material being edited. Every other check
+// in this file still covers it.
 func TestEdgeEmbeddedSkillsUseNoHeHimHis(t *testing.T) {
 	re := regexp.MustCompile(`(?i)\b(he|him|his|himself)\b`)
 	for p, body := range edgeEmbeddedSkills(t) {
+		if strings.HasPrefix(p, "humanizer/") {
+			continue
+		}
 		for _, loc := range re.FindAllStringIndex(body, -1) {
 			t.Errorf("%s uses %q: …%s…", p, body[loc[0]:loc[1]], edgeContext(body, loc))
 		}
