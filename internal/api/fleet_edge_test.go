@@ -301,6 +301,7 @@ func TestEdgeFleetPolicyForFallbacks(t *testing.T) {
 		{"/api/pair/revoke", TierPaired},
 		{"/api/pair/devices", TierOwner},
 		{"/api/editor/open", TierOwner},
+		{"/api/finder/reveal", TierOwner},
 		// AMENDED: the registry read is node tier, the three proxies stay paired
 		{"/api/nodes", TierNode},
 		{"/api/nodes/action", TierPaired},
@@ -385,6 +386,7 @@ func TestEdgeFleetGateOwnerRoutesRefusePairedCaller(t *testing.T) {
 		{http.MethodPost, "/api/pair/password"},
 		{http.MethodGet, "/api/pair/devices"},
 		{http.MethodPost, "/api/editor/open"},
+		{http.MethodPost, "/api/finder/reveal"},
 		{http.MethodGet, "/api/edge-unlisted-route"},
 	} {
 		inner := &edgeFleetInner{}

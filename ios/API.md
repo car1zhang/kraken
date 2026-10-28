@@ -1962,7 +1962,7 @@ Every `kraken serve` on the tailnet is a **node**. A node finds its siblings thr
 | Tier | Recognised by | Reaches |
 |---|---|---|
 | owner | loopback, or one of this host's own interface addresses | everything |
-| paired | `Authorization: Bearer <token>`, or the cookie `kraken_pair=<token>` (for `<img>`/`<iframe>`/WKWebView loads), whose SHA-256 matches a paired device | everything except `/api/pair/password`, `/api/pair/devices`, `/api/editor/open` |
+| paired | `Authorization: Bearer <token>`, or the cookie `kraken_pair=<token>` (for `<img>`/`<iframe>`/WKWebView loads), whose SHA-256 matches a paired device | everything except `/api/pair/password`, `/api/pair/devices`, `/api/editor/open`, `/api/finder/reveal` |
 | node | any other tailnet device (tailscale status, else `tailscale whois`) | `/api/health`, `/api/node*`, `GET /api/nodes`, `/api/pair/challenge`, `POST /api/pair`, the SPA shell and assets |
 | anon | anything else | `/api/health` |
 
@@ -2245,6 +2245,13 @@ Response: `{"ok": true}`, plus `note` (string) when the cell's worktree is gone 
 The file opens inside a Zed window rooted at the resolved checkout — reusing the window that already has that root open, else creating one (core/zed.go passes the root as its own leading path argument).
 The source IP must be loopback or one of this host's own interface addresses: a click from a phone or another machine on the tailnet answers 403, since the editor it would open runs here (api/editor.go). Mirror mode 403s it with the rest of the tmux/GUI-driving routes.
 Errors: 403 (non-local origin, or mirror mode), 400 (bad json), 409 (empty/absolute/`..`/dot-prefixed path, negative line/col, unknown slug, unresolvable repo, missing file, basename matching zero or several tracked files, or a launch failure). POST only (405 otherwise) and requires `Content-Type: application/json` (415 otherwise, see `requireJSONPost`).
+
+### `POST /api/finder/reveal` — local-origin-only (not called by the iOS app; not modeled in Models.swift/APIClient.swift)
+
+Request: `{"slug": string, "name": string}` — `slug` names an ACTIVE job, and `name` is a live cell artifact's name relative to the cell's artifacts dir (a subpath allowed), decoded rather than url-escaped. Body limited to 1MB.
+Response: `{"ok": true}`. The file is selected in a Finder window on this Mac (`open -R`, api/finder.go).
+The web artifact viewer's `finder` button sends it, offered only for a `cell`-home artifact url on a job this node owns: a done or archived job's artifacts are kraken.db rows with no file to reveal. The name resolves through `ArtifactPath`, the guard every cell artifact read passes. The source IP must be local exactly as for `/api/editor/open`, and mirror mode 403s it the same way.
+Errors: 403 (non-local origin, or mirror mode), 400 (bad json), 409 (unknown slug; a name that is empty, escapes the artifacts dir, has a dot-prefixed segment, or names no file in a live cell; or a launch failure). POST only (405 otherwise) and requires `Content-Type: application/json` (415 otherwise).
 
 ---
 

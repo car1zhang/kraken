@@ -61,6 +61,9 @@ func registerRoutes(mux routeMux) {
 	// GUI app on this Mac regardless of which DB is wired. Its own
 	// local-origin gate is a second, narrower refusal inside the handler.
 	mux.HandleFunc("/api/editor/open", mirrorGated(editorOpenHandler))
+	// The artifact viewer's Finder button (finder.go): editor/open's sibling,
+	// gated the same two ways for the same reasons.
+	mux.HandleFunc("/api/finder/reveal", mirrorGated(finderRevealHandler))
 	mux.HandleFunc("/api/board", boardHandler)
 	mux.HandleFunc("/api/usage", usageHandler)
 	mux.HandleFunc("/api/account/switch", accountSwitchHandler)
