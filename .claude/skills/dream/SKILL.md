@@ -243,7 +243,13 @@ channel truncates. Each brief also names that scout's OWN scratch subdirectory f
 (staged reduced views, notes) — two scouts staging into one shared directory have collided mid-run,
 and the collision recovery costs more than the namespace would have. Name those directories with
 SHORT slice handles under one root you create first — a short `/tmp/<handle>` root, never under
-the session-uuid scratchpad, or every path built on it re-carries the identifier — and **never
+the session-uuid scratchpad, or every path built on it re-carries the identifier — and key every
+staged VIEW on the transcript file's full stem (`<uuid>` for a root, `agent-<id>` for a sidecar),
+never a prefix and never the sidecar's parent uuid: the handle names the directory, the stem
+names the file, and the staging script derives it from the assigned path's basename rather than
+anyone typing it — sidecar ids share their first characters, and an eight-character stem staged
+two sidecars onto one file in three assignments, each scout reading a view that belonged to a
+sibling until the lead re-staged them mid-run — and **never
 hand-transcribe an opaque
 identifier — a session uuid, a 36-char random string — into a brief**: one brief carried five
 successive wrong transcriptions of its work-dir uuid, the attempt labelled "FINAL, copy this
