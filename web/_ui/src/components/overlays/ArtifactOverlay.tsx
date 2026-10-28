@@ -6,7 +6,12 @@ import {
   useState,
   type MouseEvent as ReactMouseEvent,
 } from "react";
-import { createFeedback, openInEditor, threadOp } from "../../api/client.ts";
+import {
+  createFeedback,
+  openInEditor,
+  revealInFinder,
+  threadOp,
+} from "../../api/client.ts";
 import type { WebArtifact, WebJob, WebLibraryItem } from "../../api/types.ts";
 import { useArtifactSeq, type SeqEntry } from "../../hooks/useArtifactSeq.ts";
 import { ESC_PRIORITY } from "../../hooks/useEscapeStack.ts";
@@ -147,6 +152,44 @@ export function artifactParts(url: string): ArtifactParts | null {
   return m && m[1] && m[2] && m[3]
     ? { slug: m[1], home: m[2], name: m[3] }
     : null;
+}
+
+/**
+ * What the Finder button reveals: {slug, name} DECODED out of a live cell's
+ * artifact url, or null for anything else. Only the "cell" home is a file on
+ * disk — a done or archived job's artifacts are kraken.db rows — so every
+ * other home, and every url that is not an /api/artifact one, gets no button.
+ *
+ * The url carries each segment percent-escaped (board.go artifactURL), while
+ * the server resolves the raw name, so each segment is decoded here; a
+ * malformed escape means the url was not one the board built, and gets null.
+ */
+export function finderTarget(
+  url: string,
+): { slug: string; name: string } | null {
+  const parts = artifactParts(url);
+  if (!parts || parts.home !== "cell") return null;
+  try {
+    return {
+      slug: decodeURIComponent(parts.slug),
+      name: parts.name.split("/").map(decodeURIComponent).join("/"),
+    };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Reveal the open artifact in Finder. Silent on success — the Finder window
+ * coming to the front is the feedback — and a refusal toasts the server's own
+ * sentence, exactly as openCodeRef does.
+ */
+async function revealArtifact(t: { slug: string; name: string }) {
+  try {
+    await revealInFinder(t.slug, t.name);
+  } catch (e) {
+    showToast(e instanceof Error ? e.message : String(e));
+  }
 }
 
 /**
@@ -533,6 +576,12 @@ function ArtifactBody({
   // board's document as live markup, the one place a sibling's content would
   // stop being confined to a sandboxed frame.
   const offer3D = compilable && !remote;
+  // a live cell's artifact is a real file on the owner's disk; another node's
+  // is on ITS disk, which no Finder here can show
+  const finder = useMemo(
+    () => (remote ? null : finderTarget(url)),
+    [remote, url],
+  );
 
   const toggleSaved = useCallback(async () => {
     if (savingLib) return;
@@ -772,6 +821,17 @@ function ArtifactBody({
           }}
         >
           ↗ tab
+        </button>
+        <button
+          className="btn ghost"
+          id="panel-finder"
+          hidden={!finder}
+          title="reveal this artifact in Finder on this Mac"
+          onClick={() => {
+            if (finder) void revealArtifact(finder);
+          }}
+        >
+          finder
         </button>
         {/* a PDF has no useful raw text and an image has none at all */}
         <button

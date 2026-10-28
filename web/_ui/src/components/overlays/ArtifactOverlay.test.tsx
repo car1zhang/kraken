@@ -4,19 +4,29 @@ import { StrictMode, useState } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { WebArtifact, WebJob } from "../../api/types.ts";
 import { makeJob } from "../../test/fixtures.ts";
-import { ArtifactOverlay, artifactParts } from "./ArtifactOverlay.tsx";
+import {
+  ArtifactOverlay,
+  artifactParts,
+  finderTarget,
+} from "./ArtifactOverlay.tsx";
 import { askThreadSeed, askThreadTitle } from "./askThread.ts";
 
 vi.mock("../../api/client.ts", () => ({
   createFeedback: vi.fn(() => Promise.resolve({ ok: true })),
   threadOp: vi.fn(() => Promise.resolve({ ok: true, tid: "t1" })),
   openInEditor: vi.fn(() => Promise.resolve({ ok: true })),
+  revealInFinder: vi.fn(() => Promise.resolve({ ok: true })),
 }));
 // the overlay's one out-of-band channel — mocked so the tid-less branch can
 // assert what the reader is actually told, rather than that nothing crashed
 vi.mock("./Toast.tsx", () => ({ showToast: vi.fn(), Toast: () => null }));
 
-import { createFeedback, openInEditor, threadOp } from "../../api/client.ts";
+import {
+  createFeedback,
+  openInEditor,
+  revealInFinder,
+  threadOp,
+} from "../../api/client.ts";
 import { showToast } from "./Toast.tsx";
 
 const mutate = async <T,>(op: () => Promise<T>) => op();
@@ -139,6 +149,82 @@ describe("artifactParts", () => {
 
   it("does not match a prefix — the path must start at /api/artifact", () => {
     expect(artifactParts("https://x/api/artifact/j/h/n.md")).toBeNull();
+  });
+});
+
+describe("finderTarget", () => {
+  it("decodes slug and every name segment of a live cell artifact", () => {
+    expect(
+      finderTarget("/api/artifact/my-job/cell/icons/v%201%23a.png"),
+    ).toEqual({ slug: "my-job", name: "icons/v 1#a.png" });
+  });
+
+  it("is null for every home that is not a file on disk", () => {
+    expect(finderTarget("/api/artifact/j/pluto/00-overview.md")).toBeNull();
+    expect(finderTarget("/api/artifact/j/archive/00-overview.md")).toBeNull();
+    expect(finderTarget("/api/library/artifact/3/00-overview.md")).toBeNull();
+  });
+
+  it("is null for an escape the board never builds", () => {
+    expect(finderTarget("/api/artifact/j/cell/%E0%A4%A.md")).toBeNull();
+  });
+});
+
+describe("the finder button", () => {
+  const openAt = (url: string, j?: WebJob) =>
+    render(
+      <ArtifactOverlay
+        open
+        url={url}
+        name="j/x"
+        job={j}
+        onNavigate={() => {}}
+        onAskBranched={() => {}}
+        onClose={() => {}}
+        {...noLibrary}
+        mutate={mutate}
+      />,
+    );
+  const finder = () =>
+    document.getElementById("panel-finder") as HTMLButtonElement;
+
+  it("reveals a live cell artifact by its decoded name", async () => {
+    openAt("/api/artifact/j/cell/sub/a%20b.md", makeJob({ slug: "j" }));
+    expect(finder().hidden).toBe(false);
+    fireEvent.click(finder());
+    await waitFor(() =>
+      expect(revealInFinder).toHaveBeenCalledWith("j", "sub/a b.md"),
+    );
+    expect(showToast).not.toHaveBeenCalled();
+  });
+
+  it("toasts the server's refusal", async () => {
+    vi.mocked(revealInFinder).mockRejectedValueOnce(
+      new Error("Finder reveals are restricted to this Mac"),
+    );
+    openAt("/api/artifact/j/cell/a.md", makeJob({ slug: "j" }));
+    fireEvent.click(finder());
+    await waitFor(() =>
+      expect(showToast).toHaveBeenCalledWith(
+        "Finder reveals are restricted to this Mac",
+      ),
+    );
+  });
+
+  it("is hidden for a done job's store-served artifact", () => {
+    openAt("/api/artifact/j/pluto/a.md", makeJob({ slug: "j" }));
+    expect(finder().hidden).toBe(true);
+  });
+
+  it("is hidden for another node's job", () => {
+    openAt(
+      "/api/artifact/j/cell/a.md",
+      makeJob({
+        slug: "j",
+        owner: { node_id: "n1", label: "other", operator: "", online: true },
+      }),
+    );
+    expect(finder().hidden).toBe(true);
   });
 });
 

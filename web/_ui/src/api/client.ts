@@ -585,6 +585,21 @@ export const openInEditor = (
     },
   );
 
+/**
+ * Reveal a LIVE cell's artifact in Finder on THIS machine — the artifact
+ * viewer's Finder button. `name` is the artifact's name relative to the cell's
+ * artifacts dir, decoded (not the url-escaped form the artifact url carries).
+ *
+ * Not routed through the shared mutation path, for openInEditor's reason: it
+ * changes nothing on the board, and its refusals (a click from another
+ * machine, a cell torn down since the page loaded) belong in the toast.
+ */
+export const revealInFinder = (slug: string, name: string) =>
+  postJSON<{ ok?: boolean; error?: string }>("/api/finder/reveal", {
+    slug,
+    name,
+  });
+
 export const switchAccount = (slug: string) =>
   postJSON<{ from: string; to: string; mode: string }>("/api/account/switch", {
     slug,

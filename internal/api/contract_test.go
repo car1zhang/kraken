@@ -1934,6 +1934,14 @@ var editorOpenSpec = map[string]fieldSpec{
 	"note": {kind: wireString, required: false},
 }
 
+// --- /api/finder/reveal (finder.go finderRevealHandler) ---
+//
+// Its success shape is asserted in finder_test.go, which drives the handler
+// behind the revealInFinderFunc seam; refusals use the shared {"error"} shape.
+var finderRevealSpec = map[string]fieldSpec{
+	"ok": {kind: wireBool, required: true},
+}
+
 // editorOpenRepo makes a checkout under ~/Developer that jobs.ResolveRepo can
 // find (a dir with a .git entry), and returns its path.
 func editorOpenRepo(t *testing.T) string {

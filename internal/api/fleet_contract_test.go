@@ -385,6 +385,7 @@ func TestContractFleetRoutePolicyNamedEntries(t *testing.T) {
 		"/api/pair/password":  TierOwner,
 		"/api/pair/devices":   TierOwner,
 		"/api/editor/open":    TierOwner,
+		"/api/finder/reveal":  TierOwner,
 		"/api/pair/revoke":    TierPaired,
 		"/api/artifact/":      TierPaired,
 		"/api/upload/":        TierPaired,
