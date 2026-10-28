@@ -305,6 +305,131 @@ type mineBlock struct {
 // human pressed escape mid-turn.
 const interruptPrefix = "[Request interrupted"
 
+// forkBoundary is the pre-pass behind digestTranscript's ownership rule for a
+// PREFIX-SHAPED fork — a file whose records stamped with another session all
+// come before any record stamped with its own (the seed a `--fork-session`
+// copies in, then the session's own life). It returns the scanner index
+// (every line counted, blank and malformed ones included, so it lines up with
+// the main loop's) where the seed ends — the forked session's opening prompt,
+// or its first own-stamped record when that comes first — and
+// prefixFork=true; every id-less record before that index is the parent's,
+// every one from it on is this session's. The parent's turn does not end on
+// its last stamped record: its id-less closing records (the tool result a
+// mid-tool cut was waiting on, turn_duration, a synthetic banner) are seeded
+// right after it, which is why the boundary is the prompt and not the last
+// foreign record (measured: most forks carry a parent turn_duration there,
+// and a tool result is a user record too, so only a typed prompt counts).
+// A file with no foreign record, or with an own-stamped record BEFORE its
+// last foreign one (both shapes occur in root transcripts), is not a prefix
+// fork: it returns prefixFork=false and the caller keeps neighbour
+// inheritance. No prompt after the last foreign record means the whole tail
+// is the parent's (the boundary lands past the end). The one shape this
+// cannot separate is a fork of a HEADLESS fork, whose intermediate life is
+// id-less too and reads as the new file's own; no kraken spawn produces that
+// file today. A file that cannot be opened or scanned reads as no fork.
+func forkBoundary(path, own string) (boundary int, prefixFork bool) {
+	f, err := os.Open(path)
+	if err != nil {
+		return 0, false
+	}
+	defer f.Close()
+	sc := bufio.NewScanner(f)
+	sc.Buffer(make([]byte, 0, mineScanBufInit), mineScanBufMax)
+	firstOwn, lastForeign, promptAfter, ownAfter, idx := -1, -1, -1, -1, -1
+	for sc.Scan() {
+		idx++
+		line := sc.Bytes()
+		if len(bytes.TrimSpace(line)) == 0 {
+			continue
+		}
+		// Only records that can move the answer are decoded: a stamped one,
+		// or a user record (the candidate boundary). The literal byte check
+		// holds because Claude Code writes compact JSON.
+		if !bytes.Contains(line, []byte(`"session_id"`)) && !bytes.Contains(line, []byte(`"type":"user"`)) {
+			continue
+		}
+		var rec struct {
+			Type      string `json:"type"`
+			SessionID string `json:"session_id"`
+			IsMeta    bool   `json:"isMeta"`
+			Message   struct {
+				Content any `json:"content"`
+			} `json:"message"`
+		}
+		if err := json.Unmarshal(line, &rec); err != nil {
+			// The same tolerance as the main loop's: a wrongly-typed field
+			// keeps the record, so the two passes read one line alike.
+			var typeErr *json.UnmarshalTypeError
+			if !errors.As(err, &typeErr) {
+				continue
+			}
+		}
+		if rec.SessionID != "" && rec.SessionID != own {
+			lastForeign = idx
+			promptAfter, ownAfter = -1, -1
+			continue
+		}
+		if rec.SessionID == own {
+			if firstOwn < 0 {
+				firstOwn = idx
+			}
+			if lastForeign >= 0 && ownAfter < 0 {
+				ownAfter = idx
+			}
+		}
+		// Only a PROMPT is the boundary — never a tool result, an interrupt
+		// marker or a meta record, which a seed cut mid-tool carries after
+		// the parent's last stamped record. The prompt may be own-stamped (a
+		// pane thread) or id-less (a headless one).
+		if rec.Type == "user" && !rec.IsMeta && lastForeign >= 0 && promptAfter < 0 && isPromptContent(rec.Message.Content) {
+			promptAfter = idx
+		}
+	}
+	if lastForeign < 0 || (firstOwn >= 0 && firstOwn < lastForeign) {
+		return 0, false
+	}
+	// The seed ends at the first prompt, or at the first own-stamped record
+	// when that comes earlier (a stamped record is proof the seed is over),
+	// whichever the file reaches first; neither means the tail is the
+	// parent's.
+	switch {
+	case promptAfter < 0 && ownAfter < 0:
+		return idx + 1, true
+	case promptAfter < 0 || (ownAfter >= 0 && ownAfter < promptAfter):
+		return ownAfter, true
+	}
+	return promptAfter, true
+}
+
+// isPromptContent reports whether a user record's message content is a typed
+// prompt: a string, or a block list holding a text block and no tool_result
+// — and not the harness's interrupt marker, which is a string too.
+func isPromptContent(content any) bool {
+	switch c := content.(type) {
+	case string:
+		return !strings.HasPrefix(c, interruptPrefix)
+	case []any:
+		text := false
+		for _, b := range c {
+			m, ok := b.(map[string]any)
+			if !ok {
+				continue
+			}
+			switch m["type"] {
+			case "tool_result":
+				return false
+			case "text":
+				if s, _ := m["text"].(string); strings.HasPrefix(s, interruptPrefix) {
+					return false
+				}
+				text = true
+			}
+		}
+		return text
+	}
+	return false
+}
+
 // digestTranscript streams one transcript and returns its digest. ok=false
 // only when the file can't be opened — a malformed line and a truncated final
 // line both cost only themselves.
@@ -371,23 +496,35 @@ func digestTranscript(path, project string, since int64) (SessionDigest, bool) {
 	// than zero.
 	var lastMaxTokID string
 
-	// lastSID carries the most recent non-empty session_id forward, because
-	// ownership is stamped unevenly by record TYPE: system/turn_duration
-	// records carry NO session_id at all (0 of ~1,700 measured), and a small
-	// share of interrupt-bearing user records drop it too — so testing each
-	// record's own field left exactly those signals ungated on a fork, while
-	// the fixture that "covered" them stamped a session_id real records never
-	// have. A record with no session_id inherits its neighborhood's owner.
-	// Replay regions are contiguous runs of foreign-session_id records
-	// (though not always a prefix — both FFF…OOO and OOO…FFF occur), so
-	// positional inheritance assigns each undated-owner record correctly;
-	// a sidecar carries no session_id anywhere, lastSID stays "", and
-	// tokenRecordOwned treats absent as own — unchanged.
+	// Ownership is stamped unevenly by record TYPE: system/turn_duration
+	// records carry NO session_id at all (0 of ~1,700 measured), a small
+	// share of interrupt-bearing user records drop it too, and a HEADLESS
+	// side thread's own records carry none either — every record the thread
+	// itself makes after the fork is id-less, while the seed it inherited is
+	// stamped with the parent's id. lastSID carries the most recent non-empty
+	// session_id forward so an id-less record inherits its neighbourhood's
+	// owner, which is right wherever stamped records surround it — and read a
+	// headless thread's whole life as the parent's replay (a thread whose one
+	// answer cold-primed hundreds of thousands of cache-write tokens digested
+	// at 0 output tokens) while reading the seed's leading id-less records —
+	// the parent's opening prompt comes first in every transcript, before any
+	// record stamps an id — as the thread's own. For a prefix-shaped fork the
+	// boundary forkBoundary finds settles both: id-less before it is the
+	// parent's, from it on is this session's. Every other shape keeps the
+	// inheritance, and a sidecar (no session_id anywhere) keeps
+	// tokenRecordOwned's absent-is-own reading. SumTokensDelta needs no such
+	// pass: it counts only usage-bearing assistant records, a fork's own ones
+	// are id-less or own-stamped and absent-is-own already attributes them,
+	// and the id-less assistant records a seed carries are synthetic banners
+	// with zero usage (measured), so the two readers' counters still agree.
+	forkAt, prefixFork := forkBoundary(path, own)
 	var lastSID string
 
 	sc := bufio.NewScanner(f)
 	sc.Buffer(make([]byte, 0, mineScanBufInit), mineScanBufMax)
+	idx := -1
 	for sc.Scan() {
+		idx++
 		line := sc.Bytes()
 		if len(bytes.TrimSpace(line)) == 0 {
 			continue
@@ -446,7 +583,11 @@ func digestTranscript(path, project string, since int64) (SessionDigest, bool) {
 		} else {
 			lastSID = sid
 		}
-		counted := inWindow && tokenRecordOwned(tokenRecord{SessionID: sid}, own)
+		owned := tokenRecordOwned(tokenRecord{SessionID: sid}, own)
+		if rec.SessionID == "" && prefixFork {
+			owned = idx >= forkAt
+		}
+		counted := inWindow && owned
 		if ts > 0 && inWindow {
 			dg.Lines++
 			if dg.FirstTS == 0 || ts < dg.FirstTS {

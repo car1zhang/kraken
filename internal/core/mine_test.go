@@ -224,9 +224,10 @@ func TestMineTranscriptsReplayedRecordsNotCounted(t *testing.T) {
 		// turn_duration record and one interrupt deliberately carry NO
 		// session_id — the REAL shapes (0 of ~1,700 system records in the
 		// corpus carry one, and ~13% of interrupt records drop it) — so they
-		// are gated only by lastSID inheritance from the foreign records
-		// around them; a fixture that stamped session_id on a system record
-		// certified a record shape the producer never emits.
+		// are gated only by their position before the fork boundary (the
+		// fork's first user record after the seed); a fixture that stamped
+		// session_id on a system record certified a record shape the producer
+		// never emits.
 		withSession(mineAssistant(t, at(120), "claude-opus-5",
 			mineToolUse("p1", "Bash", map[string]any{"command": "go vet ./..."})), "parent-session"),
 		withSession(mineUser(t, at(119), []any{mineToolResult("p1", true, "boom")}), "parent-session"),
@@ -239,12 +240,12 @@ func TestMineTranscriptsReplayedRecordsNotCounted(t *testing.T) {
 			"message": map[string]any{"id": "msg-p", "model": "claude-opus-5", "stop_reason": "max_tokens",
 				"content": []any{map[string]any{"type": "thinking", "thinking": "x"}}}}), "parent-session"),
 		// the fork's own records: all counted — including a turn_duration
-		// with no session_id, owned by inheritance from the fork's records
+		// with no session_id, which falls after the fork boundary
 		withSession(mineAssistant(t, at(60), "claude-opus-5",
 			mineToolUse("f1", "Read", map[string]any{"file_path": "/tmp/a.go"})), "fork-session"),
 		withSession(mineUser(t, at(59), []any{mineToolResult("f1", true, "gone")}), "fork-session"),
 		mineJSON(t, map[string]any{"type": "system", "subtype": "turn_duration",
-			"durationMs": 1_000, "timestamp": mineISO(at(58))}), // no session_id: inherits fork
+			"durationMs": 1_000, "timestamp": mineISO(at(58))}), // no session_id: after the boundary
 	}
 	mineWrite(t, projects, "-Users-carl-Developer-monolith", "fork-session.jsonl", lines...)
 
@@ -261,7 +262,7 @@ func TestMineTranscriptsReplayedRecordsNotCounted(t *testing.T) {
 		t.Errorf("ErrorCounts = %v, want only the fork's own Read:1", d.ErrorCounts)
 	}
 	if d.Interrupts != 0 {
-		t.Errorf("Interrupts = %d, want 0 (both are the parent's, one via lastSID inheritance)", d.Interrupts)
+		t.Errorf("Interrupts = %d, want 0 (both are the parent's, one by its position before the fork boundary)", d.Interrupts)
 	}
 	if d.SyntheticErrors != 0 {
 		t.Errorf("SyntheticErrors = %d, want 0 (replayed)", d.SyntheticErrors)
@@ -270,7 +271,140 @@ func TestMineTranscriptsReplayedRecordsNotCounted(t *testing.T) {
 		t.Errorf("MaxTokensStops = %d, want 0 (replayed)", d.MaxTokensStops)
 	}
 	if len(d.TurnDurations) != 1 || d.TurnDurations[0] != 1_000 {
-		t.Errorf("TurnDurations = %v, want [1000] — the fork's own; the parent's 99000 carries no session_id and is owned by inheritance", d.TurnDurations)
+		t.Errorf("TurnDurations = %v, want [1000] — the fork's own; the parent's 99000 carries no session_id and sits before the fork boundary", d.TurnDurations)
+	}
+}
+
+// TestMineTranscriptsHeadlessThreadOwnRecordsCounted: a headless side
+// thread's transcript is its parent's seed — stamped with the parent's
+// session_id — followed by the thread's own records, which carry NO
+// session_id at all. Under neighbour inheritance the whole file read as the
+// parent's replay (0 output tokens against a real answer) while the seed's
+// leading id-less prompt, which comes before any stamped record, read as the
+// thread's own. The fork boundary is the thread's first user record after
+// the seed: everything id-less before it — the parent's opening records AND
+// the parent's id-less tail (its last turn_duration, a synthetic banner),
+// which is seeded after the parent's last stamped record — is the parent's,
+// everything from it on is the thread's.
+func TestMineTranscriptsHeadlessThreadOwnRecordsCounted(t *testing.T) {
+	projects := mineHome(t)
+	now := time.Now().UnixMilli()
+	since := now - int64(6*time.Hour/time.Millisecond)
+	at := func(minsAgo int64) int64 { return now - minsAgo*60_000 }
+
+	withSession := func(line, sid string) string {
+		var m map[string]any
+		if err := json.Unmarshal([]byte(line), &m); err != nil {
+			t.Fatalf("reparse fixture: %v", err)
+		}
+		m["session_id"] = sid
+		return mineJSON(t, m)
+	}
+	answer := func(ts int64, id string, out int) string {
+		return mineJSON(t, map[string]any{
+			"type": "assistant", "timestamp": mineISO(ts),
+			"message": map[string]any{"id": id, "model": "claude-opus-5",
+				"content": []any{mineText("answer")},
+				"usage":   map[string]any{"output_tokens": out, "cache_creation_input_tokens": 1000}},
+		})
+	}
+
+	lines := []string{
+		// the seed: the parent's opening prompt is id-less and comes first,
+		// then the parent's stamped work, one interrupt among it
+		mineUser(t, at(120), "[Request interrupted by user]"), // no session_id: still the parent's
+		withSession(answer(at(119), "msg-p", 500), "parent-session"),
+		withSession(mineUser(t, at(118), []any{mineToolResult("p1", true, "boom")}), "parent-session"),
+		withSession(mineAssistant(t, at(117), "claude-opus-5",
+			mineToolUse("p1", "Bash", map[string]any{"command": "go vet ./..."})), "parent-session"),
+		// the parent's id-less tail, seeded after its last stamped record:
+		// the tool result its last call was waiting on (the fork cut it
+		// mid-tool), its turn_duration and a synthetic banner — the parent's,
+		// not the thread's, and the tool result is a user record that must
+		// not be mistaken for the thread's prompt
+		mineUser(t, at(116), []any{mineToolResult("p1", true, "boom")}),
+		mineJSON(t, map[string]any{"type": "system", "subtype": "turn_duration",
+			"durationMs": 99_000, "timestamp": mineISO(at(116))}),
+		mineAssistant(t, at(115), "<synthetic>", mineText("API Error")),
+		// the thread's own life: the question, one unstamped answer, a
+		// turn_duration — none carries a session_id
+		mineUser(t, at(60), "how is the cache warmed?"),
+		answer(at(59), "msg-t", 40),
+		mineJSON(t, map[string]any{"type": "system", "subtype": "turn_duration",
+			"durationMs": 2_000, "timestamp": mineISO(at(58))}),
+	}
+	mineWrite(t, projects, "-Users-carl-Developer-monolith", "thread-session.jsonl", lines...)
+
+	res, err := MineTranscripts(since)
+	if err != nil {
+		t.Fatalf("MineTranscripts: %v", err)
+	}
+	d := mineFindDigest(t, res, "thread-session.jsonl")
+
+	if d.Out != 40 || d.CacheWrite != 1000 {
+		t.Errorf("Out/CacheWrite = %d/%d, want 40/1000 — the thread's own answer, not the parent's", d.Out, d.CacheWrite)
+	}
+	if d.Interrupts != 0 {
+		t.Errorf("Interrupts = %d, want 0 — the leading id-less interrupt is the parent's seed", d.Interrupts)
+	}
+	if d.ToolCounts["Bash"] != 0 || d.ErrorCounts["Bash"] != 0 {
+		t.Errorf("ToolCounts/ErrorCounts = %v/%v, want none — the Bash call and its failed result are the parent's", d.ToolCounts, d.ErrorCounts)
+	}
+	if d.SyntheticErrors != 0 {
+		t.Errorf("SyntheticErrors = %d, want 0 — the banner is the parent's seeded tail", d.SyntheticErrors)
+	}
+	if len(d.TurnDurations) != 1 || d.TurnDurations[0] != 2_000 {
+		t.Errorf("TurnDurations = %v, want [2000] — the thread's own; the parent's 99000 is its seeded tail", d.TurnDurations)
+	}
+}
+
+// TestMineTranscriptsOwnThenForeignKeepsInheritance: a root transcript can
+// carry its own stamped records BEFORE records another session stamped (both
+// orders occur), and that shape is not a fork seed — the boundary rule must
+// not apply, or every id-less record among the own run would read as the
+// other session's. Neighbour inheritance keeps governing such a file.
+func TestMineTranscriptsOwnThenForeignKeepsInheritance(t *testing.T) {
+	projects := mineHome(t)
+	now := time.Now().UnixMilli()
+	since := now - int64(6*time.Hour/time.Millisecond)
+	at := func(minsAgo int64) int64 { return now - minsAgo*60_000 }
+
+	withSession := func(line, sid string) string {
+		var m map[string]any
+		if err := json.Unmarshal([]byte(line), &m); err != nil {
+			t.Fatalf("reparse fixture: %v", err)
+		}
+		m["session_id"] = sid
+		return mineJSON(t, m)
+	}
+
+	lines := []string{
+		// the file's own run first, with an id-less turn_duration among it
+		withSession(mineAssistant(t, at(120), "claude-opus-5",
+			mineToolUse("o1", "Read", map[string]any{"file_path": "/tmp/a.go"})), "root-session"),
+		withSession(mineUser(t, at(119), []any{mineToolResult("o1", false, "ok")}), "root-session"),
+		mineJSON(t, map[string]any{"type": "system", "subtype": "turn_duration",
+			"durationMs": 5_000, "timestamp": mineISO(at(118))}), // no session_id: inherits own
+		// then records another session stamped, with an id-less tail of their own
+		withSession(mineAssistant(t, at(60), "claude-opus-5",
+			mineToolUse("x1", "Bash", map[string]any{"command": "go vet ./..."})), "other-session"),
+		withSession(mineUser(t, at(59), []any{mineToolResult("x1", true, "boom")}), "other-session"),
+		mineJSON(t, map[string]any{"type": "system", "subtype": "turn_duration",
+			"durationMs": 77_000, "timestamp": mineISO(at(58))}), // no session_id: inherits other
+	}
+	mineWrite(t, projects, "-Users-carl-Developer-monolith", "root-session.jsonl", lines...)
+
+	res, err := MineTranscripts(since)
+	if err != nil {
+		t.Fatalf("MineTranscripts: %v", err)
+	}
+	d := mineFindDigest(t, res, "root-session.jsonl")
+
+	if d.ToolCounts["Read"] != 1 || d.ToolCounts["Bash"] != 0 {
+		t.Errorf("ToolCounts = %v, want only the file's own Read:1", d.ToolCounts)
+	}
+	if len(d.TurnDurations) != 1 || d.TurnDurations[0] != 5_000 {
+		t.Errorf("TurnDurations = %v, want [5000] — the own run's, by inheritance; the other session's 77000 inherits its stamped neighbours", d.TurnDurations)
 	}
 }
 
