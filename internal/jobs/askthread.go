@@ -255,6 +255,7 @@ func AskArgv(j *Job, t store.Thread, from ThreadOrigin, resume bool) (argv []str
 		"--system-prompt-snapshot", "off",
 		"--tools", tools}
 	argv = append(argv, core.ModelArgs(resolved)...)
+	argv = append(argv, askArtifactsDirArgs(j, tools)...)
 	argv = append(argv, "--name", ThreadAgentName(j, t.TID), "--append-system-prompt", askThreadBrief(j, t))
 	if resume {
 		argv = append(argv, "-r", t.SessionID)
@@ -269,6 +270,23 @@ func AskArgv(j *Job, t store.Thread, from ThreadOrigin, resume bool) (argv []str
 		env = append(env, "CLAUDE_SECURESTORAGE_CONFIG_DIR="+slotDir(j.AccountSlug))
 	}
 	return argv, cwd, env, nil
+}
+
+// askArtifactsDirArgs widens the `--restricted` fence to the cell's artifacts
+// dir for a run that holds the read-only tools. The worktree is the cwd, and
+// `--restricted` confines the file tools to it, so without this a question
+// about what the job wrote is refused on every artifact and answered from the
+// forked transcript instead. A run with no tools gets nothing, and neither does
+// a cell whose artifacts dir does not exist.
+func askArtifactsDirArgs(j *Job, tools string) []string {
+	if tools == "" {
+		return nil
+	}
+	dir := CellArtifacts(j)
+	if fi, err := os.Stat(dir); err != nil || !fi.IsDir() {
+		return nil
+	}
+	return []string{"--add-dir", dir}
 }
 
 // askToolsSelf is the one test for the read-only tool set and the self
