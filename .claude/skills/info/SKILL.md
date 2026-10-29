@@ -254,7 +254,7 @@ short form, with /info's overrides:
 When invoked by a kraken job brief (the brief will say so and give paths), apply these deltas —
 the cell's brief wins wherever it is more specific:
 
-- **Read `.claude/skills/humanizer/SKILL.md` in full once this phase, before your first {{operator}}-facing text.** The brief's edit pass names that file, and a lead that never opens it has nothing to edit against. The pass covers your pane replies and closing message as well as the artifacts; skill-fixed formats such as the closing line stay verbatim.
+- **Read `.claude/skills/humanizer/SKILL.md` in full once this phase, before your first {{operator}}-facing text, and again after any compaction or resume.** The brief's edit pass names that file, and a lead that never opens it has nothing to edit against. The pass covers your pane replies and closing message as well as the artifacts; skill-fixed formats such as the closing line stay verbatim.
 - The set root is `<cellDir>/artifacts/`: write `00-overview.md` there, plus any later diagram
   cards (`1N-<id>.html`) and topic docs (`5N-<topic>.md`) as rounds are requested. Fragments stage
   at `<cellDir>/doc/fragments/<id>.svg`. `artifacts/` is the only board-visible directory and is

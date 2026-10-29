@@ -116,7 +116,11 @@ func TestPhaseSkillsReadHumanizer(t *testing.T) {
 		if i < 0 {
 			t.Fatalf("%s/SKILL.md has no cell section", name)
 		}
-		if !strings.Contains(body[i:], want) {
+		section := body[i:]
+		if end := strings.Index(section[1:], "\n## "); end >= 0 {
+			section = section[:end+1]
+		}
+		if !strings.Contains(section, want) {
 			t.Errorf("%s/SKILL.md's cell section no longer tells the lead to read the humanizer skill", name)
 		}
 	}
