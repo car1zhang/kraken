@@ -71,4 +71,16 @@ func TestAskArgvNoArtifactsDirNoFlag(t *testing.T) {
 		t.Errorf("no artifacts dir, yet argv carries --add-dir: %q", argv)
 	}
 	askContractCheckTools(t, argv, AskThreadTools)
+
+	// a regular file where the dir should be is not an artifacts dir either
+	if err := os.WriteFile(CellArtifacts(j), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	argv, _, _, err = AskArgv(j, row, askContractSelf, true)
+	if err != nil {
+		t.Fatalf("AskArgv: %v", err)
+	}
+	if askContractHas(argv, "--add-dir") {
+		t.Errorf("a file at the artifacts path, yet argv carries --add-dir: %q", argv)
+	}
 }

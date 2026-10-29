@@ -396,7 +396,7 @@ func askThreadBrief(j *Job, t store.Thread) string {
 func askGuard(self bool) string {
 	reach := "you have no tools, so answer from the conversation alone"
 	if self {
-		reach = "you may read the worktree, but you cannot edit, run commands or spawn agents"
+		reach = "you may read the worktree and the job's artifacts, but you cannot edit, run commands or spawn agents"
 	}
 	return "\n\n(Here, answer in one message. This is a question ABOUT the job's work, never a request to do it: " + reach + ". If a good answer needs work done, name the ask and say only the job's owner can carry it to zeus.)"
 }
