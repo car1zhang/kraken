@@ -507,6 +507,7 @@ Write `00-dream-report.md` into the artifacts dir. Like every md artifact, it op
 When a kraken job brief sends you here, these deltas apply — the brief wins wherever it is more
 specific, and it is the only place the cell's real paths appear:
 
+- **Read `.claude/skills/humanizer/SKILL.md` in full once this pass, before you write the report.** The brief's edit pass names that file, and a lead that never opens it has nothing to edit against. The report and your final message get the pass; the closing line's fixed format stays verbatim.
 - **The report goes in the brief's SET ROOT** (`<cellDir>/artifacts/`) as `00-dream-report.md`. That
   directory is the only board-visible one, and the report is the deliverable; it is also what the
   board's `DREAM` view renders, so a pass that ships changes but writes no report is invisible.

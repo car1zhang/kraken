@@ -102,6 +102,26 @@ func TestHermesReadsHumanizer(t *testing.T) {
 	}
 }
 
+// TestPhaseSkillsReadHumanizer pins the lead's half of the humanizer pass.
+// The brief tells zeus to edit against the skill, but only as a clause of a
+// longer sentence, so each phase skill's cell section tells the lead to Read
+// the file once per phase. The line has to sit INSIDE the cell section: a
+// mention anywhere else in the file (aim and info name the path in their
+// hermes brief lists) is an instruction about a renderer, not the lead.
+func TestPhaseSkillsReadHumanizer(t *testing.T) {
+	const want = "Read `.claude/skills/humanizer/SKILL.md` in full once this"
+	for _, name := range []string{"info", "aim", "do", "dream"} {
+		body := readEmbedded(t, name+"/SKILL.md")
+		i := strings.Index(body, "## Inside A Kraken Cell")
+		if i < 0 {
+			t.Fatalf("%s/SKILL.md has no cell section", name)
+		}
+		if !strings.Contains(body[i:], want) {
+			t.Errorf("%s/SKILL.md's cell section no longer tells the lead to read the humanizer skill", name)
+		}
+	}
+}
+
 // TestHumanizerSkillVendored pins the vendored humanizer skill: the file the
 // brief sends every cell to must exist in the bundle, and the MIT license and
 // the provenance note must ride beside it, since the skill is copied from
