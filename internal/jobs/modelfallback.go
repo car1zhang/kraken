@@ -217,18 +217,69 @@ func fableFallbackDecide(hit LimitHit, agentModel string, acct *core.AccountUsag
 	if !banner && modelPercent(acct, "Fable", now) < 100 {
 		return fallbackNo
 	}
-	if acct.Session != nil && acct.Session.Percent >= 100 {
-		return fallbackNo
-	}
-	if acct.Weekly != nil && acct.Weekly.Percent >= 100 {
-		return fallbackNo
-	}
-	// Opus has its own model window: switching onto a spent one would trade
-	// one limit for the next.
-	if modelPercent(acct, "Opus", now) >= 100 {
+	if !opusHasRoom(acct, now) {
 		return fallbackNo
 	}
 	return fallbackSwitch
+}
+
+// opusHasRoom reports whether the account can still run turns on the fallback
+// tier: its session and weekly windows are short of their caps, and so is the
+// Opus model window — Opus has its own, and switching onto a spent one would
+// trade one limit for the next. Shared by the mid-run fallback above and the
+// spawn-time one (spawnModel) so the two read headroom the same way. A window
+// whose reset has already passed reads as room, the rule modelPercent applies
+// to model windows: the snapshot is a poll, and a session row still at 100%
+// from before its reset would otherwise keep a zeus on a spent Fable tier
+// exactly on the resumed-after-reset respawn.
+func opusHasRoom(acct *core.AccountUsage, now time.Time) bool {
+	if windowSpent(acct.Session, now) || windowSpent(acct.Weekly, now) {
+		return false
+	}
+	return modelPercent(acct, "Opus", now) < 100
+}
+
+// windowSpent is one session/weekly window at or past its cap with its reset
+// (when known) still ahead. A nil window is no evidence of exhaustion.
+func windowSpent(w *core.UsageWindow, now time.Time) bool {
+	if w == nil || w.Percent < 100 {
+		return false
+	}
+	return w.ResetsAt == 0 || w.ResetsAt > now.UnixMilli()
+}
+
+// spawnModel is the fallback's SPAWN-TIME arm: the model a Fable-tier agent
+// is actually launched on, given the usage row of the account it will bill.
+// When that account's Fable window is already spent while session, weekly and
+// Opus still have room, the agent starts on fableFallbackModel from its first
+// turn instead of starting on Fable, hitting the wall on that turn, and
+// waiting for the mid-run arm to notice the hit (a tick on the hook arm, up to
+// ten minutes on the transcript arm) and type /model into the pane. Starting
+// on Opus also costs nothing the mid-run switch would not: the prompt cache is
+// empty at spawn either way.
+//
+// It is pure, and conservative on every unknown. A configured model that is
+// not Fable-tier is returned as-is (a hand-authored model: is the operator's
+// pick, and only a Fable pick has a Fable window to fall off). No usage row —
+// no snapshot yet, the account unknown, its last poll errored — means the
+// configured model: the mid-run arm will still catch a real exhaustion, and a
+// wrong guess here would put a cell on Opus for its whole life on no evidence.
+// A Fable row whose window has already reset reads as 0% (modelPercent), so a
+// stale poll past the reset never demotes a fresh window. The headroom gates
+// are the mid-run arm's (opusHasRoom): when Opus, session or weekly is spent
+// too, switching tier would not buy a turn, so the agent spawns on its
+// configured model and the ordinary rescue chain handles the hit.
+func spawnModel(configured string, acct *core.AccountUsage, now time.Time) string {
+	if !strings.Contains(strings.ToLower(configured), "fable") || acct == nil {
+		return configured
+	}
+	if modelPercent(acct, "Fable", now) < 100 {
+		return configured
+	}
+	if !opusHasRoom(acct, now) {
+		return configured
+	}
+	return fableFallbackModel
 }
 
 // modelPercent is the account's usage of one model window, the highest when
@@ -271,6 +322,14 @@ func pickFallbackAccount(snap core.UsageSnapshot, email string) *core.AccountUsa
 	}
 	return best
 }
+
+// launchAccount is the package-level indirection to fallbackAccount the
+// spawn-time arm (zeusLaunchModel, cell.go) reads through, and it is what the
+// test binary no-ops (testmain_test.go, bindGate's pattern): the real read
+// opens the machine's usage snapshot, and a dev machine whose main account has
+// Fable spent would otherwise turn every fresh-argv assertion in the suite
+// into a fallback.
+var launchAccount = fallbackAccount
 
 func fallbackAccount(email string) *core.AccountUsage {
 	snap, ok := ReadUsageSnapshot()

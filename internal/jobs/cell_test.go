@@ -824,8 +824,10 @@ func TestRecreateFromRemoteMergedBranchFallsBack(t *testing.T) {
 // package walk would need a by-name skip
 // for it, and a by-name skip is the mechanism that would exempt the very file a
 // future zeus spawn got added to. cell.go is where zeus is spawned and NOWHERE
-// else, so a raw j.Model reaching cellClaudeArgs HERE is by definition a zeus
-// spawn that skipped the Fable fallback.
+// else, so anything other than zeusLaunchModel(j) reaching cellClaudeArgs HERE
+// is by definition a zeus spawn that skipped either zeusModel's default to
+// core.ZeusModel or the spawn-time demotion off a spent Fable window
+// (spawnModel).
 func TestZeusSpawnPathsResolveTheModel(t *testing.T) {
 	fset := token.NewFileSet()
 	file, err := parser.ParseFile(fset, "cell.go", nil, 0)
@@ -843,15 +845,18 @@ func TestZeusSpawnPathsResolveTheModel(t *testing.T) {
 			return true
 		}
 		calls++
-		// the one legal shape in this file: cellClaudeArgs(zeusModel(j))
+		// the one legal shape in this file: cellClaudeArgs(zeusLaunchModel(j))
+		// — the LAUNCH resolution, which is zeusModel's configured answer
+		// demoted by the spawn-time Fable fallback; a direct zeusModel(j)
+		// here would spawn a Fable-spent account's zeus on Fable
 		arg, ok := call.Args[0].(*ast.CallExpr)
 		if !ok {
-			t.Errorf("%s: cellClaudeArgs called with something other than zeusModel(...) — zeus must resolve through zeusModel; if you introduced a local for it, inline it or re-aim this test",
+			t.Errorf("%s: cellClaudeArgs called with something other than zeusLaunchModel(...) — zeus must resolve through zeusLaunchModel; if you introduced a local for it, inline it or re-aim this test",
 				fset.Position(call.Pos()))
 			return true
 		}
-		if inner, ok := arg.Fun.(*ast.Ident); !ok || inner.Name != "zeusModel" {
-			t.Errorf("%s: cellClaudeArgs argument is not zeusModel(...) — zeus would skip core.ZeusModel",
+		if inner, ok := arg.Fun.(*ast.Ident); !ok || inner.Name != "zeusLaunchModel" {
+			t.Errorf("%s: cellClaudeArgs argument is not zeusLaunchModel(...) — zeus would skip core.ZeusModel or the spawn-time Fable fallback",
 				fset.Position(call.Pos()))
 		}
 		return true

@@ -3,6 +3,8 @@ package jobs
 import (
 	"os"
 	"testing"
+
+	"kraken/internal/core"
 )
 
 // TestMain quarantines the unified event log for the whole package: daemon
@@ -20,6 +22,13 @@ func TestMain(m *testing.M) {
 	// touches either. A test that specifically wants to assert on binding
 	// re-swaps this locally.
 	bindGate = func(*Job, string) {}
+	// Same reasoning for the spawn-time Fable fallback's usage read: the
+	// real launchAccount opens the machine's usage snapshot, and on a dev
+	// machine whose main account has Fable spent every fresh zeus argv in the
+	// suite would come out on Opus. nil means "no row" — the configured
+	// model, byte for byte the pre-feature spawn. A test that asserts on the
+	// fallback re-swaps this locally (TestZeusLaunchModel).
+	launchAccount = func(string) *core.AccountUsage { return nil }
 	// Same reasoning for the codex usage pass, which the daemon tick kicks:
 	// the real pass walks the machine's ~/.codex-pool and writes
 	// ~/.kraken/usage-codex.json, and no test may touch either. A test that
