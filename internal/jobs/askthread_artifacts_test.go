@@ -2,13 +2,14 @@ package jobs
 
 import (
 	"os"
+	"strings"
 	"testing"
 )
 
 // A self question in a self thread may read the job's artifacts: the run
 // carries `--add-dir <cell artifacts>`, because `--restricted` confines the
-// file tools to the worktree cwd and the artifacts dir sits beside it, not
-// inside it. Every run without the read-only tools carries no such flag.
+// file tools to the worktree cwd and the artifacts dir is its sibling. Every
+// run without the read-only tools carries no such flag.
 func TestAskArgvAddsArtifactsDirForSelfTools(t *testing.T) {
 	st := askContractEnv(t)
 	j := askContractJob(t, st)
@@ -25,6 +26,10 @@ func TestAskArgvAddsArtifactsDirForSelfTools(t *testing.T) {
 	}
 	if got, n := askContractFlag(argv, "--add-dir"); n != 1 || got != art {
 		t.Errorf("self run: --add-dir = %q (present %d times), want exactly once naming %q", got, n, art)
+	}
+	// the brief names the dir, or the run looks for artifacts in its cwd
+	if !strings.Contains(askThreadBrief(j, selfRow), art) {
+		t.Errorf("self brief does not name the artifacts dir %q", art)
 	}
 	askContractCheckForkTail(t, argv, selfRow)
 

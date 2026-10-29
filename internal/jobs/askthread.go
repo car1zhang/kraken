@@ -380,6 +380,9 @@ func askThreadBrief(j *Job, t store.Thread) string {
 	b.WriteString("Each message you receive is one question, prefixed with who asked it. Several people may ask in this thread. Answer each in one message, leading with its TLDR — that message is all the asker reads.\n")
 	if rowOrigin(t).IsSelf() {
 		b.WriteString("You run headless with read-only tools confined to the worktree (Read, Grep, Glob, WebFetch, WebSearch): no shell, no edits, no agents. Read the code to answer; never claim to have changed anything.\n")
+		if args := askArtifactsDirArgs(j, AskThreadTools); len(args) == 2 {
+			fmt.Fprintf(&b, "The job's artifacts (its docs, cards and build report) sit outside the worktree, at %s, and you may read them there too.\n", args[1])
+		}
 	} else {
 		b.WriteString("You run headless and you have no tools: answer from the conversation above alone, and say so plainly when it does not hold the answer. Never claim to have looked anything up or changed anything.\n")
 	}
