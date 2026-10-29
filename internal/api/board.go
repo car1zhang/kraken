@@ -1089,13 +1089,13 @@ type webBoard struct {
 }
 
 // jobArtifacts collects a job's viewable artifacts from exactly one source.
-// A live cell serves straight from the cell dir (Q12). Any other job serves
-// the artifacts table — the block-event sync's mirror, which teardown's
-// final pass completes with the worktree's uncommitted root notes
-// (jobs/sync.go) — under the URL home "pluto" for an active job and
-// "archive" (keyed on ArchivedName) for an archived one. The home names are
-// namespace names that shipped iOS builds decode, not directories: nothing
-// here reads the filesystem once the cell is not live.
+// A live cell serves straight from the cell dir (Q12), under the URL home
+// "cell". Any other job serves the artifacts table — the block-event sync's
+// mirror, which teardown's final pass completes with the worktree's
+// uncommitted root notes (jobs/sync.go) — under the URL home "pluto" for an
+// unarchived job and "archive" (keyed on ArchivedName) for an archived one.
+// The home names are namespace names that shipped iOS builds decode, not
+// directories: nothing here reads the filesystem once the cell is not live.
 //
 // Both branches end in sortedArtifacts — the wire order is the reading
 // order, and the guarantee must not rest on either source happening to
@@ -1141,8 +1141,8 @@ func sortedArtifacts(out []webArtifact) []webArtifact {
 // storeArtifactList lists jobID's DB-mirrored artifacts (store/artifacts.go,
 // populated by the block-event sync — jobs/sync.go) as webArtifacts under
 // the given URL "home" segment, which ArtifactBytes/artifactHandler resolve
-// through the store. home is "pluto" for an active job's artifacts,
-// "archive" for an archived job's — namespace names kept for the wire, not
+// through the store. home is "pluto" for an unarchived job whose cell is not
+// live, "archive" for an archived job's — namespace names kept for the wire, not
 // directories.
 func storeArtifactList(slug string, jobID int64, home string) []webArtifact {
 	st := jobs.ActiveStore()
