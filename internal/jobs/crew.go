@@ -225,16 +225,23 @@ func zeusBrief(j *Job) string {
 	// here rather than in its SKILL.md.
 	b.WriteString("Before writing anything " + op + " reads — an overview, a caption, a final message, a report — check what they know (the full `kraken` binary, as its own command: a guardrail kills any compound with a bare `k`): `kraken mm get --q \"<subject>\"` (plus `--file <path>` per file you cite), `kraken mm show <id>` for each relevant hit, `kraken mm source <id>` only when the body is not enough. Abstract what they know, spell out what they do not, then edit the draft against `.claude/skills/humanizer/SKILL.md` (skill-fixed formats stay verbatim); carry the same '" + op + " knows / is unfamiliar with' lines and that edit pass into every teammate brief. Any agent that sees an item contradicting another or the work runs `kraken mm flag --item <id> --note \"<why>\"` and proceeds; only you, the lead, run `kraken mm flag raise <id> --note \"<why>\"` or `kraken mm flag dismiss <id> --note \"<why>\"`: settle every pending flag before you stop and say so in your final message.\n")
 	b.WriteString("`[image: <path>]` lines in specs or steering messages are images " + op + " attached — treat their visual content as part of the message (Claude Code auto-reads them; Read the path if it wasn't ingested).\n")
-	// The tier is RESOLVED rather than named: zeus is spawned on zeusModel(j)
-	// — codexZeusModel(j) for a codex cell, the same rule on the other
-	// launcher — which a job's model: field overrides, so a hardcoded "you
-	// run on Fable" asserts a model zeus is not on for exactly the jobs that
-	// set one — and then forbids working around a tier it never had.
-	// JobTemplate advertises that override, so the false case is the
-	// documented one.
-	briefModel := zeusModel(j)
-	if j.Agent == "codex" {
-		briefModel = codexZeusModel(j)
+	// The tier is RESOLVED rather than named: zeus is spawned on
+	// zeusLaunchModel(j) — codexZeusModel(j) for a codex cell, the same rule
+	// on the other launcher — which a job's model: field overrides, so a
+	// hardcoded "you run on Fable" asserts a model zeus is not on for exactly
+	// the jobs that set one — and then forbids working around a tier it never
+	// had. JobTemplate advertises that override, so the false case is the
+	// documented one. The LAUNCH resolution rather than the configured one,
+	// since a zeus spawned on Opus because its account's Fable was spent
+	// (spawnModel) is on Opus, and the memo on the Job is what makes this
+	// line and the argv agree within one spawn. Codex branches FIRST: a codex
+	// zeus runs on neither claude tier, and resolving zeusLaunchModel for it
+	// would read the claude usage snapshot and log a fallback for a pane that
+	// never had a Fable window (measured by the edge review: an unbound codex
+	// job on a Fable-spent main logged "spawning zeus on claude-opus-5-5").
+	briefModel := codexZeusModel(j)
+	if j.Agent != "codex" {
+		briefModel = zeusLaunchModel(j)
 	}
 	fmt.Fprintf(&b, "kraken spawned you on `%s` — zeus' tier is kraken's deliberate choice (the lead plans, briefs, arbitrates and integrates, so its turnaround is the cell's latency), not something to work around. EVERY OTHER agent in this cell runs on Claude Opus 5: every teammate and every subagent you ever spawn, no exceptions, always passing `model: opus` on the Agent tool (a tier alias — `opus` IS Claude Opus 5). Never drop one to a cheaper tier or leave the model unset — an unset model can inherit YOURS, the one way the crew stops being Opus unnoticed. The deep work is what you delegate, so that is where the deep tier goes.\n",
 		briefModel)

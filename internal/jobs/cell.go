@@ -660,6 +660,90 @@ func zeusModel(j *Job) string {
 	return core.ZeusModel
 }
 
+// zeusLaunchModel is the model a zeus is LAUNCHED on: zeusModel's configured
+// answer, demoted to the Fable fallback tier by spawnModel (modelfallback.go)
+// when the account the cell bills has its Fable window spent while session,
+// weekly and Opus still have room. The account is cellAccountEmail's — the
+// job's binding when it has one, which bindAccount stamps before either spawn
+// path reaches here, else the machine's main identity — so the row consulted
+// is the one the process is about to resolve credentials for.
+//
+// The answer is memoized on the Job for the length of one spawn chain: the
+// argv (zeusSpawnArgv) and the brief's "kraken spawned you on" line
+// (zeusBrief) both resolve through here, microseconds apart, and the usage
+// pass can rewrite the snapshot between any two reads; a brief naming a tier
+// the argv did not pass is exactly the lie the brief's resolved-tier rule
+// exists to prevent. Every spawn site loads its Job fresh from the store, so
+// the memo never outlives the spawn it was made for. What the rescue needs
+// ticks later — the model the running PROCESS was started on — is the stamp
+// spawnCommand writes from the argv, read back by zeusLaunchedModel.
+func zeusLaunchModel(j *Job) string {
+	if j.launchModel != "" {
+		return j.launchModel
+	}
+	configured := zeusModel(j)
+	model := spawnModel(configured, launchAccount(cellAccountEmail(j)), time.Now())
+	if model != configured {
+		dlogEvent("info", "spawn-model-fallback", "%s: %s has its Fable window spent with room on Opus — spawning zeus on %s instead of %s", j.Slug, cellAccountEmail(j), model, configured)
+	}
+	j.launchModel = model
+	return model
+}
+
+// zeusModelStampPath is the cell-dir file recording the `--model` the cell's
+// zeus pane was last spawned with — written by spawnCommand on every zeus
+// spawn (StartCell, ReactivateJob, the limit rescue's respawn), read by
+// zeusLaunchedModel. It lives beside zeus-brief.md for the same reason
+// color.applied does: teardown frees it with the cell dir, and a renamed job
+// still resolves to the dir its pane was spawned from (existingCellDir).
+func zeusModelStampPath(j *Job) string {
+	return filepath.Join(existingCellDir(j), "zeus-model")
+}
+
+// stampZeusModel records argv's --model value at zeusModelStampPath. Nothing
+// to record (no --model in argv) writes nothing; a failed write is logged and
+// never fails the spawn, since the reader falls back to the configured model
+// — wrong only for a zeus spawnModel started on Opus, whose next hit then
+// gets one wasted /model switch before the ordinary chain, which is cheaper
+// than a cell that never came up. The stamp is written when the command is
+// BUILT, a step before the pane runs it: a respawn that then fails leaves the
+// old process on its old tier under a stamp naming the new one. That hit
+// already carries SwappedAt, which fableFallbackCandidate refuses whatever
+// the model says, and the retry restamps, so the gap costs nothing today;
+// a spawn site that can fail after building its command owes this a thought.
+func stampZeusModel(j *Job, argv []string) {
+	model := ""
+	for i := 0; i+1 < len(argv); i++ {
+		if argv[i] == "--model" {
+			model = argv[i+1]
+		}
+	}
+	if model == "" {
+		return
+	}
+	if err := os.WriteFile(zeusModelStampPath(j), []byte(model+"\n"), 0o644); err != nil {
+		dlogErr("%s: stamping zeus' spawn model: %v", j.Slug, err)
+	}
+}
+
+// zeusLaunchedModel is the model the cell's zeus PROCESS was spawned on —
+// the stamp spawnCommand wrote, else zeusModel's configured answer for a cell
+// spawned before the stamp existed. It is what the limit rescue hands the
+// Fable fallback as the agent's model: a zeus launched on Opus by
+// zeusLaunchModel has no Fable window to fall off, so its hits take the
+// ordinary chain, and the respawn that chain ends in resolves the tier afresh
+// on the account it lands on. Never zeusLaunchModel itself — that reads the
+// snapshot NOW, and a cell spawned on Fable hours ago whose account has since
+// drained would read as Opus, which would route its Fable hit past the one
+// arm that can fix it without a kill.
+func zeusLaunchedModel(j *Job) string {
+	data, err := os.ReadFile(zeusModelStampPath(j))
+	if model := strings.TrimSpace(string(data)); err == nil && model != "" {
+		return model
+	}
+	return zeusModel(j)
+}
+
 // zeusSpawnArgv is the argv both zeus spawn paths build — StartCell with no
 // resume args, ReactivateJob with `-r <session>`. They were two hand-written
 // lines that nothing pinned: zeusModel and both model constants have their own
@@ -668,7 +752,7 @@ func zeusModel(j *Job) string {
 // as dead code with nothing failing. One seam both paths go through is a seam a
 // test can hold; TestZeusSpawnPathsResolveTheModel (cell_test.go) holds it.
 func zeusSpawnArgv(j *Job, resume ...string) []string {
-	argv := append(cellClaudeArgs(zeusModel(j)), "--name", ZeusName(j))
+	argv := append(cellClaudeArgs(zeusLaunchModel(j)), "--name", ZeusName(j))
 	return append(argv, resume...)
 }
 
@@ -752,6 +836,10 @@ func spawnCommand(j *Job, argv []string, brief, prompt string) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	// the model this pane is about to run on, for zeusLaunchedModel — taken
+	// from the argv itself so the stamp can never say a tier the pane was not
+	// given
+	stampZeusModel(j, argv)
 	return accountEnvPrefix(j) + cmd, nil
 }
 

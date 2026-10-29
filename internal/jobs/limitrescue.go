@@ -1699,8 +1699,11 @@ func (d *daemonState) limitRescue(j *Job, all []*core.Peer, live map[string]bool
 	// The Fable fallback pre-empts the whole chain: a zeus that ran out of
 	// Fable on an account with session, weekly and Opus room left is switched
 	// to Opus in place rather than rebound and killed (see modelfallback.go).
-	// Claude zeus only — a codex zeus has no Fable tier to fall off.
-	if j.Agent != "codex" && d.tryFableFallback(limitHitKey(j.ID), j.Slug, zeusModel(j), func() string { return cellAccountEmail(j) }, hit,
+	// Claude zeus only — a codex zeus has no Fable tier to fall off. The
+	// model is the one the PROCESS was spawned on (the cell-dir stamp), not
+	// the configured one: a zeus that spawnModel started on Opus has no Fable
+	// window to fall off either, and its hits belong to the chain below.
+	if j.Agent != "codex" && d.tryFableFallback(limitHitKey(j.ID), j.Slug, zeusLaunchedModel(j), func() string { return cellAccountEmail(j) }, hit,
 		func() *core.Peer { return CellZeus(j, all) }, now) {
 		return
 	}

@@ -159,6 +159,11 @@ type Job struct {
 	AccountSlug  string `json:"-"`
 	AccountEmail string `json:"-"`
 	AccountAt    int64  `json:"-"`
+	// launchModel memoizes zeusLaunchModel's answer for the length of ONE
+	// spawn chain, so the argv and the brief composed in that chain name the
+	// same tier. Never persisted, never read outside zeusLaunchModel; a Job
+	// loaded from the store starts with it empty.
+	launchModel string
 	// ID and Rev are storage-internal, populated only when this Job was
 	// loaded from the store (jobFromStoreRow in jobs/store.go): ID is the
 	// store row id, Rev the optimistic-concurrency counter WriteJobFields/
