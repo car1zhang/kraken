@@ -301,7 +301,7 @@ the scratch path above.* When the brief mentions the heredoc report fallback, it
 scouts with a working `Write` tool have shipped 20 KB reports through `cat <<EOF` (three of five in
 one measured wave), and a heredoc routes report PROSE through Bash, where a text-matching guardrail
 hook can block the whole write because the findings quote a banned command. `do/SKILL.md` names the
-same failure for review fleets; it applies to scout briefs identically. And the brief says what to
+same failure in its read-only-researcher bullet; it applies to scout briefs identically. And the brief says what to
 do when BOTH paths are closed — `Write` refused and the heredoc blocked by a hook: report the
 refusal in the reply and stop, never trim or reword the findings until the hook passes. One more
 brief clause, and it binds you as much as any scout: `kraken.db` is read through the verbs —
