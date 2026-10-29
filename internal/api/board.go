@@ -1092,8 +1092,9 @@ type webBoard struct {
 // A live cell serves straight from the cell dir (Q12). Any other job serves
 // the artifacts table — the block-event sync's mirror, which teardown's
 // final pass completes with the worktree's uncommitted root notes
-// (jobs/sync.go) — under the URL home "pluto" for an active job and
-// "archive" (keyed on ArchivedName) for an archived one. The home names are
+// (jobs/sync.go) — under the URL home "pluto" for an unarchived job whose
+// cell is not live and "archive" (keyed on ArchivedName) for an archived one;
+// a live cell's artifacts are always served under "cell". The home names are
 // namespace names that shipped iOS builds decode, not directories: nothing
 // here reads the filesystem once the cell is not live.
 //
