@@ -166,7 +166,7 @@ const TranscriptTurnTail int64 = 2 << 20
 // comparison is at second granularity because every cut a caller holds is
 // `now.Unix()`-shaped: a record written in the SAME second as the cut is
 // not after it, since the hit's own failing turn can leave a real record
-// a few hundred milliseconds before the delivery that stamps the second.
+// within the same second as the delivery that stamps the cut.
 // A missing or unreadable file, an undecodable line, or a record with no
 // parseable timestamp never satisfies it. The jobs package's limit rescue
 // is its caller (a revived zeus has no latch left to clear).

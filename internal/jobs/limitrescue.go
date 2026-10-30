@@ -1539,8 +1539,19 @@ func hitEvidenceAt(hit LimitHit) int64 {
 // read off the pane itself, so there the status is the one signal — a codex
 // zeus revived by hand and idle at the tick is still resumed as before, a
 // recorded gap rather than a silent one.
+//
+// The hit must be ZEUS' own. Every claude in a cell posts onto the job's one
+// key, and a TEAMMATE's hook delivery carries the teammate's session id; a
+// zeus that keeps working after a teammate latched is the ordinary case,
+// not a revival, so a hit stamped with another session's id never answers
+// true here and takes the decide chain as before (the same gate the Fable
+// fallback applies). A hit with no session id — the transcript arm's, or a
+// record from before the field — is judged on the pane alone.
 func revivedSinceHit(hit LimitHit, agent string, zeus *core.Peer) bool {
 	if zeus == nil {
+		return false
+	}
+	if hit.SessionID != "" && zeus.SessionID != "" && hit.SessionID != zeus.SessionID {
 		return false
 	}
 	if agent == "codex" {
@@ -1568,9 +1579,10 @@ func zeusRanSince(p *core.Peer, since int64) bool {
 }
 
 // transcriptTurnTail and transcriptTurnSince are the package's names for
-// core's transcript reader (core.TranscriptTurnSince), kept so the rescue's
-// contract reads in one place; the reading itself lives with every other
-// transcript reader in internal/core.
+// core's transcript reader (core.TranscriptTurnSince): the names the frozen
+// contract and its tests use, while the reading itself lives with every
+// other transcript reader in internal/core. Production code reaches only
+// transcriptTurnSince.
 const transcriptTurnTail = core.TranscriptTurnTail
 
 func transcriptTurnSince(path string, since int64) bool {
