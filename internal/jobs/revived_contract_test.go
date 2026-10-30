@@ -192,9 +192,12 @@ func TestContractRevivedZeusRanSince(t *testing.T) {
 			t.Error("since == 0 answered true")
 		}
 	})
-	t.Run("running peer", func(t *testing.T) {
-		if !zeusRanSince(&core.Peer{Status: "running", Agent: "claude"}, since) {
-			t.Error("a running peer answered false")
+	// Amended at the join (review round 1, contract defect): the pane's
+	// status is not evidence of a turn for a claude pane — a running peer
+	// with no transcript to read answers false.
+	t.Run("running peer without a transcript", func(t *testing.T) {
+		if zeusRanSince(&core.Peer{Status: "running", Agent: "claude"}, since) {
+			t.Error("a running peer with no transcript answered true")
 		}
 	})
 	t.Run("waiting peer, unreadable transcript", func(t *testing.T) {
@@ -233,13 +236,19 @@ func TestContractRevivedSinceHit(t *testing.T) {
 			t.Error("nil zeus answered true")
 		}
 	})
-	for _, agent := range []string{"claude", "codex"} {
-		t.Run("running "+agent, func(t *testing.T) {
-			if !revivedSinceHit(hit, agent, &core.Peer{Status: "running", Agent: agent}) {
-				t.Errorf("a running %s zeus answered false", agent)
-			}
-		})
-	}
+	// Amended at the join (review round 1, contract defect): a running
+	// codex zeus is revived; a running claude zeus is judged by its
+	// transcript alone, so with none to read it answers false.
+	t.Run("running codex", func(t *testing.T) {
+		if !revivedSinceHit(hit, "codex", &core.Peer{Status: "running", Agent: "codex"}) {
+			t.Error("a running codex zeus answered false")
+		}
+	})
+	t.Run("running claude without a transcript", func(t *testing.T) {
+		if revivedSinceHit(hit, "claude", &core.Peer{Status: "running", Agent: "claude"}) {
+			t.Error("a running claude zeus with no transcript answered true")
+		}
+	})
 	t.Run("waiting codex", func(t *testing.T) {
 		if revivedSinceHit(hit, "codex", &core.Peer{Status: "waiting", Agent: "codex"}) {
 			t.Error("a waiting codex zeus answered true")

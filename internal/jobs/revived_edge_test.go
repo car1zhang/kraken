@@ -265,7 +265,8 @@ func TestEdgeRevivedZeusRanSinceRefusals(t *testing.T) {
 		{"nil peer", nil, edgeRevNow.Unix(), false},
 		{"nil peer, since 0", nil, 0, false},
 		{"since 0 refuses even a running peer", &core.Peer{Status: "running", SessionID: "s-1", Agent: "claude"}, 0, false},
-		{"running answers true without a transcript", &core.Peer{Status: "running", SessionID: "s-no-file", Agent: "claude"}, edgeRevNow.Unix(), true},
+		// amended at the join (review round 1): status is not evidence for claude
+		{"running answers false without a transcript", &core.Peer{Status: "running", SessionID: "s-no-file", Agent: "claude"}, edgeRevNow.Unix(), false},
 		{"waiting with no session id", &core.Peer{Status: "waiting", Agent: "claude"}, edgeRevNow.Unix(), false},
 		{"idle with no transcript on disk", &core.Peer{Status: "idle", SessionID: "s-absent", Agent: "claude"}, edgeRevNow.Unix(), false},
 		{"shell pane", &core.Peer{Status: "idle", Role: "shell", SessionID: "s-shell"}, edgeRevNow.Unix(), false},
@@ -324,10 +325,11 @@ func TestEdgeRevivedSinceHitGuards(t *testing.T) {
 	}{
 		{"nil zeus", hit, "claude", nil, false},
 		{"nil zeus, codex", hit, "codex", nil, false},
-		{"running claude", hit, "claude", &core.Peer{Status: "running"}, true},
+		// amended at the join (review round 1): only codex is judged by status
+		{"running claude without a transcript", hit, "claude", &core.Peer{Status: "running"}, false},
 		{"running codex", hit, "codex", &core.Peer{Status: "running", Agent: "codex"}, true},
-		{"running with empty agent", hit, "", &core.Peer{Status: "running"}, true},
-		{"running with an empty hit", LimitHit{}, "claude", &core.Peer{Status: "running"}, true},
+		{"running with empty agent, no transcript", hit, "", &core.Peer{Status: "running"}, false},
+		{"running claude with an empty hit (evidence 0)", LimitHit{}, "claude", &core.Peer{Status: "running"}, false},
 		{"waiting codex never reads a transcript", hit, "codex", &core.Peer{Status: "waiting", Agent: "codex", RolloutPath: "/nonexistent"}, false},
 		{"idle claude with an empty hit (evidence 0)", LimitHit{}, "claude", &core.Peer{Status: "idle", SessionID: "s-1"}, false},
 	}

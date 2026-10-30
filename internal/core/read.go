@@ -8,6 +8,7 @@ import (
 	"os"
 	"regexp"
 	"strings"
+	"time"
 )
 
 // --- k r ---
@@ -148,6 +149,55 @@ func tailLines(path string, window int64) []string {
 		return nil
 	}
 	return lines
+}
+
+// TranscriptTurnTail bounds how much of a transcript TranscriptTurnSince
+// reads: the records that can answer "did a turn run after the cut" are at
+// the end, and a long session's file is tens of MB.
+const TranscriptTurnTail int64 = 2 << 20
+
+// TranscriptTurnSince reports whether the transcript at path holds a REAL
+// assistant turn after `since` (unix seconds): a `type:"assistant"` record
+// whose timestamp falls in a later second than `since` and whose
+// `message.model` is neither empty nor Claude Code's "<synthetic>" — the
+// model a limit-latched pane stamps on the banner it writes instead of
+// calling the API. Only the file's last TranscriptTurnTail bytes are read
+// (tailWindow, which drops the partial line a tail read starts inside). The
+// comparison is at second granularity because every cut a caller holds is
+// `now.Unix()`-shaped: a record written in the SAME second as the cut is
+// not after it, since the hit's own failing turn can leave a real record
+// a few hundred milliseconds before the delivery that stamps the second.
+// A missing or unreadable file, an undecodable line, or a record with no
+// parseable timestamp never satisfies it. The jobs package's limit rescue
+// is its caller (a revived zeus has no latch left to clear).
+func TranscriptTurnSince(path string, since int64) bool {
+	if path == "" || since == 0 {
+		return false
+	}
+	for _, line := range tailLines(path, TranscriptTurnTail) {
+		if !strings.Contains(line, "\"assistant\"") {
+			continue
+		}
+		var rec struct {
+			Type      string `json:"type"`
+			Timestamp string `json:"timestamp"`
+			Message   struct {
+				Model string `json:"model"`
+			} `json:"message"`
+		}
+		if err := json.Unmarshal([]byte(line), &rec); err != nil || rec.Type != "assistant" {
+			continue
+		}
+		ts, err := time.Parse(time.RFC3339Nano, rec.Timestamp)
+		if err != nil || ts.Unix() <= since {
+			continue
+		}
+		if rec.Message.Model == "" || rec.Message.Model == "<synthetic>" {
+			continue
+		}
+		return true
+	}
+	return false
 }
 
 // LastBlocks returns the transcript's trailing blocks: the last n

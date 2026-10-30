@@ -2957,6 +2957,21 @@ func ReactivateJob(j *Job, session, message string) error {
 	if err != nil {
 		return fmt.Errorf("%v (worktree left at %s)", err, wt)
 	}
+	// The process that may have latched on a usage limit is gone and a fresh
+	// one is about to come up, so an unresolved hit on this job's record is
+	// closed BEFORE the new session exists (limitHitReactivated): the rescue
+	// sweep runs over done jobs too, and a tick that found the new pane live
+	// under the old open record would act on it. Best-effort: a failed write
+	// costs one wrong kill at most, and it is logged.
+	if hit := ReadLimitHit(j); hit.At != 0 {
+		if closed, ok := limitHitReactivated(hit, time.Now()); ok {
+			if err := saveLimitRescueState(j, closed); err != nil {
+				dlogErr("%s: closing the previous process' limit hit on reactivate failed: %v", j.Slug, err)
+			} else {
+				dlogEvent("info", "limit-hit-reactivated", "%s: the previous process' unresolved limit hit is closed ahead of the respawn", j.Slug)
+			}
+		}
+	}
 	var newSessionStderr bytes.Buffer
 	newSessionCmd := exec.Command("tmux", "new-session", "-d",
 		"-x", strconv.Itoa(core.DetachedSessionCols), "-y", strconv.Itoa(core.DetachedSessionRows),
@@ -2977,20 +2992,6 @@ func ReactivateJob(j *Job, session, message string) error {
 	// folder trust normally persists — but a fresh machine or cleared
 	// config would block startup on the dialog just like a first start
 	acceptTrustPrompts(sess)
-	// The process that may have latched on a usage limit is gone and a fresh
-	// one is up, so an unresolved hit on this job's record is closed here
-	// rather than left for the rescue pass to act on against the new pane
-	// (limitHitReactivated). Best-effort: a failed write costs one wrong
-	// kill at most, and it is logged.
-	if hit := ReadLimitHit(j); hit.At != 0 {
-		if closed, ok := limitHitReactivated(hit, time.Now()); ok {
-			if err := saveLimitRescueState(j, closed); err != nil {
-				dlogErr("%s: closing the previous process' limit hit on reactivate failed: %v", j.Slug, err)
-			} else {
-				dlogEvent("info", "limit-rescue-skipped", "%s: reactivated — the previous process' unresolved limit hit is closed", j.Slug)
-			}
-		}
-	}
 	// a reactivated job was "not truly finished" — drop the recorded outcome
 	// along with the state flip so it reads like it was never completed
 	if err := WriteJobFields(j, "state", "working", "outcome", ""); err != nil {
