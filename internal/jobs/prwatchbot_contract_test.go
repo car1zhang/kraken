@@ -43,8 +43,8 @@ func TestContractPRBotReviewNeedsAttention(t *testing.T) {
 		body  string
 		want  bool
 	}{
-		{"approved, empty body", "APPROVED", "", false},
-		{"approved, whitespace body", "APPROVED", "  \n\t ", false},
+		{"approved, empty body", "APPROVED", "", true},
+		{"approved, whitespace body", "APPROVED", "  \n\t ", true},
 		{"approved, Auto-approved body", "APPROVED", "Auto-approved by bot-reviewer: all checks green", false},
 		{"approved, padded Auto-approved body", "APPROVED", "\n  Auto-approved", false},
 		{"approved, real text", "APPROVED", "LGTM, but rename the helper", true},
@@ -55,12 +55,12 @@ func TestContractPRBotReviewNeedsAttention(t *testing.T) {
 		{"empty state, empty body", "", "", true},
 		{"empty state, Auto-approved body", "", "Auto-approved", true},
 	}
-	// Amended at the join (review round 1, contract defect): an EMPTY body
-	// is a bare approval only from a `[bot]` login, so the table runs under
-	// one; a human's empty-bodied approval is checked separately below.
+	// Amended at the join (review rounds 1 and 2, contract defect): only the
+	// `Auto-approved` template is a bare approval; an EMPTY body counts
+	// whoever wrote it, since gh's review author carries no bot marker.
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			r := contractPRBotReview("2026-04-02T10:00:00Z", "bot-reviewer[bot]", c.state, c.body)
+			r := contractPRBotReview("2026-04-02T10:00:00Z", "bot-reviewer", c.state, c.body)
 			if got := reviewNeedsAttention(r); got != c.want {
 				t.Errorf("reviewNeedsAttention(state=%q body=%q) = %v, want %v", c.state, c.body, got, c.want)
 			}
@@ -92,7 +92,7 @@ func TestContractPRBotLatestActivityAt(t *testing.T) {
 			name: "bot bare approval newest never advances",
 			reviews: []prActivityReview{
 				contractPRBotReview("2026-04-01T10:00:00Z", "alice", "COMMENTED", "nit on line 3"),
-				contractPRBotReview("2026-04-03T10:00:00Z", "bot-reviewer[bot]", "APPROVED", ""),
+				contractPRBotReview("2026-04-03T10:00:00Z", "bot-reviewer", "APPROVED", "Auto-approved"),
 			},
 			prAuthor: "zeus-author",
 			want:     "2026-04-01T10:00:00Z",
