@@ -502,10 +502,10 @@ func parseLimitReset(details string, hitAt time.Time) int64 {
 	// bounded park: a weekly banner first noticed AFTER its stated time has
 	// passed (a daemon down or a Mac asleep across the reset) rolls to the
 	// next day and parks the cell up to 24h on a window that is already
-	// open, where the cap read it as due at once; a zone the banner names
-	// that LoadLocation cannot resolve falls back to the machine's and is
-	// now off by the zone difference rather than capped. Both are rarer
-	// than the loop and end at the next occurrence of the stated time.
+	// open; a zone the banner names that LoadLocation cannot resolve falls
+	// back to the machine's and is off by the zone difference, uncapped.
+	// Both are rarer than the loop and end at the next occurrence of the
+	// stated time.
 	if candidate.Sub(at) > limitResetMaxWait && !weeklyBannerRe.MatchString(details) {
 		return at.Unix()
 	}
