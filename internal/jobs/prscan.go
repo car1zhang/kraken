@@ -88,9 +88,41 @@ var ghPrCreatePattern = regexp.MustCompile(`(^|[\n;&|(]|&&|\|\|)\s*(\w+=(\$\((?:
 // then read as that job's create. Blanking keeps the quote characters
 // themselves, so an env assignment whose value is a quoted string before the
 // command (`GH_TOKEN="…" gh pr create`) still matches through the pattern's
-// quoted-value alternative.
+// quoted-value alternative — which is why this uses blankQuotedSpans rather
+// than bash-lint's stripQuotedAndCond, whose blanking takes the quotes too.
 func ghPrCreateInvoked(cmd string) bool {
-	return ghPrCreatePattern.MatchString(stripQuotedAndCond(stripHeredocBodies(cmd)))
+	return ghPrCreatePattern.MatchString(blankQuotedSpans(stripHeredocBodies(cmd)))
+}
+
+// blankQuotedSpans replaces the CONTENTS of every single- and double-quoted
+// span with spaces, keeping the quote characters and every newline, so token
+// positions and the pattern's quoted-value alternative both survive. A
+// backslash escapes the next byte outside single quotes; an unterminated
+// span runs to the end of the input.
+func blankQuotedSpans(s string) string {
+	b := []byte(s)
+	n := len(b)
+	for i := 0; i < n; i++ {
+		switch {
+		case b[i] == '\\' && i+1 < n:
+			i++
+		case b[i] == '\'' || b[i] == '"':
+			q := b[i]
+			j := i + 1
+			for ; j < n && b[j] != q; j++ {
+				if q == '"' && b[j] == '\\' {
+					j++
+				}
+			}
+			for k := i + 1; k < j && k < n; k++ {
+				if b[k] != '\n' {
+					b[k] = ' '
+				}
+			}
+			i = j
+		}
+	}
+	return string(b)
 }
 
 // prScanLine is the tiny slice of a transcript jsonl line scanTranscriptPRURLs
