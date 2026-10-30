@@ -81,11 +81,11 @@ var ghPrCreatePattern = regexp.MustCompile(`(^|[\n;&|(]|&&|\|\|)\s*(\w+=(\$\((?:
 // create", shared by the transcript scanner below and the pr-hook's gate
 // (prhook.go): ghPrCreatePattern applied after every heredoc BODY and every
 // quoted span has been blanked, the same preprocessing bash-lint uses.
-// Matched over the raw text, the pattern was quote-blind: a grep whose
-// regex ARGUMENT contained `|gh pr create`, or a script fed through a
-// heredoc that merely mentioned the command, satisfied it, and the command's
-// stdout — a transcript dump carrying another job's PR URL verbatim — was
-// then read as that job's create. Blanking keeps the quote characters
+// Matched over the raw text, the pattern is quote-blind: a grep whose regex
+// ARGUMENT contains `|gh pr create`, or a script fed through a heredoc that
+// merely mentions the command, would satisfy it, and the command's stdout —
+// a transcript dump carrying another job's PR URL verbatim — would then be
+// read as that job's create. Blanking keeps the quote characters
 // themselves, so an env assignment whose value is a quoted string before the
 // command (`GH_TOKEN="…" gh pr create`) still matches through the pattern's
 // quoted-value alternative — which is why this uses blankQuotedSpans rather
