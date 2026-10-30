@@ -154,6 +154,33 @@ type prActivityReview struct {
 	Author struct {
 		Login string `json:"login"`
 	} `json:"author"`
+	// State and Body decide whether the review is anything to ADDRESS. gh
+	// serialises State as APPROVED, CHANGES_REQUESTED, COMMENTED or
+	// DISMISSED. An auto-approve bot's review — APPROVED with the
+	// `Auto-approved: …` template body — asks nothing of the author;
+	// counted as activity it would bump zeus with an "address it" notice
+	// the moment a PR opens, for a turn that finds nothing to address.
+	State string `json:"state"`
+	Body  string `json:"body"`
+}
+
+// reviewNeedsAttention is the one test for whether a review is activity the
+// PR's author has to act on. Pure, so the template skip is table-testable.
+// Everything is attention except an APPROVED review whose trimmed body
+// starts with the auto-approve template `Auto-approved`. An EMPTY-bodied
+// approval still counts, whoever wrote it: `gh pr view --json comments`
+// carries no inline review comments, so the review's timestamp is the only
+// sign an approve-with-nits left them — and `--json reviews` gives a bot's
+// login with no `[bot]` suffix (it is built from GraphQL `author{login}`),
+// so there is no author-side signal to narrow the empty case by. An
+// approval carrying any other text may hold a request, so it counts too,
+// and an unknown or empty state fails OPEN — a review gh serialises in a
+// shape this code has not seen must bump rather than vanish.
+func reviewNeedsAttention(r prActivityReview) bool {
+	if r.State != "APPROVED" {
+		return true
+	}
+	return !strings.HasPrefix(strings.TrimSpace(r.Body), "Auto-approved")
 }
 
 // latestActivityAt is watchPRs' newest-comment-or-review computation: the
@@ -175,6 +202,9 @@ func latestActivityAt(comments []prActivityComment, reviews []prActivityReview, 
 	}
 	for _, r := range reviews {
 		if prAuthor != "" && r.Author.Login == prAuthor {
+			continue
+		}
+		if !reviewNeedsAttention(r) {
 			continue
 		}
 		if r.SubmittedAt > latest {
