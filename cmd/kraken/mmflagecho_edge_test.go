@@ -3,7 +3,7 @@ package main
 // mmflagecho_edge_test.go — athena-edge's BLIND tests for slice F of
 // dream-2026-10-30 (`kraken mm flag` echoes the flag id and the item id
 // apart): mmFlagEcho at its numeric and string boundaries. Authored from
-// 50-contract.md alone. Every package-level identifier is prefixed edgeMF.
+// 50-contract.md alone.
 
 import (
 	"math"
