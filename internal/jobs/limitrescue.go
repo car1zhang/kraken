@@ -1545,8 +1545,9 @@ func hitEvidenceAt(hit LimitHit) int64 {
 // zeus that keeps working after a teammate latched is the ordinary case,
 // not a revival, so a hit stamped with another session's id never answers
 // true here and takes the decide chain as before (the same gate the Fable
-// fallback applies). A hit with no session id — the transcript arm's, or a
-// record from before the field — is judged on the pane alone.
+// fallback applies). A hit with no session id — a record from before the
+// field, or one recorded before zeus' session was stamped — is judged on the
+// pane alone.
 func revivedSinceHit(hit LimitHit, agent string, zeus *core.Peer) bool {
 	if zeus == nil {
 		return false
