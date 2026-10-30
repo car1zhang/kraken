@@ -77,19 +77,27 @@ import (
 // mergeLimitHitDelivery) — and that carrying is the point, because a landed
 // swap forgotten between two ticks is a cell swapped twice.
 type LimitHit struct {
-	Error       string `json:"error"`
-	Details     string `json:"details"`
-	At          int64  `json:"at"`
-	SessionID   string `json:"session_id"`
-	AgentID     string `json:"agent_id"`
-	Deliveries  int    `json:"deliveries"`
-	HandledAt   int64  `json:"handled_at"`
-	Outcome     string `json:"outcome"`
-	Attempts    int    `json:"attempts"`
-	LastAttempt int64  `json:"last_attempt_at"`
-	SwappedAt   int64  `json:"swapped_at"`
-	SwappedTo   string `json:"swapped_to"`
-	ResetAt     int64  `json:"reset_at"`
+	Error      string `json:"error"`
+	Details    string `json:"details"`
+	At         int64  `json:"at"`
+	SessionID  string `json:"session_id"`
+	AgentID    string `json:"agent_id"`
+	Deliveries int    `json:"deliveries"`
+	// LastDeliveryAt is when the LATEST delivery landed on this record — the
+	// fresh one that opened it, or the most recent fold onto it. At is the
+	// first delivery's moment and never moves, so a pane that revived after
+	// the first banner and then hit the window again would read as "worked
+	// since the hit" against At alone; the revived guard (revivedSinceHit)
+	// measures against this stamp instead. A record written before the field
+	// existed decodes it as 0, and hitEvidenceAt falls back to At.
+	LastDeliveryAt int64  `json:"last_delivery_at,omitempty"`
+	HandledAt      int64  `json:"handled_at"`
+	Outcome        string `json:"outcome"`
+	Attempts       int    `json:"attempts"`
+	LastAttempt    int64  `json:"last_attempt_at"`
+	SwappedAt      int64  `json:"swapped_at"`
+	SwappedTo      string `json:"swapped_to"`
+	ResetAt        int64  `json:"reset_at"`
 	// SourceAccount is which account was exhausted: the job's bound account
 	// email at the moment the hit OPENED, empty for a cell that was running
 	// unbound on the machine's main login. Written on a fresh record only —
@@ -524,6 +532,7 @@ func limitHitFolds(cur LimitHit, errorType string) bool {
 func mergeLimitHitDelivery(cur LimitHit, errorType, details, sessionID, agentID string, now time.Time) LimitHit {
 	if limitHitFolds(cur, errorType) {
 		cur.Deliveries++
+		cur.LastDeliveryAt = now.Unix()
 		curReset := parseLimitReset(cur.Details, time.Unix(cur.At, 0)) != 0
 		newReset := parseLimitReset(details, time.Unix(cur.At, 0)) != 0
 		gainsReset := !curReset && newReset
@@ -541,12 +550,13 @@ func mergeLimitHitDelivery(cur LimitHit, errorType, details, sessionID, agentID 
 		return cur
 	}
 	fresh := LimitHit{
-		Error:      errorType,
-		Details:    details,
-		At:         now.Unix(),
-		SessionID:  sessionID,
-		AgentID:    agentID,
-		Deliveries: 1,
+		Error:          errorType,
+		Details:        details,
+		At:             now.Unix(),
+		SessionID:      sessionID,
+		AgentID:        agentID,
+		Deliveries:     1,
+		LastDeliveryAt: now.Unix(),
 	}
 	if cur.SwappedAt != 0 && cur.HandledAt == 0 {
 		fresh.SwappedAt = cur.SwappedAt

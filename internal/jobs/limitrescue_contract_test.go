@@ -592,12 +592,13 @@ func TestContractLimitRecordFreshRecord(t *testing.T) {
 		t.Fatalf("RecordLimitHit on a missing key: %v", err)
 	}
 	want := LimitHit{
-		Error:      "rate_limit",
-		Details:    "hit your session limit",
-		At:         now.Unix(),
-		SessionID:  "s1",
-		AgentID:    "a1",
-		Deliveries: 1,
+		Error:          "rate_limit",
+		Details:        "hit your session limit",
+		At:             now.Unix(),
+		SessionID:      "s1",
+		AgentID:        "a1",
+		Deliveries:     1,
+		LastDeliveryAt: now.Unix(),
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("fresh record = %+v, want %+v", got, want)
@@ -662,12 +663,13 @@ func TestContractLimitRecordFoldsLateSameErrorDeliveries(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := LimitHit{
-		Error:      "rate_limit",
-		Details:    "old",
-		At:         first.Unix(),
-		SessionID:  "s-old",
-		AgentID:    "a-old",
-		Deliveries: 2,
+		Error:          "rate_limit",
+		Details:        "old",
+		At:             first.Unix(),
+		SessionID:      "s-old",
+		AgentID:        "a-old",
+		Deliveries:     2,
+		LastDeliveryAt: later.Unix(),
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("late same-error delivery = %+v, want a fold onto the unresolved hit %+v", got, want)
@@ -739,11 +741,12 @@ func TestContractLimitRecordStartsFreshOnAResolvedRecord(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := LimitHit{
-		Error:      "rate_limit",
-		Details:    "new",
-		At:         next.Unix(),
-		SessionID:  "s-new",
-		Deliveries: 1,
+		Error:          "rate_limit",
+		Details:        "new",
+		At:             next.Unix(),
+		SessionID:      "s-new",
+		Deliveries:     1,
+		LastDeliveryAt: next.Unix(),
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("record after a resolved one = %+v, want %+v (every counter reset)", got, want)
@@ -1787,8 +1790,9 @@ func TestContractLimitRecordFoldPreservesTheSwapWatermark(t *testing.T) {
 	}
 	want := swapped
 	want.Deliveries = swapped.Deliveries + 1
+	want.LastDeliveryAt = first.Add(30 * time.Second).Unix()
 	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("the fold changed more than Deliveries:\n got  %+v\n want %+v", got, want)
+		t.Fatalf("the fold changed more than Deliveries and the delivery stamp:\n got  %+v\n want %+v", got, want)
 	}
 
 	// ...and the decision that follows is still the resume it was owed, not a

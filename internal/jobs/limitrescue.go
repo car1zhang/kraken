@@ -3,6 +3,7 @@ package jobs
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -85,6 +86,15 @@ const (
 	rescueResume       limitRescueAction = "resume"
 	rescueParkManual   limitRescueAction = "park-manual"
 	rescueParkNoTarget limitRescueAction = "park-no-target"
+	// rescueLeaveRevived is the answer when the pane has ALREADY taken a
+	// real turn since the hit's latest evidence — carl typed into it, logged
+	// in, switched its model, or a bump landed — so the latch every arm
+	// exists to clear is gone, and a kill would only cost the conversation,
+	// every in-process teammate, an in-flight tool call and a cold re-prime.
+	// The hit resolves without touching the pane. It applies on every arm:
+	// before a rebind, between a landed rebind and its resume, and on the
+	// reset re-arm alike.
+	rescueLeaveRevived limitRescueAction = "leave-revived"
 )
 
 const (
@@ -1464,6 +1474,12 @@ func limitRescueApply(hit LimitHit, action limitRescueAction, outcome, toEmail s
 		} else {
 			hit.Outcome = "resumed-after-reset"
 		}
+	case rescueLeaveRevived:
+		// No counter touched either: nothing was attempted, the pane did the
+		// resuming itself. The outcome word says so, so a later reader does
+		// not mistake it for a resume kraken performed.
+		hit.HandledAt = now.Unix()
+		hit.Outcome = "resumed-by-hand"
 	case rescueParkManual:
 		// No counter touched: carl pinned the account deliberately, so there
 		// is nothing here to retry and nothing to count.
@@ -1488,6 +1504,144 @@ func limitRescueApply(hit LimitHit, action limitRescueAction, outcome, toEmail s
 		}
 	}
 	return hit
+}
+
+// hitEvidenceAt is the moment of the hit's LATEST evidence: the most recent
+// delivery folded onto it when the record carries that stamp, else the first
+// delivery's At (a record written before LastDeliveryAt existed). It is the
+// cut the revived guard measures a real turn against — never At alone, since
+// a pane that worked after the first banner and then hit the window again
+// has a later delivery saying so.
+func hitEvidenceAt(hit LimitHit) int64 {
+	if hit.LastDeliveryAt > hit.At {
+		return hit.LastDeliveryAt
+	}
+	return hit.At
+}
+
+// revivedSinceHit is the pass's guard against killing a zeus that is no
+// longer stuck, kept pure so the wiring is testable without a tmux snapshot.
+// It applies on EVERY arm — before a rebind, between a landed rebind and
+// its resume, and on the reset re-arm — because the thing each arm clears is
+// the pane's client-side limit latch, and a pane that has taken a real turn
+// since the hit's latest evidence has no latch left to clear: carl's own
+// `/login`, `/model` or `continue`, a board retry, a reactivation's fresh
+// process. Killing it then costs the conversation's context, every
+// in-process teammate, whatever tool call was in flight, and a cold re-prime
+// of the whole prompt, for nothing. On the rebind arm the pane keeps running
+// on the account it resolved at startup while the row now names the new
+// slot; that bookkeeping drift is cheaper than the kill, and the next spawn
+// uses the row.
+//
+// The status half (the pane running now) holds for every agent; the FILE
+// half is claude-only, because a codex rollout carries no `type:"assistant"`
+// records for it to read — so a codex zeus revived by hand and idle at the
+// tick is still resumed as before, a recorded gap rather than a silent one.
+func revivedSinceHit(hit LimitHit, agent string, zeus *core.Peer) bool {
+	if zeus == nil {
+		return false
+	}
+	if zeus.Status == "running" {
+		return true
+	}
+	return agent != "codex" && zeusRanSince(zeus, hitEvidenceAt(hit))
+}
+
+// zeusRanSince reports whether the pane took a REAL turn after `since` (unix
+// seconds): it is running now, or its transcript holds an assistant record
+// stamped after that moment whose model is not Claude Code's "<synthetic>" —
+// the model a latched pane stamps on the banner it writes instead of calling
+// the API, which is why a bare "transcript written since" cannot be the test
+// here (a keystroke into a still-latched pane appends exactly such a record).
+// "question" is deliberately not accepted on its own: the status alone is not
+// evidence of a turn, and a pane that reached a dialog by running one has the
+// record the transcript half finds.
+func zeusRanSince(p *core.Peer, since int64) bool {
+	if p == nil || since == 0 {
+		return false
+	}
+	if p.Status == "running" {
+		return true
+	}
+	path, err := core.ReadTranscriptPath(p)
+	if err != nil {
+		return false
+	}
+	return transcriptTurnSince(path, since)
+}
+
+// transcriptTurnTail bounds how much of a transcript transcriptTurnSince
+// reads: the records that can answer "did a turn run after the cut" are at
+// the end, and a long session's file is tens of MB.
+const transcriptTurnTail = 2 << 20
+
+// transcriptTurnSince is zeusRanSince's file half: a non-synthetic assistant
+// record with a timestamp after `since`, found in the file's last
+// transcriptTurnTail bytes. A record that cannot be decoded, carries no
+// timestamp, or is the partial line a tail read starts inside is skipped.
+func transcriptTurnSince(path string, since int64) bool {
+	f, err := os.Open(path)
+	if err != nil {
+		return false
+	}
+	defer f.Close()
+	fi, err := f.Stat()
+	if err != nil {
+		return false
+	}
+	start := int64(0)
+	if fi.Size() > transcriptTurnTail {
+		start = fi.Size() - transcriptTurnTail
+	}
+	buf := make([]byte, fi.Size()-start)
+	if _, err := f.ReadAt(buf, start); err != nil && err != io.EOF {
+		return false
+	}
+	lines := strings.Split(string(buf), "\n")
+	if start > 0 && len(lines) > 0 {
+		lines = lines[1:] // the tail began inside a record
+	}
+	cutoff := time.Unix(since, 0)
+	for _, line := range lines {
+		if !strings.Contains(line, "\"assistant\"") {
+			continue
+		}
+		var rec struct {
+			Type      string `json:"type"`
+			Timestamp string `json:"timestamp"`
+			Message   struct {
+				Model string `json:"model"`
+			} `json:"message"`
+		}
+		if err := json.Unmarshal([]byte(line), &rec); err != nil || rec.Type != "assistant" {
+			continue
+		}
+		ts, err := time.Parse(time.RFC3339Nano, rec.Timestamp)
+		if err != nil || !ts.After(cutoff) {
+			continue
+		}
+		if rec.Message.Model == "" || rec.Message.Model == "<synthetic>" {
+			continue
+		}
+		return true
+	}
+	return false
+}
+
+// limitHitReactivated is what a reactivation does to the job's stored hit:
+// the process that latched on the limit is gone and a fresh one has come up,
+// so an UNRESOLVED record is closed as "reactivated" rather than left for the
+// pass to act on against the new pane — left open, its parked reset re-arm
+// has killed a zeus seconds after the board brought it back. Pure: the
+// caller reads, applies, and saves. An empty or already-resolved record is
+// returned unchanged with false.
+func limitHitReactivated(hit LimitHit, now time.Time) (LimitHit, bool) {
+	if hit.At == 0 || hit.HandledAt != 0 {
+		return hit, false
+	}
+	hit.HandledAt = now.Unix()
+	hit.Outcome = "reactivated"
+	return hit, true
 }
 
 // mergeLimitRescueState folds the rescue's six owned fields onto whatever is
@@ -1705,6 +1859,23 @@ func (d *daemonState) limitRescue(j *Job, all []*core.Peer, live map[string]bool
 	// window to fall off either, and its hits belong to the chain below.
 	if j.Agent != "codex" && d.tryFableFallback(limitHitKey(j.ID), j.Slug, zeusLaunchedModel(j), func() string { return cellAccountEmail(j) }, hit,
 		func() *core.Peer { return CellZeus(j, all) }, now) {
+		return
+	}
+	// A pane that has taken a real turn since the hit's latest evidence has
+	// no latch left to clear, on any arm: resolve the hit and touch nothing.
+	// This sits AFTER the Fable fallback (whose own continue prompt is the
+	// turn it confirms on, and which resolves its hit itself) and BEFORE the
+	// decide chain, so neither a rebind nor a resume is ever started against
+	// a zeus that is already working — the three revivals this covers are
+	// carl's own keystrokes into the pane (`/login`, `/model`, `continue`),
+	// the board's retry, and a reactivation that brought a fresh process up
+	// under a stale record.
+	if revivedSinceHit(hit, j.Agent, CellZeus(j, all)) {
+		hit = limitRescueApply(hit, rescueLeaveRevived, "", "", now)
+		if err := saveLimitRescueState(j, hit); err != nil {
+			dlogErr("%s: persist limit-hit record failed: %v", j.Slug, err)
+		}
+		dlogEvent("info", "limit-rescue-skipped", "%s: zeus already took a real turn since the hit — left alone, not rebound or killed", j.Slug)
 		return
 	}
 	mode := rescueMode(j)

@@ -2977,6 +2977,20 @@ func ReactivateJob(j *Job, session, message string) error {
 	// folder trust normally persists — but a fresh machine or cleared
 	// config would block startup on the dialog just like a first start
 	acceptTrustPrompts(sess)
+	// The process that may have latched on a usage limit is gone and a fresh
+	// one is up, so an unresolved hit on this job's record is closed here
+	// rather than left for the rescue pass to act on against the new pane
+	// (limitHitReactivated). Best-effort: a failed write costs one wrong
+	// kill at most, and it is logged.
+	if hit := ReadLimitHit(j); hit.At != 0 {
+		if closed, ok := limitHitReactivated(hit, time.Now()); ok {
+			if err := saveLimitRescueState(j, closed); err != nil {
+				dlogErr("%s: closing the previous process' limit hit on reactivate failed: %v", j.Slug, err)
+			} else {
+				dlogEvent("info", "limit-rescue-skipped", "%s: reactivated — the previous process' unresolved limit hit is closed", j.Slug)
+			}
+		}
+	}
 	// a reactivated job was "not truly finished" — drop the recorded outcome
 	// along with the state flip so it reads like it was never completed
 	if err := WriteJobFields(j, "state", "working", "outcome", ""); err != nil {
