@@ -711,8 +711,20 @@ func runMMFlag(args []string, session func() (string, bool)) (string, error) {
 		ID    int64  `json:"id"`
 		State string `json:"state"`
 	}
-	_ = json.Unmarshal(raw, &resp)
-	return fmt.Sprintf("flagged mm #%d (%s)", resp.ID, resp.State), nil
+	if err := json.Unmarshal(raw, &resp); err != nil || resp.ID == 0 {
+		// A 200 whose body carries no flag id would otherwise echo
+		// `flag 0 (…)`, and 0 reads as a real id to the lead's next command.
+		return "", fmt.Errorf("mm flag: the server answered without a flag id (%s)", strings.TrimSpace(string(raw)))
+	}
+	return mmFlagEcho(resp.ID, resp.State, itemID), nil
+}
+
+// mmFlagEcho is the flag verb's success line. It names the FLAG id and the
+// ITEM id apart, in that order: the earlier form `flagged mm #<n>` printed
+// the flag's id in item notation, which reads as the item's id and invites a
+// `raise` on the wrong number.
+func mmFlagEcho(flagID int64, state string, itemID int64) string {
+	return fmt.Sprintf("flag %d (%s) on mm #%d", flagID, state, itemID)
 }
 
 // runMMFlagStep is `flag raise|dismiss <id> --note "<text>"`: the lead's move
