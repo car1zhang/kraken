@@ -280,6 +280,12 @@ var limitResetRe = regexp.MustCompile(`(?i)resets\s+(\d{1,2})(?::(\d{2}))?\s*(am
 // completely — see parseLimitReset.
 var limitResetsAtRe = regexp.MustCompile(`resets_at=(\d+)`)
 
+// weeklyBannerRe names the one banner family whose stated reset is
+// legitimately far away — "You've hit your weekly limit · resets 6am (…)"
+// reopens at that wall time on some day up to a week out — and so the one
+// family parseLimitReset's staleness cap must not read as already due.
+var weeklyBannerRe = regexp.MustCompile(`(?i)weekly limit`)
+
 // codexLimitReason is CellHealth's codex classifier: the usage-limit reason
 // for a codex zeus whose rollout says its account is exhausted, and "" for
 // every other state (no such record, an unreadable file, a record whose
@@ -480,15 +486,27 @@ func parseLimitReset(details string, hitAt time.Time) int64 {
 	// the hit time itself makes the stale case already-due: the decide
 	// chain's settle margin then releases the resume on the next tick, which
 	// is the right action for a window that reopened before kraken ever
-	// read the banner. The cap also bounds the fall-back DST roll (once a
-	// year, same shape as a stale banner). Spring-forward names a wall time
-	// that does not exist; Go documents time.Date's choice there as
-	// unspecified, and this toolchain measures it resolving an hour EARLY —
-	// the resume then fails on the still-closed window and resolves the hit,
-	// but the failed turn writes a fresh banner and a fresh, correctly
-	// anchored record within a tick or two, so the cost is one wasted turn
-	// once a year, not a strand.
-	if candidate.Sub(at) > limitResetMaxWait {
+	// read the banner. For a session banner the cap also bounds the
+	// fall-back DST roll (once a year, same shape as a stale banner).
+	// Spring-forward names a wall time that does not exist; Go documents
+	// time.Date's choice there as unspecified, and this toolchain measures
+	// it resolving an hour EARLY — the resume then fails on the still-closed
+	// window and resolves the hit, but the failed turn writes a fresh banner
+	// and a fresh, correctly anchored record within a tick or two, so the
+	// cost is one wasted turn once a year, not a strand.
+	//
+	// The cap is a SESSION-banner rule, so a banner naming the weekly window
+	// is exempt (weeklyBannerRe): its reset is days out by design, and a
+	// weekly banner read as already-due would be resumed every settle window
+	// into the same exhausted window. The exemption trades that loop for a
+	// bounded park: a weekly banner first noticed AFTER its stated time has
+	// passed (a daemon down or a Mac asleep across the reset) rolls to the
+	// next day and parks the cell up to 24h on a window that is already
+	// open; a zone the banner names that LoadLocation cannot resolve falls
+	// back to the machine's and is off by the zone difference, uncapped.
+	// Both are rarer than the loop and end at the next occurrence of the
+	// stated time.
+	if candidate.Sub(at) > limitResetMaxWait && !weeklyBannerRe.MatchString(details) {
 		return at.Unix()
 	}
 	return candidate.Unix()
