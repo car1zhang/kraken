@@ -280,6 +280,19 @@ var limitResetRe = regexp.MustCompile(`(?i)resets\s+(\d{1,2})(?::(\d{2}))?\s*(am
 // completely — see parseLimitReset.
 var limitResetsAtRe = regexp.MustCompile(`resets_at=(\d+)`)
 
+// weeklyBannerRe names the one banner family whose stated reset is
+// legitimately far away: "You've hit your weekly limit · resets 6am (…)"
+// reopens at that wall time on some day up to a week out, so the staleness
+// cap below — whose premise is a SESSION banner naming a reset at most one
+// window (~5h) ahead — reads every weekly banner noticed more than six hours
+// before its reset as already due. The consequence measured on a standing
+// agent was a kill-and-respawn every settle window into the same exhausted
+// window, each respawn meeting the identical banner. A weekly banner keeps
+// its rolled target instead; when the real reset is days out the first
+// resume after the stated time fails once, writes a fresh banner, and parks
+// a day at a time rather than every half hour.
+var weeklyBannerRe = regexp.MustCompile(`(?i)weekly limit`)
+
 // codexLimitReason is CellHealth's codex classifier: the usage-limit reason
 // for a codex zeus whose rollout says its account is exhausted, and "" for
 // every other state (no such record, an unreadable file, a record whose
@@ -488,7 +501,12 @@ func parseLimitReset(details string, hitAt time.Time) int64 {
 	// but the failed turn writes a fresh banner and a fresh, correctly
 	// anchored record within a tick or two, so the cost is one wasted turn
 	// once a year, not a strand.
-	if candidate.Sub(at) > limitResetMaxWait {
+	//
+	// The cap is a SESSION-banner rule, so a banner naming the weekly window
+	// is exempt (weeklyBannerRe): its reset is days out by design, and
+	// reading it as already-due is what sent a standing agent round a
+	// kill-and-respawn loop against a window that had not moved.
+	if candidate.Sub(at) > limitResetMaxWait && !weeklyBannerRe.MatchString(details) {
 		return at.Unix()
 	}
 	return candidate.Unix()
