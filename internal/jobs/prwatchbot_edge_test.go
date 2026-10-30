@@ -46,11 +46,36 @@ func TestEdgeReviewNeedsAttention(t *testing.T) {
 		{"dismissed, empty", "DISMISSED", "", true},
 		{"pending, empty", "PENDING", "", true},
 	}
+	// Amended at the join (review round 1, contract defect): an EMPTY body
+	// is a bare approval only from a `[bot]` login, so the table runs under
+	// one; the human-login boundaries follow.
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			r := edgePRWReview("2026-02-01T00:00:00Z", "bot-reviewer", c.state, c.body)
+			r := edgePRWReview("2026-02-01T00:00:00Z", "bot-reviewer[bot]", c.state, c.body)
 			if got := reviewNeedsAttention(r); got != c.want {
 				t.Errorf("reviewNeedsAttention(state=%q, body=%q) = %v, want %v", c.state, c.body, got, c.want)
+			}
+		})
+	}
+	human := []struct {
+		name  string
+		login string
+		body  string
+		want  bool
+	}{
+		{"human, empty body", "alice", "", true},
+		{"human, whitespace body", "alice", " \n ", true},
+		{"human, Auto-approved template", "alice", "Auto-approved", false},
+		{"login ending in bot without brackets, empty body", "nightbot", "", true},
+		{"login with [bot] suffix, empty body", "deploy[bot]", "", false},
+		{"login with [bot] suffix, real text", "deploy[bot]", "one nit", true},
+		{"empty login, empty body", "", "", true},
+	}
+	for _, c := range human {
+		t.Run(c.name, func(t *testing.T) {
+			r := edgePRWReview("2026-02-01T00:00:00Z", c.login, "APPROVED", c.body)
+			if got := reviewNeedsAttention(r); got != c.want {
+				t.Errorf("reviewNeedsAttention(login=%q, body=%q) = %v, want %v", c.login, c.body, got, c.want)
 			}
 		})
 	}
@@ -66,20 +91,20 @@ func TestEdgeLatestActivityAtSkipsBareApprovals(t *testing.T) {
 	}{
 		{
 			name:    "only a bare approval",
-			reviews: []prActivityReview{edgePRWReview("2026-02-03T00:00:00Z", "bot-reviewer", "APPROVED", "")},
+			reviews: []prActivityReview{edgePRWReview("2026-02-03T00:00:00Z", "bot-reviewer[bot]", "APPROVED", "")},
 			want:    "",
 		},
 		{
 			name: "only bare approvals, from anyone",
 			reviews: []prActivityReview{
 				edgePRWReview("2026-02-03T00:00:00Z", "bot-reviewer", "APPROVED", "Auto-approved"),
-				edgePRWReview("2026-02-04T00:00:00Z", "alice", "APPROVED", "  "),
+				edgePRWReview("2026-02-04T00:00:00Z", "deploy[bot]", "APPROVED", "  "),
 			},
 			want: "",
 		},
 		{
 			name:     "bare approval skipped with an empty PR author too",
-			reviews:  []prActivityReview{edgePRWReview("2026-02-05T00:00:00Z", "alice", "APPROVED", "")},
+			reviews:  []prActivityReview{edgePRWReview("2026-02-05T00:00:00Z", "deploy[bot]", "APPROVED", "")},
 			prAuthor: "",
 			want:     "",
 		},
@@ -93,7 +118,7 @@ func TestEdgeLatestActivityAtSkipsBareApprovals(t *testing.T) {
 			name: "newest bare approval does not beat an older real review",
 			reviews: []prActivityReview{
 				edgePRWReview("2026-02-02T00:00:00Z", "alice", "CHANGES_REQUESTED", "please fix"),
-				edgePRWReview("2026-02-09T00:00:00Z", "bot-reviewer", "APPROVED", ""),
+				edgePRWReview("2026-02-09T00:00:00Z", "bot-reviewer[bot]", "APPROVED", ""),
 			},
 			want: "2026-02-02T00:00:00Z",
 		},
@@ -124,7 +149,7 @@ func TestEdgeLatestActivityAtSkipsBareApprovals(t *testing.T) {
 			comments: []prActivityComment{
 				{CreatedAt: "2026-02-08T00:00:00Z", ViewerDidAuthor: true},
 			},
-			reviews: []prActivityReview{edgePRWReview("2026-02-09T00:00:00Z", "bot-reviewer", "APPROVED", "")},
+			reviews: []prActivityReview{edgePRWReview("2026-02-09T00:00:00Z", "bot-reviewer[bot]", "APPROVED", "")},
 			want:    "",
 		},
 	}

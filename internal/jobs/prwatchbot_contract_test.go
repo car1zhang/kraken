@@ -55,14 +55,29 @@ func TestContractPRBotReviewNeedsAttention(t *testing.T) {
 		{"empty state, empty body", "", "", true},
 		{"empty state, Auto-approved body", "", "Auto-approved", true},
 	}
+	// Amended at the join (review round 1, contract defect): an EMPTY body
+	// is a bare approval only from a `[bot]` login, so the table runs under
+	// one; a human's empty-bodied approval is checked separately below.
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			r := contractPRBotReview("2026-04-02T10:00:00Z", "bot-reviewer", c.state, c.body)
+			r := contractPRBotReview("2026-04-02T10:00:00Z", "bot-reviewer[bot]", c.state, c.body)
 			if got := reviewNeedsAttention(r); got != c.want {
 				t.Errorf("reviewNeedsAttention(state=%q body=%q) = %v, want %v", c.state, c.body, got, c.want)
 			}
 		})
 	}
+	t.Run("human approval with an empty body still needs attention", func(t *testing.T) {
+		r := contractPRBotReview("2026-04-02T10:00:00Z", "alice", "APPROVED", "")
+		if !reviewNeedsAttention(r) {
+			t.Error("a human's empty-bodied approval was skipped; inline review comments ride no other signal")
+		}
+	})
+	t.Run("human Auto-approved body is still the template", func(t *testing.T) {
+		r := contractPRBotReview("2026-04-02T10:00:00Z", "alice", "APPROVED", "Auto-approved: role admin")
+		if reviewNeedsAttention(r) {
+			t.Error("the Auto-approved template counted as attention")
+		}
+	})
 }
 
 func TestContractPRBotLatestActivityAt(t *testing.T) {
@@ -77,7 +92,7 @@ func TestContractPRBotLatestActivityAt(t *testing.T) {
 			name: "bot bare approval newest never advances",
 			reviews: []prActivityReview{
 				contractPRBotReview("2026-04-01T10:00:00Z", "alice", "COMMENTED", "nit on line 3"),
-				contractPRBotReview("2026-04-03T10:00:00Z", "bot-reviewer", "APPROVED", ""),
+				contractPRBotReview("2026-04-03T10:00:00Z", "bot-reviewer[bot]", "APPROVED", ""),
 			},
 			prAuthor: "zeus-author",
 			want:     "2026-04-01T10:00:00Z",
@@ -91,13 +106,15 @@ func TestContractPRBotLatestActivityAt(t *testing.T) {
 			want:     "",
 		},
 		{
-			name: "human bare approval never advances either (whoever wrote it)",
+			// amended at the join (review round 1): a human's empty-bodied
+			// approval may carry inline nits gh's comment list never shows
+			name: "human bare approval still advances",
 			reviews: []prActivityReview{
 				contractPRBotReview("2026-04-03T10:00:00Z", "alice", "APPROVED", ""),
 			},
 			comments: []prActivityComment{{CreatedAt: "2026-04-02T09:00:00Z"}},
 			prAuthor: "zeus-author",
-			want:     "2026-04-02T09:00:00Z",
+			want:     "2026-04-03T10:00:00Z",
 		},
 		{
 			name: "approval with real text advances",

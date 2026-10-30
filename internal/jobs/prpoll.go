@@ -156,28 +156,36 @@ type prActivityReview struct {
 	} `json:"author"`
 	// State and Body decide whether the review is anything to ADDRESS. gh
 	// serialises State as APPROVED, CHANGES_REQUESTED, COMMENTED or
-	// DISMISSED; a bare approval — APPROVED with no body, or with the
-	// org bot's "Auto-approved: …" template — asks nothing of the author,
-	// yet counted as activity it bumped zeus with an "address it" notice on
-	// every monolith PR the moment it opened, and the pane spent a turn
-	// discovering there was nothing to address.
+	// DISMISSED. A BOT's bare approval — an `Auto-approved: …` template
+	// body, or an empty body from a `[bot]` login — asks nothing of the
+	// author; counted as activity it would bump zeus with an "address it"
+	// notice the moment a PR opens, for a turn that finds nothing to
+	// address.
 	State string `json:"state"`
 	Body  string `json:"body"`
 }
 
 // reviewNeedsAttention is the one test for whether a review is activity the
 // PR's author has to act on. Pure, so the bare-approval skip is
-// table-testable. Everything is attention except an APPROVED review whose
-// body is empty or the auto-approve template; an approval that carries any
-// other text may hold a request ("approving, but please …"), so it still
-// counts, and an unknown or empty state fails OPEN — a review gh serialises
-// in a shape this code has not seen must bump rather than vanish.
+// table-testable. Everything is attention except a bot's bare approval: an
+// APPROVED review whose trimmed body starts with the auto-approve template
+// `Auto-approved`, or whose body is empty and whose author login carries
+// GitHub's `[bot]` suffix. A HUMAN's empty-bodied approval still counts,
+// because `gh pr view --json comments` carries no inline review comments
+// and the review's timestamp is the only sign an approve-with-nits left
+// them; an approval carrying any other text may hold a request, so it
+// counts too; and an unknown or empty state fails OPEN — a review gh
+// serialises in a shape this code has not seen must bump rather than
+// vanish.
 func reviewNeedsAttention(r prActivityReview) bool {
 	if r.State != "APPROVED" {
 		return true
 	}
 	body := strings.TrimSpace(r.Body)
-	return body != "" && !strings.HasPrefix(body, "Auto-approved")
+	if strings.HasPrefix(body, "Auto-approved") {
+		return false
+	}
+	return body != "" || !strings.HasSuffix(r.Author.Login, "[bot]")
 }
 
 // latestActivityAt is watchPRs' newest-comment-or-review computation: the
