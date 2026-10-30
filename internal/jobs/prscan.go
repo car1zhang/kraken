@@ -77,6 +77,22 @@ import (
 // `gh pr create` invocations use single spaces, so this costs nothing.
 var ghPrCreatePattern = regexp.MustCompile(`(^|[\n;&|(]|&&|\|\|)\s*(\w+=(\$\((?:[^()]|\([^()]*\))*\)|"[^"]*"|'[^']*'|\S+)\s+)*gh pr create\b`)
 
+// ghPrCreateInvoked is the ONE answer to "did this Bash command run gh pr
+// create", shared by the transcript scanner below and the pr-hook's gate
+// (prhook.go): ghPrCreatePattern applied after every heredoc BODY and every
+// quoted span has been blanked, the same preprocessing bash-lint uses.
+// Matched over the raw text, the pattern was quote-blind: a grep whose
+// regex ARGUMENT contained `|gh pr create`, or a script fed through a
+// heredoc that merely mentioned the command, satisfied it, and the command's
+// stdout — a transcript dump carrying another job's PR URL verbatim — was
+// then read as that job's create. Blanking keeps the quote characters
+// themselves, so an env assignment whose value is a quoted string before the
+// command (`GH_TOKEN="…" gh pr create`) still matches through the pattern's
+// quoted-value alternative.
+func ghPrCreateInvoked(cmd string) bool {
+	return ghPrCreatePattern.MatchString(stripQuotedAndCond(stripHeredocBodies(cmd)))
+}
+
 // prScanLine is the tiny slice of a transcript jsonl line scanTranscriptPRURLs
 // cares about: the message's content blocks (tool_use / tool_result), and the
 // top-level toolUseResult field a tool_result line carries alongside its
@@ -209,7 +225,7 @@ func scanTranscriptPRURLs(path, prefix string) []string {
 			}
 			switch b.Type {
 			case "tool_use":
-				if b.Name == "Bash" && b.ID != "" && ghPrCreatePattern.MatchString(b.Input.Command) {
+				if b.Name == "Bash" && b.ID != "" && ghPrCreateInvoked(b.Input.Command) {
 					pending[b.ID] = true
 				}
 			case "tool_result":
