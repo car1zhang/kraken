@@ -254,6 +254,16 @@ func AskArgv(j *Job, t store.Thread, from ThreadOrigin, resume bool) (argv []str
 		"--permission-mode", "default", "--permission-prompts", "none",
 		"--system-prompt-snapshot", "off",
 		"--tools", tools}
+	if tools != "" {
+		// `--tools` only ROSTERS a tool; under `--permission-mode default`
+		// with `--permission-prompts none` any tool that needs approval is
+		// then denied automatically, and the web pair does — so the owner's
+		// thread advertised WebFetch and WebSearch and had every call refused
+		// ("this session has no approval surface"). `--allowedTools` is the
+		// pre-grant, over exactly the same list, so the read-only set stays
+		// the one constant and a thread with no tools gets no grant either.
+		argv = append(argv, "--allowedTools", tools)
+	}
 	argv = append(argv, core.ModelArgs(resolved)...)
 	argv = append(argv, "--name", ThreadAgentName(j, t.TID), "--append-system-prompt", askThreadBrief(j, t))
 	if resume {
