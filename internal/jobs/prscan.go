@@ -102,9 +102,9 @@ func ghPrCreateInvoked(cmd string) bool {
 // `(` is the separator the pattern accepts) all survive. A backslash escapes
 // the next byte outside single quotes. A `#` opens a comment only in word
 // position (input start, or after whitespace, `;`, `&`, `|` or `(`), and the
-// comment runs to the end of its line: blanked before quote scanning would
-// see it, an apostrophe inside one cannot open a span that swallows the next
-// line's real command. An unterminated quote still runs to the end of the
+// comment runs to the end of its line: the `#` is handled before any quote
+// inside the comment is reached, so an apostrophe in one cannot open a span
+// that swallows the next line's real command. An unterminated quote still runs to the end of the
 // input — that text is not a shell command the pattern should read.
 func blankQuotedSpans(s string) string {
 	b := []byte(s)
@@ -152,10 +152,12 @@ func blankQuotedSpans(s string) string {
 					continue
 				}
 				if b[j] == '$' && j+1 < n && b[j+1] == '(' {
-					// Keep the whole substitution, nesting included: its
-					// text is a command the pattern may legitimately match.
-					// Blank the run before it, find its closing `)`, and
-					// resume blanking after that.
+					// Keep the substitution as a COMMAND, nesting included:
+					// its text is shell the pattern may legitimately match.
+					// Blank the run before it, find its closing `)`, run
+					// this same pass over its interior (so a quoted mention
+					// of the command inside it is blanked like any other),
+					// and resume blanking after it.
 					blank(seg, j)
 					depth := 0
 					k := j + 1
@@ -168,6 +170,9 @@ func blankQuotedSpans(s string) string {
 								break
 							}
 						}
+					}
+					if inner := blankQuotedSpans(string(b[j+2 : min(k, n)])); inner != "" {
+						copy(out[j+2:], inner)
 					}
 					j = k
 					seg = k + 1

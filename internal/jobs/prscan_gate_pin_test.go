@@ -23,6 +23,10 @@ func TestGhPrCreateInvokedKeepsSubstitutionsAndComments(t *testing.T) {
 		{"# gh pr create\necho done", false},
 		{`echo "a#b" && grep -E 'x|gh pr create' f`, false},
 		{`echo "$(gh pr view 1)" && echo 'gh pr create'`, false},
+		// a quoted mention INSIDE a kept substitution is blanked too
+		{`echo "$(grep -E 'a|gh pr create' f.txt)"`, false},
+		{`x="$(echo '|gh pr create')"`, false},
+		{`"$(echo "$(gh pr create)")"`, true},
 	}
 	for _, c := range cases {
 		if got := ghPrCreateInvoked(c.cmd); got != c.want {
