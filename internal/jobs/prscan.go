@@ -77,6 +77,114 @@ import (
 // `gh pr create` invocations use single spaces, so this costs nothing.
 var ghPrCreatePattern = regexp.MustCompile(`(^|[\n;&|(]|&&|\|\|)\s*(\w+=(\$\((?:[^()]|\([^()]*\))*\)|"[^"]*"|'[^']*'|\S+)\s+)*gh pr create\b`)
 
+// ghPrCreateInvoked is the ONE answer to "did this Bash command run gh pr
+// create", shared by the transcript scanner below and the pr-hook's gate
+// (prhook.go): ghPrCreatePattern applied after every heredoc BODY and every
+// quoted span has been blanked, the same preprocessing bash-lint uses.
+// Matched over the raw text, the pattern is quote-blind: a grep whose regex
+// ARGUMENT contains `|gh pr create`, or a script fed through a heredoc that
+// merely mentions the command, would satisfy it, and the command's stdout —
+// a transcript dump carrying another job's PR URL verbatim — would then be
+// read as that job's create. Blanking keeps the quote characters
+// themselves, so an env assignment whose value is a quoted string before the
+// command (`GH_TOKEN="…" gh pr create`) still matches through the pattern's
+// quoted-value alternative — which is why this uses blankQuotedSpans rather
+// than bash-lint's stripQuotedAndCond, whose blanking takes the quotes too.
+func ghPrCreateInvoked(cmd string) bool {
+	return ghPrCreatePattern.MatchString(blankQuotedSpans(stripHeredocBodies(cmd)))
+}
+
+// blankQuotedSpans replaces the CONTENTS of every single- and double-quoted
+// span, and every `#` comment, with spaces — keeping the quote characters,
+// every newline, and any `$(…)` command substitution inside a double-quoted
+// span — so token positions, the pattern's quoted-value alternative, and a
+// create run inside a substitution (`URL="$(gh pr create --fill)"`, where the
+// `(` is the separator the pattern accepts) all survive. A backslash escapes
+// the next byte outside single quotes. A `#` opens a comment only in word
+// position (input start, or after whitespace, `;`, `&`, `|` or `(`), and the
+// comment runs to the end of its line: the `#` is handled before any quote
+// inside the comment is reached, so an apostrophe in one cannot open a span
+// that swallows the next line's real command. An unterminated quote still runs to the end of the
+// input — that text is not a shell command the pattern should read.
+func blankQuotedSpans(s string) string {
+	b := []byte(s)
+	n := len(b)
+	out := make([]byte, n)
+	copy(out, b)
+	blank := func(from, to int) {
+		for k := from; k < to && k < n; k++ {
+			if b[k] != '\n' {
+				out[k] = ' '
+			}
+		}
+	}
+	wordStart := func(i int) bool {
+		if i == 0 {
+			return true
+		}
+		switch b[i-1] {
+		case ' ', '\t', '\n', ';', '&', '|', '(':
+			return true
+		}
+		return false
+	}
+	for i := 0; i < n; i++ {
+		switch {
+		case b[i] == '\\' && i+1 < n:
+			i++
+		case b[i] == '#' && wordStart(i):
+			j := i
+			for j < n && b[j] != '\n' {
+				j++
+			}
+			blank(i, j)
+			i = j
+		case b[i] == '\'' || b[i] == '"':
+			q := b[i]
+			j := i + 1
+			seg := j // start of the run still to be blanked
+			for ; j < n && b[j] != q; j++ {
+				if q != '"' {
+					continue
+				}
+				if b[j] == '\\' {
+					j++
+					continue
+				}
+				if b[j] == '$' && j+1 < n && b[j+1] == '(' {
+					// Keep the substitution as a COMMAND, nesting included:
+					// its text is shell the pattern may legitimately match.
+					// Blank the run before it, find its closing `)`, run
+					// this same pass over its interior (so a quoted mention
+					// of the command inside it is blanked like any other),
+					// and resume blanking after it.
+					blank(seg, j)
+					depth := 0
+					k := j + 1
+					for ; k < n; k++ {
+						if b[k] == '(' {
+							depth++
+						} else if b[k] == ')' {
+							depth--
+							if depth == 0 {
+								break
+							}
+						}
+					}
+					if inner := blankQuotedSpans(string(b[j+2 : min(k, n)])); inner != "" {
+						copy(out[j+2:], inner)
+					}
+					j = k
+					seg = k + 1
+				}
+			}
+			blank(seg, j)
+			i = j
+		}
+	}
+	return string(out)
+}
+
 // prScanLine is the tiny slice of a transcript jsonl line scanTranscriptPRURLs
 // cares about: the message's content blocks (tool_use / tool_result), and the
 // top-level toolUseResult field a tool_result line carries alongside its
@@ -209,7 +317,7 @@ func scanTranscriptPRURLs(path, prefix string) []string {
 			}
 			switch b.Type {
 			case "tool_use":
-				if b.Name == "Bash" && b.ID != "" && ghPrCreatePattern.MatchString(b.Input.Command) {
+				if b.Name == "Bash" && b.ID != "" && ghPrCreateInvoked(b.Input.Command) {
 					pending[b.ID] = true
 				}
 			case "tool_result":

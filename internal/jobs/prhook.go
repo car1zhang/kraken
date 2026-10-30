@@ -71,7 +71,7 @@ func hookOutput(raw json.RawMessage) (stdout, stderr string) {
 // extractPRURLs finds GitHub PR URLs created by this hook call: raw is one
 // PostToolUse payload, prefix (e.g. "github.com/carl/kraken") restricts hits
 // to that owner/repo when non-empty. Only a Bash call that INVOKES
-// `gh pr create` is considered — gated by ghPrCreatePattern (declared in
+// `gh pr create` is considered — gated by ghPrCreateInvoked (declared in
 // prscan.go and shared by both callers: this hook and the transcript
 // scanner) rather than a plain substring check, since PostToolUse fires on
 // every Bash call including ones that merely mention the phrase, e.g.
@@ -94,7 +94,7 @@ func extractPRURLs(raw []byte, prefix string) []string {
 	if json.Unmarshal(raw, &p) != nil {
 		return nil
 	}
-	if p.ToolName != "Bash" || !ghPrCreatePattern.MatchString(p.ToolInput.Command) {
+	if p.ToolName != "Bash" || !ghPrCreateInvoked(p.ToolInput.Command) {
 		return nil
 	}
 	stdout, stderr := hookOutput(p.ToolOutput)
