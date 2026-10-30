@@ -712,7 +712,15 @@ func runMMFlag(args []string, session func() (string, bool)) (string, error) {
 		State string `json:"state"`
 	}
 	_ = json.Unmarshal(raw, &resp)
-	return fmt.Sprintf("flagged mm #%d (%s)", resp.ID, resp.State), nil
+	return mmFlagEcho(resp.ID, resp.State, itemID), nil
+}
+
+// mmFlagEcho is the flag verb's success line. It names the FLAG id and the
+// ITEM id apart, in that order, because the earlier form `flagged mm #<n>`
+// printed the flag's id in item notation and a lead read it as the item,
+// then tried to `raise` the wrong number.
+func mmFlagEcho(flagID int64, state string, itemID int64) string {
+	return fmt.Sprintf("flag %d (%s) on mm #%d", flagID, state, itemID)
 }
 
 // runMMFlagStep is `flag raise|dismiss <id> --note "<text>"`: the lead's move
