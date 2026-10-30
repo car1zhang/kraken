@@ -95,34 +95,89 @@ func ghPrCreateInvoked(cmd string) bool {
 }
 
 // blankQuotedSpans replaces the CONTENTS of every single- and double-quoted
-// span with spaces, keeping the quote characters and every newline, so token
-// positions and the pattern's quoted-value alternative both survive. A
-// backslash escapes the next byte outside single quotes; an unterminated
-// span runs to the end of the input.
+// span, and every `#` comment, with spaces — keeping the quote characters,
+// every newline, and any `$(…)` command substitution inside a double-quoted
+// span — so token positions, the pattern's quoted-value alternative, and a
+// create run inside a substitution (`URL="$(gh pr create --fill)"`, where the
+// `(` is the separator the pattern accepts) all survive. A backslash escapes
+// the next byte outside single quotes. A `#` opens a comment only in word
+// position (input start, or after whitespace, `;`, `&`, `|` or `(`), and the
+// comment runs to the end of its line: blanked before quote scanning would
+// see it, an apostrophe inside one cannot open a span that swallows the next
+// line's real command. An unterminated quote still runs to the end of the
+// input — that text is not a shell command the pattern should read.
 func blankQuotedSpans(s string) string {
 	b := []byte(s)
 	n := len(b)
+	out := make([]byte, n)
+	copy(out, b)
+	blank := func(from, to int) {
+		for k := from; k < to && k < n; k++ {
+			if b[k] != '\n' {
+				out[k] = ' '
+			}
+		}
+	}
+	wordStart := func(i int) bool {
+		if i == 0 {
+			return true
+		}
+		switch b[i-1] {
+		case ' ', '\t', '\n', ';', '&', '|', '(':
+			return true
+		}
+		return false
+	}
 	for i := 0; i < n; i++ {
 		switch {
 		case b[i] == '\\' && i+1 < n:
 			i++
+		case b[i] == '#' && wordStart(i):
+			j := i
+			for j < n && b[j] != '\n' {
+				j++
+			}
+			blank(i, j)
+			i = j
 		case b[i] == '\'' || b[i] == '"':
 			q := b[i]
 			j := i + 1
+			seg := j // start of the run still to be blanked
 			for ; j < n && b[j] != q; j++ {
-				if q == '"' && b[j] == '\\' {
+				if q != '"' {
+					continue
+				}
+				if b[j] == '\\' {
 					j++
+					continue
+				}
+				if b[j] == '$' && j+1 < n && b[j+1] == '(' {
+					// Keep the whole substitution, nesting included: its
+					// text is a command the pattern may legitimately match.
+					// Blank the run before it, find its closing `)`, and
+					// resume blanking after that.
+					blank(seg, j)
+					depth := 0
+					k := j + 1
+					for ; k < n; k++ {
+						if b[k] == '(' {
+							depth++
+						} else if b[k] == ')' {
+							depth--
+							if depth == 0 {
+								break
+							}
+						}
+					}
+					j = k
+					seg = k + 1
 				}
 			}
-			for k := i + 1; k < j && k < n; k++ {
-				if b[k] != '\n' {
-					b[k] = ' '
-				}
-			}
+			blank(seg, j)
 			i = j
 		}
 	}
-	return string(b)
+	return string(out)
 }
 
 // prScanLine is the tiny slice of a transcript jsonl line scanTranscriptPRURLs
