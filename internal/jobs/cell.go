@@ -2202,8 +2202,12 @@ func acceptTrustPrompts(sess string) {
 				// move the cursor onto the trust/yes option, then Enter —
 				// never a bare Enter, which picks whatever the dialog
 				// pre-selected (trustAcceptKeys has the measurement)
-				args := append([]string{"send-keys", "-t", pane}, trustAcceptKeys(text)...)
+				keys := trustAcceptKeys(text)
+				args := append([]string{"send-keys", "-t", pane}, keys...)
 				_ = exec.Command("tmux", args...).Run()
+				// logged so a cell that dies in this window leaves a record
+				// of which dialog it showed and what was typed into it
+				dlogEvent("info", "trust-accept", "%s: pane %s: sent %s", sess, pane, strings.Join(keys, " "))
 			} else if strings.TrimSpace(text) != "" {
 				rendered++
 			}

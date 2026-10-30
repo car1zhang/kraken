@@ -1118,6 +1118,11 @@ func redactSecrets(s string) string {
 	})
 }
 
+// RedactSecrets is redactSecrets for callers outside core: the Jev dialog
+// answerer scrubs a pane tail with it before logging it or sending it to
+// TypeSafe.
+func RedactSecrets(s string) string { return redactSecrets(s) }
+
 // writeReduced appends one labelled section, skipping blanks and the
 // harness-injected <system-reminder> parts that ride along in user records
 // but are not the user speaking.

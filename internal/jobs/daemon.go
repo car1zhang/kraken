@@ -319,6 +319,12 @@ type daemonState struct {
 	// nodes is the fleet pass' per-process memory (nodes.go): failure counts,
 	// the last announced envelope, and its single-flight flag.
 	nodes NodesState
+	// Jev is the dialog answerer's memory (jev.go): how often each dialog
+	// on screen was typed into and which escalations were already logged.
+	// Created on first use. In-process only, like the maps above: losing
+	// it on a restart costs at most one more keypress or one duplicate log
+	// line per dialog on screen.
+	Jev   *jevState
 	tickN int
 	// offline: in-memory only, like the dedup maps above — losing it on
 	// restart just costs one duplicate "offline" notification. Set while
@@ -990,6 +996,16 @@ func (d *daemonState) tick(mirror bool) (int, error) {
 		// this block.
 		for _, j := range jobs {
 			autoHandoffPass(ActiveStore(), j, all, live, now)
+		}
+		// dialog answerer (its own pass, same per-tick cadence): when a live
+		// cell pane shows a Claude Code or codex dialog, ask Jev which option
+		// keeps the job running and type it, or log an escalation (jev.go).
+		// It types into live panes, which is why it sits in this block.
+		if d.Jev == nil {
+			d.Jev = newJevState()
+		}
+		for _, j := range jobs {
+			d.Jev.jevPass(j, all, live, threadPanes, now, func(l, e, m string) { dlogEvent(l, e, "%s", m) })
 		}
 		// stack probe (its own pass, same per-tick cadence): dial each live
 		// cell's loopback stack links and stamp up/down on change
