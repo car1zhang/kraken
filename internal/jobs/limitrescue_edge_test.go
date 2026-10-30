@@ -1607,8 +1607,9 @@ func TestEdgeRecordLimitHitFoldPreservesTheSwapWatermark(t *testing.T) {
 
 	want := stored
 	want.Deliveries = stored.Deliveries + 1
+	want.LastDeliveryAt = late.Unix()
 	if got != want {
-		t.Fatalf("fold changed more than Deliveries:\n got  %+v\n want %+v", got, want)
+		t.Fatalf("fold changed more than Deliveries and the delivery stamp:\n got  %+v\n want %+v", got, want)
 	}
 	if got.SwappedAt != stored.SwappedAt || got.SwappedTo != stored.SwappedTo {
 		t.Fatalf("the fold cleared the swap watermark: (%d, %q)", got.SwappedAt, got.SwappedTo)
@@ -2117,7 +2118,8 @@ func TestEdgeMergeLimitHitDeliveryCarriesTheSwapWatermark(t *testing.T) {
 		want := LimitHit{
 			Error: "rate_limit", Details: "a later message", At: edgeNow.Unix(),
 			SessionID: "sess-new", AgentID: "agent-new", Deliveries: 1,
-			SwappedAt: swapped.SwappedAt, SwappedTo: swapped.SwappedTo,
+			LastDeliveryAt: edgeNow.Unix(),
+			SwappedAt:      swapped.SwappedAt, SwappedTo: swapped.SwappedTo,
 		}
 		if got != want {
 			t.Fatalf("superseded record = %+v, want %+v — only the swap watermark crosses", got, want)
@@ -2174,6 +2176,7 @@ func TestEdgeMergeLimitHitDeliveryCarriesTheSwapWatermark(t *testing.T) {
 		got := mergeLimitHitDelivery(inWindow, "rate_limit", "other", "other", "other", edgeNow)
 		want := inWindow
 		want.Deliveries++
+		want.LastDeliveryAt = edgeNow.Unix()
 		if got != want {
 			t.Fatalf("fold = %+v, want %+v", got, want)
 		}
