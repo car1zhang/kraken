@@ -389,10 +389,13 @@ grep'd lines, twelve rows saying READ — and the lead's "97 READ / 9 SAMPLED" a
 arithmetic over false inputs, while its one verification habit checked that the LEAD had read its
 eleven reports, the link that was never the problem. So before trusting the aggregate, spot-check
 the scouts of at least the two LARGEST assignments against their own transcripts, and say in
-Coverage which scouts were spot-checked. The spot-check needs a DENOMINATOR: compare the scout's
-read offsets against the staged file's own line count (a `wc -l` you run yourself), because offsets
-alone prove contiguity, not completion — a lead extracted both scouts' offset lists, never fetched
-either file's length, and certified "coverage spot-checks passed" on an instrument structurally
+Coverage which scouts were spot-checked. The spot-check needs a DENOMINATOR: compare the UNION of the
+scout's paged ranges (every `Read` offset+limit and every `sed -n`/`cat` span, merged) against
+the staged file's own line count, a `wc -l` you run yourself. Never the largest offset alone. A
+maximum proves the last page was reached; an unread middle (two pages that do not meet, a range a
+filter skipped) sits below it unseen. And offsets alone prove contiguity, not completion — a lead
+extracted both scouts' offset lists, never fetched either file's length, and certified "coverage
+spot-checks passed" on an instrument structurally
 unable to tell a scout that finished from one that stopped a page short (both happened to have
 finished; the check could not have known). Two axes decide a row's label, and they answer
 different questions. PAGE COVERAGE — not tool choice — separates READ from SAMPLED: READ means
@@ -407,9 +410,12 @@ real work in the raw JSONL — exactly what the brief encourages — has nothing
 format that only certifies the reduced view, and two such scouts (three nights running) resolved
 the tension by writing "READ in full" about reduced files they never opened, one enumerating its
 own 82-line hole inside the sentence claiming completeness. The labels are: READ (reduced pages
-reached the last line), SAMPLED (say what was skipped), and RAW (targeted) — covered primarily by
-raw-JSONL queries, saying which queries; a RAW row is honest coverage, not a downgrade, but like
-SAMPLED it cannot carry a "clean, nothing found" verdict on its own. DELIVERY MECHANISM is the
+reached the last line, every line delivered whole), SAMPLED (say what was skipped), and RAW
+(targeted) — covered primarily by raw-JSONL queries, saying which queries; a RAW row is honest
+coverage, not a downgrade, but like SAMPLED it cannot carry a "clean, nothing found" verdict on
+its own. A page passed through a width cut (`cut -c`, `awk` substr, `head -c`), filtered by
+`grep -v`, or certified by a diff against another view is SAMPLED whatever line it reached; name
+the cut as the skip. DELIVERY MECHANISM is the
 second axis, and it separates READ from RAW: a READ row's pages entered your context through
 `Read` or a plain `cat` of the staged view itself — content you met only as extraction-script
 output or filtered greps is RAW whatever file the script opened, however completely it covered
