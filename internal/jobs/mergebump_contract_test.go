@@ -25,11 +25,15 @@ func TestContractMergeBumpMessageWording(t *testing.T) {
 		"awaiting checks",
 		// The merge of the PR an open manual-test gate names passes that
 		// gate: the operator merges instead of replying, and a notice that
-		// left the gate open left the gate's stack serving on a finished job.
+		// left the gate open would leave the gate's stack serving on a
+		// finished job.
 		"PASSES that gate",
 		"kraken stack clear <slug>",
 		"kraken load clear <slug>",
-		// A gate for a different PR, or a question round, is not answered.
+		// A gate for a different PR, or a question round, is not answered:
+		// the carve-outs are pinned by name, not by the phrase alone.
+		"another PR",
+		"question round",
 		"still holds",
 	} {
 		if !strings.Contains(msg, want) {

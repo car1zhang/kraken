@@ -1561,16 +1561,18 @@ func mergeBumpWanted(j *Job, live map[string]bool) bool {
 // no re-run and no "awaiting checks"; a follow-up starts from a recycled
 // branch; and the job may or may not be done, which the lead decides. The
 // closing clauses settle the gate question, because cells and PRs are
-// many-to-one and the gate state has an owner either way: the operator
-// merges the PR a manual-test gate names instead of replying to it more
-// often than not, and a notice that only said "the gate still holds" left
-// the gate's test services, stack chips and load estimate standing on a
-// finished job (two side stacks were still serving from deleted worktrees a
-// day later). So a merge of the PR the gate names PASSES that gate and the
-// lead shuts its stack down; a gate for a LATER PR, or a question round,
-// still holds, and the lead must not read "continue" as that gate opening.
+// many-to-one: the operator often merges the PR a manual-test gate names
+// instead of replying to it, and a notice that only said "the gate still
+// holds" would leave the gate's test services, stack chips and load estimate
+// standing on a finished job, where a test stack's processes outlive the
+// worktree they serve from. So a merge of the PR the gate names PASSES that
+// gate and the lead shuts its stack down and stops, even when the job has
+// more work (the operator's next prompt starts it); a gate for a LATER PR,
+// or a question round, still holds, and the lead must not read "continue"
+// as that gate opening. The gate clause comes before the continue-or-stop
+// sentence so a lead at the gate reads one instruction, not two.
 func mergeBumpMessage(url string) string {
-	return prWatchPrefix() + " " + url + " has MERGED into its base branch. That branch is finished: do not push to it, re-run its checks, or report it as awaiting checks or review. Any further change starts on a fresh branch recycled off origin/main (the recycle step in do/SKILL.md's cell section). If this PR completed the job's work, say so in your closing message and stop; if not, continue and open the follow-up from the recycled branch. If your open manual-test gate names THIS PR, the merge PASSES that gate: shut down every test service you started for it, run `kraken stack clear <slug>` and `kraken load clear <slug>`, and stop. A gate naming another PR, or a question round, still holds — this notice does not answer those."
+	return prWatchPrefix() + " " + url + " has MERGED into its base branch. That branch is finished: do not push to it, re-run its checks, or report it as awaiting checks or review. Any further change starts on a fresh branch recycled off origin/main (the recycle step in do/SKILL.md's cell section). If your open manual-test gate names THIS PR, the merge PASSES that gate: shut down every test service you started for it, run `kraken stack clear <slug>` and `kraken load clear <slug>`, and stop even if the job has more work — the operator's next prompt starts it. Otherwise, if this PR completed the job's work, say so in your closing message and stop; if not, continue and open the follow-up from the recycled branch. A gate naming another PR, or a question round, still holds — this notice does not answer those."
 }
 
 // prWatchPrefix opens EVERY message the PR watcher types into a pane. It is
