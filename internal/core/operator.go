@@ -658,7 +658,16 @@ func operatorFile(path string, opts OperatorOptions, seen map[string]bool, res *
 		res.Skipped++
 		return
 	}
-	zeus := strings.HasPrefix(headAgentName(f), "zeus-")
+	// A lead's head name is one kraken minted: `zeus-<slug>`, or
+	// `thread-<slug>-<tid>`, because a side thread's agent name lands in
+	// the PARENT zeus transcript's head too (a lead file can carry its own
+	// thread's name as its only head marker), and a zeus prefix alone then
+	// admits that cell's staged spec as the operator's typed first prompt.
+	// IsLeadAgentName is the token splitter's lead test, so both readers
+	// draw the lead line in the same place. For a thread's own file the
+	// first prompt is normally the fork's replay of the parent's staged
+	// spec, which the session_id rule below also drops.
+	zeus := IsLeadAgentName(headAgentName(f))
 	stem := strings.TrimSuffix(filepath.Base(path), ".jsonl")
 	projectDir := filepath.Base(filepath.Dir(path))
 	slug, repo := cellNameParts(projectDir)

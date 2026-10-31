@@ -480,6 +480,31 @@ func TestMpcOperatorProseDropsTheZeusFirstPrompt(t *testing.T) {
 	}
 }
 
+// The same identity rung when the lead transcript's head carries a SIDE
+// THREAD's name rather than its own: a thread forked off zeus writes its
+// `thread-<slug>-<tid>` agent name into the parent file's head, and a lead
+// whose only head markers name its thread is still a lead, so its first
+// prompt is still the staged spec and never the operator's words. Before this
+// test the `zeus-` prefix alone let that spec through as typed prose.
+func TestMpcOperatorProseDropsTheFirstPromptBehindAThreadHead(t *testing.T) {
+	projects := mineHome(t)
+	since, at := mpcWindow()
+	mineWrite(t, projects, mpcCellProject, "zeus.jsonl",
+		`{"type":"custom-title","customTitle":"thread-demo-12-t1"}`,
+		`{"type":"agent-name","agentName":"thread-demo-12-t1"}`,
+		mpcPrompt(t, "z1", "zeus", at(1), "STAGED-JOB-SPEC build the thing", nil),
+		mpcAsst(t, at(2), "starting"),
+		mpcPrompt(t, "z2", "zeus", at(3), "OPERATOR-STEER use the smaller cap", nil),
+	)
+	res := mpcRun(t, OperatorOptions{Since: since, Login: mpcLogin})
+	if got := mpcTexts(res); len(got) != 1 || got[0] != "OPERATOR-STEER use the smaller cap" {
+		t.Fatalf("records = %q, want only the steer after the staged prompt", got)
+	}
+	if res.Skipped != 0 {
+		t.Errorf("Skipped = %d, want 0 — a thread-named head is a lead, not a teammate", res.Skipped)
+	}
+}
+
 // `Truncated` = "files whose scan ended early (a line over `mineScanBufMax` or
 // a read error) — their records read so far are KEPT".
 func TestMpcOperatorProseKeepsWhatATruncatedScanRead(t *testing.T) {
