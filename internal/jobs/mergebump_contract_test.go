@@ -23,10 +23,21 @@ func TestContractMergeBumpMessageWording(t *testing.T) {
 		"do not push to it",
 		"origin/main",
 		"awaiting checks",
+		// The merge of the PR an open manual-test gate names passes that
+		// gate: the operator merges instead of replying, and a notice that
+		// left the gate open left the gate's stack serving on a finished job.
+		"PASSES that gate",
+		"kraken stack clear <slug>",
+		"kraken load clear <slug>",
+		// A gate for a different PR, or a question round, is not answered.
+		"still holds",
 	} {
 		if !strings.Contains(msg, want) {
 			t.Errorf("message lacks %q: %q", want, msg)
 		}
+	}
+	if strings.Contains(msg, "Any gate you are stopped at still holds") {
+		t.Errorf("message still tells the lead every gate holds through a merge of the gate's own PR: %q", msg)
 	}
 	if strings.Contains(msg, "\n") {
 		t.Errorf("message contains a newline: %q", msg)
