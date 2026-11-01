@@ -251,7 +251,12 @@ literally" among them, then cut off before its report rules; the scout burned fo
 duplicated full reduce in the garbled dir, and the failure is silent to the lead. The paths that
 cannot avoid identifiers — the assigned transcript paths above all — go in a staged assignment
 file (copied bytes, not typed ones) that the brief names by its short path, exactly as zeus' own
-brief rides in a file rather than on the tmux command line. Tell each scout to stage
+brief rides in a file rather than on the tmux command line. And the spawn prompt names ONE file
+to read first — the scout's own brief, which points at the common brief and the assignment file in
+turn — never two or three files to read in sequence: a prompt listing several files is answered
+with one sectioned compound (`cat A; echo ===; cat B`) typed before the dialect rule in any of
+them has been read, and the cell's bash-lint then refuses every scout's first command for the
+bare `=` word. Tell each scout to stage
 running notes there AS IT READS: the one-shot report rule concentrates the run's entire value into
 the final call, and a scout that died on a connection error at the literal write boundary — its last words were an
 announcement that it had everything and was writing the report — cost ~30K output tokens of
