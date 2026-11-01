@@ -784,7 +784,9 @@ type reducer struct {
 	// that a verbatim repeat of an earlier steer is shown once; measured
 	// zero intra-file duplicate steer texts across 500 real transcripts, so
 	// the cost is currently theoretical and bounded by the handful of real
-	// mid-turn messages a session ever carries.
+	// mid-turn messages a session ever carries. The one release is a text
+	// the operator pulled back (pulledBack), so a verbatim re-send of THAT
+	// renders again.
 	midTurnSeen map[string]struct{}
 	// delivered is queuedAlready's consume-once ledger: queued texts whose
 	// one delivered user record has already been suppressed. Separate from
@@ -971,23 +973,39 @@ func (r *reducer) midTurn(out reduceSink, text string) {
 
 // pulledBack emits a queued message the operator PULLED BACK into the input
 // box before the turn ended — stored as a `queue-operation` with operation
-// `popAll` carrying the popped text, and never delivered: no `queued_command`
-// attachment and no `user` record follow it, so the agent never saw it. The
-// enqueue was already emitted as [user mid-turn] when it arrived (the reducer
-// is one pass), so this section is the retraction, labelled so a reader does
-// not score the agent against a steer it never received — a lead that acted
-// only on the message the operator re-sent read, in the bare view, as having
-// ignored the pulled-back one. The text is also released from midTurnSeen:
-// the operator usually re-sends an edited version, and a verbatim re-send is
-// a new message, not the double-write the seen-set collapses. A pulled-back
-// text that was never emitted (blank, or a queued task-notification) is
-// dropped, exactly as midTurn drops it.
+// `popAll` carrying the popped text (one text per record in every shape seen
+// so far), and never delivered: no `queued_command` attachment and no `user`
+// record follow it, so the agent never saw it. The enqueue was already emitted
+// as [user mid-turn] when it arrived (the reducer is one pass), so this
+// section is the retraction, labelled so a reader does not score the agent
+// against a steer it never received: without it, a lead that acts only on the
+// re-sent message reads as having ignored the pulled-back one. The text is
+// released from BOTH ledgers — midTurnSeen, so the operator's re-send (usually
+// edited, sometimes verbatim) renders as the new message it is, and
+// delivered, so that re-send gets its own one delivery credit rather than
+// rendering twice. Two shapes emit nothing: a text never emitted (blank, or a
+// queued task-notification), and a text already DELIVERED — the popped
+// enqueue was then a verbatim re-queue the seen-set had collapsed, never on
+// the page, and a retraction section would land under the earlier steer the
+// agent did receive; both ledgers are still released. A teammate envelope
+// routes through teammateBlock to the teammate label, exactly as midTurn
+// does: the one thing the reduction must never do is print another agent's
+// words as the operator's.
 func (r *reducer) pulledBack(out reduceSink, text string) {
 	t := strings.TrimSpace(text)
 	if _, seen := r.midTurnSeen[t]; !seen {
 		return
 	}
+	_, wasDelivered := r.delivered[t]
 	delete(r.midTurnSeen, t)
+	delete(r.delivered, t)
+	if wasDelivered {
+		return
+	}
+	if b, ok := teammateBlock(t); ok {
+		writeReduced(out, "[teammate "+b.From+" mid-turn, pulled back]", b.Text)
+		return
+	}
 	writeReduced(out, "[user mid-turn, pulled back]", t)
 }
 
