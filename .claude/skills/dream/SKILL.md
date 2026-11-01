@@ -174,7 +174,9 @@ brief). `kraken mine reduce --since <ts> <path>` then emits the **reduced view**
 — user prose, tool calls and assistant text, with thinking, tool results and attachments dropped,
 which is about an eighth of the bytes. The operator's MID-TURN messages — typed while a turn was running,
 the course corrections that matter most to the prompting-feedback output — are stored as queue
-records rather than user records and emit as `[user mid-turn]`; kraken's own daemon bumps queue
+records rather than user records and emit as `[user mid-turn]` — and one the operator pulled back
+into the input box before the turn ended follows as `[user mid-turn, pulled back]`, a steer the
+agent never received, so it is not scored against; kraken's own daemon bumps queue
 through the same channel and read the same way, so judge by the text.
 
 **Rank by spend, not by tool-call count — and rank CELLS, scouting each one whole.** A per-session

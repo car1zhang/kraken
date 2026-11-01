@@ -260,7 +260,9 @@ type mineRecord struct {
 	// Attachment is the `attachment` record's payload: the two of the three
 	// shapes a message typed MID-TURN is stored as that these fields cover —
 	// the third is a `user` record written when the harness later delivers
-	// it, deduped by reducer.queuedAlready.
+	// it, deduped by reducer.queuedAlready. Operation `popAll` is the one
+	// non-enqueue queue record the reducer reads: the operator pulled the
+	// queued text back into the input box (reducer.pulledBack).
 	// reducer.line reads them; everything else ignores them.
 	Operation  string `json:"operation"`
 	Content    string `json:"content"`
@@ -846,8 +848,11 @@ func (r *reducer) line(out reduceSink, line []byte, since int64) {
 	// nothing in the record to tell them apart — the text itself says which.
 	switch rec.Type {
 	case "queue-operation":
-		if rec.Operation == "enqueue" {
+		switch rec.Operation {
+		case "enqueue":
 			r.midTurn(out, rec.Content)
+		case "popAll":
+			r.pulledBack(out, rec.Content)
 		}
 		return
 	case "attachment":
@@ -962,6 +967,28 @@ func (r *reducer) midTurn(out reduceSink, text string) {
 		return
 	}
 	writeReduced(out, "[user mid-turn]", t)
+}
+
+// pulledBack emits a queued message the operator PULLED BACK into the input
+// box before the turn ended — stored as a `queue-operation` with operation
+// `popAll` carrying the popped text, and never delivered: no `queued_command`
+// attachment and no `user` record follow it, so the agent never saw it. The
+// enqueue was already emitted as [user mid-turn] when it arrived (the reducer
+// is one pass), so this section is the retraction, labelled so a reader does
+// not score the agent against a steer it never received — a lead that acted
+// only on the message the operator re-sent read, in the bare view, as having
+// ignored the pulled-back one. The text is also released from midTurnSeen:
+// the operator usually re-sends an edited version, and a verbatim re-send is
+// a new message, not the double-write the seen-set collapses. A pulled-back
+// text that was never emitted (blank, or a queued task-notification) is
+// dropped, exactly as midTurn drops it.
+func (r *reducer) pulledBack(out reduceSink, text string) {
+	t := strings.TrimSpace(text)
+	if _, seen := r.midTurnSeen[t]; !seen {
+		return
+	}
+	delete(r.midTurnSeen, t)
+	writeReduced(out, "[user mid-turn, pulled back]", t)
 }
 
 // ReduceJSONLBytes reduces a JSONL span already in memory, per reducer.line's
