@@ -419,7 +419,17 @@ entered your context, not a script's output over it" — since it is the axis th
 inflated rows. A scout that staged reduced
 views, worked entirely from its own extracts, and filed every row READ has now happened on
 consecutive nights, including by a scout that was itself policing a sibling's inflated
-rows. Alongside it:
+rows, because a label is a judgment the scout makes about itself from memory. So a READ row
+carries a LIST: it names the page commands that delivered the view, as line ranges in the order
+they ran (`sed -n 1,170p`, `171,340p`, `341,500p`; a `cat` whole, with the view's line count,
+for a view short enough to come back in full; a `Read` with its offset and limit — a re-read of
+a persisted-output copy lists that `Read` and counts as the staged view). A row with no such
+list is SAMPLED or RAW whatever word it carries, and a listed row whose ranges stop short of the
+last line is SAMPLED. Put that in the brief as the coverage format itself, beside the two axis
+sentences above — "a READ row lists the page commands that delivered it, with their line
+ranges" — never as one more sentence about honesty: writing the list is what makes a scout look
+at what it ran, and reading the list is what lets you check a row against the sidecar in one
+grep rather than reconstruct it. Alongside it:
 **every finding cites its source, and a finding that came from a scout cites that scout's file and quotes one verbatim
 line out of it — name the scout file even when you also cite the underlying transcript, because a
 report whose findings cite only cells and transcripts is indistinguishable, on this format's own
