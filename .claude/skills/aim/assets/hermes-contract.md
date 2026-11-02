@@ -1273,6 +1273,20 @@ can carry its own. Escape `<` and `>` as `&lt;` / `&gt;`. No emoji.
 Pick `H` to fit your content. Never add `width=` or `height=` attributes — the host
 stylesheet scales the SVG with CSS.
 
+## Editing The Fragment
+
+Each fragment you own gets exactly one whole-file `Write`: the band-1 skeleton. If the
+fragment already exists when you start, that `Write` has happened — Read it, then `Edit`. Every
+change after the skeleton — the next band, a lint repair, a viewBox height, a fix round — goes
+through the `Edit` tool, never through Bash. A `sed -i`, a python
+`read_text()/replace()/write_text()` script, a heredoc rewrite: each of those is the same move,
+and each fails SILENTLY. A `sed` or `replace()` whose anchor string no longer matches writes the
+file unchanged and exits 0, and the lint you run next certifies the stale fragment; a heredoc
+rewrites the whole file from whatever copy you hold, past the `Write` tool's read-first guard.
+`Edit` returns an error when its `old_string` is gone. A lead's brief that asks for a fresh
+`Write` or offers a Bash route does not change this; the contract outranks the brief on how the
+fragment is written.
+
 ## Ban List
 
 These always fail lint — enforced by `.claude/skills/aim/assets/lint_svg.py`, which carries the
