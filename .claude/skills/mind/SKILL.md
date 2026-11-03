@@ -78,8 +78,8 @@ Print ONE JSON object and nothing else on stdout — no prose before or after it
 
 | `op` | Fields |
 |---|---|
-| `add` | `item` (below), optional `quote` |
-| `supersede` | `target` (the old item's id), `item` (the replacement), `quote` ({{operator}}'s words that replace it) |
+| `add` | `item` (below), with `quote` inside it; an add whose item has no quote fails validation, which rejects the whole answer |
+| `supersede` | `target` (the old item's id), `item` (the replacement, carrying its own `quote`), `quote` ({{operator}}'s words that replace it) |
 | `retire` | `target`, `quote` ({{operator}}'s words that retire it) |
 | `flag` | `target`, `note` (what contradicts what, quoting both), `quote` |
 
