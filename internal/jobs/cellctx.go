@@ -301,6 +301,27 @@ func writeAutoHandoffState(st *store.Store, jobID int64, s autoHandoffState) err
 	return st.SetKV(autoHandoffKVKey(jobID), string(data))
 }
 
+// handoffQueued reports whether the /handoff an earlier fire typed into zeus
+// is still sitting in zeus' input queue, replayed from the queue records in
+// zeus' own transcript (core.QueuedCommandPending) from the process' start,
+// so a /handoff queued into a process that has since been killed and
+// resumed does not read as pending. A seam so a test can swap the replay.
+var handoffQueued = func(j *Job, zeus *core.Peer, all []*core.Peer) bool {
+	return core.QueuedCommandPending(zeusTranscriptPath(j, all), "/handoff", zeus.StartedAt)
+}
+
+// autoHandoffHeld is the retry gate's pure decision: a RETRY fire (the stored
+// state for this session was not armed) is held while zeus' pane reads
+// running, and while the earlier /handoff is still queued in its transcript.
+// The second check exists because the first misses a queued command: a zeus
+// holding its turn in a foreground wait loop reads idle to the pane probe
+// while its /handoff waits, and an unheld retry would queue a second
+// /handoff behind the first. A first fire is never held: there is nothing
+// queued yet for it to wait on.
+func autoHandoffHeld(retry bool, zeusStatus string, queued bool) bool {
+	return retry && (zeusStatus == "running" || queued)
+}
+
 // autoHandoffPass types /handoff into a live cell's zeus when its context
 // report is at or above autoHandoffThreshold. Called per job every tick from
 // the daemon's !mirror block, right after the colour reconcile.
@@ -308,10 +329,11 @@ func writeAutoHandoffState(st *store.Store, jobID int64, s autoHandoffState) err
 // Two gates sit in front of a fire, both leaving the stored state untouched:
 // a report older than autoHandoffFresh never fires, and a RETRY fire (the
 // stored state for this session was not armed) is held while zeus is
-// running, since the earlier /handoff may still be queued or in progress.
-// A fire is recorded only once the keystrokes were sent: no zeus found, or a
-// send refused (a question prompt open, the pane gone), leaves the stored
-// state untouched so the next tick tries again.
+// running or while the earlier /handoff is still queued in zeus'
+// transcript (autoHandoffHeld), since that /handoff is still to run. A fire
+// is recorded only once the keystrokes were sent: no zeus found, or a send
+// refused (a question prompt open, the pane gone), leaves the stored state
+// untouched so the next tick tries again.
 func autoHandoffPass(st *store.Store, j *Job, all []*core.Peer, live map[string]bool, now time.Time) {
 	if st == nil || j == nil {
 		return
@@ -338,7 +360,10 @@ func autoHandoffPass(st *store.Store, j *Job, all []*core.Peer, live map[string]
 			return
 		}
 		retry := stored.SessionID == c.SessionID && !stored.Armed
-		if retry && zeus.Status == "running" {
+		// the transcript replay runs only when the cheaper pane status has
+		// not already decided the hold
+		queued := retry && zeus.Status != "running" && handoffQueued(j, zeus, all)
+		if autoHandoffHeld(retry, zeus.Status, queued) {
 			return
 		}
 		if _, err := core.SendToPeer(zeus, "/handoff"); err != nil {

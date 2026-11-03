@@ -33,3 +33,29 @@ func TestAutoHandoffDueStreakWindow(t *testing.T) {
 		t.Fatalf("after the window: fire=%v notify=%v state=%+v", fire, notify, s)
 	}
 }
+
+// TestAutoHandoffHeld pins the retry gate: a first fire is never held, and a
+// retry is held by either a running pane or a /handoff still queued in zeus'
+// transcript, the queued check being what covers a turn the pane probe
+// misreads as idle.
+func TestAutoHandoffHeld(t *testing.T) {
+	cases := []struct {
+		name   string
+		retry  bool
+		status string
+		queued bool
+		want   bool
+	}{
+		{"first fire, running", false, "running", false, false},
+		{"first fire, queued reads as nothing", false, "waiting", true, false},
+		{"retry, idle, nothing queued", true, "waiting", false, false},
+		{"retry, running", true, "running", false, true},
+		{"retry, idle pane, /handoff still queued", true, "waiting", true, true},
+		{"retry, running and queued", true, "running", true, true},
+	}
+	for _, c := range cases {
+		if got := autoHandoffHeld(c.retry, c.status, c.queued); got != c.want {
+			t.Errorf("%s: autoHandoffHeld(%v, %q, %v) = %v, want %v", c.name, c.retry, c.status, c.queued, got, c.want)
+		}
+	}
+}
