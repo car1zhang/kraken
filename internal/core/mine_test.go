@@ -1149,3 +1149,63 @@ func TestRedactSecrets(t *testing.T) {
 		}
 	}
 }
+
+// TestMineTranscriptsClearBornRecordsCounted is the digest's half of the
+// `/clear` rule (tokens.go, ownAnySession): a transcript `/clear` opened
+// carries the earlier session's `session_id` on every record, and under the
+// stem rule alone every one of its signals — tool calls, errors, tokens —
+// read as a replay and digested to zero. The `/clear` record in the head
+// makes the whole file its own.
+func TestMineTranscriptsClearBornRecordsCounted(t *testing.T) {
+	projects := mineHome(t)
+	now := time.Now().UnixMilli()
+	since := now - int64(6*time.Hour/time.Millisecond)
+	at := func(minsAgo int64) int64 { return now - minsAgo*60_000 }
+
+	withSession := func(line, sid string) string {
+		var m map[string]any
+		if err := json.Unmarshal([]byte(line), &m); err != nil {
+			t.Fatalf("reparse fixture: %v", err)
+		}
+		m["session_id"] = sid
+		return mineJSON(t, m)
+	}
+	// usage stamps a message id and an output count on an assistant fixture,
+	// one id per message so the two are not read as one message's records.
+	usage := func(line, msgID string, out int) string {
+		var m map[string]any
+		if err := json.Unmarshal([]byte(line), &m); err != nil {
+			t.Fatalf("reparse fixture: %v", err)
+		}
+		m["message"].(map[string]any)["usage"] = map[string]any{"output_tokens": out}
+		m["message"].(map[string]any)["id"] = msgID
+		return mineJSON(t, m)
+	}
+
+	lines := append(tokClearHead(t, at(90)),
+		// every record stamped with the session the process was started as
+		withSession(usage(mineAssistant(t, at(60), "claude-opus-5",
+			mineToolUse("c1", "Bash", map[string]any{"command": "go vet ./..."})), "msg-c1", 40), "before-clear"),
+		withSession(mineUser(t, at(59), []any{mineToolResult("c1", true, "boom")}), "before-clear"),
+		withSession(usage(mineAssistant(t, at(58), "claude-opus-5",
+			mineToolUse("c2", "Read", map[string]any{"file_path": "/tmp/a.go"})), "msg-c2", 2), "before-clear"),
+		withSession(mineUser(t, at(57), []any{mineToolResult("c2", false, "ok")}), "before-clear"),
+	)
+	mineWrite(t, projects, "-proj", "after-clear.jsonl", lines...)
+
+	res, err := MineTranscripts(since)
+	if err != nil {
+		t.Fatalf("MineTranscripts: %v", err)
+	}
+	d := mineFindDigest(t, res, "after-clear.jsonl")
+
+	if d.ToolCounts["Bash"] != 1 || d.ToolCounts["Read"] != 1 {
+		t.Errorf("ToolCounts = %v, want Bash:1 Read:1 — a /clear-born file's records are its own", d.ToolCounts)
+	}
+	if d.ErrorCounts["Bash"] != 1 {
+		t.Errorf("ErrorCounts = %v, want Bash:1", d.ErrorCounts)
+	}
+	if d.Out != 42 {
+		t.Errorf("Out = %d, want 42 — the token counters follow the same ownership", d.Out)
+	}
+}
