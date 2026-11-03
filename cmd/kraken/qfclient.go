@@ -104,15 +104,17 @@ func qfUnreachableError(err error) error {
 	return fmt.Errorf("kraken serve unreachable at %s (is `kraken serve` running?): %w", jobs.ServeBaseURL(), err)
 }
 
-// qfTimeoutError formats the "request exceeded qfHTTPTimeout" case,
-// distinct from qfUnreachableError: a POST that timed out behind kraken
-// serve's single sqlite writer may already have committed by the time the
-// client gives up, so treating a timeout as "unreachable" risks two
-// failures at once — misreporting a possibly-successful write as a failure,
-// and inviting the reader to start a second `kraken serve` (a second DB
-// writer) to "fix" it, which is never safe.
-func qfTimeoutError(err error) error {
-	return fmt.Errorf("kraken serve did not respond within %s at %s — the request may have completed server-side; re-read with `get` before retrying rather than assuming it failed: %w", qfHTTPTimeout, jobs.ServeBaseURL(), err)
+// qfTimeoutError formats the "request exceeded its deadline" case, distinct
+// from qfUnreachableError: a POST that timed out behind kraken serve's
+// single sqlite writer may already have committed by the time the client
+// gives up, so treating a timeout as "unreachable" risks two failures at
+// once — misreporting a possibly-successful write as a failure, and
+// inviting the reader to start a second `kraken serve` (a second DB writer)
+// to "fix" it, which is never safe. The deadline named is the one that
+// fired: a call with its own longer deadline (the submit) must not report
+// the family's 5 s after waiting far longer.
+func qfTimeoutError(err error, timeout time.Duration) error {
+	return fmt.Errorf("kraken serve did not respond within %s at %s — the request may have completed server-side; re-read with `get` before retrying rather than assuming it failed: %w", timeout, jobs.ServeBaseURL(), err)
 }
 
 // qfIsTimeout reports whether err is a client-side deadline expiry
@@ -139,7 +141,7 @@ func qfGet(path string) ([]byte, error) {
 	resp, err := client.Get(jobs.ServeBaseURL() + path)
 	if err != nil {
 		if qfIsTimeout(err) {
-			return nil, qfTimeoutError(err)
+			return nil, qfTimeoutError(err, qfHTTPTimeout)
 		}
 		return nil, qfUnreachableError(err)
 	}
@@ -193,7 +195,7 @@ func qfPostLimit(path string, reqBody any, headers map[string]string, timeout ti
 	resp, err := client.Do(req)
 	if err != nil {
 		if qfIsTimeout(err) {
-			return nil, qfTimeoutError(err)
+			return nil, qfTimeoutError(err, timeout)
 		}
 		return nil, qfUnreachableError(err)
 	}

@@ -157,7 +157,7 @@ func artifactsFetch(full string) ([]byte, error) {
 	resp, err := client.Get(full)
 	if err != nil {
 		if qfIsTimeout(err) {
-			return nil, qfTimeoutError(err)
+			return nil, qfTimeoutError(err, qfHTTPTimeout)
 		}
 		return nil, qfUnreachableError(err)
 	}

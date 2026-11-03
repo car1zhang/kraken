@@ -549,7 +549,7 @@ func TestQfIsTimeoutDetectsWrappedNetTimeout(t *testing.T) {
 }
 
 func TestQfTimeoutErrorMessage(t *testing.T) {
-	err := qfTimeoutError(fakeTimeoutNetErr{})
+	err := qfTimeoutError(fakeTimeoutNetErr{}, qfHTTPTimeout)
 	if strings.Contains(err.Error(), "unreachable") {
 		t.Fatalf("err = %v, must not say unreachable — a timed-out write may have already landed", err)
 	}
