@@ -4,8 +4,36 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"os"
 	"strings"
 )
+
+// ReadKVFile reads one kv value from the database file at path without
+// opening a Store: read-only, no migration, no write lock. It is for a
+// process that is not kraken serve (a CLI command) and only wants what the
+// daemon last wrote. A missing file, kv table or key all read as
+// ErrNotFound.
+func ReadKVFile(path, key string) (string, error) {
+	if _, err := os.Stat(path); err != nil {
+		return "", ErrNotFound
+	}
+	db, err := sql.Open("sqlite3", fmt.Sprintf("file:%s?mode=ro&_busy_timeout=2000", path))
+	if err != nil {
+		return "", fmt.Errorf("open %s read-only: %w", path, err)
+	}
+	defer db.Close()
+	var v string
+	err = db.QueryRow(`SELECT COALESCE(value,'') FROM kv WHERE key = ?`, key).Scan(&v)
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		return "", ErrNotFound
+	case err != nil && strings.Contains(err.Error(), "no such table"):
+		return "", ErrNotFound
+	case err != nil:
+		return "", fmt.Errorf("read kv %s from %s: %w", key, path, err)
+	}
+	return v, nil
+}
 
 // GetKV fetches key's value, or ErrNotFound if unset. Intended for small
 // singleton state (e.g. a usage snapshot) that doesn't warrant its own
