@@ -101,18 +101,7 @@ func writeCodexUsageSnapshot(snap core.UsageSnapshot, path string) error {
 // that as "no candidates", which leaves a cell unbound — today's behaviour for
 // every codex job, and never a failed spawn.
 func ReadCodexUsageSnapshot() (core.UsageSnapshot, bool) {
-	if st := ActiveStore(); st != nil {
-		raw, err := st.GetKV(codexUsageSnapshotKVKey)
-		if err != nil {
-			return core.UsageSnapshot{}, false
-		}
-		var snap core.UsageSnapshot
-		if json.Unmarshal([]byte(raw), &snap) != nil {
-			return core.UsageSnapshot{}, false
-		}
-		return snap, true
-	}
-	return readUsageSnapshotFrom(CodexUsageSnapshotPath())
+	return readSnapshot(codexUsageSnapshotKVKey, CodexUsageSnapshotPath())
 }
 
 // codexUsagePassRunning single-flights the codex pass across ticks, its own

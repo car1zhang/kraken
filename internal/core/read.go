@@ -413,10 +413,11 @@ var nonTransientAPIErrors = []string{"credit balance", "prompt is too long", "in
 // kind is fixable by a retry — because the two want opposite responses: a
 // credit or auth failure needs carl, while an exhausted window is fixable
 // with no human at all by swapping the main login to a pool account that
-// still has headroom. The list is one generic phrase, the three
-// subscription-window banners Claude Code renders for a plan limit ("You've
-// hit your session limit · resets …", and the weekly and opus equivalents),
-// and the two credit-window shapes measured on this machine 2026-08-06: the
+// still has headroom. The list is one generic phrase and the two
+// credit-window shapes; the subscription-window banners Claude Code renders
+// for a plan limit ("You've hit your 5-hour limit · resets …", and the
+// weekly and opus equivalents) are matched by usageLimitBanner below. The
+// credit shapes are measured on this machine 2026-08-06: the
 // per-model-tier banner ("You've reached your <model> limit. Run
 // /usage-credits to continue or switch models with /model."), matched on its
 // remedy token because the model name in it varies with the lead's tier, and
@@ -428,7 +429,18 @@ var nonTransientAPIErrors = []string{"credit balance", "prompt is too long", "in
 // Listing it would classify that as an exhausted account, take the retry
 // away, and swap the machine's login to fix something that was about to fix
 // itself.
-var usageLimitMarkers = []string{"usage limit", "hit your session limit", "hit your weekly limit", "hit your opus limit", "/usage-credits", "usage credits are required"}
+var usageLimitMarkers = []string{"usage limit", "/usage-credits", "usage credits are required"}
+
+// usageLimitBanner matches the plan-window banners by their sentence shape
+// rather than by window name, because Claude Code renames the windows: on
+// 2026-11-03 "You've hit your session limit · resets …" became "You've hit
+// your 5-hour limit · resets 1pm (America/Los_Angeles)", which no fixed
+// marker caught, so no limited cell was rescued. It covers "hit your
+// session/weekly/opus/5-hour limit", a bare "hit your limit" and "reached
+// your <model> limit". The window name between "your" and "limit" may not
+// cross a sentence break (".", "·"), so two unrelated clauses never join
+// into a match.
+var usageLimitBanner = regexp.MustCompile(`\b(hit|reached) your\b[^.·\n]{0,40}\blimit\b`)
 
 // LastStall reads the final message entry of a transcript JSONL file and
 // classifies it. It reads only a fixed 256 KiB tail window (huge
@@ -657,6 +669,9 @@ func classifyStall(entryType string, msg map[string]any, text string) Stall {
 		// can fix it unattended, rather than to carl. Transient is stated
 		// rather than left to the zero value: an exhausted window does pass
 		// on its own, but not on the timescale a nudge assumes.
+		if usageLimitBanner.MatchString(lower) {
+			return Stall{Kind: "usage-limit", Text: TruncateOneLine(text, 120), Transient: false}
+		}
 		for _, s := range usageLimitMarkers {
 			if strings.Contains(lower, s) {
 				return Stall{Kind: "usage-limit", Text: TruncateOneLine(text, 120), Transient: false}

@@ -63,6 +63,10 @@ func TestEdgeUsageLimitPhrasesClassifyNonTransient(t *testing.T) {
 		{"session limit banner", "You've hit your session limit · resets 3pm (America/New_York)"},
 		{"weekly limit banner", "You've hit your weekly limit · resets Sunday"},
 		{"opus limit banner", "You've hit your opus limit · resets Sunday"},
+		// the session window was renamed in Claude Code's banner (measured
+		// 2026-11-03 on 12 transcripts): "session limit" became "5-hour limit"
+		{"5-hour limit banner", "You've hit your 5-hour limit · resets 1pm (America/Los_Angeles)"},
+		{"bare limit banner", "You've hit your limit · resets 3pm"},
 		{"per-model-tier banner", "You've reached your Fable 5 limit. Run /usage-credits to continue or switch models with /model."},
 		{"usage credits banner", "Usage credits are required for this model."},
 		// a prefixed limit text must keep classifying too — the marker check

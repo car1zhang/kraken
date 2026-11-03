@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"kraken/internal/core"
+	"kraken/internal/store"
 	"kraken/internal/util"
 )
 
@@ -25,21 +26,45 @@ func UsageSnapshotPath() string {
 const usageSnapshotKVKey = "usage_snapshot"
 
 // ReadUsageSnapshot loads the snapshot, defensively: a missing or corrupt
-// value reads as "no snapshot yet", never an error. Store-backed (kv key
-// usageSnapshotKVKey) when a store is wired, else the file.
+// value reads as "no snapshot yet", never an error. See readSnapshot for
+// where it comes from.
 func ReadUsageSnapshot() (core.UsageSnapshot, bool) {
+	return readSnapshot(usageSnapshotKVKey, UsageSnapshotPath())
+}
+
+// readSnapshot loads a usage snapshot stored under kv key `key`. Inside
+// kraken serve (a store is wired) that is the store's kv row. Anywhere else
+// (`kraken account` and every other CLI command) it is the newer of two
+// copies: the same kv row read straight from kraken.db, which a running
+// daemon refreshes every few minutes, and the legacy file at path, which
+// only a storeless pass writes. Reading the file alone made `k account`
+// print numbers days old while the daemon's own were current.
+func readSnapshot(key, path string) (core.UsageSnapshot, bool) {
 	if st := ActiveStore(); st != nil {
-		raw, err := st.GetKV(usageSnapshotKVKey)
+		raw, err := st.GetKV(key)
 		if err != nil {
 			return core.UsageSnapshot{}, false
 		}
-		var snap core.UsageSnapshot
-		if json.Unmarshal([]byte(raw), &snap) != nil {
-			return core.UsageSnapshot{}, false
-		}
-		return snap, true
+		return decodeSnapshot(raw)
 	}
-	return readUsageSnapshotFrom(UsageSnapshotPath())
+	fromFile, fileOK := readUsageSnapshotFrom(path)
+	raw, err := store.ReadKVFile(store.DBPath(), key)
+	if err != nil {
+		return fromFile, fileOK
+	}
+	fromDB, dbOK := decodeSnapshot(raw)
+	if !dbOK || (fileOK && fromFile.FetchedAt > fromDB.FetchedAt) {
+		return fromFile, fileOK
+	}
+	return fromDB, true
+}
+
+func decodeSnapshot(raw string) (core.UsageSnapshot, bool) {
+	var snap core.UsageSnapshot
+	if json.Unmarshal([]byte(raw), &snap) != nil {
+		return core.UsageSnapshot{}, false
+	}
+	return snap, true
 }
 
 func readUsageSnapshotFrom(path string) (core.UsageSnapshot, bool) {
