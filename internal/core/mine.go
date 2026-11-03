@@ -1084,7 +1084,13 @@ const mineTextCap = 64 * 1024
 // one and the cookie's high-entropy tail was emitted verbatim (or, with one
 // inside the first 8 chars, the cookie never matched at all). None of the
 // three can START a match, so admitting them only extends redaction.
-var secretRE = regexp.MustCompile(`\b(?:xox[a-z]-[A-Za-z0-9%+/=.\-]{8,}|sk-[A-Za-z0-9_\-]{16,}|gh[pousr]_[A-Za-z0-9]{16,}|github_pat_[A-Za-z0-9_]{16,}|AKIA[0-9A-Z]{16}|eyJ[A-Za-z0-9_\-]{10,}\.[A-Za-z0-9_\-.]{20,})`)
+// Google's two API-key shapes are the newest arms: the classic `AIza` key
+// is exactly 39 characters, and the Vertex AI express-mode key is `AQ.`
+// followed by a long base64url run — both prefix-keyed like the rest, and
+// both start at a word boundary so `FAQ.` and a prose mention of the prefix
+// stay untouched. Without them a key of either shape pasted into a prompt
+// would ride every reduced view and scout brief verbatim.
+var secretRE = regexp.MustCompile(`\b(?:xox[a-z]-[A-Za-z0-9%+/=.\-]{8,}|sk-[A-Za-z0-9_\-]{16,}|gh[pousr]_[A-Za-z0-9]{16,}|github_pat_[A-Za-z0-9_]{16,}|AKIA[0-9A-Z]{16}|AIza[0-9A-Za-z_\-]{35}|AQ\.[A-Za-z0-9_\-]{30,}|eyJ[A-Za-z0-9_\-]{10,}\.[A-Za-z0-9_\-.]{20,})`)
 
 // mineRedactKeep is how many runes of a matched credential the marker keeps:
 // long enough to show the vendor prefix (`xoxc-`, `AKIAI`), short enough
