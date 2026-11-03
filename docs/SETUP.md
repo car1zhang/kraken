@@ -125,6 +125,7 @@ An empty board with the top bar rendered is success. `kraken ls` in a tmux pane 
 | Several Macs | nothing to configure: every `kraken serve` on the tailnet finds the others through `tailscale status` and shows their `readonly`/`public` jobs on its own board with an owner chip. Per job, `visibility: private \| readonly \| public` in the job file or the steer modal; `KRAKEN_NODES=off` in `~/.kraken/env` keeps a machine out of the fleet entirely |
 | macOS board app | `make install-mac` (needs `brew install xcodegen` and an Apple team) |
 | Zed editor marks | `docs/zed-mental-model.md` (Rust toolchain) |
+| Shell lint in your own sessions | every cell already runs `kraken bash-lint` as a `PreToolUse` hook, which blocks the zsh shapes that abort or lie silently (an unquoted `--include=*.py` glob, a bare `=` word, `timeout N`, a `path=` assignment, a mutating `git stash`) and names the fix; the claudes you run by hand get none of it unless you add the same hook to `~/.claude/settings.json`: `{"hooks": {"PreToolUse": [{"matcher": "Bash", "hooks": [{"type": "command", "command": "kraken bash-lint"}]}]}}` (merge it into any `PreToolUse` list already there). It reads the tool call from stdin and needs no running daemon |
 | Updating | the board's **UPDATE** button, or `kraken update` from any shell (the checkout must be clean and on `main`): fetch, ff-only merge, build, install, restart the daemon; the mac-app phase runs only if `/Applications/Kraken.app` is installed |
 
 ## 8. Troubleshooting
