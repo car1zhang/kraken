@@ -21,7 +21,7 @@ Three outputs, three destinations. Getting this wrong is the only mistake here t
 
 | Output | Destination | May contain |
 |---|---|---|
-| A hardened change | a PR {{operator}} reviews | **the diff only** — never findings, evidence, quotes, or transcript excerpts |
+| A hardened change | a PR {{operator}} reviews | **the diff only** — never findings, evidence, quotes, or transcript excerpts; a dated aggregate count justifying the change, and an anonymous account of the mechanism behind it, are the carve-out (below) |
 | An observation not yet worth acting on | the standalone watch store (`kraken watchlist` verbs — its own `watch_items` table since v29) | anything useful; it is local and never committed |
 | The night's report | `00-dream-report.md` in the artifacts dir | anything, including {{operator}}'s own words quoted back to them |
 
@@ -45,6 +45,15 @@ future clone and transcript, and a made-up one pins the same parser — a pass t
 session id from its diffs by hand still shipped a real cell's banner, reset time and all, as a
 table case, because nothing had said a fixture counts. It does: invent its values — times, ids,
 names, numbers — and keep its fixed wording and shape.
+What is NOT a finding is the change's own justification in aggregate. A dated count — "14 of 230
+transcripts had this shape, measured 2025-06-02" — belongs in the code comment, because the repo's
+comments date what they measure and a style reviewer has blocked a comment that left the date
+out; the pass that met that block had the rule above keeping evidence out of git and no line
+saying which instruction won. The line is identity: a count, what it counted and its date cross
+into the diff, and so does an account of the mechanism the change answers — even one seen once —
+told so that nothing in it leads back to a particular session, person or message; a session id,
+a name, a path, a quote, a fixture value or a paraphrase of what someone said does not, however
+much the count's provenance seems to want one beside it.
 
 The corollary is freeing — because the local side never travels, the report and a watched fact can
 hold the real thing: actual quotes, real session ids, the prompt text as written. That is what makes
