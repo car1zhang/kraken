@@ -409,7 +409,166 @@ func (g *tokenGroup) commit(id string, u tokenUsage, eligible bool) tokenUsage {
 // `session_id` entirely — which is the honest limit of the rule and is
 // stated on SumTokensDelta.
 func tokenRecordOwned(rec tokenRecord, own string) bool {
-	return rec.SessionID == "" || rec.SessionID == own
+	return own == ownAnySession || rec.SessionID == "" || rec.SessionID == own
+}
+
+// ownAnySession is the `own` both readers pass for a transcript that `/clear`
+// opened, and it makes tokenRecordOwned accept every record in the file.
+//
+// The stem rule above assumes a record stamped with ANOTHER session is a
+// replay. `/clear` breaks that assumption without being a fork: since at
+// least Claude Code 2.1.281 it starts a NEW transcript (new file, new
+// `sessionId`) whose every record carries the `session_id` of the session
+// the PROCESS was started or resumed as — the one `/clear` left behind. The
+// file shares no record with that session: nothing in it is replayed, and
+// nothing in it is counted anywhere else, since the earlier file holds only
+// the earlier file's own work. Under the stem rule alone such a file reads
+// as 100% replay, and its whole life — tokens and every mechanical signal
+// the digest counts — is dropped silently. Measured 2026-11-03 over 45
+// days of one machine's transcripts: 22 of 191 root transcripts (12%) had
+// this shape, every one of them opening with the `/clear` command record,
+// across twelve Claude Code builds from 2.1.281 to 2.1.317; that night's
+// digest read four sessions of 400 to 800 timestamped records each as zero
+// tokens and zero tool calls.
+//
+// The marker is the `/clear` command record itself, which Claude Code
+// writes into the NEW file's head (measured 2026-11-03: at line index 5 or
+// 6 of all 36 files on that machine whose first 40 lines carry the record,
+// whatever their stamps — after the mode, snapshot and hook-attachment
+// records, never later than 7.4 KB in). A genuine fork is not confused with
+// this: its seed is the PARENT's records, and the parent's head carries no
+// `/clear` command record. A prompt that merely quotes the marker is not
+// one, since the command record's text opens with a `<command-` tag (see
+// isClearCommand). A COPY of a born head is told apart by the command
+// record's own `sessionId` stamp (the camel-case one, which a session
+// stamps with its own file's id as it writes — a sidecar's names its parent
+// session — and which a fork restamps with its own while a backgrounding
+// copy, below, does not; as opposed to `session_id`, which names the
+// session that made the call): Claude Code's "Backgrounding after the
+// current tool finishes" copies the live file whole into a new one named
+// for the continuation, writes a `continued-in` record into the original,
+// and never restamps the copied records, so their `sessionId` keeps naming
+// the original — measured 2026-11-04, one such pair, the copy byte-identical
+// to the original's first several hundred lines and never written again.
+// Under the marker alone that copy read as born and counted the original's
+// whole session a second time; the probe therefore owns a head only when
+// its command record is stamped with the file's own stem (or carries no
+// stamp), and a copied head stays under the stem rule, where its records
+// are the replay they are. The one shape this cannot separate is a
+// `--fork-session` OF a `/clear`-born session, whose seed copies that
+// `/clear` record in AND restamps it with the fork's own `sessionId`, so it
+// reads as born rather than replayed. No skill tells an agent to clear, so
+// that file needs a `/clear` typed into the session first and then a fork
+// of it (`k b`, or a side thread off a zeus the operator cleared); none
+// occurred in the 191 files measured. The stem rule stays the answer for
+// every other file.
+const ownAnySession = "*"
+
+// clearMarker is the literal the `/clear` command record's content carries.
+// Claude Code writes the typed command into a user record as
+// `<command-name>/clear</command-name>` plus its message and args; only the
+// name is matched, since the other two are empty for a bare `/clear`.
+const clearMarker = "<command-name>/clear</command-name>"
+
+// clearBornLines bounds the head scan for the `/clear` record. The record
+// sat at index 5 or 6 in all 36 files measured (see ownAnySession); 24
+// leaves room for a head with more of the optional title, owner and hook
+// records in front of it, and the byte ceiling is isAgentTranscript's, for
+// the same reason: the line has to be decoded whole, and a cut line
+// decodes to nothing.
+const clearBornLines = 24
+
+// clearBorn reports whether a transcript is one `/clear` opened — see
+// ownAnySession for why that changes which of its records are owned. It is a
+// pread over the head like isAgentTranscript, so it disturbs no offset, and
+// it decodes the candidate line rather than trusting the substring: the
+// marker inside an assistant record's prose or a tool result (a transcript
+// discussing `/clear`) is not a `/clear` record, and only a user record
+// whose text IS the command counts — and only when that record is stamped
+// with `own`, the file's stem, or not stamped at all: a command record
+// stamped with another file's `sessionId` is a copied head (see
+// ownAnySession), and the copy's records are counted by the file they were
+// copied from. A head that cannot be read reads as not born, which leaves
+// the stem rule in charge — the pre-existing answer, wrong only for a
+// `/clear` file, rather than a new way to over-count.
+func clearBorn(f *os.File, own string) bool {
+	sc := bufio.NewScanner(io.NewSectionReader(f, 0, agentMarkerBytes))
+	sc.Buffer(make([]byte, 0, agentMarkerInit), agentMarkerBytes)
+	for i := 0; i < clearBornLines && sc.Scan(); i++ {
+		line := sc.Bytes()
+		// The command record precedes every assistant record in a born
+		// file (it is the session's first typed input), so the first
+		// assistant record ends the scan: in the common case, a file not
+		// born, that is a few lines in rather than the whole window.
+		if bytes.Contains(line, []byte(`"type":"assistant"`)) {
+			break
+		}
+		// Only user records can be the command record, and both raw-byte
+		// checks here are PREFILTERS (Claude Code writes compact JSON, as
+		// does every fixture): the type check keeps the mode, snapshot and
+		// attachment records in front of it from costing a decode, and the
+		// `/clear` check keeps a head-sized tool result or brief from
+		// costing one. The MARKER itself is matched only after decoding,
+		// never on the raw bytes: an encoder may write the `<` of its tags
+		// literally or as a JSON escape, and both are the same record,
+		// while the slash and the word survive both encodings.
+		if !bytes.Contains(line, []byte(`"type":"user"`)) || !bytes.Contains(line, []byte("/clear")) {
+			continue
+		}
+		var rec struct {
+			Type      string `json:"type"`
+			SessionID string `json:"sessionId"`
+			Message   struct {
+				Content any `json:"content"`
+			} `json:"message"`
+		}
+		if err := json.Unmarshal(line, &rec); err != nil {
+			var typeErr *json.UnmarshalTypeError
+			if !errors.As(err, &typeErr) {
+				continue
+			}
+		}
+		if rec.Type == "user" && contentHasClear(rec.Message.Content) {
+			return rec.SessionID == "" || rec.SessionID == own
+		}
+	}
+	return false
+}
+
+// contentHasClear reports whether a user record's content is the `/clear`
+// command: a string that is the command record (the shape Claude Code
+// writes — 36 of 36 measured, see ownAnySession), or a block list with a
+// text block that is, kept so the probe does not hinge on which of the two
+// content encodings a build chooses for command records.
+func contentHasClear(content any) bool {
+	switch c := content.(type) {
+	case string:
+		return isClearCommand(c)
+	case []any:
+		for _, b := range c {
+			m, ok := b.(map[string]any)
+			if !ok {
+				continue
+			}
+			if text, _ := m["text"].(string); m["type"] == "text" && isClearCommand(text) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// isClearCommand reports whether a user text IS the `/clear` command record
+// rather than prose quoting it: Claude Code writes the record's content as
+// nothing but its command tags (name, message, args), so the text opens with
+// one of them — all 36 measured open with `<command-name>`. A prompt that
+// merely mentions the marker does not, and must not: a job spec discussing
+// this very reader is a zeus' first user record, every side thread's seed
+// copies it in, and a probe that read it as the command would count the
+// thread's whole replayed seed a second time.
+func isClearCommand(text string) bool {
+	t := strings.TrimSpace(text)
+	return strings.HasPrefix(t, "<command-") && strings.Contains(t, clearMarker)
 }
 
 // fileSessionID is the session a transcript file belongs to — the value
@@ -957,6 +1116,13 @@ func sumTokensFrom(path string, from, limit int64, own string) (Tokens, int64, e
 	// nothing below — and because a caller doing it would have to open every
 	// file including the settled ones the whole design exists not to open.
 	lead := !isAgentTranscript(f, path)
+
+	// A `/clear`-born file owns every record it holds, whatever session they
+	// are stamped with — decided here, with the handle already open, for the
+	// reason the split is. See ownAnySession.
+	if clearBorn(f, own) {
+		own = ownAnySession
+	}
 
 	// Seed the group tracker with whatever record precedes the resume point,
 	// so a message split across two passes is still counted once. A seed the

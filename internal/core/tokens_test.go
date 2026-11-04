@@ -1,6 +1,7 @@
 package core
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -1600,4 +1601,224 @@ func TestGroupCommitIsTheOneRule(t *testing.T) {
 			t.Fatalf("got %+v — an unidentifiable record is counted on its own", got)
 		}
 	})
+}
+
+// tokClearHead is the head Claude Code writes into the NEW transcript `/clear`
+// opens: the mode record, then the typed command as a user record. The
+// records that follow it in a real file are stamped with the session the
+// process was started as — the one `/clear` left behind — and never with the
+// new file's own id, which is the shape tokenRecordOwned's stem rule reads
+// as a replay. Invented ids throughout; only the command record's wording is
+// the producer's.
+func tokClearHead(t *testing.T, ts int64) []string {
+	t.Helper()
+	return []string{
+		mineJSON(t, map[string]any{"type": "mode", "mode": "normal"}),
+		mineUser(t, ts, "<command-name>/clear</command-name>\n<command-message>clear</command-message>\n<command-args></command-args>"),
+	}
+}
+
+// TestSumTokensDeltaCountsAClearBornTranscript: a transcript `/clear` opened
+// carries another session's `session_id` on every record it holds, yet none
+// of them is a replay — the earlier file holds only its own work, so a file
+// skipped under the stem rule is work counted NOWHERE. The `/clear` record in
+// its head is what tells it apart from a fork's seed.
+func TestSumTokensDeltaCountsAClearBornTranscript(t *testing.T) {
+	projects := mineHome(t)
+	now := time.Now().UnixMilli()
+	dir := filepath.Join(projects, "-proj")
+
+	// the session the process was started as: its own work, stamped with
+	// its own id
+	mineWrite(t, projects, "-proj", "before-clear.jsonl",
+		tokAssistantFull(t, now, tokUsage{out: 100, cr: 1000}, "msg_B", "before-clear"),
+	)
+	// the file `/clear` opened: new work, every record stamped before-clear
+	born := append(tokClearHead(t, now),
+		tokAssistantFull(t, now, tokUsage{out: 7, cr: 11}, "msg_A1", "before-clear"),
+		tokAssistantFull(t, now, tokUsage{out: 5, cr: 13}, "msg_A2", "before-clear"),
+	)
+	mineWrite(t, projects, "-proj", "after-clear.jsonl", born...)
+
+	got, _, err := SumTokensDelta(dir, nil)
+	if err != nil {
+		t.Fatalf("SumTokensDelta: %v", err)
+	}
+	// both files count in full: 100+7+5 out, 1000+11+13 cache-read
+	tokWant(t, got, 0, 112, 0, 1024, 2)
+}
+
+// TestSumTokensDeltaContinuationCopyOfABornFileCountsOnce pins the stamp
+// half of the probe (see ownAnySession): a backgrounding continuation copies
+// a born file whole, `/clear` record included, without restamping the copied
+// records' `sessionId`, so the copy's command record still names the
+// original. Under the marker alone the copy read as born and the session
+// counted twice; with the stamp it stays under the stem rule and counts
+// nowhere, since the original already counts every one of its records.
+// Every id and timestamp is invented.
+func TestSumTokensDeltaContinuationCopyOfABornFileCountsOnce(t *testing.T) {
+	projects := mineHome(t)
+	now := time.Now().UnixMilli()
+	dir := filepath.Join(projects, "-proj")
+
+	// stamp sets the camel-case `sessionId` — the file a record was written
+	// into — on a fixture line, the field a continuation copy carries over
+	// unchanged from the file it was copied from.
+	stamp := func(line, sid string) string {
+		var m map[string]any
+		if err := json.Unmarshal([]byte(line), &m); err != nil {
+			t.Fatalf("reparse fixture: %v", err)
+		}
+		m["sessionId"] = sid
+		return mineJSON(t, m)
+	}
+	var born []string
+	for _, line := range tokClearHead(t, now) {
+		born = append(born, stamp(line, "born"))
+	}
+	born = append(born,
+		stamp(tokAssistantFull(t, now, tokUsage{out: 7, cr: 11}, "msg_A1", "before-clear"), "born"),
+		stamp(tokAssistantFull(t, now, tokUsage{out: 5, cr: 13}, "msg_A2", "before-clear"), "born"),
+	)
+	mineWrite(t, projects, "-proj", "born.jsonl", born...)
+	// the continuation: the same bytes under a new name, nothing restamped
+	mineWrite(t, projects, "-proj", "continuation.jsonl", born...)
+
+	got, _, err := SumTokensDelta(dir, nil)
+	if err != nil {
+		t.Fatalf("SumTokensDelta: %v", err)
+	}
+	// the born file once — 7+5 out, 11+13 cache-read — and the copy nothing
+	tokWant(t, got, 0, 12, 0, 24, 2)
+}
+
+// TestSumTokensDeltaClearMarkerOnlyInAUserRecord pins the decode half of the
+// probe: the marker quoted inside an assistant's prose at the head of an
+// ordinary fork is not a `/clear` record, so that fork's seed stays a replay.
+func TestSumTokensDeltaClearMarkerOnlyInAUserRecord(t *testing.T) {
+	projects := mineHome(t)
+	now := time.Now().UnixMilli()
+	dir := filepath.Join(projects, "-proj")
+	parent := tokUsage{out: 1000, cr: 90000}
+
+	mineWrite(t, projects, "-proj", "parent.jsonl",
+		tokAssistantFull(t, now, parent, "msg_P", "parent"),
+	)
+	// the parent's replayed record, whose prose mentions the marker, then
+	// the fork's own work — the pre-existing fork shape
+	prose := mineJSON(t, map[string]any{
+		"type": "assistant", "timestamp": mineISO(now), "session_id": "parent",
+		"message": map[string]any{
+			"id": "msg_P", "model": "claude-opus-5",
+			"usage":   map[string]any{"output_tokens": parent.out, "cache_read_input_tokens": parent.cr},
+			"content": []any{mineText("type <command-name>/clear</command-name> to start over")},
+		},
+	})
+	mineWrite(t, projects, "-proj", "fork.jsonl",
+		prose,
+		tokAssistantFull(t, now, tokUsage{out: 7, cr: 11}, "msg_F", "fork"),
+	)
+	got, _, err := SumTokensDelta(dir, nil)
+	if err != nil {
+		t.Fatalf("SumTokensDelta: %v", err)
+	}
+	// the parent's message once, the fork's own once — the replay still skipped
+	tokWant(t, got, 0, 1007, 0, 90011, 2)
+}
+
+// TestSumTokensDeltaClearMarkerQuotedInAPromptIsNotTheCommand pins the
+// other half of that decode rule, the one that bites a kraken cell: a
+// parent whose FIRST USER record is a prompt quoting the marker (a job spec
+// about this reader, say) is the head every side thread's seed copies in,
+// and a probe that read the quote as the command would count the whole
+// replayed seed a second time.
+func TestSumTokensDeltaClearMarkerQuotedInAPromptIsNotTheCommand(t *testing.T) {
+	projects := mineHome(t)
+	now := time.Now().UnixMilli()
+	dir := filepath.Join(projects, "-proj")
+	parent := tokUsage{out: 1000, cr: 90000}
+
+	prompt := mineUser(t, now, "fix the reader: a file whose head holds <command-name>/clear</command-name> is dropped")
+	mineWrite(t, projects, "-proj", "parent.jsonl",
+		prompt,
+		tokAssistantFull(t, now, parent, "msg_P", "parent"),
+	)
+	mineWrite(t, projects, "-proj", "fork.jsonl",
+		prompt,
+		tokAssistantFull(t, now, parent, "msg_P", "parent"),
+		tokAssistantFull(t, now, tokUsage{out: 7, cr: 11}, "msg_F", "fork"),
+	)
+	got, _, err := SumTokensDelta(dir, nil)
+	if err != nil {
+		t.Fatalf("SumTokensDelta: %v", err)
+	}
+	tokWant(t, got, 0, 1007, 0, 90011, 2)
+}
+
+// TestClearBornHeadShapes drives the probe over RAW lines rather than
+// json.Marshal'd fixtures, because the producer's bytes are the thing it
+// exists for: Claude Code writes the `<` of the command tags literally,
+// while encoding/json writes it as a JSON unicode escape (which every
+// mineJSON fixture in this file therefore carries), and the probe must read
+// both as one record. Every id and timestamp is invented.
+func TestClearBornHeadShapes(t *testing.T) {
+	command := `{"type":"user","timestamp":"2026-01-02T03:04:05.000Z","sessionId":"born","message":{"role":"user","content":"<command-name>/clear</command-name>\n<command-message>clear</command-message>\n<command-args></command-args>"}}`
+	head := []string{
+		`{"type":"mode","mode":"normal","sessionId":"born"}`,
+		`{"type":"file-history-snapshot","messageId":"m-1","snapshot":{"messageId":"m-1","trackedFileBackups":{}}}`,
+		`{"type":"attachment","timestamp":"2026-01-02T03:04:05.000Z","attachment":{"type":"hook_success","hookName":"SessionStart:clear"}}`,
+		`{"type":"user","timestamp":"2026-01-02T03:04:05.000Z","message":{"role":"user","content":"<local-command-caveat>The command below was run directly in Claude Code.</local-command-caveat>"}}`,
+	}
+	assistant := `{"type":"assistant","timestamp":"2026-01-02T03:04:06.000Z","session_id":"older","message":{"id":"msg-1","model":"claude-opus-5","content":[{"type":"text","text":"hi"}]}}`
+	cases := []struct {
+		name  string
+		lines []string
+		want  bool
+	}{
+		{"a single blank line", nil, false},
+		{"the producer's literal tags", append(append([]string{}, head...), command, assistant), true},
+		// The escaped form is built from the literal one at run time, so no
+		// editing tool can collapse the escape back into `<` on its way to
+		// disk and silently turn this case into a copy of the literal one.
+		{"the tags json-escaped", append(append([]string{}, head...),
+			strings.ReplaceAll(command, "<", `\`+"u003c")), true},
+		{"the message tag first", append(append([]string{}, head...),
+			`{"type":"user","timestamp":"2026-01-02T03:04:05.000Z","message":{"role":"user","content":"<command-message>clear</command-message>\n<command-name>/clear</command-name>"}}`), true},
+		{"a text block list", append(append([]string{}, head...),
+			`{"type":"user","timestamp":"2026-01-02T03:04:05.000Z","message":{"role":"user","content":[{"type":"text","text":"<command-name>/clear</command-name>"}]}}`), true},
+		{"a prompt quoting the marker", append(append([]string{}, head...),
+			`{"type":"user","timestamp":"2026-01-02T03:04:05.000Z","message":{"role":"user","content":"please make <command-name>/clear</command-name> files count"}}`), false},
+		{"the marker inside a tool result", append(append([]string{}, head...),
+			`{"type":"user","timestamp":"2026-01-02T03:04:05.000Z","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t-1","content":"<command-name>/clear</command-name>"}]}}`), false},
+		{"the marker in an assistant's prose", append(append([]string{}, head...),
+			`{"type":"assistant","timestamp":"2026-01-02T03:04:05.000Z","message":{"id":"msg-2","model":"claude-opus-5","content":[{"type":"text","text":"<command-name>/clear</command-name>"}]}}`), false},
+		{"a malformed line before the command", append(append([]string{`{not json`}, head...), command), true},
+		{"the command only after the first assistant record", append(append([]string{}, head...), assistant, command), false},
+		{"the command at the last index inside the window", append(make([]string, clearBornLines-1), command), true},
+		{"the command one past the window", append(make([]string, clearBornLines), command), false},
+		// A backgrounding continuation copies a born file whole, head and
+		// all, and never restamps the copied records: the command record in
+		// the copy still names the file it was copied from, so the copy is
+		// not born, and its records stay the replay they are.
+		{"the command stamped with another file's sessionId", append(append([]string{}, head...),
+			strings.ReplaceAll(command, `"sessionId":"born"`, `"sessionId":"origin"`)), false},
+		{"the command carrying no sessionId stamp", append(append([]string{}, head...),
+			strings.ReplaceAll(command, `"sessionId":"born",`, ``)), true},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "born.jsonl")
+			if err := os.WriteFile(path, []byte(strings.Join(c.lines, "\n")+"\n"), 0o644); err != nil {
+				t.Fatalf("write fixture: %v", err)
+			}
+			f, err := os.Open(path)
+			if err != nil {
+				t.Fatalf("open fixture: %v", err)
+			}
+			defer f.Close()
+			if got := clearBorn(f, "born"); got != c.want {
+				t.Errorf("clearBorn = %v, want %v", got, c.want)
+			}
+		})
+	}
 }
