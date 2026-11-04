@@ -1209,3 +1209,49 @@ func TestMineTranscriptsClearBornRecordsCounted(t *testing.T) {
 		t.Errorf("Out = %d, want 42 — the token counters follow the same ownership", d.Out)
 	}
 }
+
+// TestMineTranscriptsContinuationCopyDigestsToNothing is the digest's half
+// of the probe's stamp rule (tokens.go, ownAnySession): a backgrounding
+// continuation copies a born file whole without restamping the copied
+// records' `sessionId`, so the copy's `/clear` record still names the
+// original, the copy is not born, and every one of its signals stays a
+// replay of work the original's digest already carries. Every id and
+// timestamp is invented.
+func TestMineTranscriptsContinuationCopyDigestsToNothing(t *testing.T) {
+	projects := mineHome(t)
+	now := time.Now().UnixMilli()
+	since := now - int64(6*time.Hour/time.Millisecond)
+	at := func(minsAgo int64) int64 { return now - minsAgo*60_000 }
+
+	restamp := func(line, sessionID, sid string) string {
+		var m map[string]any
+		if err := json.Unmarshal([]byte(line), &m); err != nil {
+			t.Fatalf("reparse fixture: %v", err)
+		}
+		m["session_id"] = sessionID
+		m["sessionId"] = sid
+		return mineJSON(t, m)
+	}
+	var lines []string
+	for _, line := range tokClearHead(t, at(90)) {
+		lines = append(lines, restamp(line, "before-clear", "born"))
+	}
+	lines = append(lines,
+		restamp(mineAssistant(t, at(60), "claude-opus-5",
+			mineToolUse("c1", "Bash", map[string]any{"command": "go vet ./..."})), "before-clear", "born"),
+		restamp(mineUser(t, at(59), []any{mineToolResult("c1", false, "ok")}), "before-clear", "born"),
+	)
+	mineWrite(t, projects, "-proj", "born.jsonl", lines...)
+	mineWrite(t, projects, "-proj", "continuation.jsonl", lines...)
+
+	res, err := MineTranscripts(since)
+	if err != nil {
+		t.Fatalf("MineTranscripts: %v", err)
+	}
+	if d := mineFindDigest(t, res, "born.jsonl"); d.ToolCounts["Bash"] != 1 {
+		t.Errorf("born ToolCounts = %v, want Bash:1 — the original owns its records", d.ToolCounts)
+	}
+	if d := mineFindDigest(t, res, "continuation.jsonl"); len(d.ToolCounts) != 0 {
+		t.Errorf("continuation ToolCounts = %v, want none — a copied head is not born", d.ToolCounts)
+	}
+}

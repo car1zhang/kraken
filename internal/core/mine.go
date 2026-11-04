@@ -365,7 +365,7 @@ func digestTranscript(path, project string, since int64) (SessionDigest, bool) {
 	// A `/clear`-born file owns every record it holds, whatever session they
 	// are stamped with — the same probe sumTokensFrom runs, so the two readers
 	// cannot disagree about which files are replays. See ownAnySession.
-	if clearBorn(f) {
+	if clearBorn(f, own) {
 		own = ownAnySession
 	}
 

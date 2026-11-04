@@ -1,6 +1,7 @@
 package core
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -1647,6 +1648,50 @@ func TestSumTokensDeltaCountsAClearBornTranscript(t *testing.T) {
 	tokWant(t, got, 0, 112, 0, 1024, 2)
 }
 
+// TestSumTokensDeltaContinuationCopyOfABornFileCountsOnce pins the stamp
+// half of the probe (see ownAnySession): a backgrounding continuation copies
+// a born file whole, `/clear` record included, without restamping the copied
+// records' `sessionId`, so the copy's command record still names the
+// original. Under the marker alone the copy read as born and the session
+// counted twice; with the stamp it stays under the stem rule and counts
+// nowhere, since the original already counts every one of its records.
+// Every id and timestamp is invented.
+func TestSumTokensDeltaContinuationCopyOfABornFileCountsOnce(t *testing.T) {
+	projects := mineHome(t)
+	now := time.Now().UnixMilli()
+	dir := filepath.Join(projects, "-proj")
+
+	// stamp sets the camel-case `sessionId` — the file a record was written
+	// into — on a fixture line, the field a continuation copy carries over
+	// unchanged from the file it was copied from.
+	stamp := func(line, sid string) string {
+		var m map[string]any
+		if err := json.Unmarshal([]byte(line), &m); err != nil {
+			t.Fatalf("reparse fixture: %v", err)
+		}
+		m["sessionId"] = sid
+		return mineJSON(t, m)
+	}
+	var born []string
+	for _, line := range tokClearHead(t, now) {
+		born = append(born, stamp(line, "born"))
+	}
+	born = append(born,
+		stamp(tokAssistantFull(t, now, tokUsage{out: 7, cr: 11}, "msg_A1", "before-clear"), "born"),
+		stamp(tokAssistantFull(t, now, tokUsage{out: 5, cr: 13}, "msg_A2", "before-clear"), "born"),
+	)
+	mineWrite(t, projects, "-proj", "born.jsonl", born...)
+	// the continuation: the same bytes under a new name, nothing restamped
+	mineWrite(t, projects, "-proj", "continuation.jsonl", born...)
+
+	got, _, err := SumTokensDelta(dir, nil)
+	if err != nil {
+		t.Fatalf("SumTokensDelta: %v", err)
+	}
+	// the born file once — 7+5 out, 11+13 cache-read — and the copy nothing
+	tokWant(t, got, 0, 12, 0, 24, 2)
+}
+
 // TestSumTokensDeltaClearMarkerOnlyInAUserRecord pins the decode half of the
 // probe: the marker quoted inside an assistant's prose at the head of an
 // ordinary fork is not a `/clear` record, so that fork's seed stays a replay.
@@ -1751,6 +1796,14 @@ func TestClearBornHeadShapes(t *testing.T) {
 		{"the command only after the first assistant record", append(append([]string{}, head...), assistant, command), false},
 		{"the command at the last index inside the window", append(make([]string, clearBornLines-1), command), true},
 		{"the command one past the window", append(make([]string, clearBornLines), command), false},
+		// A backgrounding continuation copies a born file whole, head and
+		// all, and never restamps the copied records: the command record in
+		// the copy still names the file it was copied from, so the copy is
+		// not born, and its records stay the replay they are.
+		{"the command stamped with another file's sessionId", append(append([]string{}, head...),
+			strings.ReplaceAll(command, `"sessionId":"born"`, `"sessionId":"origin"`)), false},
+		{"the command carrying no sessionId stamp", append(append([]string{}, head...),
+			strings.ReplaceAll(command, `"sessionId":"born",`, ``)), true},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -1763,7 +1816,7 @@ func TestClearBornHeadShapes(t *testing.T) {
 				t.Fatalf("open fixture: %v", err)
 			}
 			defer f.Close()
-			if got := clearBorn(f); got != c.want {
+			if got := clearBorn(f, "born"); got != c.want {
 				t.Errorf("clearBorn = %v, want %v", got, c.want)
 			}
 		})

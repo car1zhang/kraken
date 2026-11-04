@@ -439,13 +439,29 @@ func tokenRecordOwned(rec tokenRecord, own string) bool {
 // this: its seed is the PARENT's records, and the parent's head carries no
 // `/clear` command record. A prompt that merely quotes the marker is not
 // one, since the command record's text opens with a `<command-` tag (see
-// isClearCommand). The one shape this cannot separate is a `--fork-session`
-// OF a `/clear`-born session, whose seed copies that `/clear` record in and
-// so reads as born rather than replayed. No skill tells an agent to clear,
-// so that file needs a `/clear` typed into the session first and then a
-// fork of it (`k b`, or a side thread off a zeus the operator cleared);
-// none occurred in the 191 files measured. The stem rule stays the answer
-// for every other file.
+// isClearCommand). A COPY of a born head is told apart by the command
+// record's own `sessionId` stamp (the camel-case one, which a session
+// stamps with its own file's id as it writes — a sidecar's names its parent
+// session — and which a fork restamps with its own while a backgrounding
+// copy, below, does not; as opposed to `session_id`, which names the
+// session that made the call): Claude Code's "Backgrounding after the
+// current tool finishes" copies the live file whole into a new one named
+// for the continuation, writes a `continued-in` record into the original,
+// and never restamps the copied records, so their `sessionId` keeps naming
+// the original — measured 2026-11-04, one such pair, the copy byte-identical
+// to the original's first several hundred lines and never written again.
+// Under the marker alone that copy read as born and counted the original's
+// whole session a second time; the probe therefore owns a head only when
+// its command record is stamped with the file's own stem (or carries no
+// stamp), and a copied head stays under the stem rule, where its records
+// are the replay they are. The one shape this cannot separate is a
+// `--fork-session` OF a `/clear`-born session, whose seed copies that
+// `/clear` record in AND restamps it with the fork's own `sessionId`, so it
+// reads as born rather than replayed. No skill tells an agent to clear, so
+// that file needs a `/clear` typed into the session first and then a fork
+// of it (`k b`, or a side thread off a zeus the operator cleared); none
+// occurred in the 191 files measured. The stem rule stays the answer for
+// every other file.
 const ownAnySession = "*"
 
 // clearMarker is the literal the `/clear` command record's content carries.
@@ -468,10 +484,14 @@ const clearBornLines = 24
 // it decodes the candidate line rather than trusting the substring: the
 // marker inside an assistant record's prose or a tool result (a transcript
 // discussing `/clear`) is not a `/clear` record, and only a user record
-// whose text IS the command counts. A head that cannot be read reads as not
-// born, which leaves the stem rule in charge — the pre-existing answer,
-// wrong only for a `/clear` file, rather than a new way to over-count.
-func clearBorn(f *os.File) bool {
+// whose text IS the command counts — and only when that record is stamped
+// with `own`, the file's stem, or not stamped at all: a command record
+// stamped with another file's `sessionId` is a copied head (see
+// ownAnySession), and the copy's records are counted by the file they were
+// copied from. A head that cannot be read reads as not born, which leaves
+// the stem rule in charge — the pre-existing answer, wrong only for a
+// `/clear` file, rather than a new way to over-count.
+func clearBorn(f *os.File, own string) bool {
 	sc := bufio.NewScanner(io.NewSectionReader(f, 0, agentMarkerBytes))
 	sc.Buffer(make([]byte, 0, agentMarkerInit), agentMarkerBytes)
 	for i := 0; i < clearBornLines && sc.Scan(); i++ {
@@ -496,8 +516,9 @@ func clearBorn(f *os.File) bool {
 			continue
 		}
 		var rec struct {
-			Type    string `json:"type"`
-			Message struct {
+			Type      string `json:"type"`
+			SessionID string `json:"sessionId"`
+			Message   struct {
 				Content any `json:"content"`
 			} `json:"message"`
 		}
@@ -508,7 +529,7 @@ func clearBorn(f *os.File) bool {
 			}
 		}
 		if rec.Type == "user" && contentHasClear(rec.Message.Content) {
-			return true
+			return rec.SessionID == "" || rec.SessionID == own
 		}
 	}
 	return false
@@ -1099,7 +1120,7 @@ func sumTokensFrom(path string, from, limit int64, own string) (Tokens, int64, e
 	// A `/clear`-born file owns every record it holds, whatever session they
 	// are stamped with — decided here, with the handle already open, for the
 	// reason the split is. See ownAnySession.
-	if clearBorn(f) {
+	if clearBorn(f, own) {
 		own = ownAnySession
 	}
 
