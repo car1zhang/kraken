@@ -83,8 +83,12 @@ func TestDialogEdgeRefusals(t *testing.T) {
 		{"cursor alone at bottom", "Pick one:\n❯ only option"},
 		{"cursor neighbour only across blank line", "❯ 1. alpha\n\n  2. beta"},
 		{"cursor followed by a non-matching footer only", "Pick one:\n❯ alone here\nfooter text at column zero"},
-		{"two cursors in the last 25 lines", "❯ 1. alpha\n  2. beta\n\nmore text\n› 1. gamma\n  2. delta"},
-		{"two cursors, one is a > with text", "> first choice\n  second choice\n\n❯ 1. third\n  2. fourth"},
+		{"bottom cursor is the empty input prompt", "❯ 1. alpha\n  2. beta\n\n❯ "},
+		{"bottom cursor is a one-line echoed message", "❯ 1. alpha\n  2. beta\n\n❯ please carry on"},
+		{"older cursor touching the bottom run", "❯ 1. alpha\n  2. beta\n› 1. gamma\n  2. delta"},
+		{"echoed numbered message above an empty prompt", "❯ steer:\n  1. fix a\n  2. fix b\n\n⏺ ok\n────\n❯ \n────"},
+		{"multi-line draft in the input box", "────\n❯ please do this\n  and also that\n────\n  ⏵⏵ bypass permissions on"},
+		{"empty prompt with a trailing nbsp", "❯ 1. alpha\n  2. beta\n\n❯ "},
 		{"bare > with nothing after it", " >\n  1. alpha\n  2. beta"},
 		{"> followed only by spaces", " >    \n  1. alpha\n  2. beta"},
 		{"login paste screen is not a dialog", edgePastePane},
@@ -92,6 +96,28 @@ func TestDialogEdgeRefusals(t *testing.T) {
 	}
 	for _, c := range cases {
 		edgeRefused(t, c.name, c.pane)
+	}
+}
+
+func TestDialogEdgeBottomCursorWinsOverGlyphsAbove(t *testing.T) {
+	// a second glyph line inside the window (an answered dialog, an echoed
+	// user message) is history: the bottom-most cursor is the live dialog
+	cases := []struct {
+		name, pane string
+		want       []string
+	}{
+		{"two dialogs in the last 25 lines", "❯ 1. alpha\n  2. beta\n\nmore text\n› 1. gamma\n  2. delta", []string{"gamma", "delta"}},
+		{"a > with text above a ❯ dialog", "> first choice\n  second choice\n\n❯ 1. third\n  2. fourth", []string{"third", "fourth"}},
+	}
+	for _, c := range cases {
+		d, ok := ParseDialog(c.pane)
+		if !ok {
+			t.Errorf("%s: ParseDialog = false, want the bottom dialog", c.name)
+			continue
+		}
+		if got := edgeTexts(d); !reflect.DeepEqual(got, c.want) {
+			t.Errorf("%s: options = %q, want %q", c.name, got, c.want)
+		}
 	}
 }
 
