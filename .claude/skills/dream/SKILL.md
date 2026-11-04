@@ -213,7 +213,23 @@ searches by SHAPE (a prefix, a length, a regex) and COUNTS or LOCATES rather tha
 never an unredirected `grep -o`, `grep -ob` or a bare grep that echoes the matching line, since a
 tool result is a transcript record too, and paging a view with Read shows whatever is in it — and
 reports the class, the file and the record timestamp (or path and line for a file that is not a
-transcript); it never types a value it found into a command, a notes line or its report. The one
+transcript); it never types a value it found into a command, a notes line or its report. A shape
+is a LENGTH and a CHARACTER CLASS, plus a fixed prefix only when the FORMAT puts that prefix on
+every value (`sk-`, `xoxp-`), never the leading characters of this value — "a five-digit number",
+"a 36-character hex-and-dash string" — and never the text around the value: a report that quotes
+the sentence a secret was typed in, with only the secret elided, has spelled the answer out to
+anyone who can read the sentence, and one such report put three copies of a typed password into
+the lead's transcript the moment the lead read it. A secret that is an ordinary word would have no
+token shape, so no redaction could catch such a copy, and a shape regex cannot fill the needle
+file below for it, since every ordinary word of that length would match. Locate such a value by
+where it sits (the record and the field), and say that a bare count of the word means nothing. To
+ask whether it propagated, fill the needle from that location instead: extract the field's whole
+text into the needle file by record and field, never typing it, and its longest line alone when
+the field spans several, since a blank or short line in the needle file matches nearly everything
+and text joined across a newline matches no copy. Then count the phrase, or the word only where it
+sits within a few characters of the word that introduced it, and report those counts with their
+locations.
+The one
 case where typing it looks unavoidable — COUNTING or LOCATING a value already known, to ask whether
 it propagated — is done from a needle file instead: extract the value with its shape regex into a
 file in the scout's scratch dir (`grep -o -E '<shape>' <source> > needles.txt` — the one permitted
