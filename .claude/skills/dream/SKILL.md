@@ -394,7 +394,15 @@ read offsets against the staged file's own line count (a `wc -l` you run yoursel
 alone prove contiguity, not completion — a lead extracted both scouts' offset lists, never fetched
 either file's length, and certified "coverage spot-checks passed" on an instrument structurally
 unable to tell a scout that finished from one that stopped a page short (both happened to have
-finished; the check could not have known). Two axes decide a row's label, and they answer
+finished; the check could not have known). And it runs after the LAST scout of the LAST wave has
+reported — a resumed or respawned scout included — over the final sidecars, and again if any scout
+runs after it: an unfinished scout's offsets stop wherever it happens to be, so a check run while
+scouts are still reading certifies nothing — one pass ran it when three of ten scouts had finished,
+saw the largest assignment's reads stop short of its last line, and still reported every scout
+checked, true only by luck the instrument could not know. Print one line per scout the night
+spawned, by name, with the sidecar the check read for it (the final one, never a dead first
+attempt), so a scout it never saw is a visible gap rather than an absence a matching count hides.
+Two axes decide a row's label, and they answer
 different questions. PAGE COVERAGE — not tool choice — separates READ from SAMPLED: READ means
 the reads collectively reach the staged file's LAST line, so a `Read` capped
 at `limit=60` on a 202-line file and a `head -20` are SAMPLED whatever the row says — a brief
