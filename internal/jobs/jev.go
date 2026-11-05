@@ -514,6 +514,12 @@ func (s *jevState) jevPass(j *Job, all []*core.Peer, live map[string]bool, threa
 		if !ok {
 			continue
 		}
+		// The /model confirm belongs to the Fable fallback that typed the
+		// /model (fallbackSwitchConfirmKeys): a "No, go back" here would
+		// leave the pane on Fable while the fallback counts it switched.
+		if strings.Contains(d.Header, "Switch model?") {
+			continue
+		}
 		optTexts := make([]string, len(d.Options))
 		for i, o := range d.Options {
 			optTexts[i] = o.Text
