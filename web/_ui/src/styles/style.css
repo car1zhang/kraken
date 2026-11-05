@@ -3828,3 +3828,145 @@ button.spawn-chip.spawn-draft:hover { background: color-mix(in srgb, var(--ac) 1
 /* a done goal is still one of the job's goals — muted, never hidden, and each
    chip mutes on its OWN goal's done-ness */
 .goal-chip.done { color: var(--muted); border-color: var(--border-strong); background: transparent; }
+
+/* ---- the agent map (MapView) ----
+   The board bar's view toggle, the map plane, its cards and the activity
+   band inside each, plus the steer modal's events panel that lists the same
+   events in writing. The characters themselves are canvas drawings
+   (lib/agentmap/draw.ts) and read their colours from the primitives above at
+   draw time, so a theme or accent flip reaches them too. */
+.bb-view { display: inline-flex; flex: none; }
+.bb-view-btn {
+  font: 600 9px var(--display); letter-spacing: 0.14em; text-transform: uppercase;
+  color: var(--body); background: transparent;
+  border: 1px solid var(--border); padding: 3px 9px;
+}
+.bb-view-btn + .bb-view-btn { border-left: none; }
+.bb-view-btn:hover { color: var(--fg); border-color: var(--ac); }
+.bb-view-btn.on { background: var(--ac); color: var(--accent-ink); border-color: var(--ac); }
+
+.agent-map {
+  position: relative; overflow: hidden;
+  height: calc(100vh - 120px); min-height: 320px;
+  touch-action: none;
+  user-select: none; -webkit-user-select: none;
+}
+.agent-map[hidden] { display: none; }
+.map-under, .map-over {
+  position: absolute; inset: 0; width: 100%; height: 100%;
+  pointer-events: none;
+}
+.map-under { z-index: 0; }
+/* the world is its own stacking context, so every card's z-index (from
+   stackOrder) orders cards among themselves and the top canvas stays above
+   all of them */
+.map-world { position: absolute; left: 0; top: 0; z-index: 1; }
+.map-zoom { position: absolute; left: 0; top: 0; }
+.map-over { z-index: 2; }
+
+.map-card {
+  position: absolute; width: 300px;
+  --map-sc: var(--muted);
+}
+/* a card moved out of the way by a settle glides there; MapView adds the
+   class for the move and takes it off after, so a drag never lags the
+   pointer */
+.map-card.glide { transition: left 260ms var(--ease), top 260ms var(--ease); }
+.map-card[data-status="working"] { --map-sc: var(--ac); }
+.map-card[data-status="blocked"] { --map-sc: var(--ac2); }
+.map-card[data-status="question"] { --map-sc: var(--warn); }
+.map-card[data-status="parked"] { --map-sc: color-mix(in srgb, var(--ac2) 55%, var(--g1)); }
+.map-card[data-status="limit"] { --map-sc: var(--stopped); }
+.map-card[data-status="done"] { --map-sc: var(--ok); }
+.map-card[data-status="draft"] { --map-sc: var(--muted); }
+/* the status colour frames the whole map card — JobCard inside it keeps its
+   own job-colour edge, which says WHICH job rather than where it is */
+.map-card > .card {
+  margin: 0;
+  outline: 1px solid var(--map-sc); outline-offset: 0;
+  background: var(--surface);
+}
+.map-card[data-status="working"] > .card { box-shadow: 0 0 14px color-mix(in srgb, var(--ac) 22%, transparent); }
+:root[data-theme="light"] .map-card[data-status="working"] > .card { box-shadow: none; }
+/* the characters' canvas paints IN FRONT of its own card's face (it follows
+   the card in the markup and sits one level up inside the .map-card's own
+   stacking context), so a card stacked in front still covers both; it takes
+   no pointer events, so every control on the card stays clickable */
+.map-actors {
+  position: absolute; z-index: 1; width: calc(100% + 128px);
+  pointer-events: none;
+}
+
+/* the activity band: the map card's last band, on the card's own surface
+   with a hairline above it, so it reads as part of the card rather than a
+   box under it. The same markup is the steer modal's collapsed activity
+   summary. */
+.act-strip {
+  margin-top: 6px; padding-top: 5px;
+  border-top: 1px solid var(--hairline);
+  font: 10px var(--mono);
+}
+.act-now { color: var(--fg); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.act-now b { font-weight: 600; color: var(--act, var(--ac)); }
+.act-now .act-label { color: var(--muted); }
+/* 24 ticks on one line: 8px wide with a 2px gap is 238px, inside the 276px
+   content box of a 300px map card (3px + 1px border, 10px padding each
+   side); they never grow, so a short record stays left-aligned instead of
+   stretching */
+.act-ribbon { display: flex; flex-wrap: nowrap; gap: 2px; margin-top: 4px; height: 6px; overflow: hidden; }
+.act-ribbon:empty { display: none; }
+.act-ribbon i { flex: 0 0 8px; width: 8px; background: var(--act, var(--divider)); }
+
+/* one hue per activity, the trial's legend; `hear` borrows talk's */
+[data-act="think"] { --act: #9aa0b4; }
+[data-act="edit"] { --act: #f5d34d; }
+[data-act="search"] { --act: #5ea8ff; }
+[data-act="read"] { --act: #c9b2ff; }
+[data-act="run"] { --act: #fb923c; }
+[data-act="home"] { --act: #2dd4bf; }
+[data-act="delegate"] { --act: #ff4fd8; }
+[data-act="talk"], [data-act="hear"] { --act: #f0abfc; }
+[data-act="review"] { --act: #a3e635; }
+[data-act="test"] { --act: #7fd44a; }
+[data-act="web"] { --act: #00e5ff; }
+[data-act="wait"] { --act: #b0b3c4; }
+[data-act="check"] { --act: #c084fc; }
+[data-act="ship"] { --act: #ffffff; }
+:root[data-theme="light"] [data-act="ship"] { --act: #55506b; }
+[data-act="data"] { --act: #60a5fa; }
+[data-act="build"] { --act: #fbbf24; }
+[data-act="other"] { --act: var(--muted); }
+[data-act="blocked"] { --act: var(--ac2); }
+[data-act="question"] { --act: var(--warn); }
+/* parked is the frame's and the dino's colour too (draw.ts Palette.parked) */
+[data-act="parked"] { --act: color-mix(in srgb, var(--ac2) 55%, var(--g1)); }
+[data-act="draft"] { --act: var(--muted); }
+[data-act="limit"] { --act: var(--stopped); }
+[data-act="done"] { --act: var(--ok); }
+
+.map-hud { position: absolute; left: 12px; bottom: 12px; z-index: 3; display: flex; gap: 2px; }
+.map-hud-btn {
+  font: 600 10px var(--display); letter-spacing: 0.14em; text-transform: uppercase;
+  color: var(--body); background: var(--surface);
+  border: 1px solid var(--border); padding: 5px 10px;
+}
+.map-hud-btn:hover { color: var(--fg); border-color: var(--ac); }
+
+/* the steer modal's recent-activity disclosure (EventsPanel), where the zeus
+   transcript panel was: the toggle wears the transcript head's look, the
+   collapsed body is the card's activity band, the expanded one the list */
+.steer-activity { display: flex; flex-direction: column; gap: 6px; }
+.steer-activity-toggle {
+  align-self: flex-start; background: none; border: 0; padding: 0;
+  font: 600 9px var(--display); letter-spacing: 0.08em; color: var(--muted);
+}
+.steer-activity-toggle:hover { color: var(--fg); }
+.steer-activity-body .act-strip { margin-top: 0; }
+.steer-events {
+  list-style: none; margin: 0; padding: 6px 9px; max-height: 40vh; overflow: auto;
+  background: var(--raised); border: 1px solid var(--divider);
+}
+.steer-events li { display: flex; gap: 6px; align-items: baseline; padding: 1px 0; font: 10.5px var(--mono); color: var(--body); }
+.steer-events li i { flex: none; width: 7px; height: 7px; display: inline-block; background: var(--act, var(--divider)); }
+.steer-events li b { flex: none; width: 62px; font-weight: 600; color: var(--fg); }
+.steer-events li span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }

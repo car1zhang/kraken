@@ -363,6 +363,14 @@ var webJobSpec = map[string]fieldSpec{
 	// session near that fill. Additive, so it never bumps apiContract;
 	// listed because assertShape rejects any key the spec does not document.
 	"context": {kind: wireObject, required: false},
+	// the agent map's activity (activity.go, jobs.JobActivity) and message
+	// threads (webTalk), both omitempty: activity rides only a live cell whose
+	// lead transcript holds an event, talks only a job that has exchanged
+	// `kraken s` messages with another active job, and neither rides an
+	// archived card. Shapes are webActivitySpec and webTalkSpec. Additive, no
+	// contract bump.
+	"activity": {kind: wireObject, required: false},
+	"talks":    {kind: wireArray, required: false},
 	// Every goal this job serves (goals.go), in link order, omitempty — absent
 	// means the job links none, which is every job until carl labels one and
 	// every job whose goals were deleted (schema v27's ON DELETE CASCADE takes
@@ -1262,6 +1270,12 @@ func TestWebJobWireShapePopulated(t *testing.T) {
 		// reason.
 		Spawned:   []webSpawnLink{{Slug: "spawned-cells-ios-chips", State: "working"}},
 		SpawnedBy: &webSpawnLink{Slug: "kraken-link-spawned-cells", State: "done"},
+		// Present so the agent map's two registrations are exercised, for
+		// Account's reason.
+		Activity: &jobs.JobActivity{Act: "test", Label: "go test", At: 1_792_599_370_254,
+			Events: []core.AgentEvent{{ID: "toolu_1", T: 1_792_599_370_254, Act: "test", Label: "go test", Open: true}},
+			Crew:   []jobs.CrewActivity{{Name: "hephaestus-go", Act: "edit", Label: "Edit board.go", At: 1_792_599_360_000}}},
+		Talks: []webTalk{{Slug: "other-cell", State: "working", Sent: 2, Received: 1, LastAt: 1_792_599_370_254}},
 	}
 	data, err := json.Marshal(wj)
 	if err != nil {
@@ -1290,6 +1304,72 @@ func TestWebSpawnLinkWireShape(t *testing.T) {
 		}
 		assertShape(t, "webSpawnLink "+l.State, data, webSpawnLinkSpec)
 	}
+}
+
+// webActivitySpec covers jobs.JobActivity (webJob's "activity"): events is
+// always present (the object exists only when there is at least one), label
+// and crew are omitempty.
+var webActivitySpec = map[string]fieldSpec{
+	"act":    {kind: wireString, required: true},
+	"label":  {kind: wireString, required: false},
+	"at":     {kind: wireNumber, required: true},
+	"events": {kind: wireArray, required: true},
+	"crew":   {kind: wireArray, required: false},
+}
+
+// agentEventSpec covers core.AgentEvent, the elements of activity.events and
+// of GET /api/job/events' "events".
+var agentEventSpec = map[string]fieldSpec{
+	"id":     {kind: wireString, required: true},
+	"t":      {kind: wireNumber, required: true},
+	"act":    {kind: wireString, required: true},
+	"label":  {kind: wireString, required: true},
+	"dur_ms": {kind: wireNumber, required: false},
+	"open":   {kind: wireBool, required: false},
+	"from":   {kind: wireString, required: false},
+	"who":    {kind: wireString, required: false},
+}
+
+// crewActivitySpec covers jobs.CrewActivity, the elements of activity.crew.
+var crewActivitySpec = map[string]fieldSpec{
+	"name":  {kind: wireString, required: true},
+	"act":   {kind: wireString, required: true},
+	"label": {kind: wireString, required: false},
+	"at":    {kind: wireNumber, required: true},
+}
+
+// webTalkSpec covers webTalk, the elements of webJob's "talks". No omitempty
+// on the type: a zero count is a real answer.
+var webTalkSpec = map[string]fieldSpec{
+	"slug":     {kind: wireString, required: true},
+	"state":    {kind: wireString, required: true},
+	"sent":     {kind: wireNumber, required: true},
+	"received": {kind: wireNumber, required: true},
+	"last_at":  {kind: wireNumber, required: true},
+}
+
+func TestActivityAndTalkWireShapes(t *testing.T) {
+	a := jobs.JobActivity{Act: "think", At: 1,
+		Events: []core.AgentEvent{
+			{ID: "toolu_1", T: 1, Act: "edit", Label: "Edit a.go", DurMS: 40},
+			{ID: "u1", T: 2, Act: "hear", Label: "from cell other", From: "cell", Who: "other"},
+		},
+		Crew: []jobs.CrewActivity{{Name: "athena-logic", Act: "read", At: 1}}}
+	data, err := json.Marshal(a)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertShape(t, "jobs.JobActivity", data, webActivitySpec)
+	for _, e := range a.Events {
+		data, _ := json.Marshal(e)
+		assertShape(t, "core.AgentEvent "+e.ID, data, agentEventSpec)
+	}
+	for _, c := range a.Crew {
+		data, _ := json.Marshal(c)
+		assertShape(t, "jobs.CrewActivity", data, crewActivitySpec)
+	}
+	data, _ = json.Marshal(webTalk{Slug: "x", State: "working"})
+	assertShape(t, "webTalk", data, webTalkSpec)
 }
 
 // --- webJob's array-element types, marshaled and checked directly: webJob's

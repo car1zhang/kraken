@@ -121,7 +121,10 @@ import (
 // Version 39 is mind runs: the mind_runs queue/record, its mind_run_blobs
 // side table, the mm_marks read marks, three provenance columns on mm_items,
 // and every proposed item flipped live (see schemaV39MindRuns).
-const schemaVersion = 39
+// Version 40 adds job_messages: one row per ordered (sender, receiver) pair
+// of jobs whose cells have messaged each other through `kraken s`, with a
+// count and first/last stamps (see jobMessagesTable).
+const schemaVersion = 40
 
 // schemaV1 creates all nine tables plus kv. Exact DDL (types, indexes) was
 // left to this package by the spec; shapes below mirror the spec's Data
@@ -2345,8 +2348,10 @@ type migrationStep struct {
 // IF NOT EXISTS) and flips proposed items live in SQL; its hook,
 // migrateV39MindRuns, adds the three mm_items columns only when each is
 // missing (see schemaV39MindRuns).
+// migrations[40] creates job_messages (CREATE TABLE IF NOT EXISTS, no hook;
+// see jobMessagesTable).
 // Future schema changes append
-// migrations[40], migrations[41], ... rather than editing an existing
+// migrations[41], migrations[42], ... rather than editing an existing
 // schemaV<N> string (or hook) in place, so a database created under an older
 // binary still migrates forward correctly.
 var migrations = map[int]migrationStep{
@@ -2389,6 +2394,7 @@ var migrations = map[int]migrationStep{
 	37: {sql: schemaV37, hook: migrateV37MindPass},
 	38: {sql: jobSpawnsTable},
 	39: {sql: schemaV39MindRuns, hook: migrateV39MindRuns},
+	40: {sql: jobMessagesTable},
 }
 
 // migrateV5Questions is migrations[5]'s Go hook: schemaV5's SQL has already
@@ -3570,6 +3576,26 @@ CREATE TABLE IF NOT EXISTS job_spawns (
 	parent_id INTEGER NOT NULL,
 	at        INTEGER NOT NULL DEFAULT 0,
 	via       TEXT    NOT NULL DEFAULT ''
+);
+`
+
+// jobMessagesTable is migration 40: the cell-to-cell message record
+// (jobmsg.go), one row per ORDERED pair of jobs — (a, b) and (b, a) are two
+// rows — counting how many times a's cell messaged b's zeus through
+// `kraken s`, with the first and last stamps (unix millis). The agent map
+// draws one thread per pair from it.
+//
+// No FK and no cascade, job_spawns' house style and for its reason: the rows
+// are history, so archive and teardown keep them, and only a hard delete
+// removes a job's rows on either side (DeleteJob).
+const jobMessagesTable = `
+CREATE TABLE IF NOT EXISTS job_messages (
+	from_id  INTEGER NOT NULL,
+	to_id    INTEGER NOT NULL,
+	n        INTEGER NOT NULL,
+	first_at INTEGER NOT NULL,
+	last_at  INTEGER NOT NULL,
+	PRIMARY KEY (from_id, to_id)
 );
 `
 

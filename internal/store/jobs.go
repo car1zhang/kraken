@@ -883,5 +883,12 @@ func (s *Store) DeleteJob(id int64) error {
 	// exists nowhere renders as nothing, so the row would only be noise. After
 	// the row delete rather than in one transaction, since a leftover link is
 	// harmless and a failed delete must not undo a hard delete already asked for.
-	return deleteSpawnsForJob(s.db, id)
+	// The cell-to-cell message rows (jobmsg.go) go the same way, and both
+	// deletes are attempted even when the first fails.
+	spawnErr := deleteSpawnsForJob(s.db, id)
+	msgErr := deleteMessagesForJob(s.db, id)
+	if spawnErr != nil {
+		return spawnErr
+	}
+	return msgErr
 }

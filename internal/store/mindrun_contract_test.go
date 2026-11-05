@@ -156,8 +156,8 @@ func contractGzip(t *testing.T, b []byte) []byte {
 // superseded_by".
 func TestContractV39FreshStoreShape(t *testing.T) {
 	s, _ := contractOpenStore(t)
-	if v := contractUserVersion(t, s); v != 39 {
-		t.Errorf("fresh user_version = %d, want 39", v)
+	if v := contractUserVersion(t, s); v != 40 {
+		t.Errorf("fresh user_version = %d, want 40", v)
 	}
 	for _, tbl := range []string{"mind_runs", "mind_run_blobs", "mm_marks"} {
 		if !contractTableExists(t, s, tbl) {
@@ -203,8 +203,8 @@ func TestContractV39FlipsProposedLiveOverAV38Store(t *testing.T) {
 	}
 	defer s2.Close()
 
-	if v := contractUserVersion(t, s2); v != 39 {
-		t.Errorf("migrated user_version = %d, want 39", v)
+	if v := contractUserVersion(t, s2); v != 40 {
+		t.Errorf("migrated user_version = %d, want 40", v)
 	}
 	for _, tbl := range []string{"mind_runs", "mind_run_blobs", "mm_marks"} {
 		if !contractTableExists(t, s2, tbl) {

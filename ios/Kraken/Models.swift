@@ -803,6 +803,79 @@ private struct TolerantWebJobContext: Decodable {
     }
 }
 
+// AgentEvent mirrors core/activity.go's AgentEvent (ios/API.md's
+// `agentEvent`): one thing a cell's lead did or heard. `act` is an activity
+// id or `hear`, a plain String so a future id decodes. Decode-only: the
+// agent map is a web view and nothing on the phone renders this yet.
+struct AgentEvent: Decodable {
+    let id: String
+    let t: Int64
+    let act: String
+    let label: String
+    let durMS: Int64?
+    let open: Bool?
+    let from: String?
+    let who: String?
+
+    enum CodingKeys: String, CodingKey {
+        case id, t, act, label, open, from, who
+        case durMS = "dur_ms"
+    }
+}
+
+// WebCrewActivity mirrors jobs.CrewActivity: one teammate's newest call.
+struct WebCrewActivity: Decodable {
+    let name: String
+    let act: String
+    let label: String?
+    let at: Int64
+}
+
+// WebActivity mirrors jobs.JobActivity (ios/API.md's `webActivity`): what a
+// live cell's lead is doing, its recent events, and its crew's newest calls.
+// Decode-only.
+struct WebActivity: Decodable {
+    let act: String
+    let label: String?
+    let at: Int64
+    let events: [AgentEvent]
+    let crew: [WebCrewActivity]?
+}
+
+// WebTalk mirrors api/activity.go's webTalk: one cell-to-cell message thread
+// between this job and another active one. Decode-only.
+struct WebTalk: Decodable {
+    let slug: String
+    let state: String
+    let sent: Int64
+    let received: Int64
+    let lastAt: Int64
+
+    enum CodingKeys: String, CodingKey {
+        case slug, state, sent, received
+        case lastAt = "last_at"
+    }
+}
+
+// The agent map's two keys, behind TolerantWebJobContext's arrangement for
+// its reason: a malformed `activity` or `talks` costs this card its
+// (unrendered) map data, never the board its decode.
+private struct TolerantWebActivity: Decodable {
+    let activity: WebActivity?
+
+    init(from decoder: Decoder) throws {
+        activity = try? WebActivity(from: decoder)
+    }
+}
+
+private struct TolerantWebTalks: Decodable {
+    let talks: [WebTalk]?
+
+    init(from decoder: Decoder) throws {
+        talks = try? [WebTalk](from: decoder)
+    }
+}
+
 struct WebJob: Decodable, Identifiable {
     let slug: String
     let repo: String
@@ -968,6 +1041,13 @@ struct WebJob: Decodable, Identifiable {
     // `context` below, exactly as `account` is, so a MALFORMED object costs
     // this card its (unrendered) meter rather than the board its decode.
     private let contextBox: TolerantWebJobContext?
+    // The agent map's data (WebActivity, WebTalk above): what a live cell is
+    // doing, and its cell-to-cell message threads. Both absent on a card the
+    // map has nothing for and on archived cards. Stored behind tolerant
+    // wrappers and read through the computed pair below, `context`'s
+    // arrangement. Decode-only: the map is a web view. Additive keys.
+    private let activityBox: TolerantWebActivity?
+    private let talksBox: TolerantWebTalks?
     // The node that owns this card when another kraken served it (v7). Absent
     // on every local card — its presence IS "remote".
     let owner: WebJobOwner?
@@ -1008,6 +1088,10 @@ struct WebJob: Decodable, Identifiable {
     var spawned: [JobSpawnLink]? { spawnedBox?.links }
     /// The cell that filed this one, or nil — none, or a malformed object.
     var spawnedBy: JobSpawnLink? { spawnedByBox?.link }
+    /// What the live cell is doing, or nil — not live, archived, or malformed.
+    var activity: WebActivity? { activityBox?.activity }
+    /// The cell-to-cell message threads, or nil — none, or a malformed array.
+    var talks: [WebTalk]? { talksBox?.talks }
 
     enum CodingKeys: String, CodingKey {
         case slug, repo, state, err, outcome, cell, live
@@ -1041,6 +1125,9 @@ struct WebJob: Decodable, Identifiable {
         case accountBox = "account"
         // same arrangement for `context`
         case contextBox = "context"
+        // and for the agent map's two keys
+        case activityBox = "activity"
+        case talksBox = "talks"
         case owner, visibility
     }
 }

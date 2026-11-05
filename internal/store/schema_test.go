@@ -224,6 +224,12 @@ func undoV37(t *testing.T, s *Store) {
 
 func downgradeFreshDB(t *testing.T, s *Store, target int) {
 	t.Helper()
+	// Reverse v40: the cell-to-cell message table goes.
+	if target < 40 {
+		if _, err := s.db.Exec(`DROP TABLE job_messages`); err != nil {
+			t.Fatalf("downgrade to v%d (undo v40) drop job_messages: %v", target, err)
+		}
+	}
 	// Reverse v39: the three mind-run tables go, then the three mm_items
 	// provenance columns, newest first. Shape-only: the proposed→live flip is
 	// not reversed, since no older shape can tell which rows it touched.

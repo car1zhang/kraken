@@ -19,6 +19,7 @@ import { StackChips } from "./chips/StackChips.tsx";
 import { StageChip, stageChipVisible } from "./chips/StageChip.tsx";
 import { ThreadChips, threadChipsVisible } from "./chips/ThreadChips.tsx";
 import { WakeupChip } from "./chips/WakeupChip.tsx";
+import { ActivityStrip } from "./ActivityStrip.tsx";
 import type { BoardActions } from "./BoardView.tsx";
 import { GoalChip } from "./GoalsPanel.tsx";
 import { useCardSubmitting, useSortableCard } from "./DragProvider.tsx";
@@ -69,6 +70,12 @@ export interface JobCardProps {
   expanded?: boolean;
   /** @deprecated See `expanded`. */
   onToggleExpanded?(key: string): void;
+  /**
+   * The card is drawn on the agent map (MapView), not in a column: it takes
+   * no part in drag-reorder at all, and carries the ActivityStrip as its last
+   * band. Absent, the card is exactly the board's.
+   */
+  mapMode?: boolean;
 }
 
 /**
@@ -166,6 +173,7 @@ export function JobCard({
   matchReason,
   matchTerms,
   boardNodeID,
+  mapMode = false,
 }: JobCardProps) {
   const key = jobKey(job);
   // A card another kraken polled in. It renders in the same columns as the
@@ -176,7 +184,10 @@ export function JobCard({
   const remote = mode !== "local";
   // Keyed by jobKey, never the bare slug: an archived entry and an active job
   // that reused its freed slug would otherwise share one drag id.
-  const drag = useSortableCard(key, { inert: remote });
+  // A map card is inert for the same reason a remote one is: the map moves
+  // the card itself (MapView's own pointer drag), and a sortable under it
+  // would turn that drag into a column reorder.
+  const drag = useSortableCard(key, { inert: remote || mapMode });
   // True for the seconds between a draft→working drop and the server answering
   // it. The card is being drawn in WORKING while the job's own state still
   // says draft — see useDragReorder's Submitting.
@@ -320,7 +331,8 @@ export function JobCard({
       // and a native drag racing it produces a ghost image and a dropped
       // gesture.
       // a remote card is not draggable, so it does not wear the grab cursor
-      draggable={remote ? "false" : "true"}
+      // and neither is a map card in the column sense
+      draggable={remote || mapMode ? "false" : "true"}
       onDragStart={(ev) => ev.preventDefault()}
       data-slug={job.slug}
       data-col={col}
@@ -566,6 +578,11 @@ export function JobCard({
           ) : null}
         </div>
       ) : null}
+
+      {/* ---- map only: ACTIVITY. The lead's current action and its record
+          of recent ones, as the card's last band — part of the card, never
+          a box beside it. The column board never renders it. */}
+      {mapMode ? <ActivityStrip job={job} /> : null}
     </div>
   );
 }

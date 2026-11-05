@@ -11,6 +11,7 @@
 // call's text belongs in the tick-stat corner rather than in a retry loop.
 
 import type {
+  AgentEvent,
   BackgroundUploadResult,
   CaptureResult,
   MarkReadResult,
@@ -432,6 +433,49 @@ export const fetchJobTranscriptTurns = (slug: string, turns = 5, signal?: AbortS
     `/api/job/transcript?slug=${encodeURIComponent(slug)}&turns=${turns}`,
     signal,
   );
+
+/**
+ * The lead's newest `n` transcript events (GET /api/job/events) — the steer
+ * modal's events panel. The server clamps `n` to 1..200 and always answers an
+ * array, `[]` when there is nothing to read; the `?? []` is for a server
+ * predating the route's body shape, not for a documented null.
+ */
+export async function fetchJobEvents(
+  slug: string,
+  n: number,
+  signal?: AbortSignal,
+): Promise<AgentEvent[]> {
+  const res = await getJSON<{ events?: AgentEvent[] | null }>(
+    `/api/job/events?slug=${encodeURIComponent(slug)}&n=${n}`,
+    signal,
+  );
+  return res.events ?? [];
+}
+
+/**
+ * Every saved agent-map card position (GET /api/map/positions), keyed by the
+ * board's own card key (lib/jobKey.ts) — opaque to the server.
+ */
+export async function fetchMapPositions(
+  signal?: AbortSignal,
+): Promise<Record<string, [number, number]>> {
+  const res = await getJSON<{ positions?: Record<string, [number, number]> | null }>(
+    "/api/map/positions",
+    signal,
+  );
+  return res.positions ?? {};
+}
+
+/**
+ * Merge `changes` into the saved positions (POST /api/map/positions). The
+ * server keeps every key not named here, so a client sends only the cards it
+ * moved — never the whole set it believes is current.
+ */
+export async function saveMapPositions(
+  changes: Record<string, [number, number]>,
+): Promise<void> {
+  await postJSON("/api/map/positions", { positions: changes });
+}
 
 /**
  * Freeze the whole artifact as read. The same {slug, home, name} triple

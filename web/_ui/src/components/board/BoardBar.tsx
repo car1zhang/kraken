@@ -34,7 +34,16 @@ export interface BoardBarProps {
    * its setter. Absent → no picker rendered (singleplayer, or a bare harness).
    */
   fleet?: FleetPickerProps;
+  /**
+   * Which view the board area shows — the four columns or the agent map —
+   * and its setter. The toggle renders only when `onView` is given, so a bar
+   * whose host does not offer the map renders exactly what it did before.
+   */
+  view?: BoardViewMode;
+  onView?: (v: BoardViewMode) => void;
 }
+
+export type BoardViewMode = "board" | "map";
 
 /**
  * The board's search strip: one input, a clear button, the goal filter's chip
@@ -67,6 +76,8 @@ export function BoardBar({
   overlayOpen,
   hidden,
   fleet,
+  view = "board",
+  onView,
 }: BoardBarProps) {
   const { query, setQuery, matched, total, active } = search;
   const inputRef = useRef<HTMLInputElement>(null);
@@ -149,6 +160,27 @@ export function BoardBar({
           is persisted) — a lone node's bar stays byte-identical to the one
           before the fleet existed. */}
       {fleet ? <FleetPicker {...fleet} /> : null}
+      {/* board ↔ map. A pressed-button pair rather than a single toggle so
+          each state is named on screen: the map is a second way to look at
+          the same cards, and the bar's search, goal chip and machines
+          dropdown narrow both. */}
+      {onView ? (
+        <span className="bb-view" id="view-toggle" role="group" aria-label="board view">
+          {(["board", "map"] as const).map((v) => (
+            <button
+              key={v}
+              type="button"
+              className={"bb-view-btn" + (view === v ? " on" : "")}
+              id={`view-${v}`}
+              aria-pressed={view === v ? "true" : "false"}
+              title={v === "board" ? "show the columns" : "show the agent map"}
+              onClick={() => onView(v)}
+            >
+              {v}
+            </button>
+          ))}
+        </span>
+      ) : null}
       <span className="bb-read">
         {active ? (
           <>

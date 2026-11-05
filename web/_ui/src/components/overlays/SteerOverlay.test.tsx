@@ -222,7 +222,9 @@ describe("steer mode matrix", () => {
         "steer-threads",
         "steer-detail",
         "steer-lastsent",
-        "steer-transcript",
+        // the recent-activity disclosure replaced zeus' transcript panel in
+        // the local body (agent-map job)
+        "steer-activity",
         "steer-chips",
         "steer-feedback",
         "steer-tokens",
