@@ -473,6 +473,16 @@ durable improvement), and never anything outside the kraken repo.
 {{operator}}'s review is the only thing standing between a judgment call and a merged mistake. The cell
 branch recycles after each merge, so several narrow PRs from one night cost nothing.
 
+**The PR body and the commit message are reviewed with the diff.** Draft each body and commit
+message from the diff as it enters the review round and hand them to the reviewers with it, named
+in the brief as in scope; when a round changes the diff, redraft both from the final diff and send
+them back for the re-review, so nothing reaches GitHub that the last verdict did not see. Pass the
+body to `gh pr create` itself, never a placeholder to fill in later, and with no review round (a
+`/direct` job run without review) read the body and the commit message against the findings rule
+yourself before the push. The diff is not the only thing that reaches GitHub, and a body written before a round and
+never shown to it keeps whatever the round removed — one pass had its reviewers block a real count
+in a diff, replaced it there, and shipped the same count in a body nobody had been asked to read.
+
 ## Prompting feedback
 
 The scouts also answer a question pointed the other way: **where did {{operator}}'s own input make the work
