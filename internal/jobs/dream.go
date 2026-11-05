@@ -159,6 +159,19 @@ func loadLastDreamDate() string {
 // cadence and the single-flight without a real sweep.
 var dreamPass = runDreamPass
 
+// DreamEnabled reports whether the nightly pass may run on this machine:
+// false only when KRAKEN_DREAM is `off` (case-insensitive, whitespace
+// trimmed), set in the environment or in ~/.kraken/env. Unset, empty or any
+// other value leaves the pass on, so a typo cannot silently turn it off.
+// This is the whole off switch: there is no cadence knob and no way to skip
+// a single night, and nothing in the binary ever writes the variable. It is
+// read on every call; what happens once, at process start, is ApplyEnvFile
+// copying ~/.kraken/env into the environment, so a flip made in the file
+// takes a serve restart.
+func DreamEnabled() bool {
+	return !strings.EqualFold(strings.TrimSpace(os.Getenv("KRAKEN_DREAM")), "off")
+}
+
 // kickDream runs at most one corroboration pass per LOCAL CALENDAR DAY,
 // returning the job it created (nil when the night was skipped, not due, or
 // failed) so the caller can queue it on this same tick.
@@ -178,6 +191,17 @@ func kickDream(now time.Time) *Job {
 	// in-memory guard first — see lastDreamDate: this is the gate that holds
 	// when the store cannot record.
 	if loadLastDreamDate() == today {
+		return nil
+	}
+	// The operator's off switch. Same shape as the no-checkout skip below:
+	// one event per day (a restart re-checks, logging at most once more),
+	// only the in-memory date stamped, the stored watermark left where it is
+	// so the first night back on sweeps from where the last pass stopped
+	// (clamped to dreamMaxWindow like any other gap, and logged as a clamp).
+	// It gates creation only: a dream cell already running keeps running.
+	if !DreamEnabled() {
+		lastDreamDate.Store(today)
+		dlogEvent("info", "dream-skipped", "dream: skipped for %s — KRAKEN_DREAM=off", today)
 		return nil
 	}
 	// The nightly pass improves kraken's own source, so a machine with no
