@@ -52,12 +52,21 @@ import (
 
 // jevDefaultDirective is the state Jev is given as the operator's standing
 // instruction when ~/.kraken/jev-directive.md does not override it.
-const jevDefaultDirective = `You answer dialogs that appear in an unattended kraken cell, so that the job keeps running without the operator having to look at it.
-The cell is a kraken worktree made from the operator's own repo, and its agent was launched on purpose with the flags it has. Trust the folder, its settings and its MCP servers.
-Accept notices, announcements, release notes, surveys and onboarding screens with their default or dismiss option. Any theme is fine.
-Never pick an option that exits or quits the program, resets configuration to defaults, deletes or removes anything, upgrades a plan, or spends money, credits or extra usage.
-Escalate anything that needs a credential, a login, a signature such as accepting terms, or the operator's own judgement. A question the agent itself is asking the operator (AskUserQuestion) or a plan approval is never yours to answer: escalate it.
-When no option is clearly safe, escalate.`
+const jevDefaultDirective = `You answer dialogs that appear in an unattended kraken cell. The operator's rule is continue-all: pick the option that keeps the job running, every time, unless the dialog is one of the exceptions listed at the end. Do not escalate out of caution; a dialog that is not an exception is always answered.
+The cell is a kraken worktree made from the operator's own repo, and its agent was launched on purpose with the flags it has.
+When several options keep the job running, pick the first of them.
+Continue past these, always:
+- Folder trust, bypass-permissions confirmations and tool permission prompts: the first yes.
+- MCP servers from the repo's .mcp.json and external CLAUDE.md imports: enable or approve them, all of them when offered.
+- Model switches, including the /model "Switch model?" confirm: switch. Kraken typed that /model itself. A warning that a response will be slower or use more tokens is not spending money.
+- Cost or token warnings and thresholds: continue.
+- Notices, announcements, release notes, surveys, onboarding screens: dismiss or take the default. Any theme is fine.
+- A data-training choice: opt out. A usage-credit consent: decline.
+Escalate only these exceptions:
+- A settings-file error or a ~/.claude.json configuration error, whatever its options say: continuing would drop the cell's settings.
+- An MCP tool asking for interaction.
+- Anything that needs a login, a credential, an API key, or a signature such as accepting terms.
+Options that exit, quit, reset, delete, remove, upgrade, purchase, or use credits or extra usage are already struck from your choices.`
 
 // jevDirectivePath is where the operator can replace the built-in directive.
 func jevDirectivePath() string {
@@ -512,12 +521,6 @@ func (s *jevState) jevPass(j *Job, all []*core.Peer, live map[string]bool, threa
 		raw := jevPaneTail(p.Pane, jevTailLines)
 		d, ok := core.ParseDialog(raw)
 		if !ok {
-			continue
-		}
-		// The /model confirm belongs to the Fable fallback that typed the
-		// /model (fallbackSwitchConfirmKeys): a "No, go back" here would
-		// leave the pane on Fable while the fallback counts it switched.
-		if strings.Contains(d.Header, "Switch model?") {
 			continue
 		}
 		optTexts := make([]string, len(d.Options))

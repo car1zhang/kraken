@@ -1,7 +1,6 @@
 package jobs
 
 import (
-	"strings"
 	"testing"
 	"time"
 
@@ -129,55 +128,6 @@ func TestStandingAgentsCarryTheirModel(t *testing.T) {
 	for _, a := range standingAgents() {
 		if a.Model == "" {
 			t.Errorf("%s: standing agent has no Model — the Fable fallback can never fire for it", a.ID)
-		}
-	}
-}
-
-func TestFallbackModelLabel(t *testing.T) {
-	for in, want := range map[string]string{
-		"claude-opus-5-5":  "Opus 5.5",
-		"claude-fable-5-1": "Fable 5.1",
-		"claude-opus":      "Opus",
-	} {
-		if got := fallbackModelLabel(in); got != want {
-			t.Errorf("fallbackModelLabel(%q) = %q, want %q", in, got, want)
-		}
-	}
-}
-
-// switchConfirmPane is the confirm that stalled two cells on 2026-11-04:
-// the fallback's continue prompt was refused every tick while it stayed open,
-// and jev escalated it over the "use more tokens" warning.
-const switchConfirmPane = "❯ steering from the operator: add a range date picker\n" +
-	"  ⎿  You've reached your Fable limit. Run /usage-credits to continue or switch models with /model.\n" +
-	"\n" +
-	"✻ Brewed for 2s · done 7:27 PM\n" +
-	"▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔\n" +
-	"   Switch model?\n" +
-	"   Your next response will be slower and use more tokens\n" +
-	"\n" +
-	"   This conversation is cached for the current model. Switching to Opus 5.5 means the full history gets re-read.\n" +
-	"\n" +
-	"   ❯ 1. Yes, switch to Opus 5.5\n" +
-	"     2. No, go back\n"
-
-func TestFallbackSwitchConfirmKeys(t *testing.T) {
-	if got := fallbackSwitchConfirmKeys(switchConfirmPane, "claude-opus-5-5"); len(got) != 1 || got[0] != "Enter" {
-		t.Errorf("cursor on Yes: keys = %v, want [Enter]", got)
-	}
-	cursorOnNo := strings.Replace(strings.Replace(switchConfirmPane, "❯ 1. Yes", "  1. Yes", 1), "  2. No", "❯ 2. No", 1)
-	if got := fallbackSwitchConfirmKeys(cursorOnNo, "claude-opus-5-5"); len(got) != 1 || got[0] != "1" {
-		t.Errorf("cursor on No: keys = %v, want [1]", got)
-	}
-	refused := []struct{ name, pane, model string }{
-		{"switch to a model the fallback did not ask for", switchConfirmPane, "claude-sonnet-5-5"},
-		{"another dialog", strings.Replace(switchConfirmPane, "Switch model?", "Do you want to proceed?", 1), "claude-opus-5-5"},
-		{"idle pane", "❯ hello\n\n────\n❯ \n────\n", "claude-opus-5-5"},
-		{"empty pane", "", "claude-opus-5-5"},
-	}
-	for _, c := range refused {
-		if got := fallbackSwitchConfirmKeys(c.pane, c.model); got != nil {
-			t.Errorf("%s: keys = %v, want nil", c.name, got)
 		}
 	}
 }

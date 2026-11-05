@@ -399,52 +399,6 @@ func fableFallbackPrompt() string {
 	return "kraken: this account's Fable usage ran out (its session and weekly usage did not), so kraken switched you to " + fableFallbackModel + " with /model. Nothing else changed — same account, same conversation. Pick up exactly where you left off and continue."
 }
 
-// fallbackModelLabel renders a model id the way Claude Code's /model confirm
-// names it: "claude-opus-5-5" becomes "Opus 5.5".
-func fallbackModelLabel(model string) string {
-	parts := strings.Split(strings.TrimPrefix(model, "claude-"), "-")
-	if len(parts) == 0 || parts[0] == "" {
-		return model
-	}
-	name := strings.ToUpper(parts[0][:1]) + parts[0][1:]
-	if len(parts) == 1 {
-		return name
-	}
-	return name + " " + strings.Join(parts[1:], ".")
-}
-
-// fallbackSwitchConfirmKeys returns the keys that accept Claude Code's
-// "Switch model?" confirm, which /model opens on a conversation cached for
-// the current model, when paneTail shows that confirm offering a switch to
-// model; nil otherwise. The fallback typed that /model itself, so answering
-// its confirm is part of the switch, not a judgement for jev: jev's directive
-// forbids spending, and the confirm's "use more tokens" warning makes the
-// model escalate it (measured 2026-11-04, twice), while the continue prompt
-// is refused for as long as the dialog is open.
-func fallbackSwitchConfirmKeys(paneTail, model string) []string {
-	d, ok := core.ParseDialog(paneTail)
-	if !ok || !strings.Contains(d.Header, "Switch model?") {
-		return nil
-	}
-	want := "Yes, switch to " + fallbackModelLabel(model)
-	for i, o := range d.Options {
-		if o.Text != want {
-			continue
-		}
-		// Enter when the cursor is already on it; otherwise the option's
-		// digit, never arrows: if the dialog closes between the capture and
-		// the send, an Up would recall an old input that Enter resubmits.
-		if d.Cursor == i {
-			return []string{"Enter"}
-		}
-		if o.Number > 0 {
-			return []string{strconv.Itoa(o.Number)}
-		}
-		return nil
-	}
-	return nil
-}
-
 // tryFableFallback is the shared effect half for both passes: decide, switch,
 // resolve the hit. It reports whether it handled the hit — true means the
 // caller's tick is done. email is a func so the account lookup (a
@@ -533,18 +487,6 @@ func (d *daemonState) tryFableFallback(hitKey, label, agentModel string, email f
 	if !ranSincePrompt {
 		if last.PromptedAt != 0 && now.Sub(time.Unix(last.PromptedAt, 0)) < fableFallbackBumpGap {
 			return true // a prompt is out and still has time to start a turn
-		}
-		// The /model just typed may have opened its "Switch model?" confirm,
-		// which SendToPeer's open-prompt guard rightly refuses to type over.
-		// Accept it, and send the continue prompt on the next tick.
-		if keys := fallbackSwitchConfirmKeys(jevPaneTail(p.Pane, jevTailLines), fableFallbackModel); keys != nil {
-			if err := jevSendKeys(p.Pane, keys); err != nil {
-				d.Poked[retryKey] = now.Unix()
-				dlogEvent("error", "limit-rescue-failed", "%s: could not accept the switch to %s: %v", label, fableFallbackModel, err)
-				return true
-			}
-			dlogEvent("info", "limit-rescue", "%s: accepted the Switch model confirm for %s, continue prompt follows next tick", label, fableFallbackModel)
-			return true
 		}
 		if _, err := core.SendToPeer(p, fableFallbackPrompt()); err != nil {
 			// The model is switched; only the prompt is owed, and the next tick
