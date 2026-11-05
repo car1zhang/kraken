@@ -124,7 +124,10 @@ import (
 // Version 40 adds job_messages: one row per ordered (sender, receiver) pair
 // of jobs whose cells have messaged each other through `kraken s`, with a
 // count and first/last stamps (see jobMessagesTable).
-const schemaVersion = 40
+// Version 41 adds jobs.frozen_at: the operator's "on hold" mark on a blocked
+// job, cleared by the same write that moves the job off blocked (see
+// schemaV41Frozen).
+const schemaVersion = 41
 
 // schemaV1 creates all nine tables plus kv. Exact DDL (types, indexes) was
 // left to this package by the spec; shapes below mirror the spec's Data
@@ -2350,8 +2353,11 @@ type migrationStep struct {
 // missing (see schemaV39MindRuns).
 // migrations[40] creates job_messages (CREATE TABLE IF NOT EXISTS, no hook;
 // see jobMessagesTable).
+// migrations[41] adds jobs.frozen_at; its SQL is empty and the hook,
+// migrateV41Frozen, adds the column only when it is missing (see
+// schemaV41Frozen).
 // Future schema changes append
-// migrations[41], migrations[42], ... rather than editing an existing
+// migrations[42], migrations[43], ... rather than editing an existing
 // schemaV<N> string (or hook) in place, so a database created under an older
 // binary still migrates forward correctly.
 var migrations = map[int]migrationStep{
@@ -2395,6 +2401,42 @@ var migrations = map[int]migrationStep{
 	38: {sql: jobSpawnsTable},
 	39: {sql: schemaV39MindRuns, hook: migrateV39MindRuns},
 	40: {sql: jobMessagesTable},
+	41: {hook: migrateV41Frozen},
+}
+
+// schemaV41Frozen is v41's one ALTER: jobs.frozen_at, the unix-millis stamp
+// of the operator putting a BLOCKED job on hold, 0 for a job that is not
+// frozen (every row that predates the column). A frozen job is still a
+// blocked job in every state reader; the mark only says it is waiting on
+// something or someone other than the operator, so the board files it out of
+// the blocked column's way.
+//
+// The column is only ever non-zero beside state = 'blocked'. SetJobFrozen
+// refuses to stamp it on any other state, and updateJobFieldsTx zeroes it in
+// the same UPDATE that writes any other state, so a cell that starts working
+// again thaws itself and reads as an ordinary blocked job the next time it
+// stops.
+//
+// Run by migrateV41Frozen behind a column probe, v34's reason: ADD COLUMN has
+// no IF NOT EXISTS form, and several migration tests age a fresh database by
+// resetting user_version alone, which replays this step over a jobs table
+// that already has the column.
+const schemaV41Frozen = `ALTER TABLE jobs ADD COLUMN frozen_at INTEGER NOT NULL DEFAULT 0;`
+
+// migrateV41Frozen is migrations[41]'s hook: add jobs.frozen_at unless it is
+// already there.
+func migrateV41Frozen(tx *sql.Tx) error {
+	var n int
+	if err := tx.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('jobs') WHERE name = 'frozen_at'`).Scan(&n); err != nil {
+		return fmt.Errorf("probe jobs.frozen_at: %w", err)
+	}
+	if n > 0 {
+		return nil
+	}
+	if _, err := tx.Exec(schemaV41Frozen); err != nil {
+		return fmt.Errorf("add jobs.frozen_at: %w", err)
+	}
+	return nil
 }
 
 // migrateV5Questions is migrations[5]'s Go hook: schemaV5's SQL has already

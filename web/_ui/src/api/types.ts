@@ -561,6 +561,16 @@ export interface WebJob {
    */
   load?: WebJobLoad;
   /**
+   * When the operator put this BLOCKED job on hold, unix millis; absent for a
+   * job that is not frozen. `state` stays "blocked" beside it, so every
+   * state-keyed rule (the drop table, the steer modal's mode, the sounds)
+   * treats a frozen card as the blocked card it is. The board reads this key
+   * for one thing: filing the card under the blocked column's FROZEN drawer
+   * (`isFrozen`, lib/format.ts). The server clears it in the same write that
+   * moves the job off blocked, and never serves it on an archived card.
+   */
+  frozen_at?: number;
+  /**
    * The job's PRIMARY goal — `goals[0]` — or absent. Absence is the ONLY
    * no-goal state on the wire: the Go field is a pointer with omitempty, so an
    * unlinked job drops the key rather than sending a zeroed object, and a

@@ -16,6 +16,7 @@
 import {
   archiveJob,
   doneJob,
+  freezeJob,
   queueJob,
   reactivateJob,
   stopJob,
@@ -30,7 +31,15 @@ import type { Column } from "../hooks/useBoard.ts";
  * uniformly (app.js:883); this type is that same trick, typed.
  */
 export const ARCHIVED = "archived" as const;
-export type DropColumn = Column | typeof ARCHIVED;
+
+/**
+ * The FROZEN drawer, at the foot of the BLOCKED column: the archive drawer's
+ * sibling, a drop target that is not a board column. A blocked card dropped
+ * on it is put on hold. Nothing is dragged out of it either: a frozen card
+ * thaws by its own button, or by itself when its cell starts working.
+ */
+export const FROZEN = "frozen" as const;
+export type DropColumn = Column | typeof ARCHIVED | typeof FROZEN;
 
 /**
  * The four steer-modal modes. Only two are reachable from a drag; `view` is
@@ -111,6 +120,9 @@ export const TRANSITIONS: Readonly<
   blocked: {
     done: post("/api/done", (slug) => doneJob(slug)),
     working: { kind: "steer", mode: "unblock", requireText: false },
+    // On hold. Writes no state: the job stays blocked and only its card
+    // moves into the drawer.
+    [FROZEN]: post("/api/job/freeze", (slug) => freezeJob(slug, true)),
   },
   done: {
     // text:"" is the wire's "reactivate without steering" — the endpoint takes

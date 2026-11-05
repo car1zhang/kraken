@@ -354,6 +354,10 @@ var webJobSpec = map[string]fieldSpec{
 	// through undocumented, which is the whole point of transcribing
 	// ios/API.md.
 	"load": {kind: wireObject, required: false},
+	// the operator's hold mark on a blocked job (jobfreeze.go, schema v41):
+	// unix millis, omitempty, present only beside state "blocked" and never
+	// on an archived card. Additive, so apiContract does not bump.
+	"frozen_at": {kind: wireNumber, required: false},
 	// the cell lead's context-window fill as its statusline last reported it
 	// (webJobContext; its own spec and shape test are in cellctx_wire_test.go),
 	// omitempty. Absent means UNREPORTED — no stamped session yet, a cell
@@ -2361,6 +2365,14 @@ var jobFormSpec = map[string]fieldSpec{
 // already the board's single source of truth for job state.
 var jobColorSpec = map[string]fieldSpec{
 	"ok": {kind: wireBool, required: true},
+}
+
+// jobFreezeSpec is POST /api/job/freeze's response: the ack plus the stamp
+// the write left on the job, 0 after a thaw. Not omitempty: the caller asked
+// about one job's hold, and 0 is the answer "not frozen".
+var jobFreezeSpec = map[string]fieldSpec{
+	"ok":        {kind: wireBool, required: true},
+	"frozen_at": {kind: wireNumber, required: true},
 }
 
 var jobSaveFormSpec = map[string]fieldSpec{

@@ -17,12 +17,13 @@ vi.mock("../api/client.ts", () => ({
   archiveJob: vi.fn(async () => ({ ok: true })),
   reactivateJob: vi.fn(async () => ({ ok: true })),
   reorderColumn: vi.fn(async () => ({ ok: true })),
+  freezeJob: vi.fn(async () => ({ ok: true, frozen_at: 1 })),
 }));
 
 import * as client from "../api/client.ts";
 import type { WebJob } from "../api/types.ts";
 import { jobKey } from "../lib/jobKey.ts";
-import { ARCHIVED } from "../lib/moves.ts";
+import { ARCHIVED, FROZEN } from "../lib/moves.ts";
 import type { DropColumn, SteerMode } from "../lib/moves.ts";
 import { bucketJobs } from "../lib/format.ts";
 import { makeBoard as makeWebBoard, makeJob } from "../test/fixtures.ts";
@@ -240,6 +241,114 @@ describe("cross-column transitions", () => {
     expect(view.spies.setDragging).not.toHaveBeenCalledWith(true);
     expect(view.spies.mutate).not.toHaveBeenCalled();
     expect(client.doneJob).not.toHaveBeenCalled();
+  });
+});
+
+// ------------------------------------------------------------ the hold
+//
+// A frozen card is a member of byColumn.blocked (bucketJobs does not know the
+// mark) but is DRAWN in the FROZEN drawer. These pin that the drop table
+// files it where it is drawn.
+
+describe("the frozen drawer", () => {
+  const BOARD = [
+    job("d1", "draft"),
+    job("w1", "working"),
+    job("b1", "blocked"),
+    job("b2", "blocked"),
+    job("f1", "blocked", { frozen_at: 1700000000000 }),
+    job("z1", "done"),
+  ];
+
+  it("dropping a blocked card on the drawer freezes it and writes nothing else", async () => {
+    const view = setup(BOARD);
+    await drag(view, "b1", columnDropId(FROZEN));
+    expect(client.freezeJob).toHaveBeenCalledTimes(1);
+    expect(client.freezeJob).toHaveBeenCalledWith("b1", true);
+    expect(view.spies.mutate).toHaveBeenCalledTimes(1);
+    expect(view.spies.onOpenSteer).not.toHaveBeenCalled();
+    expect(client.reorderColumn).not.toHaveBeenCalled();
+    expect(client.doneJob).not.toHaveBeenCalled();
+  });
+
+  it("dropping a blocked card ON a frozen card is the same freeze, not a reorder", async () => {
+    // the frozen card sits inside the drawer; hovering it is hovering the drawer
+    const view = setup(BOARD);
+    await drag(view, "b1", "f1");
+    expect(client.freezeJob).toHaveBeenCalledWith("b1", true);
+    expect(client.reorderColumn).not.toHaveBeenCalled();
+  });
+
+  it.each(["d1", "w1", "z1"])("refuses to freeze %s, which is not blocked", async (slug) => {
+    const view = setup(BOARD);
+    await drag(view, slug, columnDropId(FROZEN));
+    expect(client.freezeJob).not.toHaveBeenCalled();
+    expect(view.spies.mutate).not.toHaveBeenCalled();
+  });
+
+  it("lights the drawer up only while a blocked card is in the air", async () => {
+    const view = setup(BOARD);
+    expect(view.result.current.isTarget(FROZEN)).toBe(false);
+    await act(async () => {
+      view.result.current.onDragStart(startEvent("b1"));
+    });
+    expect(view.result.current.isTarget(FROZEN)).toBe(true);
+    await act(async () => {
+      view.result.current.onDragCancel();
+    });
+    await act(async () => {
+      view.result.current.onDragStart(startEvent("w1"));
+    });
+    expect(view.result.current.isTarget(FROZEN)).toBe(false);
+  });
+
+  it("offers no hold to an unhealthy working card, though it is drawn in BLOCKED", async () => {
+    // bucketJobs files it under blocked, so `from` is "blocked"; the server
+    // files it as working and would answer the freeze with a 409
+    const sick = job("sick", "working", { live: true, health: "zeus stopped answering" });
+    const view = setup([...BOARD, sick]);
+    await act(async () => {
+      view.result.current.onDragStart(startEvent("sick"));
+    });
+    expect(view.result.current.from).toBe("blocked");
+    expect(view.result.current.isTarget(FROZEN)).toBe(false);
+    // its other blocked-column drops are untouched
+    expect(view.result.current.isTarget("done")).toBe(true);
+    await act(async () => {
+      view.result.current.onDragCancel();
+    });
+
+    await drag(view, "sick", columnDropId(FROZEN));
+    expect(client.freezeJob).not.toHaveBeenCalled();
+    expect(view.spies.mutate).not.toHaveBeenCalled();
+    // and dropping it on a frozen card is the same refusal
+    await drag(view, "sick", "f1");
+    expect(client.freezeJob).not.toHaveBeenCalled();
+    expect(client.reorderColumn).not.toHaveBeenCalled();
+  });
+
+  it("refuses to drag a frozen card at all", async () => {
+    const view = setup(BOARD);
+    for (const to of [columnDropId("done"), columnDropId("working"), columnDropId("blocked"), "b1"]) {
+      await drag(view, "f1", to);
+    }
+    expect(view.spies.setDragging).not.toHaveBeenCalledWith(true);
+    expect(view.spies.mutate).not.toHaveBeenCalled();
+    expect(view.spies.onOpenSteer).not.toHaveBeenCalled();
+    expect(client.doneJob).not.toHaveBeenCalled();
+    expect(client.reorderColumn).not.toHaveBeenCalled();
+  });
+
+  it("keeps the frozen card's slot when the visible blocked cards are reordered", async () => {
+    // The order posted REPLACES the server's blocked column, which still holds
+    // the frozen job: leaving it out would drop its stored position.
+    const view = setup([
+      job("b1", "blocked"),
+      job("f1", "blocked", { frozen_at: 1700000000000 }),
+      job("b2", "blocked"),
+    ]);
+    await drag(view, "b2", "b1");
+    expect(client.reorderColumn).toHaveBeenCalledWith("blocked", ["b2", "b1", "f1"]);
   });
 });
 
@@ -687,8 +796,8 @@ describe("sensors", () => {
 // ------------------------------------------------------------ droppable ids
 
 describe("column drop ids", () => {
-  it("round-trips every column and the archive drawer", () => {
-    for (const c of [...COLUMNS, ARCHIVED]) {
+  it("round-trips every column and both drawers", () => {
+    for (const c of [...COLUMNS, ARCHIVED, FROZEN]) {
       expect(parseColumnDropId(columnDropId(c))).toBe(c);
     }
   });

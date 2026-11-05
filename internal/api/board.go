@@ -756,6 +756,15 @@ type webJob struct {
 	// does not know the key ignores it and renders the card exactly as it did
 	// before estimates existed.
 	Load *webJobLoad `json:"load,omitempty"`
+	// FrozenAt is when the operator put this blocked job on hold
+	// (jobfreeze.go, schema v41), unix millis, and omitted for a job that is
+	// not frozen. `state` stays "blocked" beside it: the mark is orthogonal
+	// to the four states, so a client that does not know the key renders an
+	// ordinary blocked card. Only ever present on a card whose state is
+	// blocked (webFrozenAt), and never on an archived one.
+	//
+	// ADDITIVE, so apiContract does NOT bump.
+	FrozenAt int64 `json:"frozen_at,omitempty"`
 	// Goals is every goal this job serves (goals.go), in link position order
 	// and present exactly when there is at least one — absence is the wire's
 	// only spelling of "serves none", so an empty ARRAY is never served
@@ -1503,6 +1512,9 @@ func buildWebBoard() webBoard {
 			// so one payload shape with the clients gating on state is the
 			// only version that does not flicker the key in and out.
 			Load: webJobLoadFrom(j.Load),
+			// FrozenAt: the hold mark, off the same job row. The presence
+			// rule lives in webFrozenAt so a test can reach it.
+			FrozenAt: webFrozenAt(j),
 			// Goals/Goal: resolved out of the two maps above, keyed on the job's
 			// own id — an empty slice (no links, or links that resolved to
 			// nothing) is exactly the omitempty absence, for both keys at once.

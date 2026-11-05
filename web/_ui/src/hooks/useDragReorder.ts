@@ -37,9 +37,10 @@ import { arrayMove, sortableKeyboardCoordinates } from "@dnd-kit/sortable";
 
 import { reorderColumn } from "../api/client.ts";
 import type { WebBoard, WebJob } from "../api/types.ts";
+import { isFrozen } from "../lib/format.ts";
 import { jobKey } from "../lib/jobKey.ts";
 import { columnSlugs, predictReorderedJobs } from "../lib/predictReorder.ts";
-import { ARCHIVED, SUBMIT_ENDPOINT, resolveMove } from "../lib/moves.ts";
+import { ARCHIVED, FROZEN, SUBMIT_ENDPOINT, resolveMove } from "../lib/moves.ts";
 import type { DropColumn, SteerMode } from "../lib/moves.ts";
 import { COLUMNS } from "./useBoard.ts";
 import type { BoardModel, Column } from "./useBoard.ts";
@@ -316,8 +317,12 @@ export function useDragReorder({
     const m = new Map<string, DropColumn>();
     // Remote (owned) cards never enter the drop table: no drag starts on one
     // (onDragStart finds no column for its key) and no drop resolves onto one.
+    // A frozen card is a member of byColumn.blocked but is DRAWN in the
+    // FROZEN drawer, so that is where the drop table files it: hovering one
+    // resolves to the drawer, and no drag starts on one (onDragStart).
     for (const c of COLUMNS)
-      for (const j of byColumn[c]) if (!j.owner) m.set(jobKey(j), c);
+      for (const j of byColumn[c])
+        if (!j.owner) m.set(jobKey(j), isFrozen(j) ? FROZEN : c);
     for (const j of archived) m.set(jobKey(j), ARCHIVED);
     return m;
   }, [byColumn, archived]);
@@ -431,9 +436,9 @@ export function useDragReorder({
     (e: DragStartEvent) => {
       const key = String(e.active.id);
       const col = columnOf.get(key);
-      // Archived cards are not draggable (nothing leaves the drawer by drag),
-      // and an unknown key means the board moved under us.
-      if (col === undefined || col === ARCHIVED) return;
+      // Archived and frozen cards are not draggable (nothing leaves either
+      // drawer by drag), and an unknown key means the board moved under us.
+      if (col === undefined || col === ARCHIVED || col === FROZEN) return;
       activeRef.current = { key, from: col };
       setActiveKey(key);
       setFrom(col);
@@ -559,7 +564,11 @@ export function useDragReorder({
         void refetch();
         return;
       }
-      const move = resolveMove(active.from, to);
+      // The hold is the one drop judged on the job's own state rather than on
+      // the column it is drawn in: an unhealthy working cell is filed under
+      // BLOCKED (bucketJobs), and the server refuses to freeze it.
+      const move =
+        to === FROZEN && job.state !== "blocked" ? null : resolveMove(active.from, to);
       if (move === null) {
         // A pair that is not in the table. No-op — never a nearest-legal
         // fallback: every entry in that table starts a cell or stops an agent.
@@ -632,9 +641,14 @@ export function useDragReorder({
   const isTarget = useCallback(
     (to: DropColumn): boolean => {
       if (from === null || from === to) return false;
+      // Same rule as onDragEnd's: the drawer lights up only for a card the
+      // server files as blocked, so a highlight is still a drop that works.
+      if (to === FROZEN && activeKey !== null && byKey.get(activeKey)?.state !== "blocked") {
+        return false;
+      }
       return resolveMove(from, to) !== null;
     },
-    [from],
+    [activeKey, byKey, from],
   );
 
   const sensors = useBoardSensors();

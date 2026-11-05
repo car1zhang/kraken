@@ -20,6 +20,7 @@ vi.mock("../../api/client.ts", () => ({
   reactivateJob: vi.fn(() => Promise.resolve({ ok: true })),
   killJob: vi.fn(() => Promise.resolve({ ok: true })),
   doneJob: vi.fn(() => Promise.resolve({ ok: true })),
+  freezeJob: vi.fn(() => Promise.resolve({ ok: true, frozen_at: 1 })),
   saveDraft: vi.fn(() => Promise.resolve({ ok: true })),
   uploadImage: vi.fn(),
   openTmux: vi.fn(() => Promise.resolve({ ok: true })),
@@ -44,6 +45,7 @@ import {
   answerQuestion,
   deleteFeedback,
   editFeedback,
+  freezeJob,
   reactivateJob,
   retryJob,
   setJobColor,
@@ -323,6 +325,80 @@ describe("steer mode matrix", () => {
     expect(document.getElementById("steer-markdone")).not.toHaveAttribute(
       "hidden",
     );
+  });
+});
+
+// The hold button beside mark-done. A frozen job is still state "blocked";
+// `frozen_at` is what the button reads.
+describe("steer freeze / unfreeze", () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  const freezeBtn = () => document.getElementById("steer-freeze")!;
+  const mountWith = (over: Partial<typeof job>, mode: SteerMode = "unblock") => {
+    const onClose = vi.fn();
+    render(
+      <Steer
+        open
+        slug="j"
+        mode={mode}
+        job={{ ...job, ...over }}
+        onClose={onClose}
+        mutate={mutate}
+      />,
+    );
+    return { onClose };
+  };
+
+  it("offers freeze on a blocked live cell, posts the hold and closes", async () => {
+    const { onClose } = mountWith({ state: "blocked" });
+    expect(freezeBtn()).not.toHaveAttribute("hidden");
+    expect(freezeBtn()).toHaveTextContent("freeze");
+    expect(freezeBtn()).not.toHaveTextContent("unfreeze");
+    await userEvent.click(freezeBtn());
+    expect(freezeJob).toHaveBeenCalledTimes(1);
+    expect(freezeJob).toHaveBeenCalledWith("j", true);
+    // the card was just put aside: nothing more to do with it here
+    await waitFor(() => expect(onClose).toHaveBeenCalledTimes(1));
+  });
+
+  it("offers unfreeze on a job on hold, and stays open after it", async () => {
+    const { onClose } = mountWith({ state: "blocked", frozen_at: 1_700_000_000_000 });
+    expect(freezeBtn()).not.toHaveAttribute("hidden");
+    expect(freezeBtn()).toHaveTextContent("unfreeze");
+    await userEvent.click(freezeBtn());
+    expect(freezeJob).toHaveBeenCalledWith("j", false);
+    // taking a job off hold is usually the step before steering it
+    await waitFor(() => expect(freezeBtn()).not.toBeDisabled());
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
+  it("is hidden on a working cell", () => {
+    mountWith({ state: "working" }, "steer");
+    expect(freezeBtn()).toHaveAttribute("hidden");
+  });
+
+  it("is hidden on an unhealthy working cell, though mark-done is offered", () => {
+    // drawn as blocked, but the server files it as working and would refuse
+    mountWith({ state: "working", health: "zeus is gone" }, "steer");
+    expect(document.getElementById("steer-markdone")).not.toHaveAttribute("hidden");
+    expect(freezeBtn()).toHaveAttribute("hidden");
+  });
+
+  it("is hidden in reactivate and view modes", () => {
+    for (const mode of ["reactivate", "view"] as SteerMode[]) {
+      const { unmount } = render(
+        <Steer
+          open
+          slug="j"
+          mode={mode}
+          job={{ ...job, state: "blocked" }}
+          onClose={() => {}}
+          mutate={mutate}
+        />,
+      );
+      expect(freezeBtn()).toHaveAttribute("hidden");
+      unmount();
+    }
   });
 });
 

@@ -18,6 +18,13 @@ import (
 // from carl rather than one (an answer, then a steer), which is why its body
 // names the open P0 instead of the generic "see the board".
 
+// notifyBlocked sends the "blocked" notification for j. One function for the
+// tick's two senders: the tick's confirmed state write into blocked, and the
+// frozen thaw's follow-up for a turn no tick saw as working (jobfreeze.go).
+func notifyBlocked(j *Job) {
+	notify("kraken ⏸ "+j.Slug, blockedNotifyBody(jobQuestionRows(j)))
+}
+
 // blockedNotifyBody picks the body of the "blocked" notification from the
 // job's question rows: an unanswered P0 names itself, anything else — no rows,
 // rows that are all answered, open rows that are only P1/P2 — is the generic

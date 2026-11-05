@@ -2,7 +2,7 @@ import { Fragment, useState, type CSSProperties, type ReactNode } from "react";
 
 import type { WebJob } from "../../api/types.ts";
 import type { Column } from "../../lib/columns.ts";
-import { age, columnFor, jobColorVar, repoColorVar } from "../../lib/format.ts";
+import { age, columnFor, isFrozen, jobColorVar, repoColorVar } from "../../lib/format.ts";
 import { ownerChipText, remoteMode } from "../../lib/fleet.ts";
 import { jobKey } from "../../lib/jobKey.ts";
 import { highlightSegments, type JobMatch } from "../../lib/jobSearch.ts";
@@ -104,6 +104,16 @@ const STATUS_TEXT: Partial<Record<Column, string>> = {
 };
 
 /**
+ * The status token of a card on hold. Not a STATUS_TEXT entry because frozen
+ * is not a column: the card's column is still blocked. Outside the FROZEN
+ * drawer, which is only the agent map since a frozen card is never dragged,
+ * this token is the only thing that marks the card as on hold. It is the one
+ * live-card token, an exception the working/blocked tokens did not get,
+ * because nothing else on the card says it.
+ */
+const FROZEN_STATUS_TEXT = "❄ frozen";
+
+/**
  * One job card, in SIX FIXED BANDS — this order, always this order, whatever
  * column the card is in. Port of cardHTML (app.js), band for band; the numbers
  * are shared vocabulary with style.css and the iOS JobCardView, so renumbering
@@ -187,7 +197,11 @@ export function JobCard({
   // A map card is inert for the same reason a remote one is: the map moves
   // the card itself (MapView's own pointer drag), and a sortable under it
   // would turn that drag into a column reorder.
-  const drag = useSortableCard(key, { inert: remote || mapMode });
+  //
+  // A card on hold is inert too. It is drawn in the FROZEN drawer, outside
+  // the column's sortable list, and nothing leaves that drawer by drag.
+  const frozen = isFrozen(job);
+  const drag = useSortableCard(key, { inert: remote || mapMode || frozen });
   // True for the seconds between a draft→working drop and the server answering
   // it. The card is being drawn in WORKING while the job's own state still
   // says draft — see useDragReorder's Submitting.
@@ -244,9 +258,17 @@ export function JobCard({
   // band 6 — assembled first rather than inline, so the row can be dropped
   // whole when a card offers nothing to press (every draft card).
   const reactivatable = !remote && (col === "done" || job.cell_gone) && job.reactivatable;
+  // The hold buttons. Freeze is offered on a local card the SERVER files as
+  // blocked (`job.state`, not the display column: an unhealthy working cell
+  // is drawn in blocked, and the route would refuse it), unfreeze on a card
+  // already on hold. Neither exists without the host's onFreeze, and neither
+  // is a remote action: there is no node verb for it.
+  const canFreeze = !remote && !!actions.onFreeze && !frozen && job.state === "blocked";
+  const canUnfreeze = !remote && !!actions.onFreeze && frozen;
   // tmux, retry and reactivate are all THIS machine's: a remote cell's pane is
   // on its owner's Mac, and neither retry nor reactivate is a remote action
-  const hasActions = !remote && (job.live || retryable || reactivatable);
+  const hasActions =
+    !remote && (job.live || retryable || reactivatable || canFreeze || canUnfreeze);
 
   // An uncoloured job emits no --job-color declaration AT ALL and its accent
   // bar falls through to the 40%-transparent accent edge (full accent on
@@ -263,7 +285,7 @@ export function JobCard({
   // rendered from two other places (the drag overlay, tests) that pass a column
   // of their own.
   const displayCol = columnFor(job.health ? "blocked" : job.state);
-  const statusText = STATUS_TEXT[displayCol];
+  const statusText = frozen ? FROZEN_STATUS_TEXT : STATUS_TEXT[displayCol];
 
   const openDrilldown = () => {
     // A click that ends a text selection is not a click on the card.
@@ -306,6 +328,7 @@ export function JobCard({
       className={
         "card editable" +
         (remote ? " remote" : "") +
+        (frozen ? " frozen" : "") +
         (drag.className ? " " + drag.className : "") +
         (submitting ? " submitting" : "")
       }
@@ -331,8 +354,9 @@ export function JobCard({
       // and a native drag racing it produces a ghost image and a dropped
       // gesture.
       // a remote card is not draggable, so it does not wear the grab cursor
-      // and neither is a map card in the column sense
-      draggable={remote || mapMode ? "false" : "true"}
+      // and neither is a map card in the column sense, nor a card on hold
+      draggable={remote || mapMode || frozen ? "false" : "true"}
+      data-frozen={frozen ? "true" : undefined}
       onDragStart={(ev) => ev.preventDefault()}
       data-slug={job.slug}
       data-col={col}
@@ -377,7 +401,7 @@ export function JobCard({
             the line, so anything appended after it would land outside the
             alignment the design puts it there for. */}
         {statusText ? (
-          <span className={"status status-" + displayCol}>{statusText}</span>
+          <span className={"status status-" + (frozen ? "frozen" : displayCol)}>{statusText}</span>
         ) : null}
       </div>
 
@@ -574,6 +598,36 @@ export function JobCard({
               }}
             >
               ↺ reactivate
+            </button>
+          ) : null}
+          {/* The hold. A small button beside the others rather than a
+              drag-only gesture: putting a card aside is a triage move made
+              while scanning the blocked column, and the drawer it drags to
+              is at the column's foot, which may be off screen. */}
+          {canFreeze ? (
+            <button
+              className="btn freeze"
+              data-slug={job.slug}
+              title="put on hold — waiting on something else; thaws when the cell works again"
+              onClick={(ev) => {
+                ev.stopPropagation();
+                actions.onFreeze?.(job.slug, true);
+              }}
+            >
+              ❄ freeze
+            </button>
+          ) : null}
+          {canUnfreeze ? (
+            <button
+              className="btn freeze unfreeze"
+              data-slug={job.slug}
+              title="take off hold — back to the blocked column"
+              onClick={(ev) => {
+                ev.stopPropagation();
+                actions.onFreeze?.(job.slug, false);
+              }}
+            >
+              ❄ unfreeze
             </button>
           ) : null}
         </div>

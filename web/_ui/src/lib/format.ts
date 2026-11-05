@@ -421,6 +421,21 @@ export function columnFor(state: string): Column {
   return (COLUMNS as readonly string[]).includes(state) ? (state as Column) : "draft";
 }
 
+/**
+ * isFrozen: the operator put this blocked job on hold (`frozen_at`).
+ *
+ * A frozen job is still a member of the BLOCKED bucket: bucketJobs does not
+ * know about the mark, so the drag layer, the reorder prediction and the
+ * search all see it as the blocked card it is. Only the render layer splits
+ * it out, into the FROZEN drawer at the foot of that column (BoardView).
+ *
+ * The state test is defensive. The server serves the key only beside
+ * `state: "blocked"`, and an archived card never carries it.
+ */
+export function isFrozen(j: WebJob): boolean {
+  return !!j.frozen_at && !j.archived && j.state === "blocked";
+}
+
 export interface BoardBuckets {
   byColumn: Record<Column, WebJob[]>;
   archived: WebJob[];
@@ -439,6 +454,10 @@ export function flagCount(jobs: readonly WebJob[]): number {
   let flags = 0;
   for (const j of jobs) {
     if (j.archived) continue; // drawer, not a column — and never flagged
+    // On hold: the operator has said this one does not need them right now,
+    // so nothing about it counts toward the "needs you" total. It thaws, and
+    // counts again, the moment its cell starts working.
+    if (isFrozen(j)) continue;
     if (j.question) flags++;
     if (j.health) flags++;
     flags += docQuestionsOpenP0(j);

@@ -224,6 +224,12 @@ func undoV37(t *testing.T, s *Store) {
 
 func downgradeFreshDB(t *testing.T, s *Store, target int) {
 	t.Helper()
+	// Reverse v41: jobs.frozen_at goes.
+	if target < 41 {
+		if _, err := s.db.Exec(`ALTER TABLE jobs DROP COLUMN frozen_at`); err != nil {
+			t.Fatalf("downgrade to v%d (undo v41) drop jobs.frozen_at: %v", target, err)
+		}
+	}
 	// Reverse v40: the cell-to-cell message table goes.
 	if target < 40 {
 		if _, err := s.db.Exec(`DROP TABLE job_messages`); err != nil {

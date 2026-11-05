@@ -53,6 +53,14 @@ var ErrThreadAnswering = errors.New("store: thread is already answering")
 // ErrThreadClosed is returned by ClaimThreadAnswering for a closed row.
 var ErrThreadClosed = errors.New("store: thread is closed")
 
+// ErrJobNotBlocked is returned by SetJobFrozen when the job it was asked to
+// freeze exists but its state is not "blocked". Only a blocked job can be put
+// on hold, and the check runs inside the UPDATE itself, so a job that started
+// working between the caller's read and its write is refused rather than
+// frozen mid-turn. Distinct from ErrNotFound so the API layer can answer 409
+// rather than 404.
+var ErrJobNotBlocked = errors.New("store: job is not blocked")
+
 // ErrNotFound is returned by single-row lookups (GetBySlug, GetByID, ...)
 // when no row matches.
 var ErrNotFound = errors.New("store: not found")

@@ -14,6 +14,7 @@ import {
   fetchJobForm,
   fetchJobTranscriptTurns,
   fetchNodeTranscript,
+  freezeJob,
   killJob,
   openInEditor,
   reactivateJob,
@@ -37,6 +38,7 @@ import {
   SCOPE_ANCHORS,
   UNBLOCK_ANCHORS,
   age,
+  isFrozen,
   loadRatioText,
   loadROI,
   usageColorClass,
@@ -416,6 +418,7 @@ function SteerBody({
   const [sending, setSending] = useState(false);
   const [killing, setKilling] = useState(false);
   const [markingDone, setMarkingDone] = useState(false);
+  const [freezing, setFreezing] = useState(false);
   const openTmuxTarget = useOpenTmux(mutate);
   const attInput = useRef<HTMLInputElement | null>(null);
   const [form, setForm] = useState<JobForm | null>(null);
@@ -631,6 +634,18 @@ function SteerBody({
     }
   }, [cancelDraft, jobSlug, mutate, onClose]);
 
+  // The hold. Freezing closes the modal, since the card has just been put
+  // aside and there is nothing more to do with it here; unfreezing leaves it
+  // open, because taking a job off hold is usually the step before steering
+  // it. The draft is left alone in both directions: a hold changes no state.
+  const frozen = !!job && isFrozen(job);
+  const toggleFreeze = useCallback(async () => {
+    setFreezing(true);
+    const res = await mutate(() => freezeJob(jobSlug, !frozen));
+    setFreezing(false);
+    if (res && !frozen) onClose();
+  }, [frozen, jobSlug, mutate, onClose]);
+
   // Q5's answer: the rename lives on BOTH surfaces. A live working/blocked
   // card routes here and never to the editor, so without this copy the control
   // would be reachable only while the cell is down — the same argument the
@@ -649,6 +664,10 @@ function SteerBody({
     composer && mode !== "reactivate" && (liveCol === "working" || liveCol === "blocked");
   const showTmux = composer && mode !== "reactivate" && !!job?.live;
   const showDone = composer && mode !== "reactivate" && liveCol === "blocked";
+  // Offered where mark-done is, narrowed to a job the SERVER files as blocked:
+  // an unhealthy working cell displays as blocked too, and the route refuses
+  // to freeze it.
+  const showFreeze = showDone && job?.state === "blocked";
   // view's one action. Hidden when the job cannot be reactivated (no stamped
   // session) and when nobody wired the callback — see onReactivate.
   const showReactivate = !composer && !!job?.reactivatable && !!onReactivate;
@@ -982,6 +1001,21 @@ function SteerBody({
           onClick={() => void markDone()}
         >
           ✓ mark done
+        </button>
+        <button
+          className="btn freeze"
+          id="steer-freeze"
+          hidden={!showFreeze}
+          title={
+            frozen
+              ? "take off hold — back to the blocked column"
+              : "put on hold — waiting on something else; thaws when the cell works again"
+          }
+          data-slug={jobSlug}
+          disabled={freezing}
+          onClick={() => void toggleFreeze()}
+        >
+          {frozen ? "❄ unfreeze" : "❄ freeze"}
         </button>
         <button
           className="btn ghost danger"

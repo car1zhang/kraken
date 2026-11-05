@@ -977,6 +977,12 @@ struct WebJob: Decodable, Identifiable {
     // So nil is "no estimate to act on", never "this job cost nothing". Never
     // render it as 0. Additive key, no contract bump.
     let load: WebJobLoad?
+    // When the operator put this BLOCKED job on hold (schema v41), unix
+    // millis; nil for a job that is not frozen. `state` stays "blocked"
+    // beside it, so a card that ignores this key is an ordinary blocked card,
+    // which is what the phone draws today. Additive key, absent on older
+    // servers and never served on an archived card; decoded, not rendered.
+    let frozenAt: Int64?
     // The job's optional color — one of red/blue/green/yellow/purple/orange/
     // pink/cyan (the names Claude Code's `/color` accepts), absent or "" when
     // the job has none. Additive key, absent on older servers, so no contract
@@ -1115,6 +1121,7 @@ struct WebJob: Decodable, Identifiable {
         case threads
         case tokens
         case load
+        case frozenAt = "frozen_at"
         case color
         case agent
         case author
