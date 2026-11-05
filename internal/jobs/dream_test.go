@@ -127,6 +127,43 @@ func TestKickDreamSkipsSameLocalDate(t *testing.T) {
 	}
 }
 
+// KRAKEN_DREAM=off is the operator's off switch: the pass never fires, the
+// stored watermark is left alone (so the first night back on sweeps from
+// where the last pass stopped), and only the exact word turns it off — any
+// other value, or an empty one, leaves the pass on.
+func TestKickDreamSkipsWhenTurnedOff(t *testing.T) {
+	useTestStore(t)
+	now := dreamNoon()
+	s := stubDreamPass(t, DreamRun{Date: today(now), SweptTo: now.UnixMilli()}, true)
+	prev := DreamRun{Date: today(now.Add(-48 * time.Hour)), SweptTo: now.Add(-40 * time.Hour).UnixMilli(), Job: "dream-" + today(now.Add(-48*time.Hour))}
+	seedDreamRun(t, prev)
+	t.Setenv("KRAKEN_DREAM", " Off ")
+
+	kickDream(now)
+	kickDream(now.Add(24 * time.Hour))
+
+	if n := s.calls.Load(); n != 0 {
+		t.Fatalf("pass fired %d times with KRAKEN_DREAM=off, want 0", n)
+	}
+	if got := ReadDreamRun(); got != prev {
+		t.Fatalf("watermark = %+v, want the seeded %+v untouched", got, prev)
+	}
+	// The skip stamps the in-memory date like the no-checkout skip does;
+	// without the stamp it would log a dream-skipped event on every tick.
+	if got, want := loadLastDreamDate(), today(now.Add(24*time.Hour)); got != want {
+		t.Fatalf("in-memory date after the skip = %q, want %q", got, want)
+	}
+	if DreamEnabled() {
+		t.Fatal("DreamEnabled() = true under KRAKEN_DREAM=off")
+	}
+	for _, v := range []string{"", "no", "false", "0", "on"} {
+		t.Setenv("KRAKEN_DREAM", v)
+		if !DreamEnabled() {
+			t.Fatalf("DreamEnabled() = false under KRAKEN_DREAM=%q, want true: only the word off turns the pass off", v)
+		}
+	}
+}
+
 // The next local date fires — including the case the wall-clock rule exists
 // for: a Mac asleep across midnight, waking hours later, gets its pass on the
 // first tick after it wakes rather than skipping the night.
