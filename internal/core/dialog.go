@@ -48,7 +48,7 @@ type Dialog struct {
 
 const (
 	// dialogWindow is how many lines from the bottom of the pane ParseDialog
-	// reads, so scrollback above a dialog cannot contribute a second cursor.
+	// reads, so scrollback far above a dialog is never looked at.
 	dialogWindow = 25
 	// dialogHeaderLines is how far above the first option the header reaches.
 	dialogHeaderLines = 8
@@ -115,13 +115,16 @@ func splitDialogLine(line string) dialogLine {
 }
 
 // ParseDialog finds the option list at the bottom of a captured pane. It reads
-// only the last 25 lines, and needs exactly one of them to be led by a cursor
-// glyph. The run is the cursor line plus the contiguous lines above and below
-// it (no blank line in between) that are numbered or whose text starts in the
+// only the last 25 lines and anchors on the bottom-most one led by a cursor
+// glyph; a glyph line above it (an echoed user message, an answered dialog)
+// is history and never parsed in its place, and a run that reaches one is
+// refused. The run is the cursor line plus the contiguous lines above and
+// below it (no blank line in between) that are numbered or whose text starts in the
 // cursor line's text column; the first line that is neither ends the run in
 // that direction. When the cursor line is numbered, an un-numbered line in the
 // run is folded into the option above it, and the parse needs at least two
-// options after that fold. Any failure returns a zero Dialog and false.
+// options after that fold. A run touching a rule line is Claude Code's input
+// box and is refused. Any failure returns a zero Dialog and false.
 func ParseDialog(paneText string) (Dialog, bool) {
 	if paneText == "" {
 		return Dialog{}, false
@@ -136,10 +139,11 @@ func ParseDialog(paneText string) (Dialog, bool) {
 	for i := start; i < len(lines); i++ {
 		lines[i] = strings.TrimRight(lines[i], "\r")
 		parsed[i] = splitDialogLine(lines[i])
+		// the bottom-most glyph line wins: Claude Code echoes every user
+		// message led by the same ❯, so a message sent just before a
+		// dialog opened puts a second glyph above the live cursor, and
+		// the live dialog is always drawn at the bottom
 		if parsed[i].cursor {
-			if cursor >= 0 {
-				return Dialog{}, false
-			}
 			cursor = i
 		}
 	}
@@ -161,6 +165,20 @@ func ParseDialog(paneText string) (Dialog, bool) {
 		last++
 	}
 	if first == last {
+		return Dialog{}, false
+	}
+	// An older glyph line touching the run (an echoed message ending in a
+	// numbered list right above an option list) would merge two lists and
+	// shift every arrow count, so a run holding a second cursor is refused.
+	for i := first; i <= last; i++ {
+		if i != cursor && parsed[i].cursor {
+			return Dialog{}, false
+		}
+	}
+	// Claude Code draws its input box between two rule lines, and a
+	// multi-line draft wraps into the cursor's text column; a run that
+	// touches a rule line is that box, never a dialog.
+	if (first-1 >= start && dialogRule(lines[first-1])) || (last+1 < len(lines) && dialogRule(lines[last+1])) {
 		return Dialog{}, false
 	}
 
@@ -199,6 +217,21 @@ func ParseDialog(paneText string) (Dialog, bool) {
 	}
 	d.Header = strings.Join(header, "\n")
 	return d, true
+}
+
+// dialogRule reports whether a line is a horizontal rule: non-blank and made
+// only of box-drawing dashes once trimmed.
+func dialogRule(line string) bool {
+	t := strings.TrimSpace(line)
+	if t == "" {
+		return false
+	}
+	for _, r := range t {
+		if r != '─' && r != '━' {
+			return false
+		}
+	}
+	return true
 }
 
 func letterCount(s string) int {
