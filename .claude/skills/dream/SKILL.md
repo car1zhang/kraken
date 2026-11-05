@@ -239,7 +239,12 @@ already held, because nothing in any brief said what was already known.
 digest. They are read-only exploration — they change nothing in the repo and judge nothing — so they are
 unnamed subagents, not teammates. Give each one a scratch path **outside the repo** (`/tmp/…`, never
 a worktree-relative path) and require its findings there: a scout's report is long, and the reply
-channel truncates. Each brief also names that scout's OWN scratch subdirectory for working files
+channel truncates. Say in the brief that a scout never ends its turn to wait on a background run
+or a `Monitor` watch: an in-process subagent is not woken when its own task completes, so a wait
+it needs is a foreground until-loop inside one Bash call (the call's `timeout` set, up to 600000
+ms, the loop giving up before it), or it reports now and names the run's output path; the wait
+protocol below (arm one background until-loop, then end the turn) is yours, never a scout's. Each
+brief also names that scout's OWN scratch subdirectory for working files
 (staged reduced views, notes) — two scouts staging into one shared directory have collided mid-run,
 and the collision recovery costs more than the namespace would have. Name those directories with
 SHORT slice handles under one root you create first — a short `/tmp/<handle>` root, never under
