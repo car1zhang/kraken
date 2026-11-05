@@ -817,6 +817,18 @@ type webJob struct {
 	// archivedWebJob withholds it, Load's call. ADDITIVE — a new optional
 	// key — so apiContract does NOT bump.
 	Context *webJobContext `json:"context,omitempty"`
+	// Activity is what the live cell's lead is doing, its last
+	// jobs.ActivityBoardEvents events, and each teammate's newest call, read
+	// from their transcripts (jobs.JobActivityFor) for the agent map. Present
+	// only on a non-archived job whose cell is live and whose lead transcript
+	// holds an event; a job whose cell is not live costs nothing here.
+	// ADDITIVE, so apiContract does NOT bump.
+	Activity *jobs.JobActivity `json:"activity,omitempty"`
+	// Talks is one entry per other ACTIVE job this job's cell has exchanged
+	// `kraken s` messages with (store.job_messages via talksFor), drawn as
+	// threads on the agent map. Absent when there are none and on archived
+	// cards. ADDITIVE, so apiContract does NOT bump.
+	Talks []webTalk `json:"talks,omitempty"`
 	// Visibility is who on the tailnet may see or drive this job — private,
 	// readonly or public (jobs.EffectiveVisibility, so readonly for a job that
 	// never set one). Always present: a remote board decides which controls
@@ -1435,6 +1447,13 @@ func buildWebBoard() webBoard {
 	// the same list rather than loading it a second time.
 	archived := jobs.LoadArchivedJobs()
 	spawns := buildSpawnIndex(js, archived)
+	// The cell-to-cell message rows, read once for the whole board like the
+	// spawn index, and the active jobs they may name.
+	msgs := jobs.ListCellMessages()
+	var peers map[int64]webSpawnLink
+	if len(msgs) > 0 {
+		peers = talkPeers(js)
+	}
 	byState := map[string][]webJob{}
 	for _, j := range js {
 		// Computed once: this loop runs for every job on a payload rebuilt
@@ -1506,9 +1525,13 @@ func buildWebBoard() webBoard {
 			// presence rule lives in webContextFor so a test can reach it.
 			Context:    webContextFor(ctxIndex, handoffIndex, j),
 			Visibility: j.EffectiveVisibility(),
+			Talks:      talksFor(j.ID, msgs, peers),
 		}
 		if live[jobs.CellSession(j)] {
 			wj.Cell, wj.Live = jobs.CellSession(j), true
+			// The teammates whose own transcripts JobActivityFor reads: the
+			// roster entries of kind teammate, filled in the branch below.
+			var teammates []string
 			if j.Started() && j.State != "done" {
 				board.LiveCells++
 				wj.Health = jobs.CellHealth(j, all)
@@ -1530,8 +1553,12 @@ func buildWebBoard() webBoard {
 				wj.ZeusStatus = crew.ZeusStatus
 				for _, a := range crew.Agents {
 					wj.Roster = append(wj.Roster, webAgent{Name: a.Name, Model: a.Model, Role: a.Role, Status: a.Status, Working: a.Working, Kind: a.Kind})
+					if a.Kind == jobs.CrewKindTeammate {
+						teammates = append(teammates, a.Name)
+					}
 				}
 			}
+			wj.Activity = jobs.JobActivityFor(j, teammates)
 		} else if j.Started() && j.State != "done" {
 			// dead cell: the session is gone but the worktree (and any
 			// uncommitted WIP) is still on disk. Health routes the card into

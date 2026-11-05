@@ -235,6 +235,50 @@ export interface SpawnLink {
 }
 
 /**
+ * One event out of a Claude transcript, mirroring core.AgentEvent: a tool call
+ * the agent made (`act` an activity id) or a message arriving for it (`act`
+ * "hear", with `from` naming the channel). `t` is unix MILLIS. No field ever
+ * carries message or prompt text — `label` is a program name, a file's base
+ * name or a recipient.
+ */
+export interface AgentEvent {
+  id: string;
+  t: number;
+  act: string;
+  label: string;
+  dur_ms?: number;
+  open?: boolean;
+  from?: "teammate" | "task" | "you" | "kraken" | "cell";
+  who?: string;
+}
+
+/** A teammate's newest call, mirroring jobs.CrewActivity. */
+export interface WebCrewActivity {
+  name: string;
+  act: string;
+  label?: string;
+  at: number;
+}
+
+/** Mirrors jobs.JobActivity: the lead's newest events plus each teammate's newest call. */
+export interface WebActivity {
+  act: string;
+  label?: string;
+  at: number;
+  events: AgentEvent[];
+  crew?: WebCrewActivity[];
+}
+
+/** Mirrors api.webTalk: one peer this job has messaged or been messaged by. */
+export interface WebTalk {
+  slug: string;
+  state: string;
+  sent: number;
+  received: number;
+  last_at: number;
+}
+
+/**
  * Per-job token spend, mirroring api.webTokens (internal/api/board.go:299).
  *
  * Counters are RAW and unweighted — no blended cost, deliberately: cache reads
@@ -579,6 +623,18 @@ export interface WebJob {
    * server predating the key. Widened with string for jobs.ValidColor's reason.
    */
   visibility?: Visibility | string;
+  /**
+   * What the cell's lead and its teammates are doing, read off their
+   * transcripts (jobs.JobActivity). Present only on a LIVE, non-archived job
+   * whose lead transcript holds at least one event; absent otherwise. The agent
+   * map is its only renderer — the column board's cards ignore it.
+   */
+  activity?: WebActivity;
+  /**
+   * The other active jobs this job has exchanged `kraken s` messages with, one
+   * entry per peer. Absent when there are none and on an archived card.
+   */
+  talks?: WebTalk[];
   // `start_error` is GONE from the wire with the queued state. It existed
   // because a start happened on a daemon tick nobody was watching, so its
   // failure had nowhere to land but the card. A submit is now a request carl

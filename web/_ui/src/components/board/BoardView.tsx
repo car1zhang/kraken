@@ -2,15 +2,20 @@ import { useMemo } from "react";
 
 import type { BoardModel } from "../../hooks/useBoard.ts";
 import type { JobSearchModel } from "../../hooks/useJobSearch.ts";
+import { useLocalStorage } from "../../hooks/useLocalStorage.ts";
 import { COLUMNS } from "../../lib/columns.ts";
 import { goalJobCounts } from "../../lib/goals.ts";
 import { jobKey } from "../../lib/jobKey.ts";
 import type { SteerMode } from "../../lib/moves.ts";
 import { ArchiveDrawer } from "./ArchiveDrawer.tsx";
-import { BoardBar } from "./BoardBar.tsx";
+import { BoardBar, type BoardViewMode } from "./BoardBar.tsx";
 import { BoardColumn } from "./Column.tsx";
 import { GoalsPanel } from "./GoalsPanel.tsx";
 import { JobCard } from "./JobCard.tsx";
+import { MapView } from "./MapView.tsx";
+
+/** localStorage key holding which view the board area shows. */
+const BOARD_VIEW_KEY = "kraken.boardView";
 
 /**
  * Everything a card can do that this slice does not own. All of them are
@@ -167,6 +172,11 @@ export interface BoardViewProps {
  * `board.byColumn` for both its drop table and its reorder body — seeing whole
  * columns while the screen shows a subset. All four columns still render under
  * any query: there is no status filter, so the grid template never changes.
+ *
+ * The bar's board/map toggle swaps the four columns for the agent map
+ * (MapView), which lays the same filtered cards out on a free plane. The
+ * choice is per browser (`kraken.boardView`). The map draws only active
+ * cards, so the archive drawer has no place on it.
  */
 export function BoardView({
   board,
@@ -179,6 +189,12 @@ export function BoardView({
   fleetNodes = [],
   onFleetNodes,
 }: BoardViewProps) {
+  // Columns or the agent map, per browser. Anything but "map" in storage —
+  // an old value, a hand edit — reads as the board, the safe default.
+  const [storedView, setStoredView] = useLocalStorage(BOARD_VIEW_KEY, "board");
+  const view: BoardViewMode = storedView === "map" ? "map" : "board";
+  const setView = (v: BoardViewMode) => setStoredView(v);
+
   /**
    * How many jobs link each goal, and every goal's text — both from the ONE
    * payload this view already holds, so a per-row count costs no wire key and
@@ -233,6 +249,8 @@ export function BoardView({
         onClearGoal={() => onGoalFilter(null)}
         overlayOpen={overlayOpen}
         hidden={hidden}
+        view={view}
+        onView={setView}
         // offered only once there IS another kraken (or a selection is
         // already persisted, so it can always be cleared); the picker counts
         // against the UNFILTERED cards, which is why it gets `allJobs`
@@ -249,49 +267,58 @@ export function BoardView({
             : undefined
         }
       />
-      <main className="board" id="board" hidden={hidden}>
-        {COLUMNS.map((col) => {
-          // The FILTERED list, so SortableColumn registers only cards that are
-          // actually in the DOM — a sortable id with no node measures as a null
-          // rect and the drop animation misbehaves. `total` is the unfiltered
-          // length, and passing it is what switches the head to `shown/total`;
-          // idle passes undefined and the head reads exactly as it does today.
-          const jobs = search.byColumn[col];
-          return (
-            <BoardColumn
-              key={col}
-              col={col}
-              jobs={jobs}
-              total={search.active ? board.byColumn[col].length : undefined}
-              onNewJob={() => actions.onOpenEditor(null)}
-              footer={
-                col === "done" ? (
-                  <ArchiveDrawer
-                    archived={search.archived}
+      {view === "map" ? (
+        <MapView
+          search={search}
+          actions={actions}
+          boardNodeID={board.board?.node_id}
+          hidden={hidden}
+        />
+      ) : (
+        <main className="board" id="board" hidden={hidden}>
+          {COLUMNS.map((col) => {
+            // The FILTERED list, so SortableColumn registers only cards that are
+            // actually in the DOM — a sortable id with no node measures as a null
+            // rect and the drop animation misbehaves. `total` is the unfiltered
+            // length, and passing it is what switches the head to `shown/total`;
+            // idle passes undefined and the head reads exactly as it does today.
+            const jobs = search.byColumn[col];
+            return (
+              <BoardColumn
+                key={col}
+                col={col}
+                jobs={jobs}
+                total={search.active ? board.byColumn[col].length : undefined}
+                onNewJob={() => actions.onOpenEditor(null)}
+                footer={
+                  col === "done" ? (
+                    <ArchiveDrawer
+                      archived={search.archived}
+                      actions={actions}
+                      total={search.active ? board.archived.length : undefined}
+                      // A search reaches an archived job ONLY through this: with
+                      // no status filter, a match inside a collapsed drawer would
+                      // otherwise be counted in the readout and invisible.
+                      forceOpen={search.active && search.archived.length > 0}
+                    />
+                  ) : undefined
+                }
+                renderCard={(j) => (
+                  <JobCard
+                    key={jobKey(j)}
+                    job={j}
+                    col={col}
                     actions={actions}
-                    total={search.active ? board.archived.length : undefined}
-                    // A search reaches an archived job ONLY through this: with
-                    // no status filter, a match inside a collapsed drawer would
-                    // otherwise be counted in the readout and invisible.
-                    forceOpen={search.active && search.archived.length > 0}
+                    matchReason={search.reasonByKey.get(jobKey(j))}
+                    matchTerms={search.terms}
+                    boardNodeID={board.board?.node_id}
                   />
-                ) : undefined
-              }
-              renderCard={(j) => (
-                <JobCard
-                  key={jobKey(j)}
-                  job={j}
-                  col={col}
-                  actions={actions}
-                  matchReason={search.reasonByKey.get(jobKey(j))}
-                  matchTerms={search.terms}
-                  boardNodeID={board.board?.node_id}
-                />
-              )}
-            />
-          );
-        })}
-      </main>
+                )}
+              />
+            );
+          })}
+        </main>
+      )}
       {/* The goals panel is `position: fixed`, so it is NOT inside the
           `hidden` <main> above and would keep floating over the LOG, DREAM and
           GRAPH views. Dropping it outright while the board is hidden is what

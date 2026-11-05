@@ -75,6 +75,7 @@ import {
 } from "./RenameControl.tsx";
 import { TokensPanel } from "./TokensPanel.tsx";
 import { ContextPanel } from "./ContextPanel.tsx";
+import { EventsPanel } from "./EventsPanel.tsx";
 import { RemoteSteerBody, VisibilityControl } from "./RemoteSteer.tsx";
 import {
   AttChips,
@@ -384,6 +385,7 @@ export function SteerOverlay(props: SteerOverlayProps) {
  * imperative assignments.
  */
 function SteerBody({
+  open,
   slug,
   mode,
   requireText = false,
@@ -1070,12 +1072,13 @@ function SteerBody({
           <div className="last-sent" id="steer-lastsent" hidden={!lastSent}>
             {lastSent ? `me→zeus: ${lastSent}` : ""}
           </div>
-          {/* Q5: zeus' recent transcript, read-only — the one web surface
-              where more than zeus' LAST text block can be read, and so the
-              one where most of what zeus explains can be highlighted for the
-              ✓ read button. Withheld for an archived job, whose synthetic
-              slug no route answers for. */}
-          {job && !job.archived ? <ZeusTranscriptPanel slug={jobSlug} operator={operator} /> : null}
+          {/* The lead's recent activity, in the place zeus' last-5-turns
+              transcript panel used to take (the operator's call): collapsed it
+              is the map card's horizontal summary, expanded the written list of
+              events. The remote body still mounts ZeusTranscriptPanel.
+              Withheld for an archived job, whose synthetic slug no route
+              answers for. */}
+          {job && !job.archived ? <EventsPanel slug={jobSlug} enabled={open} job={job} /> : null}
           {/* Conditional rather than a `hidden={…}` wrapper like its siblings
               above, and deliberately so: "no estimate" is the absence of the
               element, not an element with nothing in it. A hidden wrapper keeps

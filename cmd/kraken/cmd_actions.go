@@ -5,6 +5,7 @@ import (
 	"io"
 	"os"
 	"strings"
+	"time"
 
 	"kraken/internal/core"
 	"kraken/internal/util"
@@ -106,6 +107,36 @@ func cmdSend(args []string) {
 		fmt.Fprintf(os.Stderr, "kraken: %s is mid-turn — the message queued\n", core.DisplayName(p))
 	}
 	fmt.Printf("sent to %s (%s)\n", core.DisplayName(p), p.Pane)
+	reportCellMessage(os.Getenv("KRAKEN_JOB_SLUG"), p)
+}
+
+// cellMessageReportTimeout bounds the best-effort report below: it runs after
+// the send has already been printed, so a dead serve may delay k s' exit by
+// at most this much and changes nothing else about it.
+const cellMessageReportTimeout = 2 * time.Second
+
+// cellMessageTarget is the agent name a send from cell selfSlug to p is
+// reported under: only a cell's own send (selfSlug, the KRAKEN_JOB_SLUG every
+// claude zeus runs with, is set) to another cell's lead (a foreground agent
+// named zeus-…) counts as a cell-to-cell message.
+func cellMessageTarget(selfSlug string, p *core.Peer) (to string, ok bool) {
+	if strings.TrimSpace(selfSlug) == "" || p == nil || p.Depth != 0 || !strings.HasPrefix(p.Name, "zeus-") {
+		return "", false
+	}
+	return p.Name, true
+}
+
+// reportCellMessage tells kraken serve that this cell just messaged another
+// cell's zeus, for the agent map's message threads (/api/job/message). Every
+// failure is swallowed: the send itself already succeeded, and the record is
+// bookkeeping about it.
+func reportCellMessage(selfSlug string, p *core.Peer) {
+	to, ok := cellMessageTarget(selfSlug, p)
+	if !ok {
+		return
+	}
+	headers := map[string]string{fromCellHeader: strings.TrimSpace(selfSlug)}
+	_, _ = qfPostWith("/api/job/message", map[string]string{"to": to}, headers, cellMessageReportTimeout)
 }
 
 // sendMessage is k s' message: the remaining args joined, else stdin.
