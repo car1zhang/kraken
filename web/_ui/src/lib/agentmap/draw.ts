@@ -1,5 +1,6 @@
-// The agent map's characters: the yellow dino, every pose it can hold, and
-// the small props and effects each pose carries. Ported from the trial page
+// The agent map's characters: the dino in its model's coat (avatar.ts), the
+// role hats the crew wear, every pose it can hold, and the small props and
+// effects each pose carries. Ported from the trial page
 // (artifacts/10-agent-map-trial.html), which is the visual reference; the
 // numbers are the trial's own, so the two read the same side by side.
 //
@@ -16,6 +17,8 @@
 // map fillText was the largest script cost, with garbage collection close
 // behind (the lead's profile, 2026-11-05); those two are what these choices
 // remove.
+
+import { COAT_HUE, type Coat, type Hat } from "./avatar.ts";
 
 const PI = Math.PI;
 const TAU = PI * 2;
@@ -126,19 +129,52 @@ export interface Palette {
   discSide: string;
   blockLight: string;
   blockDark: string;
-  dino: { lead: DinoColors; mini: DinoColors; spent: DinoColors };
+  /** a lead spent on a usage limit; every other body is its coat (`coats`) */
+  dino: { spent: DinoColors };
+  /** one body per model's coat (avatar.ts), lead and crew alike */
+  coats: Readonly<Record<Coat, DinoColors>>;
 }
 
-function dinoColorsFor(light: boolean, kind: "lead" | "mini" | "spent"): DinoColors {
-  const sp = kind === "spent";
-  const Y = sp ? "#bdb7a4" : kind === "mini" ? "#ffdf52" : "#ffd21f";
+/**
+ * Each coat's trim, candidate set A's (artifacts/12-model-avatars.html): the
+ * outline colour the darker shade is mixed toward, the belly, the claws and
+ * the iris. The slate (codex) coat is dark, so on a dark theme its outline
+ * and claws take light stand-ins, or they would vanish into it.
+ */
+const COAT_TRIM: Readonly<
+  Record<Coat, { edge: string; edgeDark?: string; belly: string; claw: string; clawDark?: string; iris: string }>
+> = {
+  fable: { edge: "#6b4300", belly: "#fff3c4", claw: "#7a4a21", iris: "#1f8a4c" },
+  opus: { edge: "#123a73", belly: "#e6f2ff", claw: "#1d3f75", iris: "#123a73" },
+  sonnet: { edge: "#6b5a3a", belly: "#e2d3b3", claw: "#6b5a3a", iris: "#6b4a26" },
+  haiku: { edge: "#0f4a44", belly: "#e0f7f3", claw: "#0f4a44", iris: "#0f4a44" },
+  codex: { edge: "#15181f", edgeDark: "#9aa3b6", belly: "#767f92", claw: "#1b1e26", clawDark: "#c3cad8", iris: "#2b2f38" },
+};
+
+/** One coat's colours for a theme, the reference page's `coatColors`. */
+function coatColors(light: boolean, coat: Coat): DinoColors {
+  const k = COAT_TRIM[coat];
+  const body = COAT_HUE[coat];
+  return {
+    body,
+    dark: k.edgeDark && !light ? k.edgeDark : mix(body, k.edge, light ? 0.5 : 0.42),
+    lite: mix(body, "#ffffff", 0.6),
+    belly: k.belly,
+    claw: (!light && k.clawDark) || k.claw,
+    iris: k.iris,
+  };
+}
+
+/** The greyed-out coat a lead wears once it hit a usage limit, whatever its model. */
+function spentColors(light: boolean): DinoColors {
+  const Y = "#bdb7a4";
   return {
     body: Y,
     dark: mix(Y, "#6b4300", light ? 0.5 : 0.42),
     lite: mix(Y, "#ffffff", 0.6),
-    belly: sp ? "#e6e1d2" : "#fff3c4",
-    claw: sp ? "#7d766a" : "#7a4a21",
-    iris: sp ? "#8a8f86" : "#1f8a4c",
+    belly: "#e6e1d2",
+    claw: "#7d766a",
+    iris: "#8a8f86",
   };
 }
 
@@ -192,10 +228,13 @@ export function readPalette(root: HTMLElement = document.documentElement): Palet
     discSide: mix(ACT_HUE.data!, b1, 0.35),
     blockLight: mix(ACT_HUE.build!, b1, 0.15),
     blockDark: mix(ACT_HUE.build!, b1, 0.4),
-    dino: {
-      lead: dinoColorsFor(light, "lead"),
-      mini: dinoColorsFor(light, "mini"),
-      spent: dinoColorsFor(light, "spent"),
+    dino: { spent: spentColors(light) },
+    coats: {
+      fable: coatColors(light, "fable"),
+      opus: coatColors(light, "opus"),
+      sonnet: coatColors(light, "sonnet"),
+      haiku: coatColors(light, "haiku"),
+      codex: coatColors(light, "codex"),
     },
   };
 }
@@ -1221,10 +1260,127 @@ function drawArm(c: Ctx, col: DinoColors, sx: number, hx: number, hy: number) {
   }
 }
 
+// ------------------------------------------------------------------ the hats
+
+/**
+ * The hats' colours: off-white, steel, brown and oatmeal, none of them near
+ * a status colour (violet working, magenta blocked, amber question, red
+ * limit, green done), so a hat never reads as its card's state.
+ */
+const HAT_INK = {
+  shell: "#ece6d6",
+  shellEdge: "#7d7566",
+  steel: "#b4b8c2",
+  steelEdge: "#555a66",
+  crest: "#6b5644",
+  wing: "#f6f4ee",
+  wingEdge: "#8a8679",
+  cap: "#6b5a48",
+  capEdge: "#3e3226",
+  knit: "#b8a98c",
+  knitEdge: "#6e6350",
+} as const;
+
+function inked(c: Ctx, fill: string, stroke: string, w: number) {
+  c.fillStyle = fill;
+  c.fill();
+  c.strokeStyle = stroke;
+  c.lineWidth = w;
+  c.stroke();
+}
+
+/**
+ * A crew member's role hat, in the head's frame (`hx` the head's centre, the
+ * crown at y = -34, +x the way the character faces), drawn after the eyes so
+ * it sits over the brow. Every shape stays within 18 units of the centre and
+ * below y = -50 (the highest control point), far inside the canvas' 150px
+ * reach above the card at any character's scale. The shapes follow the
+ * style of the reference page's ported hats (12-model-avatars.html, set D):
+ * a filled path or two with a darker outline, at its line weights of 1 to
+ * 1.2.
+ */
+const HAT: Readonly<Record<Exclude<Hat, "none">, (c: Ctx, hx: number, front: boolean) => void>> = {
+  // hephaestus builds: a hard hat, dome, ridge and brim
+  hardhat(c, hx) {
+    c.beginPath();
+    c.moveTo(hx - 11.5, -31);
+    c.bezierCurveTo(hx - 11.5, -43, hx + 11.5, -43, hx + 11.5, -31);
+    c.closePath();
+    inked(c, HAT_INK.shell, HAT_INK.shellEdge, 1.2);
+    line(c, hx, -39.6, hx, -32, HAT_INK.shellEdge, 1.1);
+    c.beginPath();
+    c.ellipse(hx, -31, 15, 2.3, 0, 0, TAU);
+    inked(c, HAT_INK.shell, HAT_INK.shellEdge, 1.1);
+  },
+  // athena reviews: a crested helmet
+  helmet(c, hx) {
+    c.beginPath();
+    c.moveTo(hx - 9, -37);
+    c.quadraticCurveTo(hx - 1, -50, hx + 11, -38.5);
+    c.quadraticCurveTo(hx + 1, -44, hx - 9, -37);
+    c.closePath();
+    inked(c, HAT_INK.crest, HAT_INK.steelEdge, 1);
+    c.beginPath();
+    c.moveTo(hx - 12.5, -27.5);
+    c.bezierCurveTo(hx - 13, -42, hx + 13, -42, hx + 12.5, -27.5);
+    c.closePath();
+    inked(c, HAT_INK.steel, HAT_INK.steelEdge, 1.2);
+    line(c, hx - 12, -29.5, hx + 12, -29.5, HAT_INK.steelEdge, 1);
+  },
+  // hermes renders: a round cap with a wing on each side
+  wings(c, hx) {
+    for (let s = -1; s <= 1; s += 2) {
+      c.beginPath();
+      c.moveTo(hx + s * 7.5, -34.5);
+      c.quadraticCurveTo(hx + s * 12, -45, hx + s * 17.5, -44);
+      c.quadraticCurveTo(hx + s * 15, -41.5, hx + s * 16, -39);
+      c.quadraticCurveTo(hx + s * 12.5, -39.5, hx + s * 7.5, -34.5);
+      c.closePath();
+      inked(c, HAT_INK.wing, HAT_INK.wingEdge, 1);
+    }
+    c.beginPath();
+    c.moveTo(hx - 9, -32);
+    c.bezierCurveTo(hx - 9, -41, hx + 9, -41, hx + 9, -32);
+    c.closePath();
+    inked(c, HAT_INK.steel, HAT_INK.steelEdge, 1.1);
+    c.beginPath();
+    c.ellipse(hx, -32, 12, 2.2, 0, 0, TAU);
+    inked(c, HAT_INK.steel, HAT_INK.steelEdge, 1.1);
+  },
+  // any other teammate: a cap, its peak forward (centred when facing out)
+  cap(c, hx, front) {
+    c.beginPath();
+    if (front) c.ellipse(hx, -30.8, 10, 2.2, 0, 0, TAU);
+    else c.ellipse(hx + 10, -31, 7.5, 1.9, 0, 0, TAU);
+    inked(c, HAT_INK.cap, HAT_INK.capEdge, 1.1);
+    c.beginPath();
+    c.moveTo(hx - 11, -31);
+    c.bezierCurveTo(hx - 11, -42, hx + 11, -42, hx + 11, -31);
+    c.closePath();
+    inked(c, HAT_INK.cap, HAT_INK.capEdge, 1.2);
+    dot(c, hx, -39.3, 1.3, HAT_INK.capEdge);
+  },
+  // an in-process subagent: a knit beanie with a pom
+  beanie(c, hx) {
+    dot(c, hx, -42, 2.7, HAT_INK.knit);
+    c.strokeStyle = HAT_INK.knitEdge;
+    c.lineWidth = 1;
+    c.stroke();
+    c.beginPath();
+    c.moveTo(hx - 12, -29.5);
+    c.bezierCurveTo(hx - 12, -43, hx + 12, -43, hx + 12, -29.5);
+    c.closePath();
+    inked(c, HAT_INK.knit, HAT_INK.knitEdge, 1.2);
+    rr(c, hx - 12.8, -32.4, 25.6, 4.4, 1.6);
+    inked(c, HAT_INK.knit, HAT_INK.knitEdge, 1.1);
+  },
+};
+
 /**
  * Draw one dino with pose `P` (already filled), feet at (x, y), scale `s`,
- * facing `flip`. Uses one save/restore pair for the whole figure, since the
- * scale, the lean and the bob nest; every effect inside undoes its own state.
+ * facing `flip`, wearing `hat` (none by default; a lead never wears one).
+ * Uses one save/restore pair for the whole figure, since the scale, the lean
+ * and the bob nest; every effect inside undoes its own state.
  */
 export function drawKraken(
   c: Ctx,
@@ -1236,6 +1392,7 @@ export function drawKraken(
   o: PoseOpts,
   col: DinoColors,
   walking: boolean,
+  hat: Hat = "none",
 ): void {
   const t = P.t;
   const keep = FLIP;
@@ -1407,6 +1564,7 @@ export function drawKraken(
     c.arc(px - 0.5, py - 0.6, 0.45, 0, TAU);
     c.fill();
   }
+  if (hat !== "none") HAT[hat](c, hx, front);
   if (!farFwd) drawArm(c, col, -9.5, h[2], h[3]);
   drawArm(c, col, 9.5, h[0], h[1]);
   PROP[P.kind]?.(c, P, o);

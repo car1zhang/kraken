@@ -1311,12 +1311,13 @@ func TestWebSpawnLinkWireShape(t *testing.T) {
 }
 
 // webActivitySpec covers jobs.JobActivity (webJob's "activity"): events is
-// always present (the object exists only when there is at least one), label
-// and crew are omitempty.
+// always present (the object exists only when there is at least one), label,
+// model and crew are omitempty.
 var webActivitySpec = map[string]fieldSpec{
 	"act":    {kind: wireString, required: true},
 	"label":  {kind: wireString, required: false},
 	"at":     {kind: wireNumber, required: true},
+	"model":  {kind: wireString, required: false},
 	"events": {kind: wireArray, required: true},
 	"crew":   {kind: wireArray, required: false},
 }
@@ -1353,7 +1354,7 @@ var webTalkSpec = map[string]fieldSpec{
 }
 
 func TestActivityAndTalkWireShapes(t *testing.T) {
-	a := jobs.JobActivity{Act: "think", At: 1,
+	a := jobs.JobActivity{Act: "think", At: 1, Model: core.ZeusModel,
 		Events: []core.AgentEvent{
 			{ID: "toolu_1", T: 1, Act: "edit", Label: "Edit a.go", DurMS: 40},
 			{ID: "u1", T: 2, Act: "hear", Label: "from cell other", From: "cell", Who: "other"},

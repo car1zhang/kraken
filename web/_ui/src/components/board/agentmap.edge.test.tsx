@@ -1,4 +1,4 @@
-import { act, render, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { useState } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -642,5 +642,251 @@ describe("MapView — a failed save stays queued (amendment 6)", () => {
     expect(posts.length).toBeGreaterThan(1);
     const later = posts.slice(1).flatMap((p) => Object.keys(p));
     for (const k of failed) expect(later).toContain(k);
+  });
+});
+
+// --- Round 8: W5 zoom never moves a card, W7 the minimap -----------------------------
+
+// Every card saved far apart, so placement needs no settle and the view has
+// nothing of its own to save once it has mounted.
+function agentMapEdgeR8Server(jobs: WebJob[], postStatus = 200) {
+  const saved: Record<string, [number, number]> = {};
+  jobs.forEach((j, i) => {
+    saved[jobKey(j)] = [i * 3000, 400];
+  });
+  const posts: Record<string, [number, number]>[] = [];
+  agentMapEdgeStubFetch(async (url, init) => {
+    if (url.includes("/api/map/positions")) {
+      if ((init?.method ?? "GET").toUpperCase() === "POST") {
+        const body = JSON.parse(String(init?.body ?? "{}")) as { positions?: Record<string, [number, number]> };
+        posts.push(body.positions ?? {});
+        return postStatus === 200 ? agentMapEdgeJSON({ ok: true }) : new Response("refused", { status: postStatus });
+      }
+      return agentMapEdgeJSON({ positions: saved });
+    }
+    return agentMapEdgeJSON({});
+  });
+  return posts;
+}
+
+function AgentMapEdgeR8Map({ jobs, actions }: { jobs: WebJob[]; actions: BoardActions }) {
+  const search = useJobSearch(agentMapEdgeModel(jobs));
+  return <MapView search={search} actions={actions} />;
+}
+
+const agentMapEdgeR8Settle = () =>
+  act(async () => {
+    for (let i = 0; i < 5; i++) await new Promise((r) => setTimeout(r, 0));
+    await new Promise((r) => setTimeout(r, 250));
+  });
+
+// The HUD's zoom buttons, found by the glyphs the contract names them by.
+function agentMapEdgeR8Hud(container: HTMLElement, glyph: "+" | "−" | "fit"): HTMLButtonElement {
+  const map = container.querySelector("#agent-map")!;
+  const hits = [...map.querySelectorAll<HTMLButtonElement>("button")].filter((b) => (b.textContent ?? "").trim() === glyph);
+  expect(hits.length, `zoom button ${glyph}`).toBeGreaterThan(0);
+  return hits[0]!;
+}
+
+const agentMapEdgeR8Jobs = () => [
+  agentMapEdgeJob({ slug: "r8-draft", state: "draft" }),
+  agentMapEdgeJob({ slug: "r8-work", state: "working", live: true }),
+  agentMapEdgeJob({ slug: "r8-block", state: "blocked", live: true }),
+  agentMapEdgeJob({ slug: "r8-limit", state: "blocked", live: true, health: "usage limit" }),
+];
+
+const agentMapEdgeR8Unsaved = () => localStorage.getItem("kraken.mapUnsaved");
+
+describe("MapView — zoom sends no save and moves no card (W5)", () => {
+  it("hammering the zoom buttons to both extremes sends no position save", async () => {
+    const jobs = agentMapEdgeR8Jobs();
+    const posts = agentMapEdgeR8Server(jobs);
+    const actions = agentMapEdgeActions();
+    const { container } = render(<AgentMapEdgeR8Map jobs={jobs} actions={actions} />);
+    await agentMapEdgeR8Settle();
+    const before = posts.length;
+    const unsavedBefore = agentMapEdgeR8Unsaved();
+    const zoomIn = agentMapEdgeR8Hud(container, "+");
+    const zoomOut = agentMapEdgeR8Hud(container, "−");
+    const fit = agentMapEdgeR8Hud(container, "fit");
+    for (let i = 0; i < 40; i++) fireEvent.click(zoomOut);
+    await agentMapEdgeR8Settle();
+    for (let i = 0; i < 80; i++) fireEvent.click(zoomIn);
+    await agentMapEdgeR8Settle();
+    fireEvent.click(fit);
+    fireEvent.click(fit);
+    for (let i = 0; i < 40; i++) fireEvent.click(zoomOut);
+    fireEvent.click(fit);
+    await agentMapEdgeR8Settle();
+    expect(posts.length).toBe(before);
+    expect(agentMapEdgeR8Unsaved()).toBe(unsavedBefore);
+    expect(agentMapEdgeCardKeys(container)).toEqual(jobs.map(jobKey).sort());
+    // zooming opens nothing
+    expect(actions.onOpenSteer).not.toHaveBeenCalled();
+    expect(actions.onOpenEditor).not.toHaveBeenCalled();
+  });
+
+  it("wheel and pinch-style wheel gestures, on the map and over a card, send no position save", async () => {
+    const jobs = agentMapEdgeR8Jobs();
+    const posts = agentMapEdgeR8Server(jobs);
+    const { container } = render(<AgentMapEdgeR8Map jobs={jobs} actions={agentMapEdgeActions()} />);
+    await agentMapEdgeR8Settle();
+    const before = posts.length;
+    const unsavedBefore = agentMapEdgeR8Unsaved();
+    const map = container.querySelector<HTMLElement>("#agent-map")!;
+    const card = container.querySelector<HTMLElement>(".map-card .card") ?? container.querySelector<HTMLElement>(".map-card")!;
+    for (const target of [map, card]) {
+      for (const deltaY of [-5000, -120, -1, 1, 120, 5000]) {
+        fireEvent.wheel(target, { deltaY, clientX: 50, clientY: 50 });
+        fireEvent.wheel(target, { deltaY, ctrlKey: true, clientX: 50, clientY: 50 });
+        fireEvent.wheel(target, { deltaY, metaKey: true, clientX: 50, clientY: 50 });
+      }
+    }
+    await agentMapEdgeR8Settle();
+    expect(posts.length).toBe(before);
+    expect(agentMapEdgeR8Unsaved()).toBe(unsavedBefore);
+  });
+
+  it("zoom on a server that refuses saves records nothing unsaved in this browser", async () => {
+    const jobs = agentMapEdgeR8Jobs();
+    agentMapEdgeR8Server(jobs, 403);
+    const { container } = render(<AgentMapEdgeR8Map jobs={jobs} actions={agentMapEdgeActions()} />);
+    await agentMapEdgeR8Settle();
+    const unsavedBefore = agentMapEdgeR8Unsaved();
+    for (let i = 0; i < 20; i++) fireEvent.click(agentMapEdgeR8Hud(container, "−"));
+    fireEvent.click(agentMapEdgeR8Hud(container, "fit"));
+    for (let i = 0; i < 20; i++) fireEvent.click(agentMapEdgeR8Hud(container, "+"));
+    await agentMapEdgeR8Settle();
+    expect(agentMapEdgeR8Unsaved()).toBe(unsavedBefore);
+  });
+
+  it("fit with a single card sends no save and does not throw", async () => {
+    const jobs = [agentMapEdgeJob({ slug: "solo", state: "draft" })];
+    const posts = agentMapEdgeR8Server(jobs);
+    const { container } = render(<AgentMapEdgeR8Map jobs={jobs} actions={agentMapEdgeActions()} />);
+    await agentMapEdgeR8Settle();
+    const before = posts.length;
+    expect(() => {
+      fireEvent.click(agentMapEdgeR8Hud(container, "fit"));
+      fireEvent.click(agentMapEdgeR8Hud(container, "fit"));
+    }).not.toThrow();
+    await agentMapEdgeR8Settle();
+    expect(posts.length).toBe(before);
+  });
+});
+
+describe("MapView's #map-minimap — edges (W7)", () => {
+  function agentMapEdgeR8Minimap(container: HTMLElement): HTMLCanvasElement {
+    const mini = container.querySelector<HTMLCanvasElement>("#agent-map #map-minimap");
+    expect(mini, "#map-minimap inside #agent-map").not.toBeNull();
+    return mini!;
+  }
+
+  it("is present with a single card, as a canvas with role img and its label", async () => {
+    const jobs = [agentMapEdgeJob({ slug: "only", state: "draft" })];
+    agentMapEdgeR8Server(jobs);
+    const { container } = render(<AgentMapEdgeR8Map jobs={jobs} actions={agentMapEdgeActions()} />);
+    await agentMapEdgeR8Settle();
+    const mini = agentMapEdgeR8Minimap(container);
+    expect(mini.tagName).toBe("CANVAS");
+    expect(mini.getAttribute("role")).toBe("img");
+    expect(mini.getAttribute("aria-label")).toBe("map overview");
+    // it is the map's overview, not part of any card
+    expect(mini.closest(".map-card")).toBeNull();
+  });
+
+  it("is present when every card had to be seeded (no saved positions)", async () => {
+    // the default beforeEach server answers no saved positions
+    const { container } = render(<AgentMapEdgeR8Map jobs={agentMapEdgeR8Jobs()} actions={agentMapEdgeActions()} />);
+    await agentMapEdgeR8Settle();
+    agentMapEdgeR8Minimap(container);
+  });
+
+  it("is present when the position load fails", async () => {
+    agentMapEdgeStubFetch(async (url) => {
+      if (url.includes("/api/map/positions")) throw new TypeError("network down");
+      return agentMapEdgeJSON({});
+    });
+    const { container } = render(<AgentMapEdgeR8Map jobs={agentMapEdgeR8Jobs()} actions={agentMapEdgeActions()} />);
+    await agentMapEdgeR8Settle();
+    agentMapEdgeR8Minimap(container);
+  });
+
+  it("the zoom buttons stay in the map beside it", async () => {
+    const jobs = agentMapEdgeR8Jobs();
+    agentMapEdgeR8Server(jobs);
+    const { container } = render(<AgentMapEdgeR8Map jobs={jobs} actions={agentMapEdgeActions()} />);
+    await agentMapEdgeR8Settle();
+    agentMapEdgeR8Minimap(container);
+    for (const g of ["+", "−", "fit"] as const) {
+      const b = agentMapEdgeR8Hud(container, g);
+      expect(b.closest("#map-minimap")).toBeNull();
+    }
+  });
+
+  it("pressing and dragging on it sends no position save, opens nothing and keeps every card", async () => {
+    const jobs = agentMapEdgeR8Jobs();
+    const posts = agentMapEdgeR8Server(jobs);
+    const actions = agentMapEdgeActions();
+    const { container } = render(<AgentMapEdgeR8Map jobs={jobs} actions={actions} />);
+    await agentMapEdgeR8Settle();
+    const before = posts.length;
+    const unsavedBefore = agentMapEdgeR8Unsaved();
+    const statusBefore = [...container.querySelectorAll(".map-card")].map((c) => `${c.getAttribute("data-key")}=${c.getAttribute("data-status")}`).sort();
+    const mini = agentMapEdgeR8Minimap(container);
+    // corners, the middle, and points well outside the canvas
+    for (const [x, y] of [[0, 0], [5, 5], [60, 40], [-500, -500], [10_000, 10_000]] as const) {
+      fireEvent.pointerDown(mini, { clientX: x, clientY: y, button: 0, buttons: 1, pointerId: 7 });
+      fireEvent.pointerMove(mini, { clientX: x + 30, clientY: y + 20, buttons: 1, pointerId: 7 });
+      fireEvent.pointerMove(mini, { clientX: x - 80, clientY: y + 90, buttons: 1, pointerId: 7 });
+      fireEvent.pointerUp(mini, { clientX: x - 80, clientY: y + 90, button: 0, pointerId: 7 });
+      fireEvent.mouseDown(mini, { clientX: x, clientY: y, button: 0, buttons: 1 });
+      fireEvent.mouseMove(mini, { clientX: x + 30, clientY: y + 20, buttons: 1 });
+      fireEvent.mouseUp(mini, { clientX: x + 30, clientY: y + 20, button: 0 });
+      fireEvent.click(mini, { clientX: x + 30, clientY: y + 20 });
+    }
+    await agentMapEdgeR8Settle();
+    expect(posts.length).toBe(before);
+    expect(agentMapEdgeR8Unsaved()).toBe(unsavedBefore);
+    expect(actions.onOpenSteer).not.toHaveBeenCalled();
+    expect(actions.onOpenEditor).not.toHaveBeenCalled();
+    const statusAfter = [...container.querySelectorAll(".map-card")].map((c) => `${c.getAttribute("data-key")}=${c.getAttribute("data-status")}`).sort();
+    expect(statusAfter).toEqual(statusBefore);
+  });
+
+  it("renders, and takes a press, without throwing where a canvas has no 2D context", async () => {
+    vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockImplementation(() => null);
+    const jobs = agentMapEdgeR8Jobs();
+    const posts = agentMapEdgeR8Server(jobs);
+    const { container } = render(<AgentMapEdgeR8Map jobs={jobs} actions={agentMapEdgeActions()} />);
+    await agentMapEdgeR8Settle();
+    const mini = agentMapEdgeR8Minimap(container);
+    expect(mini.getAttribute("role")).toBe("img");
+    expect(mini.getAttribute("aria-label")).toBe("map overview");
+    const before = posts.length;
+    expect(() => {
+      fireEvent.pointerDown(mini, { clientX: 20, clientY: 20, button: 0, buttons: 1, pointerId: 1 });
+      fireEvent.pointerMove(mini, { clientX: 40, clientY: 30, buttons: 1, pointerId: 1 });
+      fireEvent.pointerUp(mini, { clientX: 40, clientY: 30, button: 0, pointerId: 1 });
+      fireEvent.mouseDown(mini, { clientX: 20, clientY: 20, button: 0, buttons: 1 });
+      fireEvent.mouseUp(mini, { clientX: 20, clientY: 20, button: 0 });
+    }).not.toThrow();
+    for (let i = 0; i < 5; i++) fireEvent.click(agentMapEdgeR8Hud(container, "−"));
+    await agentMapEdgeR8Settle();
+    expect(posts.length).toBe(before);
+    expect(agentMapEdgeCardKeys(container)).toEqual(jobs.map(jobKey).sort());
+  });
+
+  it("stays after zooming far out and back", async () => {
+    const jobs = agentMapEdgeR8Jobs();
+    agentMapEdgeR8Server(jobs);
+    const { container } = render(<AgentMapEdgeR8Map jobs={jobs} actions={agentMapEdgeActions()} />);
+    await agentMapEdgeR8Settle();
+    for (let i = 0; i < 40; i++) fireEvent.click(agentMapEdgeR8Hud(container, "−"));
+    await agentMapEdgeR8Settle();
+    agentMapEdgeR8Minimap(container);
+    for (let i = 0; i < 80; i++) fireEvent.click(agentMapEdgeR8Hud(container, "+"));
+    await agentMapEdgeR8Settle();
+    agentMapEdgeR8Minimap(container);
   });
 });

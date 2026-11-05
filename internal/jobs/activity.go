@@ -38,12 +38,42 @@ type CrewActivity struct {
 // JobActivity is a job's activity on the wire: the lead's current activity
 // (Act, Label — "think" with no label when it has no call among its recent
 // events), the newest event's time, the lead's recent events and the crew's.
+//
+// Model is the model id the lead runs on (LeadModel), which the map turns
+// into the lead character's coat; BuildJobActivity leaves it empty and the
+// board build fills it, since only that caller knows the lead's live pid.
 type JobActivity struct {
 	Act    string            `json:"act"`
 	Label  string            `json:"label,omitempty"`
 	At     int64             `json:"at"`
+	Model  string            `json:"model,omitempty"`
 	Events []core.AgentEvent `json:"events"`
 	Crew   []CrewActivity    `json:"crew,omitempty"`
+}
+
+// LeadModel is the model id the cell's lead is running on, which the agent
+// map draws as the lead's coat: a codex lead's `-m` value (codexZeusModel);
+// else the Fable fallback tier when the fallback record names this very pid,
+// since kraken typed `/model` into that process; else the `--model` its
+// claude process was spawned with (zeusLaunchedModel, which falls back to the
+// configured model when the cell dir has no stamp). A pid of 0 (no live lead
+// peer found) skips the fallback check. It cannot see a `/model` the
+// operator typed by hand.
+//
+// The record is written when `/model` is typed, before the switch is
+// confirmed, so the lead reads as switched from that moment. A switch that
+// expired with no turn confirmed (ExpiredAt) is not trusted either way and
+// reads as the spawn model.
+func LeadModel(j *Job, pid int) string {
+	if j.Agent == "codex" {
+		return codexZeusModel(j)
+	}
+	if pid != 0 {
+		if rec := readLastFallback(limitHitKey(j.ID)); rec.PID == pid && rec.ExpiredAt == 0 {
+			return fableFallbackModel
+		}
+	}
+	return zeusLaunchedModel(j)
 }
 
 // BuildJobActivity assembles a JobActivity from transcript paths: the lead's

@@ -17,6 +17,7 @@
 
 import type { AgentEvent, WebActivity, WebAgent, WebJob } from "../../api/types.ts";
 import { blockedUrgency, crewPose, freshEvents, mapStatus } from "./activity.ts";
+import { modelCoat, roleHat, type Coat, type Hat } from "./avatar.ts";
 import {
   clamp,
   dot,
@@ -63,6 +64,10 @@ export interface Actor {
   /** the hover name tag's text, built once when the name or kind is set */
   tag: string;
   mini: boolean;
+  /** the body's colour, from the model the payload names for this character */
+  coat: Coat;
+  /** a crew member's role hat; the lead's is always "none" */
+  hat: Hat;
   seed: number;
   /** offset along the card from its home slot */
   x: number;
@@ -141,6 +146,8 @@ function mkActor(name: string, kind: string, mini: boolean, now: number): Actor 
     kind,
     tag: tagText(name, kind),
     mini,
+    coat: "fable",
+    hat: "none",
     seed: seedOf(name + "|" + kind),
     x: 0,
     home: 0,
@@ -243,6 +250,13 @@ export function syncScene(
   s.compact = s.status === "done" || s.status === "draft";
   s.lead.k = s.status === "blocked" ? blockedUrgency(job) : null;
   s.activity = job.activity;
+  // The lead's coat. A codex cell's lead (`agent` is "codex") is slate
+  // whatever its model string says, since a codex `model:` need not name
+  // gpt, codex or astra. Any other lead takes its coat from the model id
+  // `activity.model` carries for a live cell; a card without it (no activity
+  // yet, or a node on an older build) falls back to `agent`, which then says
+  // nothing, so that lead is yellow, the coat the map shipped with.
+  s.lead.coat = job.agent === "codex" ? "codex" : modelCoat(job.activity?.model || job.agent);
 
   // ---- crew from the roster. Shells are agent-free panes, not characters.
   const want = new Map<string, WebAgent>();
@@ -268,6 +282,8 @@ export function syncScene(
       m.tag = tagText(m.name, kind);
     }
     m.working = a.working;
+    m.coat = modelCoat(a.model);
+    m.hat = roleHat(a);
   }
   crewSlots(s);
 
@@ -404,9 +420,14 @@ function stepActor(a: Actor, now: number, dt: number, R: number, C: Palette) {
   if (a.walking) a.moving = true;
 }
 
+/**
+ * Every character wears its model's coat; a lead that hit a usage limit
+ * keeps the greyed-out spent coat it always had, since that is its status.
+ * Crew wear their role hats; the lead's hat is always none.
+ */
 function drawActor(c: Ctx, s: CardScene, a: Actor, C: Palette) {
-  const col = a.mini ? C.dino.mini : a.act === "limit" ? C.dino.spent : C.dino.lead;
-  drawKraken(c, headX(s, a), 1, actorScale(s, a), a.flip, a.P, a.o!, col, a.moving);
+  const col = !a.mini && a.act === "limit" ? C.dino.spent : C.coats[a.coat];
+  drawKraken(c, headX(s, a), 1, actorScale(s, a), a.flip, a.P, a.o!, col, a.moving, a.hat);
 }
 
 /**

@@ -3869,12 +3869,22 @@ button.spawn-chip.spawn-draft:hover { background: color-mix(in srgb, var(--ac) 1
   touch-action: none;
   user-select: none; -webkit-user-select: none;
 }
+/* how much larger a map card's text and chips are than the column board's:
+   applied to the card as a CSS zoom (below), so every px-sized rule inside
+   the card scales from this one property */
+#agent-map { --map-text-scale: 1.12; }
 .agent-map[hidden] { display: none; }
-.map-under, .map-over {
+.map-over {
   position: absolute; inset: 0; width: 100%; height: 100%;
   pointer-events: none;
 }
-.map-under { z-index: 0; }
+/* the arrow layer: MapView sizes it past every edge of the map and moves it
+   with a transform while the view pans, redrawing it once the pan pauses */
+.map-under {
+  position: absolute; left: 0; top: 0; z-index: 0;
+  transform-origin: 0 0;
+  pointer-events: none;
+}
 /* the world is its own stacking context, so every card's z-index (from
    stackOrder) orders cards among themselves and the top canvas stays above
    all of them */
@@ -3899,10 +3909,20 @@ button.spawn-chip.spawn-draft:hover { background: color-mix(in srgb, var(--ac) 1
 .map-card[data-status="draft"] { --map-sc: var(--muted); }
 /* the status colour frames the whole map card — JobCard inside it keeps its
    own job-colour edge, which says WHICH job rather than where it is */
+/* The card is laid out at --map-text-scale (a CSS zoom on the card alone), so
+   its text and chips render that much larger while the .map-card around it
+   stays 300 world pixels wide: the card's width is auto, so it fills its
+   300px parent, which is 300 / scale in the card's own zoomed units. Its
+   content box is then 300 / 1.12 - 2 × 10 padding - 3 - 1 border = 243.9px
+   of its own units, so the 238px row of 24 activity ticks still fits. Each card
+   is its own layout and style containment root, so a change inside one card
+   lays out that card alone. */
 .map-card > .card {
   margin: 0;
   outline: 1px solid var(--map-sc); outline-offset: 0;
   background: var(--surface);
+  zoom: var(--map-text-scale, 1);
+  contain: layout style;
 }
 .map-card[data-status="working"] > .card { box-shadow: 0 0 14px color-mix(in srgb, var(--ac) 22%, transparent); }
 :root[data-theme="light"] .map-card[data-status="working"] > .card { box-shadow: none; }
@@ -3927,10 +3947,11 @@ button.spawn-chip.spawn-draft:hover { background: color-mix(in srgb, var(--ac) 1
 .act-now { color: var(--fg); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .act-now b { font-weight: 600; color: var(--act, var(--ac)); }
 .act-now .act-label { color: var(--muted); }
-/* 24 ticks on one line: 8px wide with a 2px gap is 238px, inside the 276px
+/* 24 ticks on one line: 8px wide with a 2px gap is 238px, inside the
    content box of a 300px map card (3px + 1px border, 10px padding each
-   side); they never grow, so a short record stays left-aligned instead of
-   stretching */
+   side), which is 243.9px of the card's own units at the map's 1.12 text
+   scale (see .map-card > .card) and 276px at 1; they never grow, so a short
+   record stays left-aligned instead of stretching */
 .act-ribbon { display: flex; flex-wrap: nowrap; gap: 2px; margin-top: 4px; height: 6px; overflow: hidden; }
 .act-ribbon:empty { display: none; }
 .act-ribbon i { flex: 0 0 8px; width: 8px; background: var(--act, var(--divider)); }
@@ -3962,7 +3983,22 @@ button.spawn-chip.spawn-draft:hover { background: color-mix(in srgb, var(--ac) 1
 [data-act="limit"] { --act: var(--stopped); }
 [data-act="done"] { --act: var(--ok); }
 
-.map-hud { position: absolute; left: 12px; bottom: 12px; z-index: 3; display: flex; gap: 2px; }
+/* the bottom-left corner: the zoom buttons stacked above the overview, so
+   neither ever covers the other */
+.map-corner {
+  position: absolute; left: 12px; bottom: 12px; z-index: 3;
+  display: flex; flex-direction: column; align-items: flex-start; gap: 6px;
+}
+.map-hud { display: flex; gap: 2px; }
+/* the overview; its size is MapView's MINI_W × MINI_H, set inline, and its
+   backdrop is drawn on it */
+#map-minimap {
+  display: block;
+  /* an outline, not a border: a border would shrink the drawing area and
+     shift a press off the point it was drawn under */
+  outline: 1px solid var(--border);
+  cursor: crosshair;
+}
 .map-hud-btn {
   font: 600 10px var(--display); letter-spacing: 0.14em; text-transform: uppercase;
   color: var(--body); background: var(--surface);
