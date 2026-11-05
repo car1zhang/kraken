@@ -1532,6 +1532,8 @@ func buildWebBoard() webBoard {
 			// The teammates whose own transcripts JobActivityFor reads: the
 			// roster entries of kind teammate, filled in the branch below.
 			var teammates []string
+			// The lead's pid, for jobs.LeadModel's fallback check.
+			leadPID := 0
 			if j.Started() && j.State != "done" {
 				board.LiveCells++
 				wj.Health = jobs.CellHealth(j, all)
@@ -1544,6 +1546,9 @@ func buildWebBoard() webBoard {
 					if zeus != nil && zeus.Status == "polling" && zeus.Wakeup != nil {
 						wj.Wakeup = webWakeupFrom(zeus.Wakeup)
 					}
+				}
+				if zeus != nil {
+					leadPID = zeus.PID
 				}
 				var members []core.TeamMember
 				if zeus != nil && !zeus.SessionIDGuessed {
@@ -1559,6 +1564,9 @@ func buildWebBoard() webBoard {
 				}
 			}
 			wj.Activity = jobs.JobActivityFor(j, teammates)
+			if wj.Activity != nil {
+				wj.Activity.Model = jobs.LeadModel(j, leadPID)
+			}
 		} else if j.Started() && j.State != "done" {
 			// dead cell: the session is gone but the worktree (and any
 			// uncommitted WIP) is still on disk. Health routes the card into

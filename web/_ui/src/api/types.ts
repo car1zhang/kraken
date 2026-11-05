@@ -265,6 +265,8 @@ export interface WebActivity {
   act: string;
   label?: string;
   at: number;
+  /** The model id the lead runs on; the map's lead coat. */
+  model?: string;
   events: AgentEvent[];
   crew?: WebCrewActivity[];
 }

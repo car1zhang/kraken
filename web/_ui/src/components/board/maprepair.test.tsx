@@ -328,3 +328,73 @@ describe("MapView: a card coming back onto the map yields", () => {
     expect(saved.some((p) => p.a !== undefined)).toBe(false);
   });
 });
+
+// ---- round 8 review pins
+
+describe("MapView: a second press never takes over a card drag", () => {
+  for (const where of ["the overview", "the map background"] as const) {
+    it(`a press on ${where} mid-drag leaves the drop written and saved`, async () => {
+      localStorage.setItem("kraken.mapView", JSON.stringify({ x: 0, y: 0, z: 1 }));
+      const posts = routeFetch(
+        async () => new Response(JSON.stringify({ positions: { a: [0, 0], b: [0, 600] } }), { status: 200 }),
+        () => new Response('{"ok":true}', { status: 200 }),
+      );
+      const { container } = render(<Harness board={model(jobs())} />);
+      await waitFor(() => expect(card(container, "a").style.left).toBe("0px"));
+      const root = container.querySelector("#agent-map") as HTMLElement;
+      const second = where === "the overview" ? (container.querySelector("#map-minimap") as HTMLElement) : root;
+      const worldBefore = (container.querySelector(".map-world") as HTMLElement).style.transform;
+      fireEvent.mouseDown(card(container, "a"), { clientX: 100, clientY: 100, button: 0 });
+      fireEvent.mouseMove(window, { clientX: 140, clientY: 100 });
+      fireEvent.mouseDown(second, { clientX: 20, clientY: 20, button: 0 });
+      fireEvent.mouseMove(window, { clientX: 150, clientY: 100 });
+      fireEvent.mouseUp(window, { clientX: 150, clientY: 100 });
+      // the view did not move, the card went where it was dropped, and the drop was saved
+      expect((container.querySelector(".map-world") as HTMLElement).style.transform).toBe(worldBefore);
+      expect(card(container, "a").style.left).toBe("50px");
+      await waitFor(() =>
+        expect(posts.some((p) => (p.body as { positions: Record<string, unknown> }).positions.a !== undefined)).toBe(
+          true,
+        ),
+      );
+      const saved = posts.map((p) => (p.body as { positions: Record<string, [number, number]> }).positions);
+      expect(saved.find((p) => p.a)?.a).toEqual([50, 0]);
+    });
+  }
+});
+
+describe("MapView: the overview redraws only on its triggers", () => {
+  it("a render that changed no card, status or view does not redraw it", async () => {
+    localStorage.setItem("kraken.mapView", JSON.stringify({ x: 0, y: 0, z: 1 }));
+    routeFetch(
+      async () => new Response(JSON.stringify({ positions: { a: [0, 0], b: [0, 600] } }), { status: 200 }),
+      () => new Response('{"ok":true}', { status: 200 }),
+    );
+    // a 2D context for the overview only; every other canvas has none, as in jsdom
+    let clears = 0;
+    const fake = new Proxy({} as Record<string | symbol, unknown>, {
+      get: (t, p) => (p in t ? t[p] : p === "clearRect" ? () => void clears++ : () => {}),
+      set: (t, p, v) => {
+        t[p] = v;
+        return true;
+      },
+    });
+    vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockImplementation(function (this: HTMLCanvasElement) {
+      return (this.id === "map-minimap" ? fake : null) as never;
+    });
+    const { container, rerender } = render(<Harness board={model(jobs())} />);
+    await waitFor(() => expect(card(container, "a").style.left).toBe("0px"));
+    await waitFor(() => expect(clears).toBeGreaterThan(0));
+    // let any redraw the load asked for land
+    await new Promise((r) => setTimeout(r, 150));
+    const settled = clears;
+    // the same jobs again, as a fresh payload: a render, and nothing it shows changed
+    rerender(<Harness board={model(jobs())} />);
+    rerender(<Harness board={model(jobs())} />);
+    await new Promise((r) => setTimeout(r, 150));
+    expect(clears).toBe(settled);
+    // a view change does redraw it
+    fireEvent.wheel(container.querySelector("#agent-map") as HTMLElement, { deltaX: 30, deltaY: 0 });
+    await waitFor(() => expect(clears).toBeGreaterThan(settled));
+  });
+});

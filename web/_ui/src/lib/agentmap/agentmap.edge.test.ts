@@ -14,6 +14,8 @@ import {
   ribbon,
 } from "./activity.ts";
 import { MAP_GAP, overlaps, seedLayout, settle, stackOrder, type MapNode } from "./layout.ts";
+import { miniFrame, miniToWorld, type MiniFrame } from "./minimap.ts";
+import { COAT_HUE, modelCoat, roleHat } from "./avatar.ts";
 
 // athena-edge's blind suite for the map's pure logic (50-contract.md W2, W3):
 // missing activity, `open` events and the hold boundary in leadPose, the
@@ -468,5 +470,296 @@ describe("stackOrder — edges", () => {
     const copy = nodes.map((n) => ({ ...n }));
     stackOrder(nodes);
     expect(nodes).toEqual(copy);
+  });
+});
+
+// --- Round 8: W7 minimap math --------------------------------------------------------
+
+type AgentMapEdgeRect = { x: number; y: number; w: number; h: number };
+
+const agentMapEdgeMini = (key: string, x: number, y: number, w: number, h: number): MapNode => ({ key, x, y, w, h });
+
+const agentMapEdgeToMini = (x: number, y: number, f: MiniFrame): [number, number] => [(x - f.ox) * f.scale, (y - f.oy) * f.scale];
+
+// The world box the contract says miniFrame fits: every node with finite
+// coordinates, and the view rectangle.
+function agentMapEdgeBox(nodes: readonly MapNode[], view: AgentMapEdgeRect): { x0: number; y0: number; x1: number; y1: number } {
+  let x0 = view.x;
+  let y0 = view.y;
+  let x1 = view.x + view.w;
+  let y1 = view.y + view.h;
+  for (const n of nodes) {
+    if (!Number.isFinite(n.x) || !Number.isFinite(n.y)) continue;
+    x0 = Math.min(x0, n.x);
+    y0 = Math.min(y0, n.y);
+    x1 = Math.max(x1, n.x + n.w);
+    y1 = Math.max(y1, n.y + n.h);
+  }
+  return { x0, y0, x1, y1 };
+}
+
+// Asserts the three stated properties: the box grown by pad fits in size, it
+// is centred, and the scale is the largest (one axis touches the padded edge).
+function agentMapEdgeExpectFit(
+  f: MiniFrame,
+  nodes: readonly MapNode[],
+  view: AgentMapEdgeRect,
+  size: { w: number; h: number },
+  pad: number,
+) {
+  const b = agentMapEdgeBox(nodes, view);
+  const [px0, py0] = agentMapEdgeToMini(b.x0, b.y0, f);
+  const [px1, py1] = agentMapEdgeToMini(b.x1, b.y1, f);
+  const eps = 1e-6;
+  expect(px0).toBeGreaterThanOrEqual(pad - eps);
+  expect(py0).toBeGreaterThanOrEqual(pad - eps);
+  expect(px1).toBeLessThanOrEqual(size.w - pad + eps);
+  expect(py1).toBeLessThanOrEqual(size.h - pad + eps);
+  expect((px0 + px1) / 2).toBeCloseTo(size.w / 2, 6);
+  expect((py0 + py1) / 2).toBeCloseTo(size.h / 2, 6);
+  const fillsX = Math.abs(px1 - px0 - (size.w - 2 * pad)) < 1e-6;
+  const fillsY = Math.abs(py1 - py0 - (size.h - 2 * pad)) < 1e-6;
+  expect(fillsX || fillsY, "the scale is the largest that fits").toBe(true);
+}
+
+function agentMapEdgeExpectSaneScale(f: MiniFrame) {
+  expect(Number.isFinite(f.scale), `scale ${f.scale} finite`).toBe(true);
+  expect(f.scale).toBeGreaterThan(0);
+}
+
+describe("miniFrame — edges (W7)", () => {
+  const size = { w: 200, h: 140 };
+
+  it("with no nodes the box is the view rectangle alone", () => {
+    const view = { x: -300, y: 50, w: 1200, h: 600 };
+    const f = miniFrame([], view, size);
+    agentMapEdgeExpectFit(f, [], view, size, 6);
+  });
+
+  it("the default pad is 6", () => {
+    const nodes = [agentMapEdgeMini("a", 10, 20, 300, 160), agentMapEdgeMini("b", 2000, -400, 300, 160)];
+    const view = { x: 0, y: 0, w: 800, h: 500 };
+    expect(miniFrame(nodes, view, size)).toEqual(miniFrame(nodes, view, size, 6));
+    agentMapEdgeExpectFit(miniFrame(nodes, view, size), nodes, view, size, 6);
+  });
+
+  it("pad 0 lets the box reach the minimap's edge", () => {
+    const nodes = [agentMapEdgeMini("a", 0, 0, 100, 100)];
+    const view = { x: 0, y: 0, w: 1000, h: 100 };
+    const f = miniFrame(nodes, view, size, 0);
+    agentMapEdgeExpectFit(f, nodes, view, size, 0);
+    // a wide box binds on x: it spans the full width
+    const [px0] = agentMapEdgeToMini(0, 0, f);
+    const [px1] = agentMapEdgeToMini(1000, 0, f);
+    expect(px0).toBeCloseTo(0, 6);
+    expect(px1).toBeCloseTo(size.w, 6);
+  });
+
+  it("a tall box binds on y and is centred on x", () => {
+    const nodes = [agentMapEdgeMini("tall", 0, -5000, 50, 10_000)];
+    const view = { x: 0, y: 0, w: 50, h: 50 };
+    const f = miniFrame(nodes, view, size, 6);
+    agentMapEdgeExpectFit(f, nodes, view, size, 6);
+    const [, py0] = agentMapEdgeToMini(0, -5000, f);
+    const [, py1] = agentMapEdgeToMini(0, 5000, f);
+    expect(py0).toBeCloseTo(6, 6);
+    expect(py1).toBeCloseTo(size.h - 6, 6);
+  });
+
+  it("covers nodes wholly outside the view, negative coordinates included, by their full size", () => {
+    const nodes = [agentMapEdgeMini("left", -9000, -7000, 300, 200), agentMapEdgeMini("right", 4000, 3000, 300, 200)];
+    const view = { x: 0, y: 0, w: 800, h: 500 };
+    const f = miniFrame(nodes, view, size);
+    agentMapEdgeExpectFit(f, nodes, view, size, 6);
+    // the far corner of "right" (x + w, y + h) is inside the padded minimap
+    const [px, py] = agentMapEdgeToMini(4300, 3200, f);
+    expect(px).toBeLessThanOrEqual(size.w - 6 + 1e-6);
+    expect(py).toBeLessThanOrEqual(size.h - 6 + 1e-6);
+  });
+
+  it("a node with a non-finite coordinate is left out", () => {
+    const good = [agentMapEdgeMini("a", 100, 100, 300, 160)];
+    const view = { x: 0, y: 0, w: 800, h: 500 };
+    const bad = [
+      ...good,
+      agentMapEdgeMini("nanx", Number.NaN, 0, 300, 160),
+      agentMapEdgeMini("nany", 0, Number.NaN, 300, 160),
+      agentMapEdgeMini("infx", Number.POSITIVE_INFINITY, 0, 300, 160),
+      agentMapEdgeMini("ninfy", 0, Number.NEGATIVE_INFINITY, 300, 160),
+    ];
+    const withBad = miniFrame(bad, view, size);
+    const without = miniFrame(good, view, size);
+    expect(withBad.scale).toBeCloseTo(without.scale, 9);
+    expect(withBad.ox).toBeCloseTo(without.ox, 6);
+    expect(withBad.oy).toBeCloseTo(without.oy, 6);
+  });
+
+  it("only non-finite nodes reads as no nodes at all", () => {
+    const view = { x: 10, y: 20, w: 400, h: 300 };
+    const f = miniFrame([agentMapEdgeMini("n", Number.NaN, Number.NaN, 300, 160)], view, size);
+    const g = miniFrame([], view, size);
+    expect(f.scale).toBeCloseTo(g.scale, 9);
+    expect(f.ox).toBeCloseTo(g.ox, 6);
+    expect(f.oy).toBeCloseTo(g.oy, 6);
+  });
+
+  const degenerate: Array<[string, MapNode[], AgentMapEdgeRect, { w: number; h: number }, number | undefined]> = [
+    ["a zero-size view and no nodes", [], { x: 0, y: 0, w: 0, h: 0 }, size, undefined],
+    ["a zero-size view and one zero-size node on it", [agentMapEdgeMini("p", 0, 0, 0, 0)], { x: 0, y: 0, w: 0, h: 0 }, size, undefined],
+    ["a zero-size minimap", [agentMapEdgeMini("a", 0, 0, 300, 160)], { x: 0, y: 0, w: 800, h: 500 }, { w: 0, h: 0 }, undefined],
+    ["a minimap smaller than its padding", [agentMapEdgeMini("a", 0, 0, 300, 160)], { x: 0, y: 0, w: 800, h: 500 }, { w: 8, h: 8 }, 6],
+    ["a negative minimap size", [], { x: 0, y: 0, w: 800, h: 500 }, { w: -50, h: -50 }, undefined],
+    ["a NaN view", [], { x: Number.NaN, y: Number.NaN, w: Number.NaN, h: Number.NaN }, size, undefined],
+    ["an infinite view", [], { x: 0, y: 0, w: Number.POSITIVE_INFINITY, h: Number.POSITIVE_INFINITY }, size, undefined],
+    ["a NaN minimap size", [], { x: 0, y: 0, w: 800, h: 500 }, { w: Number.NaN, h: Number.NaN }, undefined],
+    ["a NaN pad", [], { x: 0, y: 0, w: 800, h: 500 }, size, Number.NaN],
+    ["a node with NaN width", [agentMapEdgeMini("a", 0, 0, Number.NaN, Number.NaN)], { x: 0, y: 0, w: 800, h: 500 }, size, undefined],
+  ];
+  for (const [name, nodes, view, sz, pad] of degenerate) {
+    it(`scale stays finite and positive for ${name}`, () => {
+      agentMapEdgeExpectSaneScale(pad === undefined ? miniFrame(nodes, view, sz) : miniFrame(nodes, view, sz, pad));
+    });
+  }
+
+  it("does not move or reorder the nodes it reads", () => {
+    const nodes = [agentMapEdgeMini("z", 5, 6, 7, 8), agentMapEdgeMini("a", Number.NaN, 1, 2, 3)];
+    const copy = nodes.map((n) => ({ ...n }));
+    miniFrame(nodes, { x: 0, y: 0, w: 100, h: 100 }, size);
+    expect(nodes).toEqual(copy);
+  });
+});
+
+describe("miniToWorld — edges (W7)", () => {
+  it("is exactly px / scale + ox, py / scale + oy, negative and fractional input included", () => {
+    const f: MiniFrame = { scale: 0.025, ox: -1200, oy: 340 };
+    for (const [px, py] of [[0, 0], [-10, -3], [17.5, 99.25], [1e6, -1e6]] as const) {
+      const [x, y] = miniToWorld(px, py, f);
+      expect(x).toBeCloseTo(px / f.scale + f.ox, 9);
+      expect(y).toBeCloseTo(py / f.scale + f.oy, 9);
+    }
+  });
+
+  it("round-trips the frame miniFrame chose", () => {
+    const nodes = [agentMapEdgeMini("a", -400, 900, 300, 160), agentMapEdgeMini("b", 3000, -200, 300, 160)];
+    const f = miniFrame(nodes, { x: 0, y: 0, w: 1400, h: 900 }, { w: 220, h: 150 });
+    for (const [wx, wy] of [[-400, 900], [3300, -40], [0, 0], [123.456, -78.9]] as const) {
+      const [px, py] = agentMapEdgeToMini(wx, wy, f);
+      const [bx, by] = miniToWorld(px, py, f);
+      expect(bx).toBeCloseTo(wx, 6);
+      expect(by).toBeCloseTo(wy, 6);
+    }
+  });
+
+  it("the minimap's top-left pixel is the frame's origin", () => {
+    const f: MiniFrame = { scale: 3, ox: 7, oy: -9 };
+    expect(miniToWorld(0, 0, f)).toEqual([7, -9]);
+  });
+});
+
+// --- Round 8: W9 coat and hat ----------------------------------------------------
+
+describe("modelCoat — edges (W9)", () => {
+  const cases: Array<[string | undefined, string]> = [
+    // exact ids kraken spawns
+    ["claude-fable-5-1", "fable"],
+    ["claude-opus-5", "opus"],
+    ["claude-opus-5-5", "opus"],
+    ["gpt-6-astra", "codex"],
+    // case-insensitive
+    ["CLAUDE-OPUS-5-5", "opus"],
+    ["Sonnet", "sonnet"],
+    ["HAIKU", "haiku"],
+    ["GPT-5", "codex"],
+    ["ASTRA", "codex"],
+    ["Codex-Mini", "codex"],
+    ["FaBlE", "fable"],
+    // first match wins, in the stated order
+    ["fable-opus", "fable"],
+    ["opus-fable", "fable"],
+    ["opus-sonnet", "opus"],
+    ["sonnet-opus", "opus"],
+    ["sonnet-haiku", "sonnet"],
+    ["haiku-sonnet", "sonnet"],
+    ["haiku-gpt", "haiku"],
+    ["codex-haiku", "haiku"],
+    // contains, not equals
+    ["xopusx", "opus"],
+    ["my-codex", "codex"],
+    // everything else is the yellow default
+    ["", "fable"],
+    [undefined, "fable"],
+    ["   ", "fable"],
+    ["gemini-3", "fable"],
+    ["gp", "fable"],
+    ["opu", "fable"],
+    ["haik", "fable"],
+    ["cod", "fable"],
+  ];
+  for (const [model, coat] of cases) {
+    it(`${JSON.stringify(model)} → ${coat}`, () => {
+      expect(modelCoat(model)).toBe(coat);
+    });
+  }
+});
+
+describe("COAT_HUE — edges (W9)", () => {
+  it("holds exactly the five coats with candidate set A's hues", () => {
+    expect(Object.keys(COAT_HUE).sort()).toEqual(["codex", "fable", "haiku", "opus", "sonnet"]);
+    expect({ ...COAT_HUE }).toEqual({
+      fable: "#ffd21f",
+      opus: "#6aaef5",
+      sonnet: "#f1ead9",
+      haiku: "#4fc7b9",
+      codex: "#4b5263",
+    });
+  });
+
+  it("every modelCoat answer has a hue", () => {
+    for (const m of [undefined, "", "fable", "opus", "sonnet", "haiku", "gpt", "codex", "astra", "zzz"]) {
+      expect(COAT_HUE[modelCoat(m)]).toMatch(/^#[0-9a-f]{6}$/);
+    }
+  });
+});
+
+describe("roleHat — edges (W9)", () => {
+  const who = (over: Partial<WebAgent>): WebAgent => agentMapEdgeAgent(over);
+
+  it("monitor and shell wear nothing, whatever their name", () => {
+    expect(roleHat(who({ kind: "monitor", name: "hephaestus-go" }))).toBe("none");
+    expect(roleHat(who({ kind: "shell", name: "athena-edge" }))).toBe("none");
+    expect(roleHat(who({ kind: "monitor", name: "" }))).toBe("none");
+  });
+
+  it("a subagent wears a beanie, whatever its name", () => {
+    expect(roleHat(who({ kind: "subagent", name: "hephaestus-go" }))).toBe("beanie");
+    expect(roleHat(who({ kind: "subagent", name: "athena-logic" }))).toBe("beanie");
+    expect(roleHat(who({ kind: "subagent", name: "hermes-d1" }))).toBe("beanie");
+    expect(roleHat(who({ kind: "subagent", name: "" }))).toBe("beanie");
+  });
+
+  it("a teammate or a kindless agent is hatted by a case-insensitive name prefix", () => {
+    for (const kind of ["teammate", undefined] as const) {
+      expect(roleHat(who({ kind, name: "hephaestus" }))).toBe("hardhat");
+      expect(roleHat(who({ kind, name: "Hephaestus-web" }))).toBe("hardhat");
+      expect(roleHat(who({ kind, name: "ATHENA-EDGE" }))).toBe("helmet");
+      expect(roleHat(who({ kind, name: "athena" }))).toBe("helmet");
+      expect(roleHat(who({ kind, name: "HerMes-d7" }))).toBe("wings");
+    }
+  });
+
+  it("a role name that is not at the start, or a near miss, is a cap", () => {
+    for (const name of ["my-athena", "x-hephaestus", "the-hermes", "athen", "hephaestos", "herm", "zeus-agent-map", "", "researcher-1"]) {
+      expect(roleHat(who({ kind: "teammate", name })), name).toBe("cap");
+    }
+  });
+
+  it("the role field does not decide the hat, the name does", () => {
+    expect(roleHat(who({ kind: "teammate", name: "researcher", role: "hephaestus" }))).toBe("cap");
+    expect(roleHat(who({ kind: "teammate", name: "athena-logic", role: "researcher" }))).toBe("helmet");
+  });
+
+  it("an unrecognised kind falls to the name rule", () => {
+    expect(roleHat(who({ kind: "something-new", name: "hermes-x" }))).toBe("wings");
+    expect(roleHat(who({ kind: "something-new", name: "zed" }))).toBe("cap");
   });
 });

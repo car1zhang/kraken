@@ -14,6 +14,8 @@ import {
   ribbon,
 } from "./activity.ts";
 import { MAP_GAP, overlaps, seedLayout, settle, stackOrder, type MapNode } from "./layout.ts";
+import { COAT_HUE, modelCoat, roleHat } from "./avatar.ts";
+import { miniFrame, miniToWorld, type MiniFrame } from "./minimap.ts";
 
 // agentmap.contract.test.ts — athena-logic's blind tests for the map's pure
 // logic (50-contract.md W2 and W3). Every assertion cites its contract row.
@@ -342,5 +344,183 @@ describe("stackOrder", () => {
     expect(z.get("high")!).toBeLessThan(z.get("mid-a")!);
     expect(z.get("mid-a")!).toBeLessThan(z.get("mid-b")!);
     expect(z.get("mid-b")!).toBeLessThan(z.get("low")!);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Round 8, W7: minimap frame (lib/agentmap/minimap.ts)
+// ---------------------------------------------------------------------------
+
+/** Where a world point lands on the minimap, per MiniFrame's stated mapping. */
+const agentMapContractToMini = (x: number, y: number, f: MiniFrame): [number, number] => [(x - f.ox) * f.scale, (y - f.oy) * f.scale];
+
+describe("miniFrame (W7)", () => {
+  it("fits the union of the nodes and the view, padded by 6 by default, and centres it", () => {
+    // union box: x 0..200, y 0..100; size 212x112 with pad 6 on each side leaves exactly 200x100
+    const f = miniFrame([node("a", 0, 0, 100, 50)], { x: 0, y: 0, w: 200, h: 100 }, { w: 212, h: 112 });
+    expect(f.scale).toBeCloseTo(1);
+    expect(f.ox).toBeCloseTo(-6);
+    expect(f.oy).toBeCloseTo(-6);
+    expect(agentMapContractToMini(0, 0, f)[0]).toBeCloseTo(6);
+    expect(agentMapContractToMini(200, 100, f)[1]).toBeCloseTo(106);
+  });
+
+  it("takes the largest scale the tighter axis allows and centres the box on the other", () => {
+    // union 400x100 into 212x112, pad 6: width allows 200/400 = 0.5, height 100/100 = 1
+    const f = miniFrame([node("a", 0, 0, 400, 100)], { x: 0, y: 0, w: 100, h: 50 }, { w: 212, h: 112 });
+    expect(f.scale).toBeCloseTo(0.5);
+    const [left, top] = agentMapContractToMini(0, 0, f);
+    const [right, bottom] = agentMapContractToMini(400, 100, f);
+    expect(left).toBeCloseTo(6);
+    expect(right).toBeCloseTo(206);
+    // 50 minimap pixels of box in 112: 31 above and 31 below
+    expect(top).toBeCloseTo(31);
+    expect(bottom).toBeCloseTo(81);
+  });
+
+  it("includes nodes outside the view and the view outside the nodes", () => {
+    // node at -100,-50 (100x50) and view 0,0 200x100 -> union -100..200, -50..100 (300x150)
+    const f = miniFrame([node("a", -100, -50, 100, 50)], { x: 0, y: 0, w: 200, h: 100 }, { w: 312, h: 162 });
+    expect(f.scale).toBeCloseTo(1);
+    expect(f.ox).toBeCloseTo(-106);
+    expect(f.oy).toBeCloseTo(-56);
+    // the view far from a node: the box spans both
+    const g = miniFrame([node("a", 0, 0, 100, 100)], { x: 900, y: 0, w: 100, h: 100 }, { w: 1000, h: 1000 }, 0);
+    expect(g.scale).toBeCloseTo(1);
+    expect(agentMapContractToMini(0, 0, g)[0]).toBeCloseTo(0);
+    expect(agentMapContractToMini(1000, 0, g)[0]).toBeCloseTo(1000);
+  });
+
+  it("honours an explicit pad", () => {
+    const f = miniFrame([], { x: 0, y: 0, w: 200, h: 100 }, { w: 200, h: 100 }, 0);
+    expect(f.scale).toBeCloseTo(1);
+    expect(f.ox).toBeCloseTo(0);
+    expect(f.oy).toBeCloseTo(0);
+    const g = miniFrame([], { x: 0, y: 0, w: 200, h: 100 }, { w: 220, h: 120 }, 10);
+    expect(g.scale).toBeCloseTo(1);
+    expect(g.ox).toBeCloseTo(-10);
+    expect(g.oy).toBeCloseTo(-10);
+  });
+
+  it("uses the view rectangle alone with no nodes", () => {
+    const f = miniFrame([], { x: 50, y: 20, w: 400, h: 200 }, { w: 212, h: 112 });
+    expect(f.scale).toBeCloseTo(0.5);
+    expect(agentMapContractToMini(50, 20, f)[0]).toBeCloseTo(6);
+    expect(agentMapContractToMini(450, 220, f)[0]).toBeCloseTo(206);
+    expect(agentMapContractToMini(50, 20, f)[1]).toBeCloseTo(6);
+    expect(agentMapContractToMini(450, 220, f)[1]).toBeCloseTo(106);
+  });
+
+  it("leaves out a node with a non-finite coordinate", () => {
+    const view = { x: 0, y: 0, w: 200, h: 100 };
+    const size = { w: 212, h: 112 };
+    const clean = miniFrame([node("a", 0, 0, 100, 50)], view, size);
+    const withBad = miniFrame([node("a", 0, 0, 100, 50), node("bad", Number.NaN, 5000), node("inf", 0, Number.POSITIVE_INFINITY)], view, size);
+    expect(withBad.scale).toBeCloseTo(clean.scale);
+    expect(withBad.ox).toBeCloseTo(clean.ox);
+    expect(withBad.oy).toBeCloseTo(clean.oy);
+  });
+
+  it("always answers a finite positive scale, also for a zero-size view and no nodes", () => {
+    const f = miniFrame([], { x: 0, y: 0, w: 0, h: 0 }, { w: 200, h: 120 });
+    expect(Number.isFinite(f.scale)).toBe(true);
+    expect(f.scale).toBeGreaterThan(0);
+  });
+});
+
+describe("miniToWorld (W7)", () => {
+  it("is [px / scale + ox, py / scale + oy]", () => {
+    const f: MiniFrame = { scale: 0.25, ox: -100, oy: 40 };
+    expect(miniToWorld(10, 20, f)).toEqual([10 / 0.25 - 100, 20 / 0.25 + 40]);
+    expect(miniToWorld(0, 0, f)).toEqual([-100, 40]);
+  });
+
+  it("inverts the frame miniFrame chose", () => {
+    const f = miniFrame([node("a", -300, 200, 300, 140), node("b", 800, -90)], { x: 0, y: 0, w: 1200, h: 700 }, { w: 180, h: 120 });
+    for (const [x, y] of [
+      [0, 0],
+      [-300, 200],
+      [1040, 50],
+    ] as const) {
+      const [px, py] = agentMapContractToMini(x, y, f);
+      const [wx, wy] = miniToWorld(px, py, f);
+      expect(wx).toBeCloseTo(x);
+      expect(wy).toBeCloseTo(y);
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Round 8, W9: coat by model, hat by role (lib/agentmap/avatar.ts)
+// ---------------------------------------------------------------------------
+
+describe("modelCoat (W9)", () => {
+  it("matches fable, opus, sonnet, haiku, then gpt/codex/astra, case-insensitively", () => {
+    expect(modelCoat("claude-fable-5-1")).toBe("fable");
+    expect(modelCoat("claude-opus-5")).toBe("opus");
+    expect(modelCoat("claude-opus-5-5")).toBe("opus");
+    expect(modelCoat("opus")).toBe("opus");
+    expect(modelCoat("claude-sonnet-4-5")).toBe("sonnet");
+    expect(modelCoat("claude-haiku-4")).toBe("haiku");
+    expect(modelCoat("gpt-6-astra")).toBe("codex");
+    expect(modelCoat("gpt-5")).toBe("codex");
+    expect(modelCoat("codex-mini")).toBe("codex");
+    expect(modelCoat("astra")).toBe("codex");
+    expect(modelCoat("Claude-OPUS-5")).toBe("opus");
+    expect(modelCoat("HAIKU")).toBe("haiku");
+    expect(modelCoat("GPT-6")).toBe("codex");
+    expect(modelCoat("FABLE")).toBe("fable");
+  });
+
+  it("takes the first match in the stated order", () => {
+    expect(modelCoat("fable-opus")).toBe("fable");
+    expect(modelCoat("opus-sonnet")).toBe("opus");
+    expect(modelCoat("haiku-sonnet")).toBe("sonnet");
+    expect(modelCoat("gpt-haiku")).toBe("haiku");
+  });
+
+  it("is fable for anything else, an empty string and undefined", () => {
+    expect(modelCoat(undefined)).toBe("fable");
+    expect(modelCoat("")).toBe("fable");
+    expect(modelCoat("llama-4")).toBe("fable");
+  });
+});
+
+describe("COAT_HUE (W9)", () => {
+  it("is exactly candidate set A's coats", () => {
+    expect({ ...COAT_HUE }).toEqual({
+      fable: "#ffd21f",
+      opus: "#6aaef5",
+      sonnet: "#f1ead9",
+      haiku: "#4fc7b9",
+      codex: "#4b5263",
+    });
+  });
+});
+
+describe("roleHat (W9)", () => {
+  it("is none for a monitor or a shell whatever its name", () => {
+    expect(roleHat(agent({ kind: "monitor", name: "hephaestus-go" }))).toBe("none");
+    expect(roleHat(agent({ kind: "shell", name: "athena-logic" }))).toBe("none");
+  });
+
+  it("is beanie for a subagent whatever its name", () => {
+    expect(roleHat(agent({ kind: "subagent", name: "hermes-fig" }))).toBe("beanie");
+    expect(roleHat(agent({ kind: "subagent", name: "explore the repo" }))).toBe("beanie");
+  });
+
+  it("goes by name for a teammate or no kind, case-insensitively", () => {
+    expect(roleHat(agent({ kind: "teammate", name: "hephaestus-web" }))).toBe("hardhat");
+    expect(roleHat(agent({ kind: "teammate", name: "Athena-logic" }))).toBe("helmet");
+    expect(roleHat(agent({ kind: "teammate", name: "HERMES-10-flow" }))).toBe("wings");
+    expect(roleHat(agent({ kind: "teammate", name: "researcher" }))).toBe("cap");
+    expect(roleHat(agent({ kind: undefined, name: "hephaestus" }))).toBe("hardhat");
+    expect(roleHat(agent({ kind: undefined, name: "athena" }))).toBe("helmet");
+    expect(roleHat(agent({ kind: undefined, name: "scribe" }))).toBe("cap");
+  });
+
+  it("matches a role only at the start of the name", () => {
+    expect(roleHat(agent({ kind: "teammate", name: "my-hephaestus" }))).toBe("cap");
+    expect(roleHat(agent({ kind: "teammate", name: "x-athena" }))).toBe("cap");
   });
 });

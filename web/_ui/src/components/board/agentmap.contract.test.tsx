@@ -1,4 +1,4 @@
-import { act, render, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { useState } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -672,5 +672,132 @@ describe("MapView keeps unsaved positions in localStorage", () => {
     // alpha is now ABOVE beta (y -4000 < 0), so beta draws in front
     const z = (key: string) => Number(container.querySelector<HTMLElement>(`.map-card[data-key="${key}"]`)!.style.zIndex);
     await waitFor(() => expect(z("beta")).toBeGreaterThan(z("alpha")));
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Round 8: W5 (zoom never moves a card) and W7 (#map-minimap)
+// ---------------------------------------------------------------------------
+
+const agentMapContractR8Jobs = () => [
+  agentMapContractJob({ slug: "alpha", state: "working", live: true }),
+  agentMapContractJob({ slug: "beta", state: "working", live: true }),
+  agentMapContractJob({ slug: "gamma", state: "draft" }),
+];
+
+/** Renders the map with saved alpha/beta and a seeded gamma, then waits until the first placement has been saved and settled. */
+async function agentMapContractR8Settled() {
+  const stub = agentMapContractStubFetch({ alpha: [0, 3000], beta: [0, 0] });
+  const utils = agentMapContractRenderMap(agentMapContractR8Jobs());
+  await waitFor(() => expect(stub.posts.some((p) => "gamma" in p)).toBe(true));
+  await new Promise((r) => setTimeout(r, 300));
+  return { ...utils, ...stub };
+}
+
+/**
+ * Every card's world position and stacking, by key: MapView writes a card's
+ * position as the `.map-card`'s inline `left`/`top` (px, world units) and its
+ * stackOrder as the inline z-index. W5/W7: a zoom or an overview press
+ * changes none of them.
+ */
+interface AgentMapContractR8Pos {
+  left: string;
+  top: string;
+  z: string;
+}
+const agentMapContractR8Z = (root: ParentNode): Record<string, AgentMapContractR8Pos> =>
+  Object.fromEntries(
+    agentMapContractCards(root).map((c): [string, AgentMapContractR8Pos] => [
+      c.getAttribute("data-key") ?? "",
+      { left: c.style.left, top: c.style.top, z: c.style.zIndex },
+    ]),
+  );
+
+/** The snapshot is not vacuous: every card has a numeric px position. */
+function agentMapContractR8ExpectPlaced(snap: ReturnType<typeof agentMapContractR8Z>) {
+  expect(Object.keys(snap).sort()).toEqual(["alpha", "beta", "gamma"]);
+  for (const p of Object.values(snap)) {
+    expect(p.left).toMatch(/^-?[\d.]+(e[+-]?\d+)?px$/);
+    expect(p.top).toMatch(/^-?[\d.]+(e[+-]?\d+)?px$/);
+  }
+}
+
+/** The HUD zoom button whose text is exactly `text` (`+`, `−`, `fit`, as the contract names them). */
+const agentMapContractR8Hud = (root: ParentNode, text: string) =>
+  [...root.querySelectorAll<HTMLButtonElement>("#agent-map button")].find((b) => b.textContent?.trim() === text);
+
+describe("MapView zoom never moves a card (W5)", () => {
+  it("sends no save and moves no card when zoomed with the wheel and a pinch", async () => {
+    const { container, posts } = await agentMapContractR8Settled();
+    const before = posts.length;
+    const z = agentMapContractR8Z(container);
+    agentMapContractR8ExpectPlaced(z);
+    const map = container.querySelector<HTMLElement>("#agent-map")!;
+    for (const deltaY of [-400, -400, 900, 900, 900]) {
+      fireEvent.wheel(map, { deltaY, clientX: 200, clientY: 200 });
+      fireEvent.wheel(map, { deltaY, ctrlKey: true, clientX: 200, clientY: 200 });
+    }
+    await new Promise((r) => setTimeout(r, 300));
+    expect(posts.length).toBe(before);
+    expect(agentMapContractR8Z(container)).toEqual(z);
+  });
+
+  it("sends no save and moves no card when zoomed with the +, − and fit buttons", async () => {
+    const { container, posts } = await agentMapContractR8Settled();
+    const before = posts.length;
+    const z = agentMapContractR8Z(container);
+    agentMapContractR8ExpectPlaced(z);
+    for (const text of ["+", "+", "−", "−", "−", "fit"]) {
+      const btn = agentMapContractR8Hud(container, text);
+      expect(btn, `HUD button ${text}`).toBeDefined();
+      await userEvent.click(btn!);
+    }
+    await new Promise((r) => setTimeout(r, 300));
+    expect(posts.length).toBe(before);
+    expect(agentMapContractR8Z(container)).toEqual(z);
+  });
+});
+
+describe("MapView minimap (W7)", () => {
+  it("renders #map-minimap inside #agent-map as a canvas with role img and label map overview", async () => {
+    const { container } = await agentMapContractR8Settled();
+    const mini = container.querySelector("#agent-map #map-minimap");
+    expect(mini).not.toBeNull();
+    expect(mini!.tagName).toBe("CANVAS");
+    expect(mini).toHaveAttribute("role", "img");
+    expect(mini).toHaveAttribute("aria-label", "map overview");
+  });
+
+  it("renders it for a map that shows a single card", () => {
+    agentMapContractStubFetch({});
+    const { container } = agentMapContractRenderMap([agentMapContractJob({ slug: "solo", state: "draft" })]);
+    expect(container.querySelector("#agent-map #map-minimap")).not.toBeNull();
+  });
+
+  it("keeps the zoom buttons alongside it", async () => {
+    const { container } = await agentMapContractR8Settled();
+    expect(container.querySelector("#map-minimap")).not.toBeNull();
+    for (const text of ["+", "−", "fit"]) expect(agentMapContractR8Hud(container, text), `HUD button ${text}`).toBeDefined();
+  });
+
+  it("moves no card and sends no save when pressed or dragged", async () => {
+    const { container, posts } = await agentMapContractR8Settled();
+    const before = posts.length;
+    const z = agentMapContractR8Z(container);
+    agentMapContractR8ExpectPlaced(z);
+    const mini = container.querySelector<HTMLElement>("#map-minimap")!;
+    fireEvent.pointerDown(mini, { clientX: 10, clientY: 10, button: 0, pointerId: 1 });
+    fireEvent.pointerMove(mini, { clientX: 40, clientY: 30, buttons: 1, pointerId: 1 });
+    fireEvent.pointerUp(mini, { clientX: 40, clientY: 30, pointerId: 1 });
+    fireEvent.mouseDown(mini, { clientX: 20, clientY: 15, button: 0 });
+    fireEvent.mouseMove(mini, { clientX: 60, clientY: 50, buttons: 1 });
+    fireEvent.mouseMove(window, { clientX: 70, clientY: 55, buttons: 1 });
+    fireEvent.mouseUp(window, { clientX: 70, clientY: 55 });
+    fireEvent.click(mini, { clientX: 70, clientY: 55 });
+    await new Promise((r) => setTimeout(r, 300));
+    expect(posts.length).toBe(before);
+    expect(agentMapContractR8Z(container)).toEqual(z);
+    // the view is not broken by it
+    expect(agentMapContractCards(container).map((c) => c.getAttribute("data-key")).sort()).toEqual(["alpha", "beta", "gamma"]);
   });
 });

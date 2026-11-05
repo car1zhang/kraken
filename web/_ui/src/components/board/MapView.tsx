@@ -18,6 +18,7 @@ import { shouldStartDrag } from "../../hooks/useDragReorder.ts";
 import { leadPose, mapStatus } from "../../lib/agentmap/activity.ts";
 import { readPalette, type Palette } from "../../lib/agentmap/draw.ts";
 import { freeSpot, overlaps, seedLayout, settle, stackOrder, type MapNode } from "../../lib/agentmap/layout.ts";
+import { drawMinimap, miniFrame, miniToWorld, type MiniFrame } from "../../lib/agentmap/minimap.ts";
 import {
   drawCrossMsg,
   drawScene,
@@ -51,8 +52,10 @@ const PAD_X = 64;
 /**
  * How far the canvas reaches DOWN over the card's face, which the characters
  * now paint in front of: a seated character's dangling feet, never more. It
- * equals the card's own top padding (style.css `.card { padding: 10px }`), so
- * no character pixel can land on the card's text.
+ * is the card's top padding at zoom 1 (style.css `.card { padding: 10px }`);
+ * the map's text scale makes that padding 11.2 world pixels, so the 10 the
+ * canvas reaches stays inside it and no character pixel can land on the
+ * card's text.
  */
 const PAD_BOTTOM = 10;
 /**
@@ -90,13 +93,37 @@ const UNDER_FRESH_MS = 500;
 /** How often the arrows' hot state and the threads' freshness are re-derived from the clock. */
 const UNDER_CHECK_MS = 500;
 /**
- * A zoom is committed to CSS `zoom` (a full relayout of every card) this long
- * after the last zoom event, HUD buttons included. Long enough that a run of
- * pinches or button presses pays for one relayout once the hand has stopped,
- * not one per pause: the relayout measured about 300 ms on a 40-card board
- * (2026-11-05), which between two pinches reads as the map hanging.
+ * A zoom is committed (canvases re-backed and, above 1, a CSS `zoom` that
+ * relays out every card) this long after the last zoom event, HUD buttons
+ * included. Long enough that a run of pinches or button presses pays for one
+ * relayout once the hand has stopped, not one per pause: the relayout
+ * measured about 300 ms on a 40-card board (2026-11-05), which between two
+ * pinches reads as the map hanging.
  */
 const ZOOM_COMMIT_MS = 900;
+/**
+ * Redraws of card canvases one frame may make for cards that are NOT in
+ * motion (held and slow cadences). The slow cards all come due together
+ * after anything that resets their clocks (a zoom commit, a theme change, the
+ * first frame), and a frame that redrew all of them at once ran 47 to 98 ms
+ * on a 40-card board (the lead's profile, 2026-11-05); capped, they are
+ * spread over the next frames, most overdue first, and stay spread because
+ * each keeps the time it was actually drawn. Cards in motion are never held
+ * back, and neither is every waiting card: with six or more cards in motion
+ * due, one waiting card (the most overdue) still draws, so none is starved.
+ */
+const CARD_BUDGET = 6;
+/**
+ * The arrow layer is drawn this far past every edge of the map, so a pan can
+ * move the drawn layer instead of redrawing it until the pan has gone
+ * further than this.
+ */
+const UNDER_MARGIN = 160;
+/** A pan or zoom with no new event for this long has paused: the arrow layer is redrawn in place. */
+const VIEW_PAUSE_MS = 140;
+/** The overview's size, CSS pixels: the canvas' inline size and every overview frame read these. */
+const MINI_W = 184;
+const MINI_H = 120;
 /** A thread is "fresh" (still fading) for this long after its last message, as drawThread fades it. */
 const THREAD_FRESH_S = 40;
 /** A moved card glides to its new place for this long (style.css `.map-card.glide`). */
@@ -176,7 +203,21 @@ interface ViewState {
 
 type Drag =
   | { kind: "card"; key: string; sx: number; sy: number; ox: number; oy: number; moved: boolean }
-  | { kind: "pan"; sx: number; sy: number; ox: number; oy: number };
+  | { kind: "pan"; sx: number; sy: number; ox: number; oy: number }
+  /** a press on the overview: its frame and page offset, held for the whole drag */
+  | { kind: "mini"; left: number; top: number; f: MiniFrame };
+
+/**
+ * The zoom the card layer is LAID OUT at for a view zoom `z`. Below 1 the
+ * layer stays laid out at 1 and is only scaled, so zooming out never lays a
+ * card out again: no text re-wraps (a browser's minimum font size can force
+ * that at a small CSS zoom) and no card's height changes. The operator saw
+ * cards grow as the view zoomed out and push each other out of the
+ * arrangement he had made. Above 1 the layer is laid out at the zoom, for
+ * sharp text; what that does to a card's measured size is discounted in
+ * `takeSize`.
+ */
+const layoutZoom = (z: number) => (ZOOM_OK ? Math.max(1, z) : 1);
 
 /**
  * Where the saved positions stand. `waiting`: the GET has not answered, so no
@@ -336,13 +377,27 @@ export interface MapViewProps {
  * one that comes back (or a new one) yields, moving to a free spot near
  * where it would have been while every card already showing stays put.
  *
+ * Zooming never moves a card. Below a zoom of 1 the card layer stays laid
+ * out at 1 and is only scaled (`layoutZoom`), so no card re-wraps or grows;
+ * above 1 it is laid out at the zoom, and takeSize discounts the size change
+ * that relayout reports, so physics knows every card by its size at zoom 1
+ * and a zoom runs no settle and sends no save. A card's own text and chips
+ * are laid out at style.css' `--map-text-scale` inside its 300px width.
+ *
+ * In the bottom-left corner, the zoom buttons sit above the overview
+ * (`#map-minimap`): every card as a rectangle in its status colour and the
+ * visible area as an outline, redrawn only when one of those changed. A
+ * press or drag on it centres the view on the point under the pointer.
+ *
  * The animation loop is built to be cheap on a board that is mostly asleep:
  * it reads no layout (sizes come from a ResizeObserver, the map's own size
  * from resize events, the palette from a theme change), allocates nothing in
  * its steady state, draws text from cached bitmaps, redraws each card's
  * characters at the rate its pose needs (30, 12 or 4 a second; see
- * `intervalFor`), and redraws the arrow layer only when something it shows
- * changed.
+ * `intervalFor`) with at most CARD_BUDGET redraws a frame for cards not in
+ * motion, and redraws the arrow layer only when something it shows changed
+ * or a pan or zoom has paused (while the view moves, the drawn layer is
+ * moved with it).
  */
 export function MapView({ search, actions, boardNodeID, hidden }: MapViewProps) {
   const entries = useMemo(() => {
@@ -395,9 +450,32 @@ export function MapView({ search, actions, boardNodeID, hidden }: MapViewProps) 
   const entriesRef = useRef(entries);
   entriesRef.current = entries;
 
+  const miniRef = useRef<HTMLCanvasElement | null>(null);
+
   const viewRef = useRef<ViewState>(readView() ?? { x: 40, y: 160, z: 1 });
-  /** The zoom the card layer is LAID OUT at (CSS zoom); `viewRef.z` may run ahead of it mid-gesture. */
-  const committedZ = useRef(viewRef.current.z);
+  /**
+   * The zoom the card layer is LAID OUT at (CSS zoom): `layoutZoom` of the
+   * last committed zoom, so never below 1. The view zoom may differ from it
+   * (always below 1, and mid-gesture above); the difference is a scale
+   * transform.
+   */
+  const committedZ = useRef(layoutZoom(viewRef.current.z));
+  /** The view zoom as of the last commit: what the card canvases are backed for. */
+  const backZ = useRef(viewRef.current.z);
+  /** When the view last changed (performance.now millis), for the arrow layer's pause. */
+  const viewAt = useRef(-Infinity);
+  /** The view and layout zoom applyView last saw, so it can tell a real change from a re-application. */
+  const appliedView = useRef({ x: NaN, y: NaN, z: NaN, lz: NaN });
+  /** The overview needs drawing again: a card's place, size or status, the cards, the view or the theme changed. */
+  const miniDirty = useRef(true);
+  /**
+   * Per card: the layout zoom it was last measured at, and the height it
+   * measured then, in the layer's own units. A measurement taken at a
+   * different layout zoom from the last is the zoom's doing, not the
+   * content's (see takeSize).
+   */
+  const measuredAtZ = useRef(new Map<string, number>()).current;
+  const rawH = useRef(new Map<string, number>()).current;
   /** The map's own size and page offset, from the resize handler (never read per frame). */
   const sizeRef = useRef({ w: 0, h: 0, left: 0, top: 0 });
   const fitPending = useRef(readView() === null);
@@ -522,6 +600,7 @@ export function MapView({ search, actions, boardNodeID, hidden }: MapViewProps) 
         if (el && el.style.zIndex !== zi) el.style.zIndex = zi;
       }
       underDirty.current = true;
+      miniDirty.current = true;
     },
     [nodes, cardEls],
   );
@@ -699,27 +778,74 @@ export function MapView({ search, actions, boardNodeID, hidden }: MapViewProps) 
     return true;
   };
 
-  /** Record a card's measured size; a change asks for a settle on the next frame. */
+  /**
+   * Record a card's measured size; a change asks for a settle on the next
+   * frame. Physics knows a card by its size at zoom 1, so a measurement the
+   * ZOOM changed is never a size change:
+   *  - at a view zoom of 1 or less the layer is laid out at 1 (layoutZoom),
+   *    so zooming there measures nothing new at all;
+   *  - above 1, the first measurement after the layout zoom changed (every
+   *    card is re-observed on that commit, so each reports once) only
+   *    re-baselines the card; a later change at the same layout zoom is the
+   *    content's, and moves the card's zoom-1 height by the same amount;
+   *  - back at layout zoom 1, that first measurement is adopted as the
+   *    zoom-1 height, and one more than 2px off the stored height counts as
+   *    the content change it is.
+   * A browser that reports the box zoomed in `offset*` (its width reads as
+   * the card's width times the zoom) is brought back to the layer's units
+   * first.
+   */
   const takeSize = useCallback(
     (key: string, el: HTMLElement) => {
       const n = nodes.get(key);
       if (!n) return;
-      const h = el.offsetHeight;
-      const w = el.offsetWidth;
+      const lz = committedZ.current;
+      let h = el.offsetHeight;
+      let w = el.offsetWidth;
       if (!(h > 0)) return;
-      const changed = !measured.has(key) || Math.abs(n.h - h) > 0.5 || (w > 0 && Math.abs(n.w - w) > 0.5);
+      if (lz !== 1 && w > 0 && Math.abs(w - CARD_W * lz) < 1) {
+        h /= lz;
+        w /= lz;
+      }
+      const first = !measured.has(key);
+      const zoomOnly = !first && measuredAtZ.get(key) !== lz;
+      measuredAtZ.set(key, lz);
+      const before = rawH.get(key);
+      rawH.set(key, h);
+      let nh: number;
+      let changed: boolean;
+      if (zoomOnly) {
+        // Above 1 a zoom-only report re-baselines and changes nothing. Back
+        // at layout zoom 1 the measurement IS the zoom-1 height, so it is
+        // adopted: whatever the deltas taken above 1 got wrong (a content
+        // change in the same pass as a commit, a pixel of rounding each) is
+        // corrected here. A difference past rounding is a content change
+        // and is treated as one; a zoom alone leaves the height as it was,
+        // so it still settles and saves nothing.
+        if (lz !== 1) return;
+        nh = h;
+        changed = Math.abs(n.h - h) > 2;
+        if (!changed) {
+          n.h = h;
+          return;
+        }
+      } else {
+        nh = first || before === undefined ? h : n.h + (h - before);
+        changed = first || Math.abs(n.h - nh) > 0.5 || (w > 0 && Math.abs(n.w - w) > 0.5);
+      }
       measured.add(key);
-      n.h = h;
+      n.h = nh;
       if (w > 0) n.w = w;
       if (changed) {
         // an arriving card's size is part of its arrival (it yields when it
         // is placed); only a showing card's change moves others
         if (!arriving.has(key)) settleWanted.current = true;
         underDirty.current = true;
+        miniDirty.current = true;
         lastDraw.delete(key);
       }
     },
-    [nodes, measured, lastDraw, arriving],
+    [nodes, measured, lastDraw, arriving, measuredAtZ, rawH],
   );
 
   // One ResizeObserver for every card. Its callback runs after layout, so the
@@ -782,6 +908,7 @@ export function MapView({ search, actions, boardNodeID, hidden }: MapViewProps) 
     // (a job created) is an arrival and yields instead.
     if (firstPlacement) settleWanted.current = true;
     underDirty.current = true;
+    miniDirty.current = true;
     scheduleSave();
   });
 
@@ -807,6 +934,21 @@ export function MapView({ search, actions, boardNodeID, hidden }: MapViewProps) 
     }
     if (changed) underDirty.current = true;
   }, [entries, scenes, synced, nodes, lastDraw]);
+
+  // ---- the overview's inputs from the payload: each card's status, and a
+  // signature of the cards and their statuses, so a poll that changed
+  // neither leaves the overview alone
+  const miniStatus = useMemo(() => new Map(entries.map((e) => [e.key, mapStatus(e.job) as string])), [entries]);
+  const miniSig = useMemo(() => {
+    let s = "";
+    for (const [k, st] of miniStatus) s += k + "\u0000" + st + "\u0001";
+    return s;
+  }, [miniStatus]);
+  const miniStatusRef = useRef(miniStatus);
+  miniStatusRef.current = miniStatus;
+  useEffect(() => {
+    miniDirty.current = true;
+  }, [miniSig]);
 
   // ---- the saved positions
   useEffect(() => {
@@ -859,6 +1001,7 @@ export function MapView({ search, actions, boardNodeID, hidden }: MapViewProps) 
       markDirty([...dirty]);
       settleWanted.current = true;
       underDirty.current = true;
+      miniDirty.current = true;
       rerender();
       scheduleSave();
     };
@@ -894,11 +1037,26 @@ export function MapView({ search, actions, boardNodeID, hidden }: MapViewProps) 
   // ---- pan and zoom
   /**
    * Put the view on the DOM. The card layer is laid out at `committedZ` (CSS
-   * zoom); while a zoom gesture runs ahead of it, the difference is a scale
-   * transform, which costs no layout. Writes only, and only what changed.
+   * zoom); the difference between that and the view's zoom (below 1 always,
+   * and while a zoom gesture runs ahead of a commit) is a scale transform,
+   * which costs no layout. Writes only, and only what changed. The arrow
+   * layer is not redrawn for a view change: the frame moves the drawn layer
+   * and redraws it once the view pauses (see the frame's arrow block).
    */
   const applyView = useCallback(() => {
     const v = viewRef.current;
+    // Only a view that actually changed marks the overview and stamps the
+    // view as moving: this also runs after every render, and a render that
+    // moved nothing must not redraw the overview or defer the arrow layer.
+    const a = appliedView.current;
+    if (a.x !== v.x || a.y !== v.y || a.z !== v.z || a.lz !== committedZ.current) {
+      a.x = v.x;
+      a.y = v.y;
+      a.z = v.z;
+      a.lz = committedZ.current;
+      viewAt.current = performance.now();
+      miniDirty.current = true;
+    }
     const w = worldRef.current;
     if (w) {
       const t = `translate(${v.x}px, ${v.y}px)`;
@@ -920,7 +1078,6 @@ export function MapView({ search, actions, boardNodeID, hidden }: MapViewProps) 
         if (z.style.transform !== t) z.style.transform = t;
       }
     }
-    underDirty.current = true;
   }, []);
   const persistView = useCallback(() => {
     if (persistTimer.current !== null) window.clearTimeout(persistTimer.current);
@@ -930,16 +1087,37 @@ export function MapView({ search, actions, boardNodeID, hidden }: MapViewProps) 
       writeLS(MAP_CAMERA_KEY, JSON.stringify({ x: Math.round(v.x), y: Math.round(v.y), z: +v.z.toFixed(3) }));
     }, 300);
   }, []);
-  /** Lay the cards out at the current zoom: one relayout, sharp text. */
+  /**
+   * Commit the current zoom: the card canvases are re-backed for it, and
+   * above 1 the cards are laid out at it (one relayout, sharp text). At or
+   * below 1 the layout zoom stays 1 and nothing is laid out again. A commit
+   * that changes the layout zoom re-observes every card, so each reports its
+   * size once at the new zoom and takeSize can tell that report from a
+   * content change. Nothing here moves a card, settles or saves.
+   */
   const commitZoom = useCallback(() => {
     if (zoomTimer.current !== null) window.clearTimeout(zoomTimer.current);
     zoomTimer.current = null;
-    if (committedZ.current === viewRef.current.z) return;
-    committedZ.current = viewRef.current.z;
+    const z = viewRef.current.z;
+    if (backZ.current === z) return;
+    backZ.current = z;
+    const lz = layoutZoom(z);
+    const relayout = committedZ.current !== lz;
+    committedZ.current = lz;
     applyView();
+    if (relayout) {
+      const ro = roRef.current;
+      if (ro) {
+        for (const el of cardEls.values()) {
+          ro.unobserve(el);
+          ro.observe(el);
+        }
+      }
+    }
     // every card canvas is re-backed at the new scale on its next draw
+    // (spread over frames by CARD_BUDGET)
     lastDraw.clear();
-  }, [applyView, lastDraw]);
+  }, [applyView, lastDraw, cardEls]);
   const zoomAt = useCallback(
     (f: number, px: number, py: number, commitNow = false) => {
       const v = viewRef.current;
@@ -980,6 +1158,57 @@ export function MapView({ search, actions, boardNodeID, hidden }: MapViewProps) 
     commitZoom();
   }, [nodes, applyView, persistView, commitZoom]);
 
+  /** The visible part of the plane, world units. */
+  const viewRect = useCallback(() => {
+    const v = viewRef.current;
+    const s = sizeRef.current;
+    return { x: -v.x / v.z, y: -v.y / v.z, w: s.w / v.z, h: s.h / v.z };
+  }, []);
+  /** The overview's frame for the cards and view as they stand. */
+  const currentMiniFrame = useCallback(() => {
+    const placedNow = entriesRef.current.map((e) => nodes.get(e.key)).filter((n): n is MapNode => !!n && finiteXY(n));
+    return miniFrame(placedNow, viewRect(), { w: MINI_W, h: MINI_H });
+  }, [nodes, viewRect]);
+  /** Move the view (never a card) so world point (wx, wy) is at the map's centre. */
+  const centreOn = useCallback(
+    (wx: number, wy: number) => {
+      if (!Number.isFinite(wx) || !Number.isFinite(wy)) return;
+      const v = viewRef.current;
+      v.x = sizeRef.current.w / 2 - wx * v.z;
+      v.y = sizeRef.current.h / 2 - wy * v.z;
+      applyView();
+      persistView();
+    },
+    [applyView, persistView],
+  );
+  /**
+   * A press on the overview centres the view on the world point under it,
+   * and a drag keeps doing so. The frame is the one at the press, held for
+   * the drag: the overview's own frame follows the view, and re-reading it
+   * mid-drag would move the point under the pointer as the view moved.
+   */
+  const onMiniPointerDown = (ev: ReactMouseEvent<HTMLCanvasElement>) => {
+    if (!gestureEvent(ev)) return;
+    if (ev.button !== undefined && ev.button !== 0) return;
+    ev.stopPropagation();
+    // a second finger never takes over a card drag: the drop must still be
+    // written, settled and saved
+    if (dragRef.current?.kind === "card") return;
+    let left = 0;
+    let top = 0;
+    try {
+      const r = ev.currentTarget.getBoundingClientRect();
+      left = r.left;
+      top = r.top;
+    } catch {
+      // no layout to read: the overview's corner is the page origin
+    }
+    const d = { kind: "mini" as const, left, top, f: currentMiniFrame() };
+    dragRef.current = d;
+    const [wx, wy] = miniToWorld(num(ev.clientX) - left, num(ev.clientY) - top, d.f);
+    centreOn(wx, wy);
+  };
+
   useLayoutEffect(() => {
     applyView();
   });
@@ -995,6 +1224,7 @@ export function MapView({ search, actions, boardNodeID, hidden }: MapViewProps) 
       root.style.height = `${h}px`;
       sizeRef.current = { w: root.clientWidth, h, left: r.left, top: r.top };
       underDirty.current = true;
+      miniDirty.current = true;
     };
     size();
     window.addEventListener("resize", size);
@@ -1008,6 +1238,7 @@ export function MapView({ search, actions, boardNodeID, hidden }: MapViewProps) 
     const read = () => {
       paletteRef.current = readPalette();
       underDirty.current = true;
+      miniDirty.current = true;
       lastDraw.clear();
     };
     read();
@@ -1046,6 +1277,11 @@ export function MapView({ search, actions, boardNodeID, hidden }: MapViewProps) 
     const onMove = (ev: MouseEvent) => {
       const d = dragRef.current;
       if (!d) return;
+      if (d.kind === "mini") {
+        const [wx, wy] = miniToWorld(num(ev.clientX) - d.left, num(ev.clientY) - d.top, d.f);
+        centreOn(wx, wy);
+        return;
+      }
       const dx = num(ev.clientX) - d.sx;
       const dy = num(ev.clientY) - d.sy;
       if (d.kind === "pan") {
@@ -1068,13 +1304,14 @@ export function MapView({ search, actions, boardNodeID, hidden }: MapViewProps) 
         el.style.top = `${node.y}px`;
       }
       underDirty.current = true;
+      miniDirty.current = true;
     };
     const onUp = () => {
       const d = dragRef.current;
       if (!d) return;
       dragRef.current = null;
       rootRef.current?.classList.remove("panning");
-      if (d.kind === "pan") {
+      if (d.kind === "pan" || d.kind === "mini") {
         persistView();
         return;
       }
@@ -1108,7 +1345,19 @@ export function MapView({ search, actions, boardNodeID, hidden }: MapViewProps) 
     return () => {
       for (const [t, fn] of types) window.removeEventListener(t, fn as EventListener);
     };
-  }, [nodes, cardEls, markDirty, draggedEarly, applyView, persistView, scheduleSave, rerender, writePositions, settleToRest]);
+  }, [
+    nodes,
+    cardEls,
+    markDirty,
+    draggedEarly,
+    applyView,
+    persistView,
+    scheduleSave,
+    rerender,
+    writePositions,
+    settleToRest,
+    centreOn,
+  ]);
 
   const onCardPointerDown = useCallback(
     (key: string, ev: ReactMouseEvent<HTMLDivElement>) => {
@@ -1164,7 +1413,9 @@ export function MapView({ search, actions, boardNodeID, hidden }: MapViewProps) 
     if (!gestureEvent(ev)) return;
     if (ev.button !== undefined && ev.button !== 0) return;
     const t = ev.target as Element | null;
-    if (t && typeof t.closest === "function" && t.closest(".map-card, .map-hud")) return;
+    if (t && typeof t.closest === "function" && t.closest(".map-card, .map-corner")) return;
+    // a second finger never takes over a card drag (see onMiniPointerDown)
+    if (dragRef.current?.kind === "card") return;
     const v = viewRef.current;
     dragRef.current = { kind: "pan", sx: num(ev.clientX), sy: num(ev.clientY), ox: v.x, oy: v.y };
     rootRef.current?.classList.add("panning");
@@ -1181,6 +1432,12 @@ export function MapView({ search, actions, boardNodeID, hidden }: MapViewProps) 
     let anyHot = false;
     let freshAny = false;
     let overLive = false;
+    /** The view the arrow layer was last drawn at; `ok` false until it has been drawn. */
+    const underView = { ok: false, x: 0, y: 0, z: 1 };
+    /** Due cards not in motion, waiting on the frame's budget: list index, pose, millis since last drawn. Reused. */
+    const pendIdx: number[] = [];
+    const pendPose: string[] = [];
+    const pendWait: number[] = [];
 
     const sizeCanvas = (cv: HTMLCanvasElement, cssW: number, cssH: number, scale: number) => {
       const w = Math.max(1, Math.round(cssW * scale));
@@ -1189,6 +1446,30 @@ export function MapView({ search, actions, boardNodeID, hidden }: MapViewProps) 
         cv.width = w;
         cv.height = h;
       }
+    };
+
+    /** Redraw one card's characters now. */
+    const drawCard = (
+      c: CanvasRenderingContext2D,
+      cv: HTMLCanvasElement,
+      n: MapNode,
+      s: CardScene,
+      pose: string,
+      C: Palette,
+      ms: number,
+      now: number,
+      nowMs: number,
+      prev: number | undefined,
+      bs: number,
+    ) => {
+      const dt = prev === undefined ? 0 : Math.min(0.25, (ms - prev) / 1000);
+      lastDraw.set(s.key, ms);
+      sizeCanvas(cv, n.w + PAD_X * 2, PAD_TOP + PAD_BOTTOM, bs);
+      c.setTransform(1, 0, 0, 1, 0, 0);
+      c.clearRect(0, 0, cv.width, cv.height);
+      c.setTransform(bs, 0, 0, bs, PAD_X * bs, PAD_TOP * bs);
+      s.w = n.w;
+      drawScene(c, s, pose, C, now, nowMs, dt);
     };
 
     const frame = (ms: number) => {
@@ -1252,19 +1533,56 @@ export function MapView({ search, actions, boardNodeID, hidden }: MapViewProps) 
         if (fresh !== freshAny) underDirty.current = true;
         freshAny = fresh;
       }
+      // The layer is drawn UNDER_MARGIN past every edge. While the view is
+      // moving (a wheel pan, a pinch, a background drag) the drawn layer is
+      // moved and scaled with a transform instead of redrawn — the hot and
+      // fresh redraws wait too — and it is redrawn at the view once the view
+      // has paused for VIEW_PAUSE_MS, or as soon as the moved layer no longer
+      // covers the map (the pan went past the margin, or a zoom out shrank
+      // it). A change to what it shows (underDirty) still redraws at once.
+      const M = UNDER_MARGIN;
+      const gesturing = ms - viewAt.current < VIEW_PAUSE_MS;
+      const viewMoved = !underView.ok || underView.x !== v.x || underView.y !== v.y || underView.z !== v.z;
+      let covered = false;
+      let tx = 0;
+      let ty = 0;
+      let k = 1;
+      if (viewMoved && underView.ok) {
+        k = v.z / underView.z;
+        tx = v.x + M - k * (M + underView.x);
+        ty = v.y + M - k * (M + underView.y);
+        covered = tx - M <= 0 && ty - M <= 0 && tx - M + k * (W + 2 * M) >= W && ty - M + k * (H + 2 * M) >= H;
+      }
       const underDue =
         underDirty.current ||
-        (anyHot && ms - underAt > UNDER_HOT_MS) ||
-        (freshAny && ms - underAt > UNDER_FRESH_MS);
+        (viewMoved && (!gesturing || !covered)) ||
+        (!gesturing && anyHot && ms - underAt > UNDER_HOT_MS) ||
+        (!gesturing && freshAny && ms - underAt > UNDER_FRESH_MS);
       const under = underRef.current;
       const uc = under && underDue ? ctxOf(under) : null;
+      if (under && !uc && viewMoved && covered) {
+        const t = `translate(${tx}px, ${ty}px) scale(${k})`;
+        if (under.style.transform !== t) under.style.transform = t;
+      }
       if (under && uc) {
         underDirty.current = false;
         underAt = ms;
-        sizeCanvas(under, W, H, dpr);
+        underView.ok = true;
+        underView.x = v.x;
+        underView.y = v.y;
+        underView.z = v.z;
+        const cw = W + 2 * M;
+        const ch = H + 2 * M;
+        sizeCanvas(under, cw, ch, dpr);
+        const us = under.style;
+        if (us.width !== `${cw}px`) us.width = `${cw}px`;
+        if (us.height !== `${ch}px`) us.height = `${ch}px`;
+        if (us.left !== `${-M}px`) us.left = `${-M}px`;
+        if (us.top !== `${-M}px`) us.top = `${-M}px`;
+        if (us.transform !== "") us.transform = "";
         uc.setTransform(1, 0, 0, 1, 0, 0);
         uc.clearRect(0, 0, under.width, under.height);
-        uc.setTransform(dpr * v.z, 0, 0, dpr * v.z, dpr * v.x, dpr * v.y);
+        uc.setTransform(dpr * v.z, 0, 0, dpr * v.z, dpr * (v.x + M), dpr * (v.y + M));
         for (let i = 0; i < links.length; i++) {
           const l = links[i]!;
           const na = nodes.get(l[0]);
@@ -1287,12 +1605,19 @@ export function MapView({ search, actions, boardNodeID, hidden }: MapViewProps) 
       // sized when it is first drawn and when the committed zoom changes,
       // never shrunk for leaving the screen: re-allocating backing stores as
       // cards scroll in and out was a resize on every pan frame.
-      const bs = Math.min(MAX_BACKING, (window.devicePixelRatio || 1) * committedZ.current);
+      // A card in motion (its interval is the fast one: a working lead in an
+      // active pose, a bubble, a walk, a hover) draws as soon as it is due.
+      // The rest that are due are held to what is left of CARD_BUDGET for
+      // this frame (never less than one), most overdue first; the others
+      // wait for a later frame.
+      const bs = Math.min(MAX_BACKING, (window.devicePixelRatio || 1) * backZ.current);
       const far = v.z < FAR_ZOOM;
       const vx0 = -v.x / v.z;
       const vy0 = -v.y / v.z;
       const vx1 = (W - v.x) / v.z;
       const vy1 = (H - v.y) / v.z;
+      let drawn = 0;
+      let nPend = 0;
       for (let i = 0; i < list.length; i++) {
         const e = list[i]!;
         const cv = canvasEls.get(e.key);
@@ -1305,17 +1630,57 @@ export function MapView({ search, actions, boardNodeID, hidden }: MapViewProps) 
         if (!visible) continue;
         const pose = leadPose(e.job, nowMs);
         const prev = lastDraw.get(e.key);
-        if (prev !== undefined && ms - prev < intervalFor(pose, sceneBusy(s, now), far)) continue;
+        const iv = intervalFor(pose, sceneBusy(s, now), far);
+        if (prev !== undefined && ms - prev < iv) continue;
         const c = ctxOf(cv);
         if (!c) continue;
-        const dt = prev === undefined ? 0 : Math.min(0.25, (ms - prev) / 1000);
-        lastDraw.set(e.key, ms);
-        sizeCanvas(cv, n.w + PAD_X * 2, PAD_TOP + PAD_BOTTOM, bs);
-        c.setTransform(1, 0, 0, 1, 0, 0);
-        c.clearRect(0, 0, cv.width, cv.height);
-        c.setTransform(bs, 0, 0, bs, PAD_X * bs, PAD_TOP * bs);
-        s.w = n.w;
-        drawScene(c, s, pose, C, now, nowMs, dt);
+        if (iv === FAST_MS) {
+          drawCard(c, cv, n, s, pose, C, ms, now, nowMs, prev, bs);
+          drawn++;
+          continue;
+        }
+        pendIdx[nPend] = i;
+        pendPose[nPend] = pose;
+        pendWait[nPend] = prev === undefined ? Infinity : ms - prev;
+        nPend++;
+      }
+      // never fewer than one: with six or more cards in motion due, the most
+      // overdue waiting card still draws, so no card is starved of a redraw
+      for (let left = Math.max(1, CARD_BUDGET - drawn); left > 0 && nPend > 0; left--) {
+        let best = 0;
+        for (let j = 1; j < nPend; j++) if (pendWait[j]! > pendWait[best]!) best = j;
+        const e = list[pendIdx[best]!]!;
+        const cv = canvasEls.get(e.key)!;
+        const c = ctxOf(cv)!;
+        drawCard(c, cv, nodes.get(e.key)!, scenes.get(e.key)!, pendPose[best]!, C, ms, now, nowMs, lastDraw.get(e.key), bs);
+        nPend--;
+        pendIdx[best] = pendIdx[nPend]!;
+        pendPose[best] = pendPose[nPend]!;
+        pendWait[best] = pendWait[nPend]!;
+      }
+
+      // ---- the overview, only when something it shows changed
+      const mini = miniRef.current;
+      if (miniDirty.current && mini) {
+        miniDirty.current = false;
+        const mc = ctxOf(mini);
+        if (mc) {
+          sizeCanvas(mini, MINI_W, MINI_H, dpr);
+          mc.setTransform(dpr, 0, 0, dpr, 0, 0);
+          // the same frame a press reads (currentMiniFrame), so a press lands
+          // on the point drawn under it
+          const placedNow = list.map((e) => nodes.get(e.key)).filter((n): n is MapNode => !!n && finiteXY(n));
+          const statuses = miniStatusRef.current;
+          drawMinimap(
+            mc,
+            C,
+            placedNow,
+            (key) => statuses.get(key) ?? "draft",
+            viewRect(),
+            currentMiniFrame(),
+            { w: MINI_W, h: MINI_H },
+          );
+        }
       }
 
       // ---- on top: bubbles crossing between cells. Cleared only while one
@@ -1358,7 +1723,7 @@ export function MapView({ search, actions, boardNodeID, hidden }: MapViewProps) 
     return () => caf(id);
     // allMeasured is redefined per render but reads refs only, so the
     // closure captured here stays correct
-  }, [hidden, nodes, scenes, canvasEls, lastDraw, settleToRest, placeArrivals, fit]);
+  }, [hidden, nodes, scenes, canvasEls, lastDraw, settleToRest, placeArrivals, fit, viewRect, currentMiniFrame]);
 
   useEffect(
     () => () => {
@@ -1411,28 +1776,45 @@ export function MapView({ search, actions, boardNodeID, hidden }: MapViewProps) 
         </div>
       </div>
       <canvas className="map-over" ref={overRef} aria-hidden="true" />
-      <div className="map-hud">
-        <button
-          type="button"
-          className="map-hud-btn"
-          title="zoom in"
-          aria-label="zoom in"
-          onClick={() => zoomAt(1.25, sizeRef.current.w / 2, sizeRef.current.h / 2)}
-        >
-          +
-        </button>
-        <button
-          type="button"
-          className="map-hud-btn"
-          title="zoom out"
-          aria-label="zoom out"
-          onClick={() => zoomAt(0.8, sizeRef.current.w / 2, sizeRef.current.h / 2)}
-        >
-          −
-        </button>
-        <button type="button" className="map-hud-btn" title="fit every card in view" onClick={fit}>
-          fit
-        </button>
+      {/* the bottom-left corner: the zoom buttons above the overview, so
+          the overview never covers them */}
+      <div className="map-corner">
+        <div className="map-hud">
+          <button
+            type="button"
+            className="map-hud-btn"
+            title="zoom in"
+            aria-label="zoom in"
+            onClick={() => zoomAt(1.25, sizeRef.current.w / 2, sizeRef.current.h / 2)}
+          >
+            +
+          </button>
+          <button
+            type="button"
+            className="map-hud-btn"
+            title="zoom out"
+            aria-label="zoom out"
+            onClick={() => zoomAt(0.8, sizeRef.current.w / 2, sizeRef.current.h / 2)}
+          >
+            −
+          </button>
+          <button type="button" className="map-hud-btn" title="fit every card in view" onClick={fit}>
+            fit
+          </button>
+        </div>
+        {entries.length > 0 && (
+          <canvas
+            id="map-minimap"
+            ref={miniRef}
+            role="img"
+            aria-label="map overview"
+            width={MINI_W}
+            height={MINI_H}
+            style={{ width: MINI_W, height: MINI_H }}
+            onPointerDown={onMiniPointerDown}
+            onMouseDown={onMiniPointerDown}
+          />
+        )}
       </div>
     </main>
   );

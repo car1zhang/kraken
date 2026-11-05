@@ -838,6 +838,7 @@ struct WebActivity: Decodable {
     let act: String
     let label: String?
     let at: Int64
+    let model: String?
     let events: [AgentEvent]
     let crew: [WebCrewActivity]?
 }
