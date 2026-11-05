@@ -261,9 +261,14 @@ func windowSpent(w *core.UsageWindow, now time.Time) bool {
 // It is pure, and conservative on every unknown. A configured model that is
 // not Fable-tier is returned as-is (a hand-authored model: is the operator's
 // pick, and only a Fable pick has a Fable window to fall off). No usage row —
-// no snapshot yet, the account unknown, its last poll errored — means the
-// configured model: the mid-run arm will still catch a real exhaustion, and a
-// wrong guess here would put a cell on Opus for its whole life on no evidence.
+// no snapshot yet, the account unknown, its polls errored with no last-known
+// windows to carry — means the configured model: the mid-run arm will still
+// catch a real exhaustion, and a wrong guess here would put a cell on Opus for
+// its whole life on no evidence. An errored row that still carries its
+// last-known windows IS evidence, and pickLaunchAccount hands it over: an
+// account whose Fable window is spent answers the usage poll itself with a
+// 429, so skipping errored rows skipped exactly the spent accounts this arm
+// exists for.
 // A Fable row whose window has already reset reads as 0% (modelPercent), so a
 // stale poll past the reset never demotes a fresh window. The headroom gates
 // are the mid-run arm's (opusHasRoom): when Opus, session or weekly is spent
@@ -323,13 +328,71 @@ func pickFallbackAccount(snap core.UsageSnapshot, email string) *core.AccountUsa
 	return best
 }
 
-// launchAccount is the package-level indirection to fallbackAccount the
-// spawn-time arm (zeusLaunchModel, cell.go) reads through, and it is what the
-// test binary no-ops (testmain_test.go, bindGate's pattern): the real read
-// opens the machine's usage snapshot, and a dev machine whose main account has
-// Fable spent would otherwise turn every fresh-argv assertion in the suite
-// into a fallback.
-var launchAccount = fallbackAccount
+// pickLaunchAccount is the spawn-time arm's row for email. It is
+// pickFallbackAccount's answer when that row carries model windows, and
+// otherwise the errored row that still carries last-known ones (mergeUsage
+// keeps them, marked Stale) — the newest fetch wins. The mid-run arm can
+// afford to skip an errored row because it holds the banner as its other
+// source; at spawn there is no banner yet, and the errored row is the usual
+// shape of the very account it is asking about, whose usage poll 429s once
+// its Fable window is spent. A clean row with no model windows (a NoCreds
+// mirror slot, say) says nothing about Fable, so it does not hide a carried
+// reading.
+//
+// A carried row is taken only when every Fable window on it names its reset.
+// A carried Fable window past its reset reads as 0% (modelPercent), which is
+// what bounds an old reading; a window whose reset is unknown (ResetsAt 0)
+// would never age out while the account keeps erroring, and would demote
+// every spawn billed to it indefinitely. The second loop runs only when the
+// preferred clean row carries no model windows, and then any row with windows
+// may answer, clean or errored.
+func pickLaunchAccount(snap core.UsageSnapshot, email string) *core.AccountUsage {
+	if a := pickFallbackAccount(snap, email); a != nil && len(a.Models) > 0 {
+		return a
+	}
+	if email == "" {
+		return nil
+	}
+	var best *core.AccountUsage
+	for i := range snap.Accounts {
+		a := &snap.Accounts[i]
+		if !strings.EqualFold(a.Email, email) || len(a.Models) == 0 || !fableResetsKnown(a) {
+			continue
+		}
+		if best == nil || a.FetchedAt > best.FetchedAt {
+			best = a
+		}
+	}
+	return best
+}
+
+// fableResetsKnown reports whether every Fable window on the row names its
+// reset — the condition under which a carried reading can age out.
+func fableResetsKnown(a *core.AccountUsage) bool {
+	for _, m := range a.Models {
+		if strings.EqualFold(m.Name, "Fable") && m.ResetsAt == 0 {
+			return false
+		}
+	}
+	return true
+}
+
+// launchAccount is the package-level indirection the spawn-time arm
+// (zeusLaunchModel, cell.go) reads through, and it is what the test binary
+// no-ops (testmain_test.go, bindGate's pattern): the real read opens the
+// machine's usage snapshot, and a dev machine whose main account has Fable
+// spent would otherwise turn every fresh-argv assertion in the suite into a
+// fallback.
+var launchAccount = launchUsageAccount
+
+// launchUsageAccount is the real read behind launchAccount.
+func launchUsageAccount(email string) *core.AccountUsage {
+	snap, ok := ReadUsageSnapshot()
+	if !ok {
+		return nil
+	}
+	return pickLaunchAccount(snap, email)
+}
 
 func fallbackAccount(email string) *core.AccountUsage {
 	snap, ok := ReadUsageSnapshot()

@@ -320,3 +320,85 @@ func TestLaunchedModelGatesTheMidRunFallback(t *testing.T) {
 		t.Fatal("a zeus spawned on Fable must stay a Fable fallback candidate")
 	}
 }
+
+// TestPickLaunchAccountReadsCarriedWindows pins the spawn-time row choice: a
+// clean row wins exactly as pickFallbackAccount picks it, and when every row
+// for the email errored, the errored row still carrying last-known windows is
+// handed over (newest fetch first) rather than nothing, since a Fable-spent
+// account's own usage poll is what errors.
+func TestPickLaunchAccountReadsCarriedWindows(t *testing.T) {
+	fable := []core.ModelWindow{{Name: "Fable", Percent: 100, ResetsAt: 5000}}
+	snap := core.UsageSnapshot{Accounts: []core.AccountUsage{
+		{Slug: "clean", Email: "me@x.com", FetchedAt: 100, Models: fable},
+		{Slug: "errored", Email: "me@x.com", Error: "usage fetch: status 429", Stale: true, FetchedAt: 900, Models: fable},
+	}}
+	if got := pickLaunchAccount(snap, "me@x.com"); got == nil || got.Slug != "clean" {
+		t.Fatalf("with a clean row: got %+v, want clean", got)
+	}
+
+	snap = core.UsageSnapshot{Accounts: []core.AccountUsage{
+		{Slug: "old", Email: "me@x.com", Error: "reauth", Stale: true, FetchedAt: 100, Models: fable},
+		{Slug: "bare", Email: "me@x.com", Error: "keychain unavailable", FetchedAt: 999},
+		{Slug: "new", Email: "ME@x.com", Error: "usage fetch: status 429", Stale: true, FetchedAt: 500, Models: fable},
+		{Slug: "other", Email: "you@x.com", FetchedAt: 999, Models: fable},
+	}}
+	if got := pickLaunchAccount(snap, "me@x.com"); got == nil || got.Slug != "new" {
+		t.Fatalf("all errored: got %+v, want new (newest row carrying windows)", got)
+	}
+	if got := pickLaunchAccount(snap, ""); got != nil {
+		t.Fatalf("empty email picked %+v", got)
+	}
+	if got := pickLaunchAccount(snap, "nobody@x.com"); got != nil {
+		t.Fatalf("unknown email picked %+v", got)
+	}
+	bare := core.UsageSnapshot{Accounts: []core.AccountUsage{
+		{Slug: "bare", Email: "me@x.com", Error: "keychain unavailable", FetchedAt: 999},
+	}}
+	if got := pickLaunchAccount(bare, "me@x.com"); got != nil {
+		t.Fatalf("an errored row with no windows picked %+v", got)
+	}
+
+	// a clean row with no windows (a NoCreds mirror) says nothing about
+	// Fable and must not hide the carried reading
+	hidden := core.UsageSnapshot{Accounts: []core.AccountUsage{
+		{Slug: "mirror", Email: "me@x.com", NoCreds: true, FetchedAt: 999},
+		{Slug: "main", Email: "me@x.com", Error: "usage fetch: status 429", Stale: true, FetchedAt: 500, Models: fable},
+	}}
+	if got := pickLaunchAccount(hidden, "me@x.com"); got == nil || got.Slug != "main" {
+		t.Fatalf("windowless clean row: got %+v, want main", got)
+	}
+
+	// a carried Fable window with an unknown reset never ages out, so it is
+	// no evidence
+	unknown := core.UsageSnapshot{Accounts: []core.AccountUsage{
+		{Slug: "main", Email: "me@x.com", Error: "usage fetch: status 429", Stale: true, FetchedAt: 500,
+			Models: []core.ModelWindow{{Name: "Fable", Percent: 100}}},
+	}}
+	if got := pickLaunchAccount(unknown, "me@x.com"); got != nil {
+		t.Fatalf("carried Fable window with no reset picked %+v", got)
+	}
+}
+
+// TestSpawnModelOnA429Snapshot runs the row choice and the decision together
+// on the snapshot shape a Fable-spent main account leaves: its own row errored
+// with the last-known windows carried forward, and its pool mirror errored on
+// a stale reading whose Fable window has since reset. The spawn must fall
+// back, and a carried Fable window past its reset must not.
+func TestSpawnModelOnA429Snapshot(t *testing.T) {
+	now := time.Date(2026, 10, 29, 12, 0, 0, 0, time.UTC)
+	ahead, behind := now.Add(72*time.Hour).UnixMilli(), now.Add(-72*time.Hour).UnixMilli()
+	snap := core.UsageSnapshot{Accounts: []core.AccountUsage{
+		{Slug: "main", Email: "cell@example.com", Error: "usage fetch: status 429", Stale: true, FetchedAt: now.Add(-time.Hour).UnixMilli(),
+			Models: []core.ModelWindow{{Name: "Fable", Percent: 100, ResetsAt: ahead}}},
+		{Slug: "mirror", Email: "cell@example.com", Error: "token refresh failed (reauth required)", Stale: true, FetchedAt: now.Add(-96 * time.Hour).UnixMilli(),
+			Models: []core.ModelWindow{{Name: "Fable", Percent: 88, ResetsAt: behind}}},
+	}}
+	if got := spawnModel(core.ZeusModel, pickLaunchAccount(snap, "cell@example.com"), now); got != fableFallbackModel {
+		t.Fatalf("429 snapshot: spawnModel = %q, want %q", got, fableFallbackModel)
+	}
+
+	snap.Accounts[0].Models[0].ResetsAt = behind
+	if got := spawnModel(core.ZeusModel, pickLaunchAccount(snap, "cell@example.com"), now); got != core.ZeusModel {
+		t.Fatalf("carried Fable window past its reset: spawnModel = %q, want %q", got, core.ZeusModel)
+	}
+}
