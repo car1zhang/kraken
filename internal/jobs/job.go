@@ -159,6 +159,17 @@ type Job struct {
 	AccountSlug  string `json:"-"`
 	AccountEmail string `json:"-"`
 	AccountAt    int64  `json:"-"`
+	// FrozenAt is when the operator put this blocked job on hold
+	// (store.Job.FrozenAt, schema v41), unix millis, 0 for not frozen. A
+	// frozen job is still State "blocked" to every state reader; the mark
+	// only says it waits on something other than the operator. No
+	// frontmatter spelling, like Load: SetJobFrozen (jobfreeze.go) stamps
+	// and clears it, frozenThaw clears it through store.ThawJobFrozenAt, and
+	// any state write that leaves "blocked" clears it (the store does that in
+	// the same UPDATE; writeJobFieldsToStore mirrors it here).
+	//
+	// `json:"-"`: the client-visible form is webJob's own frozen_at.
+	FrozenAt int64 `json:"-"`
 	// launchModel memoizes zeusLaunchModel's answer for the length of ONE
 	// spawn chain, so the argv and the brief composed in that chain name the
 	// same tier. Never persisted, never read outside zeusLaunchModel; a Job

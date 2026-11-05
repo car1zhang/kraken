@@ -113,6 +113,10 @@ func jobFromStoreRow(sr *store.Job, prs []store.PR) *Job {
 		AccountSlug:  sr.AccountSlug,
 		AccountEmail: sr.AccountEmail,
 		AccountAt:    sr.AccountAt,
+		// The hold mark carries across whole (schema v41's frozen_at): no
+		// frontmatter spelling, written by SetJobFrozen and cleared by any
+		// state write that leaves "blocked".
+		FrozenAt: sr.FrozenAt,
 	}
 	if sr.Archived() {
 		j.ArchivedName = sr.ArchivedName
@@ -210,6 +214,11 @@ func writeJobFieldsToStore(st *store.Store, j *Job, keyvals ...string) error {
 		switch keyvals[i] {
 		case "state":
 			j.State = keyvals[i+1]
+			// the store thawed the row in this same UPDATE (schema v41);
+			// keep the in-memory job in step with it
+			if keyvals[i+1] != "blocked" {
+				j.FrozenAt = 0
+			}
 		case "outcome":
 			j.Outcome = keyvals[i+1]
 		case "session":

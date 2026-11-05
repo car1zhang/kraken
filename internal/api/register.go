@@ -210,8 +210,12 @@ func registerRoutes(mux routeMux) {
 	// reach on exactly the blocked, live-celled jobs it exists for. Its POST
 	// gates itself inline so the GET stays reachable under --mirror.
 	mux.HandleFunc("/api/job/load", jobLoadHandler)
-	// Rename is a one-field route for the same editableJob reason as those
-	// two, plus one of its own: a slug is identity rather than a field, so it
+	// The hold mark on a blocked job, a one-field route for the same
+	// editableJob reason as the two above (jobfreeze.go). POST only, with its
+	// mirror gate inline.
+	mux.HandleFunc("/api/job/freeze", webJobFreeze)
+	// Rename is a one-field route for the same editableJob reason as colour,
+	// load and freeze, plus one of its own: a slug is identity rather than a field, so it
 	// is never written as a side effect of an editor save (jobrename.go). Its
 	// mirror gate is inline rather than a mirrorGated wrapper here so a caller
 	// reaching the handler directly still hits it.

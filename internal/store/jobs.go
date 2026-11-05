@@ -79,6 +79,13 @@ type Job struct {
 	AccountSlug  string
 	AccountEmail string
 	AccountAt    int64 // unix millis; 0 means never bound
+	// FrozenAt is when the operator put this blocked job on hold (schema
+	// v41), unix millis; 0 means not frozen. It is only ever non-zero beside
+	// State "blocked": SetJobFrozen is the only writer that stamps it,
+	// ThawJobFrozenAt (the daemon's thaw) only clears it, and
+	// UpdateJobFields zeroes it whenever it writes any other state, so a job
+	// that leaves blocked by any route thaws in that same write.
+	FrozenAt int64
 	// FormerSlugs is every name this job has been renamed away from (schema
 	// v20's job_former_slugs), empty for the never-renamed job that every job
 	// is until someone renames it. Order is unspecified: nothing ranks them,
@@ -149,7 +156,7 @@ var jobColumns = `id, slug, COALESCE(repo,''), COALESCE(base,''), solo,
 	COALESCE(load_unblock,0), COALESCE(load_scope,0), COALESCE(load_note,''),
 	COALESCE(load_at,0), COALESCE(account_slug,''), COALESCE(account_email,''),
 	COALESCE(account_at,0), COALESCE(agent,''), COALESCE(visibility,'readonly'),
-	COALESCE(author,'unknown')`
+	COALESCE(author,'unknown'), COALESCE(frozen_at,0)`
 
 func scanJob(row interface{ Scan(...any) error }) (*Job, error) {
 	var j Job
@@ -161,7 +168,7 @@ func scanJob(row interface{ Scan(...any) error }) (*Job, error) {
 		&j.Run, &j.Rev, &j.CreatedAt, &j.UpdatedAt, &archivedAt, &archivedName, &j.Err,
 		&j.Load.Unblock, &j.Load.Scope, &j.Load.Note, &j.Load.At,
 		&j.AccountSlug, &j.AccountEmail, &j.AccountAt, &j.Agent, &j.Visibility,
-		&j.Author,
+		&j.Author, &j.FrozenAt,
 	)
 	if err != nil {
 		return nil, err
@@ -477,6 +484,18 @@ func updateJobFieldsTx(x execer, id, rev int64, fields map[string]any) (int64, e
 		setClause += k + " = ?, "
 		args = append(args, fields[k])
 	}
+	// A state write to anything but "blocked" thaws the job in the same
+	// UPDATE (schema v41): frozen_at is only meaningful on a blocked job, and
+	// this is the only statement that changes an active job's state after its
+	// INSERT (the daemon's working/blocked flips, a steer or an answer
+	// writing "working", done, a kill back to draft all land here), so the
+	// pair cannot drift apart. A non-string state value is treated as
+	// not-blocked, which thaws.
+	if st, ok := fields["state"]; ok {
+		if s, _ := st.(string); s != "blocked" {
+			setClause += "frozen_at = 0, "
+		}
+	}
 	now := time.Now().UnixMilli()
 	setClause += "rev = rev + 1, updated_at = ?"
 	args = append(args, now, id, rev)
@@ -636,6 +655,83 @@ func (s *Store) SetJobAccount(id int64, slug, email string, at int64) error {
 		return fmt.Errorf("set job account for job %d: %w", id, ErrNotFound)
 	}
 	return nil
+}
+
+// SetJobFrozen puts job id on hold (at != 0, the unix-millis stamp) or takes
+// it off hold (at == 0), writing schema v41's frozen_at.
+//
+// Freezing is CONDITIONAL on the row's state being "blocked", checked inside
+// the UPDATE: the daemon flips blocked → working from its own tick, so a
+// caller that read "blocked" a moment ago can be wrong by the time it writes,
+// and a frozen mark on a working job would hide a card that is running. A
+// zero-row freeze is disambiguated into ErrNotFound (no such active job) or
+// ErrJobNotBlocked. An archived row is never frozen through here.
+//
+// Thawing is unconditional on state and idempotent: clearing a mark that is
+// not set matches the row and changes nothing. The usual thaw is not this
+// call at all but updateJobFieldsTx's, in the write that moves the job off
+// blocked, or ThawJobFrozenAt's, when the daemon finds a turn no tick saw.
+//
+// A direct UPDATE outside UpdateJobFields, bumping NEITHER `rev` NOR
+// `updated_at` — SetJobLoad's rule, for its reasons: updated_at is the card's
+// age, which a hold must not reset (how long a frozen job has sat is the
+// thing worth seeing), and rev is the editor's optimistic lock over fields
+// this one is not among.
+func (s *Store) SetJobFrozen(id, at int64) error {
+	q := `UPDATE jobs SET frozen_at = ? WHERE id = ? AND archived_at IS NULL`
+	if at != 0 {
+		q += ` AND state = 'blocked'`
+	}
+	res, err := s.db.Exec(q, at, id)
+	if err != nil {
+		return fmt.Errorf("set job frozen for job %d: %w", id, err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("set job frozen for job %d: %w", id, err)
+	}
+	if n > 0 {
+		return nil
+	}
+	var state string
+	lookupErr := s.db.QueryRow(`SELECT state FROM jobs WHERE id = ? AND archived_at IS NULL`, id).Scan(&state)
+	switch {
+	case errors.Is(lookupErr, sql.ErrNoRows):
+		return fmt.Errorf("set job frozen for job %d: %w", id, ErrNotFound)
+	case lookupErr != nil:
+		return fmt.Errorf("set job frozen for job %d: %w", id, lookupErr)
+	default:
+		return fmt.Errorf("set job frozen for job %d (state %q): %w", id, state, ErrJobNotBlocked)
+	}
+}
+
+// ThawJobFrozenAt clears job id's hold only if it is still the one stamped
+// at, and reports whether it cleared anything.
+//
+// It is the daemon's thaw (jobs.frozenThaw), which decides from a job it
+// loaded at the top of a tick and writes some time later: the operator can
+// take the job off hold and put it back on in between, and that new hold was
+// placed after the turn the daemon is reacting to. Comparing the stamp inside
+// the UPDATE leaves it standing. A false with a nil error is that case, or a
+// hold already gone, and either way there is nothing for the caller to do.
+//
+// Bumps neither `rev` nor `updated_at`, SetJobFrozen's rule.
+func (s *Store) ThawJobFrozenAt(id, at int64) (bool, error) {
+	if at == 0 {
+		return false, nil
+	}
+	res, err := s.db.Exec(
+		`UPDATE jobs SET frozen_at = 0 WHERE id = ? AND frozen_at = ? AND archived_at IS NULL`,
+		id, at,
+	)
+	if err != nil {
+		return false, fmt.Errorf("thaw job %d: %w", id, err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return false, fmt.Errorf("thaw job %d: %w", id, err)
+	}
+	return n > 0, nil
 }
 
 // CreateArchivedJob upserts one archived-job row keyed on ArchivedName — the

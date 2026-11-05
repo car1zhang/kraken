@@ -446,3 +446,106 @@ describe("the search bar", () => {
     ]);
   });
 });
+
+// ---------------------------------------------------------------------------
+// THE FROZEN DRAWER: blocked jobs on hold, at the foot of the BLOCKED column.
+// A frozen job is still state "blocked" on the wire; `frozen_at` is the only
+// thing that moves its card.
+// ---------------------------------------------------------------------------
+
+describe("the frozen drawer", () => {
+  const FROZEN_AT = 1_700_000_000_000;
+  const fixture = () => [
+    job({ slug: "needs-me", state: "blocked", live: true }),
+    job({ slug: "on-hold", state: "blocked", live: true, frozen_at: FROZEN_AT }),
+    job({ slug: "also-held", state: "blocked", frozen_at: FROZEN_AT }),
+    job({ slug: "busy", state: "working", live: true }),
+  ];
+  const drawer = (container: HTMLElement) => container.querySelector(".frozen-drawer")!;
+  const columnCards = (container: HTMLElement, col: string) =>
+    [...colFor(container, col).querySelectorAll(".col-cards > .card")].map((c) =>
+      c.getAttribute("data-slug"),
+    );
+  const drawerCards = (container: HTMLElement) =>
+    [...drawer(container).querySelectorAll(".frozen-cards .card")].map((c) =>
+      c.getAttribute("data-slug"),
+    );
+
+  it("sits under BLOCKED and nowhere else, even with nothing frozen", () => {
+    const { container } = renderBoard([]);
+    expect(colFor(container, "blocked").querySelector(".frozen-drawer")).not.toBeNull();
+    expect(container.querySelectorAll(".frozen-drawer")).toHaveLength(1);
+    // and it is not the archive drawer wearing another name
+    expect(container.querySelectorAll(".archive-drawer")).toHaveLength(1);
+    expect(drawer(container).querySelector(".frozen-head .n")).toHaveTextContent("0");
+    expect(drawer(container).querySelector(".frozen-head")).toBeDisabled();
+  });
+
+  it("takes the frozen cards out of the column and counts them on its own head", () => {
+    const { container } = renderBoard(fixture());
+    expect(columnCards(container, "blocked")).toEqual(["needs-me"]);
+    expect(drawerCards(container)).toEqual(["on-hold", "also-held"]);
+    // the column head is the cards that need the operator
+    expect(colFor(container, "blocked").querySelector(".col-head .n")).toHaveTextContent("1");
+    expect(drawer(container).querySelector(".frozen-head .n")).toHaveTextContent("2");
+    // nothing leaked into another column
+    expect(columnCards(container, "working")).toEqual(["busy"]);
+  });
+
+  it("is collapsed until opened, and remembers that it was", async () => {
+    const { container } = renderBoard(fixture());
+    expect(container.querySelector(".frozen-cards")).toHaveAttribute("hidden");
+    await userEvent.click(drawer(container).querySelector("#frozen-toggle")!);
+    expect(container.querySelector(".frozen-cards")).not.toHaveAttribute("hidden");
+    expect(localStorage.getItem("kraken-frozen-open")).not.toBeNull();
+    // the archive drawer's flag is its own
+    expect(localStorage.getItem("kraken-archive-open")).toBeNull();
+  });
+
+  it("shows the placeholder in a BLOCKED column whose only jobs are on hold", () => {
+    const { container } = renderBoard([
+      job({ slug: "on-hold", state: "blocked", frozen_at: FROZEN_AT }),
+    ]);
+    expect(colFor(container, "blocked").querySelector(".col-cards .empty")).not.toBeNull();
+    expect(colFor(container, "blocked").querySelector(".col-head .n")).toHaveTextContent("0");
+    expect(drawerCards(container)).toEqual(["on-hold"]);
+  });
+
+  it("leaves the model's blocked bucket whole for the drag layer", () => {
+    const { board } = renderBoard(fixture());
+    expect(board.byColumn.blocked.map((j) => j.slug)).toEqual([
+      "needs-me",
+      "on-hold",
+      "also-held",
+    ]);
+  });
+
+  it("opens for a search match inside it, without storing the flag", async () => {
+    const { container } = renderBoard(fixture());
+    await userEvent.type(searchInput(container), "also");
+    expect(container.querySelector(".frozen-cards")).not.toHaveAttribute("hidden");
+    expect(shownSlugs(container)).toEqual(["also-held"]);
+    expect(drawer(container).querySelector(".frozen-head .n")).toHaveTextContent("1/2");
+    // BLOCKED's own readout leaves the frozen cards out of both numbers
+    expect(colFor(container, "blocked").querySelector(".col-head .n")).toHaveTextContent("0/1");
+    expect(drawer(container).querySelector(".frozen-head")).toBeDisabled();
+    expect(localStorage.getItem("kraken-frozen-open")).toBeNull();
+  });
+
+  it("reads 0/N, and renders no cards, when the query matches nothing frozen", async () => {
+    const { container } = renderBoard(fixture());
+    await userEvent.type(searchInput(container), "needs");
+    expect(container.querySelector(".frozen-cards")).toBeNull();
+    expect(drawer(container).querySelector(".frozen-head .n")).toHaveTextContent("0/2");
+    expect(columnCards(container, "blocked")).toEqual(["needs-me"]);
+  });
+
+  it("ignores a stamp on a job that is not blocked", () => {
+    // the server never serves one; a stale payload must not hide a running card
+    const { container } = renderBoard([
+      job({ slug: "busy", state: "working", live: true, frozen_at: FROZEN_AT }),
+    ]);
+    expect(columnCards(container, "working")).toEqual(["busy"]);
+    expect(drawerCards(container)).toEqual([]);
+  });
+});

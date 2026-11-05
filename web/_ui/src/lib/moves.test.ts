@@ -17,15 +17,16 @@ vi.mock("../api/client.ts", () => ({
   stopJob: vi.fn(async () => ({ ok: true })),
   archiveJob: vi.fn(async () => ({ ok: true })),
   reactivateJob: vi.fn(async () => ({ ok: true })),
+  freezeJob: vi.fn(async () => ({ ok: true, frozen_at: 1 })),
 }));
 
 import * as client from "../api/client.ts";
-import { ARCHIVED, MOVES, isLegalTarget, resolveMove } from "./moves.ts";
+import { ARCHIVED, FROZEN, MOVES, isLegalTarget, resolveMove } from "./moves.ts";
 import type { DropColumn } from "./moves.ts";
 import { COLUMNS } from "../hooks/useBoard.ts";
 import type { Column } from "../hooks/useBoard.ts";
 
-const DROP_TARGETS: DropColumn[] = [...COLUMNS, ARCHIVED];
+const DROP_TARGETS: DropColumn[] = [...COLUMNS, ARCHIVED, FROZEN];
 
 /** The table from artifacts/53-port-checklist.md, transcribed by hand. */
 const LISTED: Array<[Column, DropColumn, string]> = [
@@ -36,6 +37,10 @@ const LISTED: Array<[Column, DropColumn, string]> = [
   ["done", "blocked", "/api/reactivate"],
   ["done", "working", "steer:reactivate"],
   ["done", ARCHIVED, "/api/archive"],
+  // The hold: a blocked card dropped on the FROZEN drawer. The only pair that
+  // names the drawer — nothing else may be frozen, and nothing leaves it by
+  // drag (FROZEN is never a `from`; it is not a column).
+  ["blocked", FROZEN, "/api/job/freeze"],
 ];
 
 const listedKey = (from: string, to: string) => `${from}→${to}`;
@@ -74,8 +79,8 @@ describe("resolveMove", () => {
         expect(resolveMove(from, to)).toBeNull();
       }
     }
-    // 4 columns × 5 targets − 4 same-column − 7 listed = 9
-    expect(unlisted).toHaveLength(9);
+    // 4 columns × 6 targets − 4 same-column − 8 listed = 12
+    expect(unlisted).toHaveLength(12);
   });
 
   it("never invents a nearest-legal fallback for a bogus target", () => {
@@ -108,6 +113,15 @@ describe("post moves", () => {
       );
     },
   );
+
+  it("blocked → frozen calls freezeJob with the slug and `true`", async () => {
+    const move = resolveMove("blocked", FROZEN);
+    expect(move?.kind).toBe("post");
+    if (move?.kind !== "post") return;
+    await move.run("some-job");
+    // `true` is the freeze; a drop can only ever put a card ON hold
+    expect(client.freezeJob).toHaveBeenCalledWith("some-job", true);
+  });
 });
 
 describe("MOVES adjacency", () => {
@@ -130,5 +144,8 @@ describe("MOVES adjacency", () => {
     expect(isLegalTarget("draft", "draft")).toBe(false);
     expect(isLegalTarget("draft", ARCHIVED)).toBe(false);
     expect(isLegalTarget("done", ARCHIVED)).toBe(true);
+    expect(isLegalTarget("blocked", FROZEN)).toBe(true);
+    expect(isLegalTarget("working", FROZEN)).toBe(false);
+    expect(isLegalTarget("done", FROZEN)).toBe(false);
   });
 });

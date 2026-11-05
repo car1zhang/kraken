@@ -304,6 +304,16 @@ type daemonState struct {
 	// ArtifactSyncState. In-process only, like the maps above: losing it on
 	// a restart costs one more tick of hold, never a missed transition.
 	BlockedSince map[string]int
+	// ThawPending is the tick on which frozenThaw (jobfreeze.go) cleared a
+	// frozen job's hold because its lead ran a turn no tick saw as working
+	// (job id → tickN). The blocked notification for that turn waits for the
+	// immediately following tick to read the job blocked again. Keyed on the
+	// immutable job id rather than the slug, so a rename inside that one tick
+	// keeps the entry and a freed slug's next job never inherits it. Dropped
+	// on any non-blocked reading and pruned with BlockedSince. In-process
+	// only: losing it on a restart costs that one notification, and the card
+	// is already back in the blocked column.
+	ThawPending map[int64]int
 	// TokenScan throttles tokensPass over jobs with no live cell (slug →
 	// unix millis of the last sum). In-process only, like the dedup maps
 	// above: losing it on a restart costs one extra sum per job, which is a
@@ -342,6 +352,7 @@ func newDaemon() *daemonState {
 		RepairTries:       map[string]int{},
 		ArtifactSyncState: map[string]string{},
 		BlockedSince:      map[string]int{},
+		ThawPending:       map[int64]int{},
 		TokenScan:         map[string]int64{},
 		PRScan:            map[string]int64{},
 	}
@@ -357,9 +368,11 @@ func newDaemon() *daemonState {
 // cell, tmux, or a real repo to resolve.
 func (d *daemonState) pruneArtifactSyncState(jobs []*Job) {
 	stillTracked := map[string]bool{}
+	trackedIDs := map[int64]bool{}
 	for _, j := range jobs {
 		if j.Started() && j.State != "done" {
 			stillTracked[j.Slug] = true
+			trackedIDs[j.ID] = true
 		}
 	}
 	for slug := range d.ArtifactSyncState {
@@ -373,6 +386,13 @@ func (d *daemonState) pruneArtifactSyncState(jobs []*Job) {
 	for slug := range d.BlockedSince {
 		if !stillTracked[slug] {
 			delete(d.BlockedSince, slug)
+		}
+	}
+	// ThawPending likewise, by job id: frozenThaw's own adjacency check
+	// makes a stale entry harmless.
+	for id := range d.ThawPending {
+		if !trackedIDs[id] {
+			delete(d.ThawPending, id)
 		}
 	}
 }
@@ -915,20 +935,46 @@ func (d *daemonState) tick(mirror bool) (int, error) {
 		}
 		if (st == "working" || st == "blocked") && st != j.State {
 			prev := j.State
+			// read before the write: a state write that leaves "blocked"
+			// clears the hold mark in the same UPDATE (jobfreeze.go)
+			wasFrozen := j.FrozenAt != 0
 			if err := WriteJobState(j, st); err != nil {
 				dlogErr("write state %s for %s failed: %v", st, j.Slug, err)
 				continue
 			}
 			dlogEvent("info", "state-change", "%s: %s → %s", j.Slug, prev, st)
+			if wasFrozen && st == "working" {
+				dlogEvent("info", "job-thaw", "%s: frozen job's cell is working again; hold cleared", j.Slug)
+			}
 			if st == "blocked" {
 				key := "blocked:" + j.Slug
 				if d.Notified[key] == 0 {
 					if !mirror {
-						notify("kraken ⏸ "+j.Slug, blockedNotifyBody(jobQuestionRows(j)))
+						notifyBlocked(j)
 					}
 					d.Notified[key] = now.Unix()
 				}
 			}
+		}
+		// The frozen thaw's second arm (jobfreeze.go): a job that reads
+		// blocked this tick may still have run a whole turn since the hold,
+		// between two ticks, which the state write above never sees. Its
+		// transcript says so; the hold is cleared on that tick and the
+		// blocked notification follows on the next one if the job is still
+		// stopped. Any other reading drops the pending tick, since a working
+		// job is the state write's to handle.
+		if st == "blocked" && j.State == "blocked" {
+			tell, pending := frozenThaw(j, isLive, all, d.ThawPending[j.ID], d.tickN)
+			if pending != 0 {
+				d.ThawPending[j.ID] = pending
+			} else {
+				delete(d.ThawPending, j.ID)
+			}
+			if tell && !mirror {
+				notifyBlocked(j)
+			}
+		} else {
+			delete(d.ThawPending, j.ID)
 		}
 	}
 

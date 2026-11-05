@@ -420,7 +420,7 @@ body {
    added HERE, never a local cursor declaration. */
 button, a, [role="button"], summary, label.check,
 .card.editable, .card.archived, .chip, .ac-chip, .cx-chip, .ct-chip, .dq-chip, .fb-chip, .ld-chip, .st-chip,
-.thread-chip, .thread-count, .branch-btn, .colorsel-row, .usage-stat, .archive-head,
+.thread-chip, .thread-count, .branch-btn, .colorsel-row, .usage-stat, .archive-head, .frozen-head,
 .goal, .goal .t,
 .dq-row.dq-answered, .cmd-chip,
 .panel-body.md code.code-ref, .steer-detail code.code-ref, .steer-spec-body code.code-ref,
@@ -444,6 +444,7 @@ input[type="checkbox"] {
 :root[data-theme="light"] .thread-count,
 :root[data-theme="light"] .branch-btn, :root[data-theme="light"] .colorsel-row,
 :root[data-theme="light"] .usage-stat, :root[data-theme="light"] .archive-head,
+:root[data-theme="light"] .frozen-head,
 :root[data-theme="light"] .goal, :root[data-theme="light"] .goal .t,
 :root[data-theme="light"] .dq-row.dq-answered, :root[data-theme="light"] .cmd-chip,
 :root[data-theme="light"] .panel-body.md code.code-ref,
@@ -840,8 +841,8 @@ input[type="password"], .thread-name-label {
 }
 
 /* ---- archived drawer: collapsible, tucked under the DONE column ---- */
-.archive-drawer { margin-top: 18px; }
-.archive-head {
+.archive-drawer, .frozen-drawer { margin-top: 18px; }
+.archive-head, .frozen-head {
   display: flex; align-items: center; gap: 7px;
   width: 100%; text-align: left;
   background: color-mix(in srgb, var(--ac) 5%, var(--b1));
@@ -849,7 +850,7 @@ input[type="password"], .thread-name-label {
   padding: 5px 8px;
   color: var(--muted); font: 600 10px var(--display); letter-spacing: 0.2em;
 }
-.archive-head:hover { color: var(--fg); border-left-color: var(--border-strong); }
+.archive-head:hover, .frozen-head:hover { color: var(--fg); border-left-color: var(--border-strong); }
 /* pointer-events none: disabled form controls swallow drag events in
    Blink/WebKit, and with zero archived jobs the header IS the drawer's whole
    done→archived drop area — pass hit-testing through to .archive-drawer.
@@ -859,24 +860,39 @@ input[type="password"], .thread-name-label {
    archived) — see ArchiveDrawer's docblock. Drops keep working in all three
    for the same reason: hit-testing lands on .archive-drawer, which is where
    useColumnDrop(ARCHIVED) puts its ref. */
-.archive-head:disabled { pointer-events: none; }
-.archive-head .tri { font-size: 9px; letter-spacing: 0; }
-.archive-head .n { margin-left: auto; font: 10px var(--mono); letter-spacing: 0; color: var(--text-2); }
+.archive-head:disabled, .frozen-head:disabled { pointer-events: none; }
+.archive-head .tri, .frozen-head .tri { font-size: 9px; letter-spacing: 0; }
+.archive-head .n, .frozen-head .n { margin-left: auto; font: 10px var(--mono); letter-spacing: 0; color: var(--text-2); }
 
 /* drop affordances for the archive drawer (done→archived drag) — mirrors
    .col.droptarget/.drophover below */
-.archive-drawer.droptarget {
+.archive-drawer.droptarget, .frozen-drawer.droptarget {
   outline: 1px dashed var(--accent);
   outline-offset: 4px;
   background: var(--drop-tint);
 }
-.archive-drawer.drophover { background: var(--drop-tint-hover); }
-.archive-cards {
+.archive-drawer.drophover, .frozen-drawer.drophover { background: var(--drop-tint-hover); }
+.archive-cards, .frozen-cards {
   display: flex; flex-direction: column; gap: 10px;
   padding-top: 10px;
 }
 .card.archived { opacity: 0.75; }
 .card.archived:hover { opacity: 1; }
+
+/* ---- frozen drawer: blocked jobs on hold, tucked under the BLOCKED column.
+   The drawer shares .archive-drawer's rules through the grouped selectors
+   above, under class names of its own (.frozen-drawer/-head/-cards) so a
+   selector for one drawer never matches the other; only what differs is
+   here. A card on hold is dimmed the way an archived one is, since being out
+   of the way is the point. */
+.card.frozen { opacity: 0.7; }
+.card.frozen:hover { opacity: 1; }
+.status-frozen { color: var(--text-2); }
+.btn.freeze {
+  background: transparent; color: var(--muted);
+  border: 1px solid var(--border-strong);
+}
+.btn.freeze:hover { color: var(--fg); border-color: var(--fg); }
 .btn.unarchive {
   background: transparent; color: var(--accent);
   border: 1px solid var(--accent-soft);
@@ -2991,6 +3007,8 @@ button.spawn-chip.spawn-draft:hover { background: color-mix(in srgb, var(--ac) 1
   display: inline-block; width: auto; margin-top: 0;
   padding: 5px 9px;
 }
+/* freeze/unfreeze sizes to its text beside tmux, like retry and reactivate */
+.card-actions > .btn.freeze { padding: 5px 9px; }
 
 /* LIGHT MODE FLATTENS EVERY GLOW. Most of them already vanish because their
    token is `none` there (--glow/--glow-hot/--glow-ok/--glow-warn/--text-glow

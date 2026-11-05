@@ -8,6 +8,7 @@ import {
   countdown,
   docQuestionsOpenP0,
   flagCount,
+  isFrozen,
   JOB_COLORS,
   loadBadgeTitle,
   loadRatioText,
@@ -208,6 +209,40 @@ describe("flagCount", () => {
     expect(
       flagCount([job({ slug: "old", archived: true, question: { tool_use_id: "t" } })]),
     ).toBe(0);
+  });
+
+  it("leaves a job on hold out, whatever it would otherwise flag", () => {
+    const flagged: Partial<WebJob> = {
+      state: "blocked",
+      question: { tool_use_id: "t" },
+      health: "cell session is gone",
+      doc_questions: [{ id: "Q1", text: "a", importance: "P0" }],
+    };
+    // the same job counts three times off hold, and not at all on it
+    expect(flagCount([job({ slug: "live", ...flagged })])).toBe(3);
+    expect(flagCount([job({ slug: "held", ...flagged, frozen_at: 1700000000000 })])).toBe(0);
+  });
+});
+
+describe("isFrozen", () => {
+  it("is true only for a blocked, non-archived job carrying the stamp", () => {
+    expect(isFrozen(job({ state: "blocked", frozen_at: 1700000000000 }))).toBe(true);
+    expect(isFrozen(job({ state: "blocked" }))).toBe(false);
+    expect(isFrozen(job({ state: "blocked", frozen_at: 0 }))).toBe(false);
+    // the server never serves these three; the client does not trust that
+    expect(isFrozen(job({ state: "working", frozen_at: 1700000000000 }))).toBe(false);
+    expect(isFrozen(job({ state: "done", frozen_at: 1700000000000 }))).toBe(false);
+    expect(
+      isFrozen(job({ state: "blocked", archived: true, frozen_at: 1700000000000 })),
+    ).toBe(false);
+  });
+
+  it("does not move the job out of the blocked bucket", () => {
+    // the drag layer and the reorder prediction read this bucket, and both
+    // need the frozen card in it (see BoardView's blockedSplit)
+    const held = job({ slug: "held", state: "blocked", frozen_at: 1700000000000 });
+    const open = job({ slug: "open", state: "blocked" });
+    expect(bucketJobs([held, open]).byColumn.blocked).toEqual([held, open]);
   });
 });
 

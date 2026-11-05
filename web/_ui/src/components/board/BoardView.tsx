@@ -4,12 +4,14 @@ import type { BoardModel } from "../../hooks/useBoard.ts";
 import type { JobSearchModel } from "../../hooks/useJobSearch.ts";
 import { useLocalStorage } from "../../hooks/useLocalStorage.ts";
 import { COLUMNS } from "../../lib/columns.ts";
+import { isFrozen } from "../../lib/format.ts";
 import { goalJobCounts } from "../../lib/goals.ts";
 import { jobKey } from "../../lib/jobKey.ts";
 import type { SteerMode } from "../../lib/moves.ts";
 import { ArchiveDrawer } from "./ArchiveDrawer.tsx";
 import { BoardBar, type BoardViewMode } from "./BoardBar.tsx";
 import { BoardColumn } from "./Column.tsx";
+import { FrozenDrawer } from "./FrozenDrawer.tsx";
 import { GoalsPanel } from "./GoalsPanel.tsx";
 import { JobCard } from "./JobCard.tsx";
 import { MapView } from "./MapView.tsx";
@@ -88,6 +90,13 @@ export interface BoardActions {
   onUnarchive(slug: string): void;
   /** POST /api/delete with the bare archive name. The confirm() happened. */
   onDeleteForever(slug: string): void;
+  /**
+   * POST /api/job/freeze: put a blocked job on hold (`true`) or take it off
+   * (`false`). Optional, and a card offers neither button without it, so a
+   * host that never wired it (a harness, a test) renders the card it always
+   * has.
+   */
+  onFreeze?(slug: string, frozen: boolean): void;
 }
 
 export interface BoardViewProps {
@@ -140,7 +149,8 @@ export interface BoardViewProps {
 }
 
 /**
- * The board: four columns plus the archive drawer under DONE. Port of
+ * The board: four columns, the frozen drawer under BLOCKED (blockedSplit
+ * below) and the archive drawer under DONE. Port of
  * renderBoardDOM (app.js:814), minus the QUEUED column — submit is
  * synchronous, so there is no parked state between draft and working for a
  * column to hold.
@@ -234,6 +244,30 @@ export function BoardView({
     return { counts, text };
   }, [jobs, board.board?.goals]);
 
+  /**
+   * The BLOCKED column, split for rendering: the cards that need the operator
+   * stay in the column, the ones on hold go to the FROZEN drawer at its foot.
+   *
+   * The split is this view's alone. `board.byColumn.blocked` and
+   * `search.byColumn.blocked` keep every frozen card, so the drag layer still
+   * sees one whole column (its reorder posts the full order, hidden cards
+   * included, exactly as it does under a search), and the map, which reads
+   * `search.byColumn`, still draws them.
+   *
+   * Memoized on the search's own array so the column's sortable list is not
+   * re-registered on every render, the reason useJobSearch hands back the
+   * board's arrays by identity when idle.
+   */
+  const searchBlocked = search.byColumn.blocked;
+  const blockedSplit = useMemo(() => {
+    const frozen = searchBlocked.filter(isFrozen);
+    // No frozen card: hand the column the very array it was getting.
+    if (frozen.length === 0) return { open: searchBlocked, frozen };
+    return { open: searchBlocked.filter((j) => !isFrozen(j)), frozen };
+  }, [searchBlocked]);
+  const boardBlocked = board.byColumn.blocked;
+  const frozenTotal = useMemo(() => boardBlocked.filter(isFrozen).length, [boardBlocked]);
+
   return (
     <>
       <BoardBar
@@ -282,16 +316,42 @@ export function BoardView({
             // rect and the drop animation misbehaves. `total` is the unfiltered
             // length, and passing it is what switches the head to `shown/total`;
             // idle passes undefined and the head reads exactly as it does today.
-            const jobs = search.byColumn[col];
+            // BLOCKED renders only the cards not on hold; the frozen ones are
+            // in its footer drawer, and its head count and `total` leave them
+            // out so the number is the cards that need the operator.
+            const jobs = col === "blocked" ? blockedSplit.open : search.byColumn[col];
+            const colTotal =
+              board.byColumn[col].length - (col === "blocked" ? frozenTotal : 0);
+            const renderCard = (j: (typeof jobs)[number]) => (
+              <JobCard
+                key={jobKey(j)}
+                job={j}
+                col={col}
+                actions={actions}
+                matchReason={search.reasonByKey.get(jobKey(j))}
+                matchTerms={search.terms}
+                boardNodeID={board.board?.node_id}
+              />
+            );
             return (
               <BoardColumn
                 key={col}
                 col={col}
                 jobs={jobs}
-                total={search.active ? board.byColumn[col].length : undefined}
+                total={search.active ? colTotal : undefined}
                 onNewJob={() => actions.onOpenEditor(null)}
                 footer={
-                  col === "done" ? (
+                  col === "blocked" ? (
+                    <FrozenDrawer
+                      frozen={blockedSplit.frozen}
+                      total={search.active ? frozenTotal : undefined}
+                      // Same reason the archive drawer takes it: a match
+                      // inside a collapsed drawer would be counted in the
+                      // readout and invisible.
+                      forceOpen={search.active && blockedSplit.frozen.length > 0}
+                      renderCard={renderCard}
+                    />
+                  ) : col === "done" ? (
                     <ArchiveDrawer
                       archived={search.archived}
                       actions={actions}
@@ -303,17 +363,7 @@ export function BoardView({
                     />
                   ) : undefined
                 }
-                renderCard={(j) => (
-                  <JobCard
-                    key={jobKey(j)}
-                    job={j}
-                    col={col}
-                    actions={actions}
-                    matchReason={search.reasonByKey.get(jobKey(j))}
-                    matchTerms={search.terms}
-                    boardNodeID={board.board?.node_id}
-                  />
-                )}
+                renderCard={renderCard}
               />
             );
           })}

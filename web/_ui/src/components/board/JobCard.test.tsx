@@ -821,6 +821,106 @@ describe("AskUserQuestion", () => {
   });
 });
 
+// ---------------------------------------------------------------------------
+// THE HOLD: a blocked job the operator put aside (`frozen_at`). The card stays
+// a blocked card for every state-keyed rule; these pin what it adds.
+// ---------------------------------------------------------------------------
+
+describe("the hold", () => {
+  const FROZEN_AT = 1_700_000_000_000;
+  const withFreeze = () => ({ ...stubActions(), onFreeze: vi.fn() });
+  const REMOTE = { owner: { node_id: "nB", label: "other-mac", operator: "", online: true } };
+
+  it("offers freeze on a blocked card and posts the hold, without opening the card", async () => {
+    const actions = withFreeze();
+    const { card } = renderCard(job({ slug: "stuck", state: "blocked", live: true }), actions);
+    const btn = card.querySelector(".card-actions .btn.freeze")!;
+    expect(btn).toHaveTextContent("freeze");
+    expect(btn).not.toHaveTextContent("unfreeze");
+    await userEvent.click(btn);
+    expect(actions.onFreeze).toHaveBeenCalledTimes(1);
+    expect(actions.onFreeze).toHaveBeenCalledWith("stuck", true);
+    // the button is not the card's own click
+    expect(actions.onOpenSteer).not.toHaveBeenCalled();
+  });
+
+  it("offers it on a blocked card whose cell is gone too — its only action", () => {
+    const { card } = renderCard(job({ state: "blocked", live: false }), withFreeze());
+    expect(card.querySelector(".card-actions .btn.freeze")).not.toBeNull();
+  });
+
+  it.each([
+    ["a draft", job({ state: "draft" })],
+    ["a working card", job({ state: "working", live: true })],
+    ["a done card", job({ state: "done" })],
+    // drawn in BLOCKED by its health, but the server files it as working and
+    // would refuse the hold
+    ["an unhealthy working card", job({ state: "working", live: true, health: "zeus stopped answering" })],
+    ["a remote blocked card", job({ state: "blocked", live: true, ...REMOTE })],
+  ] as Array<[string, WebJob]>)("offers no freeze on %s", (_name, j) => {
+    const col = j.health ? "blocked" : undefined;
+    const { card } = renderCard(j, withFreeze(), col as Column | undefined);
+    expect(card.querySelector(".btn.freeze")).toBeNull();
+  });
+
+  it("offers neither button when the host wired no onFreeze", () => {
+    const blocked = renderCard(job({ state: "blocked", live: true })).card;
+    expect(blocked.querySelector(".btn.freeze")).toBeNull();
+    const held = renderCard(job({ state: "blocked", live: true, frozen_at: FROZEN_AT })).card;
+    expect(held.querySelector(".btn.freeze")).toBeNull();
+    // a dead blocked card with nothing to press keeps having no action row
+    expect(renderCard(job({ state: "blocked" })).card.querySelector(".card-actions")).toBeNull();
+  });
+
+  it("marks a card on hold, and swaps freeze for unfreeze", async () => {
+    const actions = withFreeze();
+    const { card } = renderCard(
+      job({ slug: "parked", state: "blocked", live: true, frozen_at: FROZEN_AT }),
+      actions,
+    );
+    expect(card.classList.contains("frozen")).toBe(true);
+    expect(card.getAttribute("data-frozen")).toBe("true");
+    expect(card.querySelector(".meta .status-frozen")).toHaveTextContent("❄ frozen");
+    // not draggable: nothing leaves the drawer by drag
+    expect(card.getAttribute("draggable")).toBe("false");
+
+    const buttons = [...card.querySelectorAll(".card-actions .btn.freeze")];
+    expect(buttons).toHaveLength(1);
+    expect(buttons[0]).toHaveTextContent("unfreeze");
+    await userEvent.click(buttons[0]!);
+    expect(actions.onFreeze).toHaveBeenCalledWith("parked", false);
+    expect(actions.onOpenSteer).not.toHaveBeenCalled();
+  });
+
+  it("still opens the unblock modal when a card on hold is clicked", async () => {
+    // steering it there is one way to thaw it
+    const actions = withFreeze();
+    const { card } = renderCard(
+      job({ slug: "parked", state: "blocked", live: true, frozen_at: FROZEN_AT }),
+      actions,
+    );
+    await userEvent.click(card.querySelector(".slug")!);
+    expect(actions.onOpenSteer).toHaveBeenCalledWith("parked", "unblock");
+  });
+
+  it("carries no frozen mark on an ordinary blocked card", () => {
+    const { card } = renderCard(job({ state: "blocked", live: true }), withFreeze());
+    expect(card.classList.contains("frozen")).toBe(false);
+    expect(card.hasAttribute("data-frozen")).toBe(false);
+    expect(card.querySelector(".status-frozen")).toBeNull();
+    expect(card.getAttribute("draggable")).toBe("true");
+  });
+
+  it("shows a remote card on hold as frozen, with nothing to press", () => {
+    const { card } = renderCard(
+      job({ state: "blocked", live: true, frozen_at: FROZEN_AT, ...REMOTE }),
+      withFreeze(),
+    );
+    expect(card.querySelector(".status-frozen")).not.toBeNull();
+    expect(card.querySelector(".btn.freeze")).toBeNull();
+  });
+});
+
 // The `start_error` describe stood here, pinning the warn-ruled block a queued
 // card rendered when the daemon's last attempt to start it had failed. Both
 // tests are obsoleted pins: the key is off the wire with the queued state.

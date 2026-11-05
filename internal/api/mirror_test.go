@@ -43,6 +43,11 @@ var mirrorGatedRoutes = []string{
 	// route's own gate wraps only the /color it types into a live pane, not
 	// its write.
 	"/api/job/load",
+	// job freeze: POST-only, gated inline (jobfreeze.go). A mirror board
+	// must not put the live deployment's jobs on hold. With mirror off the
+	// table's {"slug":"nonexistent"} body 400s on the missing `frozen`
+	// before any job lookup.
+	"/api/job/freeze",
 	// job stack: the same inline gate as load (jobstack.go), for the same
 	// reason its GET must stay reachable — `kraken stack get` and the board
 	// read it. With mirror off the table's {"slug":"nonexistent"} body 400s

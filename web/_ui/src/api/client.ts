@@ -664,6 +664,17 @@ export const setRotationMode = (mode: "auto" | "manual") =>
 export const setJobColor = (slug: string, color: string) =>
   postJSON("/api/job/color", { slug, color });
 
+/**
+ * Put a blocked job on hold (`frozen: true`) or take it off (`false`).
+ *
+ * The server refuses with a 409 when asked to freeze a job that is not
+ * blocked; thawing a job that is not frozen is a 200. Neither direction
+ * changes the job's state: a frozen job is still blocked, and it thaws by
+ * itself the moment its cell starts working again.
+ */
+export const freezeJob = (slug: string, frozen: boolean) =>
+  postJSON<{ ok: boolean; frozen_at: number }>("/api/job/freeze", { slug, frozen });
+
 // ------------------------------------------------------------ fleet
 
 /**
