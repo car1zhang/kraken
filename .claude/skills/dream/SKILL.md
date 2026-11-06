@@ -388,8 +388,17 @@ sidecars show were touched only by `grep '^\[assistant\]' -A4 | head -80` — tw
 grep'd lines, twelve rows saying READ — and the lead's "97 READ / 9 SAMPLED" aggregate was exact
 arithmetic over false inputs, while its one verification habit checked that the LEAD had read its
 eleven reports, the link that was never the problem. So before trusting the aggregate, spot-check
-the scouts of at least the two LARGEST assignments against their own transcripts, and say in
-Coverage which scouts were spot-checked. The spot-check needs a DENOMINATOR: compare the scout's
+the scouts of at least the two LARGEST assignments against the SCOUT'S OWN SIDECAR transcript, and
+say in Coverage which scouts were spot-checked. "Largest" is the staged reduced line count of the
+assignment's transcripts summed per assignment — not transcript count, not whichever scout looked
+busiest, and counted whether or not the scout itself staged a view (a scout that worked from raw
+JSONL still has an assignment of that size). The sidecar is `<your session>/subagents/agent-<id>.jsonl`,
+the file that records the pages the scout actually took — every sidecar of that assignment, since a
+scout respawned under the fresh-report-path rule above (`-B`, `-C`) has an agent id of its own — and
+never the transcripts the scout was
+reading: a pass read "their own transcripts" as the SCOUTED ones, grep'd two record uuids there,
+picked two scouts that were not the largest, and certified a check that never touched a single read
+offset. The spot-check needs a DENOMINATOR: compare the scout's
 read offsets against the staged file's own line count (a `wc -l` you run yourself), because offsets
 alone prove contiguity, not completion — a lead extracted both scouts' offset lists, never fetched
 either file's length, and certified "coverage spot-checks passed" on an instrument structurally
@@ -466,6 +475,26 @@ agent was instructed, and a sentence is cheaper to get wrong than a function. La
 allowed and sometimes right — a subagent definition, a brief, orchestration, real Go — and they
 carry the same obligations any other change would: tests, and the review the cell's brief specifies.
 
+That review binds this pass exactly as it binds a `/do` cell, and the step it keeps skipping is the
+ACCEPTANCE: a BLOCKING verdict is not acceptance, the fix goes back to the SAME athena for
+confirmation before that athena is stopped, and a post-verdict edit reopens the round for the
+dimensions it touches, under rule 4 and its carve-out (`.claude/skills/do/SKILL.md`, the "closes on
+verdicts" bullet, rules 3 and 4). That bullet already says the PR is not the boundary — its PR
+opens before the manual-test gate — and it matters more here, where a pass may open its PRs BEFORE
+it dispatches the review, so the whole round falls after `gh pr create`: the fix round and the
+reopen rule bind through the PR's final sha, and a fix pushed to an open PR after its reviewer was
+stopped is as unreviewed as one committed before the PR existed. A pass that fixes every blocking
+item, pushes, and stops the reviewers has shipped UNREVIEWED code, and the report says so — in the
+Shipped table, per PR, as the commits pushed after the last verdict, labelled as the table below
+defines — never as "every reviewer stopped on acceptance"; a merge of such a PR carries the
+unreviewed commit into main. Measured two nights running: one pass stopped all
+three second-round reviewers with BLOCKING as their last written word, pushed the fixes to nobody
+(one a new Go store change, 57 seconds before its closing line), saw one of those PRs merge the next
+morning on that unreviewed commit, and reported "every reviewer stopped on acceptance"; the pass
+before it reported "all read in full" over three review reports it never opened. The pass's claims
+about its OWN review are the one place no reviewer looks, which is why the report's Shipped row
+carries the verdict sha rather than the pass's word.
+
 Two hard fences: never `.claude/settings.json` (per-cell, gitignored, kraken-written — never a
 durable improvement), and never anything outside the kraken repo.
 
@@ -494,13 +523,15 @@ Write `00-dream-report.md` into the artifacts dir. Like every md artifact, it op
 
 | Section | Content |
 |---|---|
-| Shipped | Each change, the evidence behind it, and its PR. |
+| Shipped | Each change, the evidence behind it, and its PR — and, per PR, the sha each athena verdict was given on (per dimension, so a round ended by a reviewer's death reads "dimension X unreviewed, reviewer died") and every commit pushed after the last verdict, labelled one of three ways: `carve-out` (a reviewer's own non-blocking text applied verbatim under the do skill's rule 4 carve-out, named with the finding it applies), `base merge` (a merge of the base branch with no hand-resolved conflict), or `unreviewed` (everything else). "Stopped on acceptance" is a claim only a CLEAR verdict from every dimension supports, on the final sha or on the last sha before commits that are all carve-out or base merge. A PR that had no review round says so with the reason, and under `solo: true` every PR reads "no review (solo)" and the claim is never made. |
 | Judgment calls | Everything shipped below the two-sighting default, and why. An empty section on a night that shipped several changes means you are not naming your own judgment. |
 | Watching | Newly watched facts, and what changed on existing ones — the watch overlay is not committed, so this is the only place its movement is visible. |
 | Owed human actions | Every action only {{operator}} can take — a credential rotation, an external revoke — still outstanding, each with its watch row id, re-raised EVERY night until it is done. Done means {{operator}}'s `fine` verdict on that row, or the row's evidence recording who performed the action — then unwatch it; never unwatch a row while its action is still owed, and never write the verdict yourself. The watch row is what makes an owed action durable; this report and the closing line are the only channel that re-SURFACES it, and one live credential's rotation, named in a closing line but not re-raised by the next pass, ceased to exist for two nights while the value stayed live. |
 | Your prompting | The prompting feedback, quoted. |
 | Seen, not actionable | One line each, capped around ten. It is what distinguishes a quiet night from a blind one. |
 | Coverage | Transcripts read, feedback notes swept, and anything skipped — including the aggregate READ vs SAMPLED split from the scouts' own coverage tables ("272/272 digested" over a 30%-sampled corpus reads as full coverage and is not), and the per-report READ IN FULL / PARTIAL list from Evidence 2. Also the pass's OWN stalls: limit banners, dead stretches, and operator interventions in your own pane tonight — your session is tomorrow's sweep evidence, so tonight's report is the only one that can carry them, and one pass reported four cells' outages while omitting its own 10h37m, 2.5× the four combined. |
+
+Then the closing line, verbatim, as the last line.
 
 ## Inside A Kraken Cell
 
@@ -540,6 +571,18 @@ specific, and it is the only place the cell's real paths appear:
   (`K transcripts, T partial`): a partial scan must never be silent.
   Use `0` where a count is zero — never omit the clause. Kraken derives blocked from your
   silence and shows your last words on the board.
+  The same line is also written VERBATIM as the report's last line, at close, after the counts are
+  taken. A closing line RESTATED later — after a PR bump, a merge notice, a compaction — is COPIED
+  from that last line, never recomposed: the counts are derived once, at close, and a compaction
+  summary drops the derivation (a pass restated K five times after an idle compaction, each time
+  one higher than the report it was pointing at, so the board and the report disagreed for the
+  rest of the day). A post-close write that changes N, M or K — a fold recorded on a bump, a PR
+  opened late — updates that last line in the file FIRST, with the Watching count beside it, and
+  the restatement copies the updated line. And every post-close edit to the report re-reads its
+  Coverage claims about THIS session — the compaction count, the "last checked" time, the merge
+  count in Shipped — against the transcript at that moment: a report edited hours after close
+  whose Coverage still gave the pre-compaction count and check time after a second, idle
+  compaction reads as current to anyone who sees the modification time.
 - Never declare the job done — accepting is {{operator}}'s move, never yours.
 - `solo: true` on the job means no subagents at all: run the mechanical pass and read what you can
   yourself, and say in the report that the semantic pass was skipped.
