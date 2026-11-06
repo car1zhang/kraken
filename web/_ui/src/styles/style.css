@@ -3944,6 +3944,16 @@ button.spawn-chip.spawn-draft:hover { background: color-mix(in srgb, var(--ac) 1
 .map-card[data-status="frozen"] { --map-sc: var(--muted); }
 .map-card[data-status="done"] { --map-sc: var(--ok); }
 .map-card[data-status="draft"] { --map-sc: var(--muted); }
+/* the map's done level at `fade` (MapView's `done` button, the level it
+   starts at): a done card, its characters' canvas included, is translucent
+   until it is hovered, selected or holds the keyboard focus, so it can still
+   be read and its selection ring shows at full strength. No transition: one
+   here would replace .glide's, and a pushed done card would jump */
+.agent-map[data-done="fade"] .map-card[data-status="done"] { opacity: 0.4; }
+.agent-map[data-done="fade"] .map-card[data-status="done"]:hover,
+.agent-map[data-done="fade"] .map-card[data-status="done"]:focus-within,
+.agent-map[data-done="fade"] .map-card[data-status="done"].selected,
+.agent-map[data-done="fade"] .map-card[data-status="done"].marquee-hit { opacity: 1; }
 /* the status again as a plain square beside the card's name, in the frame's
    status colour, so it reads where the characters are switched off or cannot
    be drawn */
@@ -4104,8 +4114,10 @@ button.spawn-chip.spawn-draft:hover { background: color-mix(in srgb, var(--ac) 1
 .map-hud-btn:hover { color: var(--fg); border-color: var(--ac); }
 /* the one button in the row that makes something rather than moving the view */
 .map-hud-btn.map-hud-new { color: var(--ac); border-color: var(--ac); }
-/* a toggle that is off (the characters switch) reads struck out */
+/* a toggle that is off (the characters switch, the done button at `hide`) reads struck out */
 .map-hud-btn[aria-pressed="false"] { color: var(--muted); text-decoration: line-through; }
+/* the done button's middle level: its label is faded, as the done cards are */
+.map-hud-btn[aria-pressed="mixed"] { color: color-mix(in srgb, var(--body) 45%, transparent); }
 
 /* Drawings. The layer sits at the top canvas' z-index (2), after the cards in
    the markup, so it paints above every card (the world is z 1) and under the
@@ -4157,7 +4169,7 @@ button.spawn-chip.spawn-draft:hover { background: color-mix(in srgb, var(--ac) 1
 }
 /* the tool buttons wear the HUD buttons' look (they carry .map-hud-btn too);
    an unarmed tool is not a switched-off toggle, so it undoes the struck-out
-   look .map-hud-btn[aria-pressed="false"] gives the characters switch */
+   look .map-hud-btn[aria-pressed="false"] gives a switched-off toggle */
 /* the panel: the tool row over the ink row */
 .map-tools { display: flex; flex-direction: column; align-items: flex-start; gap: 4px; }
 .map-tool-row, .map-inks { display: flex; gap: 2px; }

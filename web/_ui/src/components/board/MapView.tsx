@@ -66,11 +66,15 @@ import {
 import { drawMinimap, miniFrame, miniToWorld, type MiniFrame } from "../../lib/agentmap/minimap.ts";
 import {
   actorsShown,
+  doneMode,
   inkChosen,
+  nextDoneMode,
   setActorsShown,
+  setDoneMode,
   setInkChosen,
   setToolsShown,
   toolsShown,
+  type DoneMode,
 } from "../../lib/agentmap/prefs.ts";
 import {
   drawCrossMsg,
@@ -399,6 +403,9 @@ function ToolIcon({ children }: { children: ReactElement }) {
     </svg>
   );
 }
+/** The done button per level: its pressed state, and the word its name and tooltip use for the level. */
+const DONE_PRESSED: Record<DoneMode, "true" | "mixed" | "false"> = { show: "true", fade: "mixed", hide: "false" };
+const DONE_LABEL: Record<DoneMode, string> = { show: "shown", fade: "faded", hide: "hidden" };
 /**
  * Where a text line's baseline sits below the top of its line, in ems: the
  * half-leading of the editor's 1.25 line height plus the mono face's ascent,
@@ -649,9 +656,19 @@ export interface MapViewProps {
  * this browser (`MAP_ACTORS_KEY`, lib/agentmap/prefs.ts): no card then has a characters canvas and
  * the crossing-bubble layer is not rendered, so the frame loop draws
  * neither. A card's status still shows as its frame colour and as the square
- * beside its name (JobCard's `.map-status`). The `new job` button in the same
- * row opens the job editor in new-job mode, as the column board's "+ NEW
- * JOB" does; the draft it creates arrives on the map like any other card.
+ * beside its name (JobCard's `.map-status`). The `done` button after
+ * `dinos` steps how done jobs are treated in this browser (`MAP_DONE_KEY`),
+ * through three levels: `show` draws them like any other card, `fade` (where
+ * it starts) draws each done card translucent until it is hovered, selected
+ * or focused (style.css, off the root's `data-done`) and its overview
+ * rectangle fainter, and `hide` leaves them out of the map's cards
+ * altogether. A hidden done job is off the map as a filtered-out one is: no
+ * card, no characters, no arrow, thread or crossing bubble, no overview
+ * rectangle, no part in physics or the selection. Its saved position is
+ * kept, and stepping back to `show` brings it in as an arriving card, which
+ * yields to the cards showing. The `new job` button in the same row opens
+ * the job editor in new-job mode, as the column board's "+ NEW JOB" does;
+ * the draft it creates arrives on the map like any other card.
  *
  * Drawings (lib/agentmap/drawings.ts) are strokes, lines, rectangles, ovals
  * and text labels on the plane, one SVG element each in `svg#map-drawings`,
@@ -690,16 +707,23 @@ export interface MapViewProps {
  * moved with it).
  */
 export function MapView({ search, actions, boardNodeID, hidden }: MapViewProps) {
+  // How done jobs are treated (see the header): a per-browser preference
+  // (`MAP_DONE_KEY`, lib/agentmap/prefs.ts). `hide` is applied here, where
+  // the map's cards are listed, so a hidden done job is off the map the same
+  // way a filtered-out one is; `fade` is style.css' for the cards and the
+  // frame loop's for the overview.
+  const [doneLevel, setDoneLevel] = useState<DoneMode>(doneMode);
   const entries = useMemo(() => {
     const out: Entry[] = [];
     for (const col of COLUMNS) {
       for (const job of search.byColumn[col]) {
         if (job.archived) continue;
+        if (doneLevel === "hide" && mapStatus(job) === "done") continue;
         out.push({ job, col, key: jobKey(job), sig: sigOf(job) });
       }
     }
     return out;
-  }, [search.byColumn]);
+  }, [search.byColumn, doneLevel]);
 
   // App rebuilds `actions` with every board payload (it closes over the
   // board), so its identity would defeat MapCard's memo on every poll. The
@@ -796,6 +820,19 @@ export function MapView({ search, actions, boardNodeID, hidden }: MapViewProps) 
     // the canvases that mount when the characters come back draw at once
     lastDraw.clear();
     setActorsOn(next);
+  };
+  /** The level as of the last render, for the frame loop's overview. */
+  const doneRef = useRef(doneLevel);
+  doneRef.current = doneLevel;
+  /** Step the done level on (show, fade, hide, and round again), remembering it for this browser. */
+  const cycleDone = () => {
+    const next = nextDoneMode(doneLevel);
+    setDoneMode(next);
+    // done cards that come back mount fresh canvases, which draw at once;
+    // the overview fades, drops or restores their rectangles
+    lastDraw.clear();
+    miniDirty.current = true;
+    setDoneLevel(next);
   };
   /**
    * The selected cards' keys: component state only, never saved or sent, and
@@ -933,8 +970,9 @@ export function MapView({ search, actions, boardNodeID, hidden }: MapViewProps) 
   }, [entries, byKey]);
   const byKeyRef = useRef(byKey);
   byKeyRef.current = byKey;
-  // A card that left the map (filtered out, archived) leaves the selection,
-  // so it is not selected again if it comes back. Idempotent during render.
+  // A card that left the map (filtered out, archived, a done job hidden)
+  // leaves the selection, so it is not selected again if it comes back.
+  // Idempotent during render.
   if ([...selRef.current].some((k) => !byKey.has(k))) {
     selRef.current = new Set([...selRef.current].filter((k) => byKey.has(k)));
   }
@@ -1394,6 +1432,10 @@ export function MapView({ search, actions, boardNodeID, hidden }: MapViewProps) 
   miniStatusRef.current = miniStatus;
   useEffect(() => {
     miniDirty.current = true;
+    // the arrow layer too: a card that came onto the map or left it (a done
+    // job hidden or shown, a filter) takes its arrows and threads with it,
+    // and the scene sync above says nothing when no job's content changed
+    underDirty.current = true;
   }, [miniSig]);
 
   // ---- the saved positions
@@ -2343,10 +2385,11 @@ export function MapView({ search, actions, boardNodeID, hidden }: MapViewProps) 
         // the click that ends this gesture is not a click on the card
         suppressClick.current = true;
         // the group's members still on the map, or the one dragged card. A
-        // member that left the map mid-drag (filtered out, archived) goes back
-        // to where it stood at the press: it is not saved, so the dragged spot
-        // would otherwise be where it reappears in this mount while the server
-        // and this browser's record still hold the old one
+        // member that left the map mid-drag (filtered out, archived, a done
+        // job hidden) goes back to where it stood at the press: it is not
+        // saved, so the dragged spot would otherwise be where it reappears in
+        // this mount while the server and this browser's record still hold
+        // the old one
         let keys: string[] = [d.key];
         if (d.group) {
           keys = [];
@@ -2471,10 +2514,15 @@ export function MapView({ search, actions, boardNodeID, hidden }: MapViewProps) 
     (key: string, el: HTMLDivElement | null) => {
       const prev = cardEls.get(key);
       if (el) cardEls.set(key, el);
-      else cardEls.delete(key);
+      else {
+        cardEls.delete(key);
+        // a card unmounted under the pointer gets no pointerleave
+        const s = scenes.get(key);
+        if (s) s.hover = false;
+      }
       observe(el, prev);
     },
-    [cardEls, observe],
+    [cardEls, scenes, observe],
   );
 
   const onRootPointerDown = (ev: ReactMouseEvent<HTMLElement>) => {
@@ -2790,6 +2838,7 @@ export function MapView({ search, actions, boardNodeID, hidden }: MapViewProps) 
             viewRect(),
             currentMiniFrame(),
             { w: MINI_W, h: MINI_H },
+            doneRef.current === "fade",
           );
         }
       }
@@ -2813,7 +2862,9 @@ export function MapView({ search, actions, boardNodeID, hidden }: MapViewProps) 
             const sb = scenes.get(m.toKey);
             const na = nodes.get(m.fromKey);
             const nb = nodes.get(m.toKey);
+            // a bubble to or from a card that is off the map is dropped
             if (!sa || !sb || !na || !nb || !finiteXY(na) || !finiteXY(nb)) continue;
+            if (!keyed.has(m.fromKey) || !keyed.has(m.toKey)) continue;
             const alive = drawCrossMsg(oc, C, m, leadHead(sa, na, HEAD_A), leadHead(sb, nb, HEAD_B), now);
             if ((now - m.t0) / m.dur >= 1 && !m.landed) {
               m.landed = true;
@@ -2854,6 +2905,7 @@ export function MapView({ search, actions, boardNodeID, hidden }: MapViewProps) 
       hidden={hidden}
       ref={rootRef}
       data-tool={tool ?? undefined}
+      data-done={doneLevel}
       onPointerDown={onRootPointerDown}
       onMouseDown={onRootPointerDown}
       aria-label="agent map"
@@ -2994,6 +3046,20 @@ export function MapView({ search, actions, boardNodeID, hidden }: MapViewProps) 
             onClick={toggleActors}
           >
             dinos
+          </button>
+          {/* the done level, one button stepping show, fade, hide: pressed
+              for show, mixed for fade, not pressed for hide, so the label
+              reads plain, faded or struck out */}
+          <button
+            type="button"
+            className="map-hud-btn"
+            id="map-done"
+            aria-pressed={DONE_PRESSED[doneLevel]}
+            aria-label={`done jobs: ${DONE_LABEL[doneLevel]}`}
+            title={`done jobs are ${DONE_LABEL[doneLevel]}; click to ${nextDoneMode(doneLevel)} them`}
+            onClick={cycleDone}
+          >
+            done
           </button>
           {/* the drawing tools' panel switch: a pencil, filled while the
               panel above is open. aria-expanded rather than aria-pressed, so

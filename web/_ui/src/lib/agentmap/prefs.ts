@@ -1,5 +1,5 @@
-// The characters' one preference, shared by every surface that draws them:
-// the agent map (which owns the switch) and the steer modal's cast strip.
+// The agent map's per-browser preferences. The characters' switch is also
+// read by the steer modal's cast strip.
 
 import { readLS, writeLS } from "../../hooks/useLocalStorage.ts";
 import { validDrawColor, type DrawColor } from "./drawings.ts";
@@ -15,6 +15,34 @@ export function actorsShown(): boolean {
 /** Record the switch: "off" when off, the key removed when on. */
 export function setActorsShown(on: boolean): void {
   writeLS(MAP_ACTORS_KEY, on ? null : "off");
+}
+
+/**
+ * How the map treats done jobs: `show` draws them like any other card, `fade`
+ * draws them translucent, `hide` leaves them off the map altogether.
+ */
+export type DoneMode = "show" | "fade" | "hide";
+
+/** The three levels in the order the map's `done` button steps through them. */
+const DONE_MODES: readonly DoneMode[] = ["show", "fade", "hide"];
+
+/** Per browser: "show" or "hide" when the operator chose one; absent or anything else is `fade`. */
+export const MAP_DONE_KEY = "kraken.mapDone";
+
+/** The level chosen in this browser. `fade` unless another was chosen, and `fade` where storage cannot be read. */
+export function doneMode(): DoneMode {
+  const v = readLS(MAP_DONE_KEY);
+  return v === "show" || v === "hide" ? v : "fade";
+}
+
+/** Record the level: its name, or the key removed for `fade`. */
+export function setDoneMode(m: DoneMode): void {
+  writeLS(MAP_DONE_KEY, m === "fade" ? null : m);
+}
+
+/** The level one step on from `m`, wrapping from `hide` back to `show`. */
+export function nextDoneMode(m: DoneMode): DoneMode {
+  return DONE_MODES[(DONE_MODES.indexOf(m) + 1) % DONE_MODES.length]!;
 }
 
 /** Per browser: "open" while the map's drawing-tool panel is open; anything else is closed. */
