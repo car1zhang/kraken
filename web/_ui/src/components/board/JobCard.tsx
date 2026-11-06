@@ -107,9 +107,11 @@ const STATUS_TEXT: Partial<Record<Column, string>> = {
  * The status token of a card on hold. Not a STATUS_TEXT entry because frozen
  * is not a column: the card's column is still blocked. Outside the FROZEN
  * drawer, which is only the agent map since a frozen card is never dragged,
- * this token is the only thing that marks the card as on hold. It is the one
- * live-card token, an exception the working/blocked tokens did not get,
- * because nothing else on the card says it.
+ * the card is drawn at full strength, and this token is the only thing ON the
+ * card that marks it as on hold (the map's sleeping character is beside it,
+ * on the canvas). It is the one live-card token, an exception the
+ * working/blocked tokens did not get, because nothing else on the card says
+ * it.
  */
 const FROZEN_STATUS_TEXT = "❄ frozen";
 

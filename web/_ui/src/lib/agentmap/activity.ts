@@ -6,6 +6,7 @@
 // consumes these answers lives beside this file in draw.ts and scene.ts.
 
 import type { AgentEvent, WebActivity, WebAgent, WebJob } from "../../api/types.ts";
+import { isFrozen } from "../format.ts";
 
 /**
  * The activity vocabulary, in core.ActivityIDs' order. The Go classifier is
@@ -46,6 +47,7 @@ export type MapStatus =
   | "question"
   | "parked"
   | "limit"
+  | "frozen"
   | "done"
   | "draft";
 
@@ -58,10 +60,18 @@ function asksQuestion(job: WebJob): boolean {
  * or when it carries a health condition — the board's own override
  * (bucketJobs files an unhealthy cell under blocked whatever its file says),
  * so a card cannot be blocked in one view and working in the other.
+ *
+ * A job the operator put on hold is FROZEN before any of the blocked
+ * readings: the hold says it does not need them right now, so a pending
+ * question, a spent limit or a gone cell on it is not what the card shows.
+ * `isFrozen` is the board's own test (a blocked, non-archived job carrying
+ * `frozen_at`), so the map sleeps exactly the cards the board files in its
+ * FROZEN drawer.
  */
 export function mapStatus(job: WebJob): MapStatus {
   if (job.state === "draft") return "draft";
   if (job.state === "done") return "done";
+  if (isFrozen(job)) return "frozen";
   if (job.state === "blocked" || job.health) {
     if (LIMIT_RE.test(job.health ?? "")) return "limit";
     if (asksQuestion(job)) return "question";
