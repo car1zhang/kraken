@@ -619,7 +619,7 @@ input[type="password"], .thread-name-label {
 }
 .theme-btn:hover { color: var(--fg); border-color: var(--border-strong); background: color-mix(in srgb, var(--ac) 8%, transparent); }
 /* min-widths sized to each button's WIDEST label (CRIMSON / FX OFF /
-   SFX 100% / SYSTEM):
+   SFX 100% / SYSTEM / the wider of ☾ SLEEPABLE and ☀ ALWAYS ON):
    these are the controls a user clicks repeatedly while watching this exact
    corner, and a label that resizes on every click shifts its neighbours and
    the clock sideways mid-cycle (review finding). */
@@ -627,6 +627,13 @@ input[type="password"], .thread-name-label {
 #scanlines-toggle { min-width: 60px; }
 #sfx-toggle { min-width: 78px; }
 #theme-toggle { min-width: 64px; }
+#sleep-toggle { min-width: 86px; }
+/* the sleep button holding the Mac awake: amber, the header's "this wants a
+   look" hue (.upd.avail), because a machine that will not sleep is a state
+   to notice. At rest (SLEEPABLE) it is a plain .theme-btn. */
+.theme-btn.sleep-held { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 40%, var(--b1)); }
+/* dimmed while its switch is in flight */
+#sleep-toggle[disabled] { opacity: 0.6; }
 
 /* the self-update control (see the self-update section in app.js): same
    chrome weight as .theme-btn at rest, taking color only when it has

@@ -11,6 +11,7 @@ import { BackgroundControl } from "./BackgroundControl.tsx";
 import { Banner, StaleBanner } from "./Banners.tsx";
 import { AccentToggle, ScanToggle, SfxToggle } from "./HudControls.tsx";
 import { ShipControl, useShipRun } from "./ShipControl.tsx";
+import { SleepControl } from "./SleepControl.tsx";
 import { ThemeToggle } from "./ThemeToggle.tsx";
 import { UpdControlButton, useUpdateRun } from "./UpdateControl.tsx";
 import { UsageStat } from "./UsageStat.tsx";
@@ -207,6 +208,10 @@ export function Chrome({
         <span className="spacer" />
         <UpdControlButton id="update-btn" model={update.button} onClick={update.onClick} />
         <ShipControl id="ship-btn" model={ship.button} onClick={ship.onClick} />
+        {/* ☾/☀ whether this Mac may sleep, and the switch for it. Renders
+            nothing until /api/sleep has answered, so it is absent on a
+            refused (node-tier) board without a check here. */}
+        <SleepControl onToast={onToast} />
         <BackgroundControl hasBg={!!b?.background} mutate={board.mutate} />
         {/* ◉ Devices: pairing password, the phone QR, paired devices and the
             nodes list. Owner tier only server-side; hidden on a refused
