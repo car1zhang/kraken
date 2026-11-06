@@ -16,6 +16,9 @@ export interface MiniFrame {
 
 const fin = (n: number) => typeof n === "number" && Number.isFinite(n);
 
+/** A done card's rectangle on the overview while the map fades done jobs: style.css' opacity for the card itself. */
+const MINI_DONE_ALPHA = 0.4;
+
 /**
  * The frame that fits every card AND the visible world rectangle `view`
  * (top-left corner and size, world units) into a minimap of `size` pixels,
@@ -77,8 +80,10 @@ export function miniToWorld(px: number, py: number, f: MiniFrame): [number, numb
  * status colour (draw.ts' `hueOf`, the palette's recipe for each status, so
  * the overview and the characters share one mapping; never smaller than a
  * pixel and a half, so a far-off card
- * still shows), and the visible area as an outline. `c`'s transform is the
- * caller's (the canvas' backing scale); everything here is in CSS pixels.
+ * still shows), and the visible area as an outline. With `fadeDone`, a done
+ * card's rectangle is drawn at MINI_DONE_ALPHA, as the map fades the card
+ * itself. `c`'s transform is the caller's (the canvas' backing scale);
+ * everything here is in CSS pixels.
  */
 export function drawMinimap(
   c: CanvasRenderingContext2D,
@@ -88,6 +93,7 @@ export function drawMinimap(
   view: { x: number; y: number; w: number; h: number },
   f: MiniFrame,
   size: { w: number; h: number },
+  fadeDone = false,
 ): void {
   c.clearRect(0, 0, size.w, size.h);
   c.globalAlpha = 0.86;
@@ -98,9 +104,12 @@ export function drawMinimap(
     if (!fin(n.x) || !fin(n.y)) continue;
     const w = Math.max(1.5, (fin(n.w) ? n.w : 0) * f.scale);
     const h = Math.max(1.5, (fin(n.h) ? n.h : 0) * f.scale);
-    c.fillStyle = hueOf(C, statusOf(n.key));
+    const status = statusOf(n.key);
+    c.fillStyle = hueOf(C, status);
+    c.globalAlpha = fadeDone && status === "done" ? MINI_DONE_ALPHA : 1;
     c.fillRect((n.x - f.ox) * f.scale, (n.y - f.oy) * f.scale, w, h);
   }
+  c.globalAlpha = 1;
   if (fin(view.x) && fin(view.y) && fin(view.w) && fin(view.h)) {
     c.strokeStyle = C.fg;
     c.lineWidth = 1;
