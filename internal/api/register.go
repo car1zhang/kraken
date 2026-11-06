@@ -65,6 +65,9 @@ func registerRoutes(mux routeMux) {
 	// gated the same two ways for the same reasons.
 	mux.HandleFunc("/api/finder/reveal", mirrorGated(finderRevealHandler))
 	mux.HandleFunc("/api/board", boardHandler)
+	// the archived cards, off the board poll since contract v8 and fetched on
+	// demand; a read, so not mirror-gated
+	mux.HandleFunc("/api/archived", archivedHandler)
 	mux.HandleFunc("/api/usage", usageHandler)
 	mux.HandleFunc("/api/account/switch", accountSwitchHandler)
 	mux.HandleFunc("/api/account/mode", accountModeHandler)

@@ -160,7 +160,7 @@ func TestArchivedWebJobWithholdsContext(t *testing.T) {
 	if len(archived) != 1 {
 		t.Fatalf("LoadArchivedJobs = %d, want 1", len(archived))
 	}
-	wj := archivedWebJob(archived[0], st, nil, nil)
+	wj := archivedWebJob(archived[0], feedbackIndex(st), artifactPathsIndex(st), nil, nil)
 	if wj.Context != nil {
 		t.Fatalf("archived card carries context = %+v, want no key at all", wj.Context)
 	}

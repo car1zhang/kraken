@@ -184,3 +184,66 @@ func TestGetArtifactNotFound(t *testing.T) {
 		t.Fatalf("err = %v, want ErrNotFound", err)
 	}
 }
+
+// ListArtifactPaths names every job's artifacts in one read, each job's in
+// ListArtifacts' own order, and carries no bytes.
+func TestListArtifactPathsCoversEveryJobInPathOrder(t *testing.T) {
+	s := openTest(t)
+	if got, err := s.ListArtifactPaths(); err != nil || len(got) != 0 {
+		t.Fatalf("empty table: %+v, %v", got, err)
+	}
+	a, err := s.CreateJob(&Job{Slug: "paths-a"})
+	if err != nil {
+		t.Fatalf("CreateJob: %v", err)
+	}
+	b, err := s.CreateJob(&Job{Slug: "paths-b"})
+	if err != nil {
+		t.Fatalf("CreateJob: %v", err)
+	}
+	if _, err := s.CreateJob(&Job{Slug: "paths-none"}); err != nil {
+		t.Fatalf("CreateJob: %v", err)
+	}
+	if err := s.SyncArtifacts(b, []ArtifactFile{{Path: "z.md", Bytes: []byte("z")}}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SyncArtifacts(a, []ArtifactFile{
+		{Path: "sub/b.txt", Bytes: []byte("bbb")},
+		{Path: "a.txt", Bytes: []byte("aaa")},
+	}, nil); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.ListArtifactPaths()
+	if err != nil {
+		t.Fatalf("ListArtifactPaths: %v", err)
+	}
+	want := []ArtifactPath{{a, "a.txt"}, {a, "sub/b.txt"}, {b, "z.md"}}
+	if len(got) != len(want) {
+		t.Fatalf("paths = %+v, want %+v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("path %d = %+v, want %+v", i, got[i], want[i])
+		}
+	}
+	// per job it agrees with the per-job read
+	for _, id := range []int64{a, b} {
+		list, err := s.ListArtifacts(id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var mine []string
+		for _, p := range got {
+			if p.JobID == id {
+				mine = append(mine, p.Path)
+			}
+		}
+		if len(mine) != len(list) {
+			t.Fatalf("job %d: %v vs ListArtifacts %+v", id, mine, list)
+		}
+		for i := range list {
+			if list[i].Path != mine[i] {
+				t.Errorf("job %d path %d = %q, want %q", id, i, mine[i], list[i].Path)
+			}
+		}
+	}
+}

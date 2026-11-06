@@ -188,7 +188,7 @@ func TestEdgeAccountArchivedCardWithholdsTheKey(t *testing.T) {
 	}
 
 	tokens := map[int64]store.JobTokens{a.ID: {JobID: a.ID, In: 1, Out: 2}}
-	wj := archivedWebJob(a, st, tokens, nil)
+	wj := archivedWebJob(a, feedbackIndex(st), artifactPathsIndex(st), tokens, nil)
 
 	if wj.Account != nil {
 		t.Errorf("archived card carries account = %+v, want no key at all", wj.Account)

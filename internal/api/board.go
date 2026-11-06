@@ -46,6 +46,13 @@ import (
 // the node tier now and is refused (401) on every board route, so a shipped
 // client that has not paired stops working against this server. Bumped so
 // such a client says why instead of failing route by route.
+//
+// NOT bumped for the archive split (GET /api/archived, and /api/board's
+// `?archived=0`): the board's default answer still carries every archived
+// card, exactly as a shipped client reads it, and a client that wants the
+// lighter poll asks for it. A bump was also not free to take: the number
+// rides the node envelope sibling krakens exchange (jobs.NodeContract, kept
+// equal to this by a test), so changing it is a multiplayer-protocol change.
 const apiContract = 7
 
 // legacyCellCap is the number webBoard.CellCap is served at. See that field's
@@ -227,6 +234,39 @@ func jobFeedback(st *store.Store, jobID int64) []webFeedback {
 		return nil
 	}
 	return webFeedbackFrom(fs)
+}
+
+// feedbackIndex reads EVERY feedback row's metadata in one query and groups
+// it by the owning job's id, so a board build costs one query rather than one
+// per card — jobTokensIndex' reason, and the archive makes it bite harder:
+// every archived job is a card too. Each job's rows keep ListFeedbackMeta's
+// order (oldest first), since the one unscoped read is ordered the same way.
+// A row with no owning job (a pre-v5 fossil, or one orphaned by a hard
+// delete) belongs to no card and is left out. nil when no store is wired and
+// on a query failure, logged: the cards then carry no feedback for that one
+// build, the same never-fail-the-whole-poll contract as jobFeedback.
+func feedbackIndex(st *store.Store) map[int64][]store.Feedback {
+	if st == nil {
+		return nil
+	}
+	rows, err := st.ListFeedbackMeta(0)
+	if err != nil {
+		util.LogEvent("web", "error", "board", fmt.Sprintf("list feedback: %v", err))
+		return nil
+	}
+	index := make(map[int64][]store.Feedback)
+	for _, f := range rows {
+		if f.JobID > 0 {
+			index[f.JobID] = append(index[f.JobID], f)
+		}
+	}
+	return index
+}
+
+// webFeedbackFor looks one job's rows out of feedbackIndex' map and shapes
+// them for the wire: what jobFeedback answers for that job, without its query.
+func webFeedbackFor(index map[int64][]store.Feedback, jobID int64) []webFeedback {
+	return webFeedbackFrom(index[jobID])
 }
 
 // webThread mirrors one `threads` row (store.Thread) for the wire — the
@@ -1107,6 +1147,23 @@ type webBoard struct {
 	// fleet off; a server older than the key makes the picker say the bare
 	// words "this Mac". Additive, no contract bump.
 	NodeLabel string `json:"node_label,omitempty"`
+	// ArchivedCount is how many jobs the archive holds. A client polling
+	// with `?archived=0` gets no archived cards in `jobs` and fetches them
+	// from GET /api/archived when it shows the archive or searches it; the
+	// count lets it label the archive, and notice that the archive changed,
+	// without fetching. Always present, 0 for an empty archive. Additive.
+	ArchivedCount int `json:"archived_count"`
+	// ArchivedGoalCounts is goal id → how many archived jobs link that goal,
+	// so a client can count the jobs behind a goal (active ones off `jobs`,
+	// plus these) before it has fetched the archive. Absent when no archived
+	// job links any goal. Additive.
+	ArchivedGoalCounts map[int64]int `json:"archived_goal_counts,omitempty"`
+}
+
+// webArchived is GET /api/archived's answer: every archived job's card, in
+// the order the board appends them after the active ones. Never null.
+type webArchived struct {
+	Jobs []webJob `json:"jobs"`
 }
 
 // jobArtifacts collects a job's viewable artifacts from exactly one source.
@@ -1179,6 +1236,51 @@ func storeArtifactList(slug string, jobID int64, home string) []webArtifact {
 		out = append(out, webArtifact{Name: a.Path, URL: artifactURL(slug, home, a.Path)})
 	}
 	return out
+}
+
+// artifactPathsIndex reads EVERY stored artifact's job id and path in one
+// query and groups the paths by job, so the board lists the artifacts of
+// every card without a live cell (done, torn down, archived) from one read
+// rather than a ListArtifacts per card — which also selected each artifact's
+// bytes only to throw them away. Each job's paths are in path order. nil when
+// no store is wired and on a query failure, logged: those cards then list no
+// artifacts for that one build.
+func artifactPathsIndex(st *store.Store) map[int64][]string {
+	if st == nil {
+		return nil
+	}
+	rows, err := st.ListArtifactPaths()
+	if err != nil {
+		util.LogEvent("web", "error", "board", fmt.Sprintf("list artifact paths: %v", err))
+		return nil
+	}
+	index := make(map[int64][]string)
+	for _, a := range rows {
+		index[a.JobID] = append(index[a.JobID], a.Path)
+	}
+	return index
+}
+
+// boardArtifacts is jobArtifacts for the board build: a job with a live cell
+// still lists its artifacts dir, and every other job reads its stored list
+// out of artifactPathsIndex' map instead of running a query of its own. The
+// homes and the slug each URL is keyed on are jobArtifacts' (an archived job
+// under "archive" and its archive name, any other under "pluto" and its
+// slug), and the list ends in sortedArtifacts like every producer.
+func boardArtifacts(index map[int64][]string, j *jobs.Job, live bool) []webArtifact {
+	if live {
+		return jobArtifacts(j, true)
+	}
+	slug, home := j.Slug, "pluto"
+	if j.ArchivedName != "" {
+		slug, home = j.ArchivedName, "archive"
+	}
+	paths := index[j.ID]
+	out := make([]webArtifact, 0, len(paths))
+	for _, p := range paths {
+		out = append(out, webArtifact{Name: p, URL: artifactURL(slug, home, p)})
+	}
+	return sortedArtifacts(out)
 }
 
 // artifactURL builds /api/artifact/<slug>/<home>/<name> with every path
@@ -1436,15 +1538,22 @@ func buildWebBoard() webBoard {
 	// links name, taken from the two lists the payload ALREADY carries plus one
 	// by-id read per distinct id those lists do not cover (a job still serving
 	// last week's goal). Only the second is demand-scoped, since goals is the
-	// table that only grows — see linkedJobGoals. The archived loop below reads
-	// the same two maps, which is why they are built out here.
+	// table that only grows — see linkedJobGoals. The archived tail below reads
+	// the same two maps, which is why they are built out here, and the link
+	// map also counts the archived jobs behind each goal (archivedGoalCounts).
 	links := jobGoalLinks(activeStore)
 	goals := linkedJobGoals(activeStore, board.Goals, links)
 	// One query for the WHOLE board's token rows, read before the loop and
 	// indexed by slug — never a per-job GetJobTokens, which would be ~74
 	// queries inside the cached build (store.ListJobTokens' own reason for
-	// existing). The archived loop below reads the same index.
+	// existing). The archived tail below reads the same index.
 	tokens := jobTokensIndex(activeStore)
+	// The same for feedback and for stored artifact names: one query each for
+	// the whole board, where every card used to run its own pair. Both the
+	// active loop and the archived tail read them, and the archive is why
+	// they matter: the pair once ran per job ever archived, on every build.
+	feedback := feedbackIndex(activeStore)
+	artifactPaths := artifactPathsIndex(activeStore)
 	// Two more one-query indexes for the lead's context fill (webContextFor):
 	// every `cell_ctx:*` row and every `auto_handoff:*` row, read once here
 	// rather than per job for the token index's reason. Only the active loop
@@ -1452,7 +1561,7 @@ func buildWebBoard() webBoard {
 	ctxIndex := jobs.CellContextIndex(activeStore)
 	handoffIndex := jobs.HandoffIndex(activeStore)
 	// Archived jobs are loaded here, once, because the spawn index needs them
-	// to name an archived child or parent; the archived loop below reuses
+	// to name an archived child or parent; the archived tail below reuses
 	// the same list rather than loading it a second time.
 	archived := jobs.LoadArchivedJobs()
 	spawns := buildSpawnIndex(js, archived)
@@ -1479,7 +1588,7 @@ func buildWebBoard() webBoard {
 			Color:     jobs.EffectiveColor(j),
 			Agent:     j.Agent,
 			Author:    j.Author,
-			Artifacts: jobArtifacts(j, live[jobs.CellSession(j)]),
+			Artifacts: boardArtifacts(artifactPaths, j, live[jobs.CellSession(j)]),
 			ModTime:   j.ModTime.Unix(),
 			PRs:       j.PRs,
 			// Stack: the cell's manual-test URLs, store-only like Threads
@@ -1492,10 +1601,11 @@ func buildWebBoard() webBoard {
 			SpawnedBy: spawns.spawnedByOf(j.ID),
 			// DocQuestions/Feedback: one uniform path straight off the store,
 			// live or dead, any state — no file, no cell-dir liveness check
-			// (see jobQuestions/jobFeedback). Never set for archived jobs,
-			// which ride a separate loop below.
+			// (see jobQuestions/jobFeedback; Feedback is jobFeedback's answer
+			// read out of the whole-board index). DocQuestions is never set
+			// for archived jobs, which ride a separate loop below.
 			DocQuestions: jobQuestions(activeStore, j),
-			Feedback:     jobFeedback(activeStore, j.ID),
+			Feedback:     webFeedbackFor(feedback, j.ID),
 			// Threads: same store-only path, and deliberately outside the
 			// live[] branch below — a closed thread outlives its cell and
 			// stays readable, so its chip must survive teardown too.
@@ -1625,18 +1735,14 @@ func buildWebBoard() webBoard {
 	}
 	// archived jobs ride the same list under state "archived": no cell, no
 	// derivation — just the file, its artifacts, and the two
-	// actions (unarchive, delete) keyed on the archive file base
-	for _, a := range archived {
-		wj := archivedWebJob(a, activeStore, tokens, webJobGoalsFor(goals, links[a.ID]))
-		// Spawn links are history and ride an archived card too — the
-		// opposite of Account's call and the same as Tokens': a parent
-		// archived after its children finished still names them. Filled here
-		// rather than inside archivedWebJob so that function's signature, and
-		// its per-field decisions, stay what its tests pin.
-		wj.Spawned = spawns.spawnedOf(a.ID)
-		wj.SpawnedBy = spawns.spawnedByOf(a.ID)
-		board.Jobs = append(board.Jobs, wj)
-	}
+	// actions (unarchive, delete) keyed on the archive file base. They are
+	// most of the payload's bytes (one card per job ever archived), so a
+	// client may poll without them (`?archived=0`, boardHandler) and fetch
+	// them from GET /api/archived when it needs them; the two counts are what
+	// it needs of them before then.
+	board.Jobs = append(board.Jobs, archivedCards(archived, feedback, artifactPaths, tokens, goals, links, spawns)...)
+	board.ArchivedCount = len(archived)
+	board.ArchivedGoalCounts = archivedGoalCounts(archived, links)
 	// the fleet: every sibling's polled cards after this node's own, each
 	// carrying its owner. Read from the registry the nodes pass keeps, so the
 	// merged board costs this request no network.
@@ -1651,6 +1757,85 @@ func buildWebBoard() webBoard {
 		board.NodeLabel = self.Label
 	}
 	return board
+}
+
+// archivedGoalCounts is goal id → how many of the archived jobs link it, out
+// of the board-wide link map. nil when none links any goal, which the wire
+// spells as the key's absence.
+func archivedGoalCounts(archived []*jobs.Job, links map[int64][]int64) map[int64]int {
+	var counts map[int64]int
+	for _, a := range archived {
+		for _, goalID := range links[a.ID] {
+			if counts == nil {
+				counts = map[int64]int{}
+			}
+			counts[goalID]++
+		}
+	}
+	return counts
+}
+
+// archivedCards builds every archived job's card out of the whole-board
+// indexes: the one loop behind both the board's archived tail and GET
+// /api/archived, so the two cannot serve different cards.
+func archivedCards(archived []*jobs.Job, feedback map[int64][]store.Feedback, artifactPaths map[int64][]string, tokens map[int64]store.JobTokens, goals map[int64]*webJobGoal, links map[int64][]int64, spawns spawnIndex) []webJob {
+	out := make([]webJob, 0, len(archived))
+	for _, a := range archived {
+		wj := archivedWebJob(a, feedback, artifactPaths, tokens, webJobGoalsFor(goals, links[a.ID]))
+		// Spawn links are history and ride an archived card too — the
+		// opposite of Account's call and the same as Tokens': a parent
+		// archived after its children finished still names them. Filled here
+		// rather than inside archivedWebJob so that function's signature, and
+		// its per-field decisions, stay what its tests pin.
+		wj.Spawned = spawns.spawnedOf(a.ID)
+		wj.SpawnedBy = spawns.spawnedByOf(a.ID)
+		out = append(out, wj)
+	}
+	return out
+}
+
+// buildWebArchived builds GET /api/archived's answer: every archived job's
+// card, exactly as the board's default answer carries it. Archived jobs have
+// no cell and nothing to derive, so this build runs no discovery: the job
+// rows, the whole-table indexes the board reads (feedback, artifact names,
+// tokens, goal links), and the spawn index, which needs the active jobs too
+// since an archived job's parent or child may still be on the board.
+//
+// Not cached: nothing polls it. A client asks when it opens the archive or
+// searches, and again when the board's `archived_count` moves or one of its
+// own writes may have changed a card.
+func buildWebArchived() webArchived {
+	st := jobs.ActiveStore()
+	archived := jobs.LoadArchivedJobs()
+	if len(archived) == 0 {
+		return webArchived{Jobs: []webJob{}}
+	}
+	links := jobGoalLinks(st)
+	goals := linkedJobGoals(st, currentGoals(st), links)
+	spawns := buildSpawnIndex(jobs.LoadJobs(), archived)
+	return webArchived{Jobs: archivedCards(archived, feedbackIndex(st), artifactPathsIndex(st), jobTokensIndex(st), goals, links, spawns)}
+}
+
+// archivedHandler serves the archived cards (GET /api/archived).
+func archivedHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		webJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "GET only"})
+		return
+	}
+	webJSON(w, http.StatusOK, buildWebArchived())
+}
+
+// withoutArchived is a board's job list with the archived cards left out,
+// for a client that polls with `?archived=0`. A new slice: the cached
+// board's own list is shared by every reader and is never edited.
+func withoutArchived(all []webJob) []webJob {
+	out := make([]webJob, 0, len(all))
+	for _, j := range all {
+		if !j.Archived {
+			out = append(out, j)
+		}
+	}
+	return out
 }
 
 // fleetBoard is the board's fleet half: every sibling's stored cards with
@@ -1686,18 +1871,23 @@ func fleetBoard(st *store.Store) ([]webJob, []webNode) {
 // the board-wide maps — passed in rather than looked up here for the reason
 // tokens is: this function must stay callable by a test, and a lookup inside it
 // would need a store the archived path does not otherwise read goals from.
-func archivedWebJob(a *jobs.Job, activeStore *store.Store, tokens map[int64]store.JobTokens, goals []webJobGoal) webJob {
+//
+// feedback and artifacts are the two whole-board indexes (feedbackIndex,
+// artifactPathsIndex), for the same reason and for cost: this function runs
+// once per job ever archived on every build, and it runs NO query. A nil
+// index reads as "none", so a test that cares about neither passes nil.
+func archivedWebJob(a *jobs.Job, feedback map[int64][]store.Feedback, artifacts map[int64][]string, tokens map[int64]store.JobTokens, goals []webJobGoal) webJob {
 	return webJob{
 		Slug: a.ArchivedName, Repo: a.Repo,
 		State: "archived", Archived: true, DisplaySlug: a.Slug,
 		Err: a.Err, Outcome: a.Outcome, Color: jobs.EffectiveColor(a), Agent: a.Agent, Author: a.Author,
-		Artifacts: archivedWebArtifacts(a), ModTime: a.ModTime.Unix(),
+		Artifacts: archivedWebArtifacts(artifacts, a), ModTime: a.ModTime.Unix(),
 		// Feedback (Q2: works for archived jobs too) is keyed on the
 		// job's own immutable id — same as the active loop above — not
 		// the archive name, so a later reuse of the freed slug can never
 		// cross-wire onto this card. DocQuestions is deliberately absent
 		// here — never set for archived jobs.
-		Feedback: jobFeedback(activeStore, a.ID),
+		Feedback: webFeedbackFor(feedback, a.ID),
 		// Tokens IS set for an archived job — keeping the number after
 		// the cell is gone is the whole reason the row has no FK and no
 		// cascade. Looked up under a.ID, which also CLOSES the cross-wire
@@ -1762,20 +1952,29 @@ func archivedWebJob(a *jobs.Job, activeStore *store.Store, tokens map[int64]stor
 }
 
 // archivedWebArtifacts lists an archived job's artifact copies for the
-// wire, from the DB (storeArtifactList) — the cell's artifacts tree is
-// already store-mirrored by the time a job can be archived (teardown's
-// syncArtifactsNow already ran).
-// Single-source today (the store's own ORDER BY path), so the sort is a
-// no-op — it is here so the ordering guarantee lives with every producer
-// rather than only with jobArtifacts, which an archived job never reaches.
-func archivedWebArtifacts(a *jobs.Job) []webArtifact {
-	return sortedArtifacts(storeArtifactList(a.ArchivedName, a.ID, "archive"))
+// wire, from the DB by way of the whole-board index (artifactPathsIndex) —
+// the cell's artifacts tree is already store-mirrored by the time a job can
+// be archived (teardown's syncArtifactsNow already ran).
+// Single-source today (the store's own ORDER BY path), so boardArtifacts'
+// sort is a no-op — it is there so the ordering guarantee lives with every
+// producer rather than only with jobArtifacts, which an archived job never
+// reaches.
+func archivedWebArtifacts(index map[int64][]string, a *jobs.Job) []webArtifact {
+	return boardArtifacts(index, a, false)
 }
 
-// boardHandler serves the memoized board snapshot.
+// boardHandler serves the memoized board snapshot. `?archived=0` answers the
+// same snapshot without its archived cards, which are most of its bytes and
+// are served on demand by GET /api/archived; `archived_count` and
+// `archived_goal_counts` ride either way. Any other value of the parameter,
+// and its absence, is the full board every shipped client reads.
 func boardHandler(w http.ResponseWriter, r *http.Request) {
+	board := webBoardCache.get()
+	if r.URL.Query().Get("archived") == "0" {
+		board.Jobs = withoutArchived(board.Jobs)
+	}
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(webBoardCache.get())
+	_ = json.NewEncoder(w).Encode(board)
 }
 
 func webJSON(w http.ResponseWriter, status int, v any) {

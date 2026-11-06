@@ -861,6 +861,8 @@ input[type="password"], .thread-name-label {
    for the same reason: hit-testing lands on .archive-drawer, which is where
    useColumnDrop(ARCHIVED) puts its ref. */
 .archive-head:disabled, .frozen-head:disabled { pointer-events: none; }
+/* an open drawer whose cards are still being fetched (they are off the poll) */
+.archive-loading { padding: 6px 8px; color: var(--muted); font: 10px var(--mono); }
 .archive-head .tri, .frozen-head .tri { font-size: 9px; letter-spacing: 0; }
 .archive-head .n, .frozen-head .n { margin-left: auto; font: 10px var(--mono); letter-spacing: 0; color: var(--text-2); }
 

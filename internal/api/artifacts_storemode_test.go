@@ -261,7 +261,7 @@ func TestArchivedWebArtifactsStoreMode(t *testing.T) {
 	if archived == nil {
 		t.Fatal("archived job not found")
 	}
-	arts := archivedWebArtifacts(archived)
+	arts := archivedWebArtifacts(artifactPathsIndex(st), archived)
 	if len(arts) != 1 || arts[0].Name != "final.md" {
 		t.Fatalf("archived artifacts = %+v", arts)
 	}
@@ -297,7 +297,7 @@ func TestArchivedWebArtifactsIsSorted(t *testing.T) {
 	}
 
 	var got []string
-	for _, a := range archivedWebArtifacts(archived) {
+	for _, a := range archivedWebArtifacts(artifactPathsIndex(jobs.ActiveStore()), archived) {
 		got = append(got, a.Name)
 	}
 	want := []string{"00-overview.md", "10-architecture.html", "90-build-report.md"}

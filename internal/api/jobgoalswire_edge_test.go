@@ -628,7 +628,7 @@ func TestEdgeJGWArchivedCardWithNoChipsCarriesNeitherKey(t *testing.T) {
 		{"an empty slice — what a caller that always builds one produces", []webJobGoal{}},
 	} {
 		t.Run(c.name, func(t *testing.T) {
-			wj := archivedWebJob(a, st, tokens, c.goals)
+			wj := archivedWebJob(a, feedbackIndex(st), artifactPathsIndex(st), tokens, c.goals)
 			if len(wj.Goals) != 0 {
 				t.Errorf("archived card carries goals = %+v, want none", wj.Goals)
 			}
@@ -656,7 +656,7 @@ func TestEdgeJGWArchivedCardWithNoChipsCarriesNeitherKey(t *testing.T) {
 
 	t.Run("one chip is the boundary: both keys appear together", func(t *testing.T) {
 		head := webJobGoal{ID: 41, Text: "ship the filter", Done: false}
-		wj := archivedWebJob(a, st, tokens, []webJobGoal{head})
+		wj := archivedWebJob(a, feedbackIndex(st), artifactPathsIndex(st), tokens, []webJobGoal{head})
 		if len(wj.Goals) != 1 || wj.Goals[0] != head {
 			t.Fatalf("archived card goals = %+v, want the passed slice verbatim", wj.Goals)
 		}

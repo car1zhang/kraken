@@ -34,6 +34,7 @@ import type {
   WatchState,
   WatchVerdict,
   WebBoard,
+  WebJob,
   WebUsage,
   NodeEnvelope,
   NodeRead,
@@ -107,8 +108,18 @@ export async function postJSON<T = { ok: true }>(
 
 // ------------------------------------------------------------ reads
 
+/**
+ * The board poll, WITHOUT the archived cards (`?archived=0`): one card per job
+ * ever archived was most of the payload, read every three seconds to draw a
+ * drawer that is usually shut. `fetchArchived` gets them when they are needed;
+ * the board still says how many there are (`archived_count`).
+ */
 export const fetchBoard = (signal?: AbortSignal) =>
-  getJSON<WebBoard>("/api/board", signal);
+  getJSON<WebBoard>("/api/board?archived=0", signal);
+
+/** Every archived job's card (`GET /api/archived`), fetched on demand by useBoard. */
+export const fetchArchived = (signal?: AbortSignal) =>
+  getJSON<{ jobs: WebJob[] }>("/api/archived", signal);
 
 export const fetchUsage = (signal?: AbortSignal) =>
   getJSON<WebUsage>("/api/usage", signal);

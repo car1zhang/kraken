@@ -607,7 +607,7 @@ func TestArchivedArtifactServing(t *testing.T) {
 	if a == nil {
 		t.Fatal("archived job not found")
 	}
-	arts := archivedWebArtifacts(a)
+	arts := archivedWebArtifacts(artifactPathsIndex(st), a)
 	if len(arts) != 1 || arts[0].Name != "report.md" || arts[0].URL != "/api/artifact/"+name+"/archive/report.md" {
 		t.Fatalf("unexpected artifacts: %+v", arts)
 	}

@@ -86,7 +86,9 @@ the way in (`mtimeToken`), for old clients — but always emit a number.
 
 ## Board & actions
 
-### `GET /api/board` → `webBoard` (web.go)
+### `GET /api/board[?archived=0]` → `webBoard` (web.go)
+
+`?archived=0` answers the same board without its archived cards, which are most of the payload's bytes (one per job ever archived); a client that sends it fetches them from `GET /api/archived` (below) when it shows the archive or searches it, and reads `archived_count` and `archived_goal_counts` until then. Any other value, and the parameter's absence, is the full board with the archived cards appended after the active ones, which is what every shipped client reads: additive, no contract bump. The web board polls with `?archived=0`; the iOS app polls the full board.
 
 | key | type | optionality | notes |
 |---|---|---|---|
@@ -104,6 +106,12 @@ the way in (`mtimeToken`), for old clients — but always emit a number.
 | `operator` | string | always | the name kraken's agents use for the person running it — `jobs.Operator()`: `KRAKEN_OPERATOR` (from the environment or `~/.kraken/env`), else `$USER`, else `"the operator"`. The web board labels the operator's turns in a side thread with it (falling back to `you` when the key is absent, i.e. an older server). Added additively, no contract bump. Modeled in the iOS app as `operatorName: String?` (JSON key `operator` — `operator` is a Swift keyword), **Optional** on `WebBoard`; the app decodes it but renders nothing from it yet |
 | `node_id` | string | omitempty | this node's tailscale stable id (the `node_id` of its `NodeEnvelope`); absent when tailscale is unreadable or under `KRAKEN_NODES=off`. A client compares a headless thread's `origin.node_id` with it to tell this node's own threads from another node's. Added additively, no contract bump. Modeled in the iOS app as `nodeId: String?` on `WebBoard` |
 | `node_label` | string | omitempty | this node's device label (`jobs.DeviceLabel`, the `label` of its `NodeEnvelope`), read off the same cached envelope as `node_id`; absent under `KRAKEN_NODES=off`. Names the "this Mac" row of the board bar's machines dropdown (web) and of Settings' machine filter (iOS) without a second poll of `/api/node`; a client that finds it absent (an older server) shows the bare words "this Mac". Added additively, no contract bump. Modeled in the iOS app as `nodeLabel: String?` on `WebBoard` |
+| `archived_count` | number | always | how many jobs the archive holds, 0 when it is empty; the same number on the full board and on `?archived=0`. A client polling `?archived=0` labels its archive with it and re-fetches `GET /api/archived` when it moves. Added additively, no contract bump. Modeled in the iOS app as `archivedCount: Int?` on `WebBoard`, decoded and not read |
+| `archived_goal_counts` | object (goal id as a string key → number) | omitempty | how many ARCHIVED jobs link each goal, absent when none does. The web board adds it to the count of active jobs behind a goal while it has not fetched the archive, so a goal's badge is the same before and after. Added additively, no contract bump. Modeled in the iOS app as `archivedGoalCounts: [String: Int]?` on `WebBoard`, decoded and not read |
+
+### `GET /api/archived` → `{"jobs": [webJob]}` (api/board.go)
+
+Every archived job's card, in the order the full board appends them, each exactly the object the full board's `jobs` carries for it (`archived: true`, `state: "archived"`, `slug` the numbered archive name, `display_slug` the original). `jobs` is `[]`, never `null`, for an empty archive. Built from the job rows and four whole-table reads with no cell discovery, and not cached: nothing polls it. The web board fetches it when the archive drawer is open, a search or goal filter is running, or a card on screen names an archived job, and again when `archived_count` moves or one of its own writes lands. Same gate tier as `/api/board` (paired). GET only (405 otherwise). Added additively, no contract bump; the iOS app does not call it.
 
 `webUpdate` (api/update.go) — assembled by one function (`currentUpdate`)
 shared with `GET /api/update/status`, so the board key and the poller's

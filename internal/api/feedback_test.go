@@ -705,6 +705,15 @@ func TestFeedbackReadsSegregateActiveFromArchivedGenerationSharingSlug(t *testin
 	if len(archFeedback) != 1 || archFeedback[0].Note != "gen1 note" {
 		t.Fatalf("archived card's jobFeedback = %+v, want only gen1's row", archFeedback)
 	}
+	// the board reads the same answer out of its whole-board index: the two
+	// generations stay apart there too, each under its own id
+	index := feedbackIndex(st)
+	if got := webFeedbackFor(index, archived.ID); len(got) != 1 || got[0].Note != "gen1 note" {
+		t.Fatalf("archived card's indexed feedback = %+v, want only gen1's row", got)
+	}
+	if got := webFeedbackFor(index, gen2.ID); len(got) != 1 || got[0].Note != "gen2 note" {
+		t.Fatalf("active card's indexed feedback = %+v, want only gen2's row", got)
+	}
 
 	// sanity: two genuinely distinct job rows, both still readable straight
 	// by id even though their job_slug columns are identical strings.
