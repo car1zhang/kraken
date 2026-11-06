@@ -181,14 +181,16 @@ func registerRoutes(mux routeMux) {
 	// Zeus' own conversation tail for the steer modal's transcript panel
 	// (transcript.go). A read, so ungated.
 	mux.HandleFunc("/api/job/transcript", jobTranscriptHandler)
-	// The agent map (activity.go, jobmsg.go, mappos.go): the lead's event
-	// tail for the steer modal's events panel (a read, ungated); a cell's
-	// `kraken s` reporting a message to another cell's zeus (POST-only,
-	// gated at registration); and the saved card positions, whose GET stays
-	// open and whose POST gates itself inside the handler.
+	// The agent map (activity.go, jobmsg.go, mappos.go, mapdraw.go): the
+	// lead's event tail for the steer modal's events panel (a read,
+	// ungated); a cell's `kraken s` reporting a message to another cell's
+	// zeus (POST-only, gated at registration); and the saved card positions
+	// and drawings, whose GETs stay open and whose POSTs gate themselves
+	// inside the handler.
 	mux.HandleFunc("/api/job/events", jobEventsHandler)
 	mux.HandleFunc("/api/job/message", mirrorGated(jobMessageHandler))
 	mux.HandleFunc("/api/map/positions", mapPositionsHandler)
+	mux.HandleFunc("/api/map/drawings", mapDrawingsHandler)
 	mux.HandleFunc("/api/retry", webAction("retry", webRetry))
 	mux.HandleFunc("/api/kill", webAction("kill", webKill))
 	mux.HandleFunc("/api/steer", webAction("steer", webSteer))

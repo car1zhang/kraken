@@ -44,7 +44,7 @@ import type {
 } from "./types.ts";
 import type { Visibility } from "../lib/fleet.ts";
 // The mental model's wire types live in lib/mm.ts and not in api/types.ts,
-// which is the one inversion in this file's imports: the contract froze
+// which is an inversion in this file's imports: the contract froze
 // `MMItem` as a lib/mm.ts export because its two pure consumers there are
 // leaves, and a second copy of the shape here would be a second thing to keep
 // in step. Nothing in lib/mm.ts imports this module, so there is no cycle.
@@ -56,6 +56,9 @@ import type {
   MMSourceView,
 } from "../lib/mm.ts";
 import type { CaptureSource } from "../lib/mind.ts";
+// The same inversion for the map's drawing ops: lib/agentmap/drawings.ts
+// imports nothing from this module.
+import type { DrawOps } from "../lib/agentmap/drawings.ts";
 
 /**
  * Same origin in production (the bundle is served off the same mux as /api).
@@ -486,6 +489,26 @@ export async function saveMapPositions(
   changes: Record<string, [number, number]>,
 ): Promise<void> {
   await postJSON("/api/map/positions", { positions: changes });
+}
+
+/**
+ * Every saved agent-map drawing (GET /api/map/drawings), by id, as the server
+ * sent it: the caller puts it through lib/agentmap/drawings.ts'
+ * sanitizeDrawings before showing any of it.
+ */
+export async function fetchMapDrawings(signal?: AbortSignal): Promise<Record<string, unknown>> {
+  const res = await getJSON<{ drawings?: Record<string, unknown> | null } | null>("/api/map/drawings", signal);
+  return res?.drawings ?? {};
+}
+
+/**
+ * Apply drawing ops (POST /api/map/drawings): the server removes `remove`,
+ * then sets `set`, and keeps every id the call does not name. Both keys are
+ * always sent. `signal` lets the caller give up on a POST that does not
+ * answer (the map aborts one after DRAW_SAVE_TIMEOUT_MS).
+ */
+export async function saveMapDrawings(ops: DrawOps, signal?: AbortSignal): Promise<void> {
+  await postJSON("/api/map/drawings", { set: ops.set, remove: ops.remove }, signal);
 }
 
 /**

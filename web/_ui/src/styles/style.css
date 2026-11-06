@@ -4095,6 +4095,47 @@ button.spawn-chip.spawn-draft:hover { background: color-mix(in srgb, var(--ac) 1
 /* a toggle that is off (the characters switch) reads struck out */
 .map-hud-btn[aria-pressed="false"] { color: var(--muted); text-decoration: line-through; }
 
+/* Drawings. The layer sits at the top canvas' z-index (2), after the cards in
+   the markup, so it paints above every card (the world is z 1) and under the
+   crossing bubbles, the surface and the corner; it takes no pointer events.
+   Its one <g> carries the view as a transform, so it overflows the svg box. */
+.map-drawings {
+  position: absolute; left: 0; top: 0; width: 100%; height: 100%; z-index: 2;
+  overflow: visible; pointer-events: none;
+}
+.map-drawings path, .map-drawings line, .map-drawings rect, .map-drawings ellipse {
+  fill: none; stroke: var(--fg); stroke-linecap: round; stroke-linejoin: round;
+}
+.map-drawings text { fill: var(--fg); font-family: var(--mono); white-space: pre; }
+.map-drawings .erase-hit { stroke: var(--stopped); }
+.map-drawings text.erase-hit { fill: var(--stopped); }
+.map-drawings [data-draft="true"] { opacity: 0.7; }
+/* while a tool is armed: every press above the cards is the tool's; the
+   corner (z 3) stays clickable above it */
+#map-draw-surface {
+  position: absolute; inset: 0; z-index: 2;
+  cursor: crosshair;
+}
+#agent-map[data-tool="text"] #map-draw-surface { cursor: text; }
+#agent-map[data-tool="erase"] #map-draw-surface { cursor: cell; }
+/* the text tool's editor: no padding or border, so its text starts exactly at
+   the press, in the face, size and line height the drawing is drawn with */
+#map-text-input {
+  position: absolute; z-index: 4; margin: 0; padding: 0; border: 0;
+  font-family: var(--mono); line-height: 1.25; color: var(--fg);
+  background: color-mix(in srgb, var(--surface) 70%, transparent);
+  outline: 1px dashed var(--muted); outline-offset: 2px;
+  resize: none; overflow: hidden; white-space: pre; box-sizing: content-box;
+  user-select: text; -webkit-user-select: text;
+}
+/* the tool buttons wear the HUD buttons' look (they carry .map-hud-btn too);
+   an unarmed tool is not a switched-off toggle, so it undoes the struck-out
+   look .map-hud-btn[aria-pressed="false"] gives the characters switch */
+.map-tools { display: flex; gap: 2px; }
+.map-tool[aria-pressed="false"] { color: var(--body); text-decoration: none; }
+.map-tool[aria-pressed="false"]:hover { color: var(--fg); }
+.map-tool[aria-pressed="true"] { background: var(--ac); color: var(--accent-ink); border-color: var(--ac); }
+
 /* the steer modal's recent-activity disclosure (EventsPanel), where the zeus
    transcript panel was: the toggle wears the transcript head's look, the
    collapsed body is the card's activity band, the expanded one the list */

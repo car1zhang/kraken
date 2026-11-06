@@ -7,16 +7,50 @@ import {
   useRef,
   useState,
   type CSSProperties,
+  type KeyboardEvent as ReactKeyboardEvent,
   type MouseEvent as ReactMouseEvent,
+  type ReactNode,
+  type RefObject,
 } from "react";
 
-import { fetchMapPositions, saveMapPositions } from "../../api/client.ts";
+import {
+  ApiError,
+  fetchMapDrawings,
+  fetchMapPositions,
+  saveMapDrawings,
+  saveMapPositions,
+} from "../../api/client.ts";
 import type { WebJob } from "../../api/types.ts";
 import type { JobSearchModel } from "../../hooks/useJobSearch.ts";
 import { readLS, writeLS } from "../../hooks/useLocalStorage.ts";
 import { shouldStartDrag } from "../../hooks/useDragReorder.ts";
 import { leadPose, mapStatus } from "../../lib/agentmap/activity.ts";
 import { readPalette, type Palette } from "../../lib/agentmap/draw.ts";
+import {
+  DRAW_SAVE_TIMEOUT_MS,
+  DRAW_STROKE_PX,
+  DRAW_TEXT_PX,
+  DRAW_TOOLS,
+  ERASE_TOL_PX,
+  MAX_DRAWINGS,
+  MAX_PEN_POINTS,
+  MAX_TEXT_RUNES,
+  drawingBox,
+  hitDrawing,
+  newDrawingId,
+  penPath,
+  readUnsavedDrawOps,
+  sanitizeDrawings,
+  simplifyStroke,
+  trimDrawText,
+  validDrawing,
+  writeUnsavedDrawOps,
+  type DrawBox,
+  type DrawKind,
+  type DrawOps,
+  type DrawTool,
+  type Drawing,
+} from "../../lib/agentmap/drawings.ts";
 import {
   freeSpot,
   marqueeKeys,
@@ -262,7 +296,122 @@ type Drag =
       ly: number;
     }
   /** a press on the overview: its frame and page offset, held for the whole drag */
-  | { kind: "mini"; left: number; top: number; f: MiniFrame };
+  | { kind: "mini"; left: number; top: number; f: MiniFrame }
+  /**
+   * A press on the drawing surface with a shape tool armed. `wx`/`wy` is the
+   * rounded world point of the press, `cx`/`cy` the rounded world point of
+   * the last move, `pts` (pen only) every rounded point so far and `path`
+   * its path data, grown by one segment per new point rather than rebuilt,
+   * `size` the stroke width fixed at the press. `dead`: an Escape dropped
+   * the draft, so the release creates nothing.
+   */
+  | {
+      kind: "draw";
+      tool: ShapeKind;
+      sx: number;
+      sy: number;
+      left: number;
+      top: number;
+      wx: number;
+      wy: number;
+      cx: number;
+      cy: number;
+      pts: number[];
+      path: string;
+      size: number;
+      moved: boolean;
+      lx: number;
+      ly: number;
+      dead: boolean;
+    }
+  /** a press on the drawing surface with the eraser armed: every move erases too */
+  | { kind: "erase"; left: number; top: number };
+
+/** The kinds drawn by a press, a drag and a release; text has its own editor. */
+type ShapeKind = Exclude<DrawKind, "text">;
+
+/**
+ * The open text editor: `id` names this opening (a late blur from an editor
+ * already replaced commits nothing), `wx`/`wy` the rounded world point of
+ * the press, `size` the font size the committed drawing gets, world units.
+ * Both are fixed at the press; applyView puts the editor on that point
+ * through the camera, at `size` times the zoom.
+ */
+interface EditorAt {
+  id: number;
+  wx: number;
+  wy: number;
+  size: number;
+}
+
+/** Each tool button's label. */
+const TOOL_LABEL: Record<DrawTool, string> = {
+  pen: "pen",
+  line: "line",
+  rect: "rect",
+  ellipse: "oval",
+  text: "text",
+  erase: "erase",
+};
+const TOOL_TITLE: Record<DrawTool, string> = {
+  pen: "draw freehand",
+  line: "draw a straight line",
+  rect: "draw a rectangle",
+  ellipse: "draw an oval",
+  text: "write a label",
+  erase: "erase drawings",
+};
+/**
+ * Where a text line's baseline sits below the top of its line, in ems: the
+ * half-leading of the editor's 1.25 line height plus the mono face's ascent,
+ * so the committed text lands where the editor showed it.
+ */
+const TEXT_BASELINE_EM = 0.95;
+
+/** To at most one decimal place. */
+const round1 = (n: number) => Math.round(n * 10) / 10;
+/** To at most two decimal places (a new drawing's size). */
+const round2 = (n: number) => Math.round(n * 100) / 100;
+
+const noOps = (): DrawOps => ({ set: {}, remove: [] });
+const opsEmpty = (o: DrawOps) => o.remove.length === 0 && Object.keys(o.set).length === 0;
+/** Queue a set: it replaces any queued op on the same id. */
+function opSet(o: DrawOps, id: string, d: Drawing) {
+  o.set[id] = d;
+  if (o.remove.includes(id)) o.remove = o.remove.filter((r) => r !== id);
+}
+/** Queue a remove: any queued set of the id is dropped. */
+function opRemove(o: DrawOps, id: string) {
+  delete o.set[id];
+  if (!o.remove.includes(id)) o.remove.push(id);
+}
+/** `a` then `b`, as one op set: a later op on an id wins. */
+function mergeOps(a: DrawOps, b: DrawOps): DrawOps {
+  const out: DrawOps = { set: { ...a.set }, remove: [...a.remove] };
+  for (const id of b.remove) opRemove(out, id);
+  for (const [id, d] of Object.entries(b.set)) opSet(out, id, d);
+  return out;
+}
+/** The drawings `rec` holds once `ops` are applied: removes, then sets. */
+function applyOps(ops: DrawOps, rec: Record<string, Drawing>): Record<string, Drawing> {
+  const out = { ...rec };
+  for (const id of ops.remove) delete out[id];
+  for (const [id, d] of Object.entries(ops.set)) out[id] = d;
+  return out;
+}
+
+/**
+ * The geometry attributes of a pen, line, rect or ellipse element, world
+ * units: the same for a saved drawing (rendered by React) and the draft
+ * (written straight to its element as the pointer moves).
+ */
+function shapeGeom(kind: ShapeKind, p: readonly number[]): Record<string, string | number> {
+  if (kind === "pen") return { d: penPath(p as number[]) };
+  const [x1, y1, x2, y2] = p as [number, number, number, number];
+  if (kind === "line") return { x1, y1, x2, y2 };
+  if (kind === "rect") return { x: Math.min(x1, x2), y: Math.min(y1, y2), width: Math.abs(x2 - x1), height: Math.abs(y2 - y1) };
+  return { cx: (x1 + x2) / 2, cy: (y1 + y2) / 2, rx: Math.abs(x2 - x1) / 2, ry: Math.abs(y2 - y1) / 2 };
+}
 
 /**
  * The zoom the card layer is LAID OUT at for a view zoom `z`. Below 1 the
@@ -466,6 +615,29 @@ export interface MapViewProps {
  * row opens the job editor in new-job mode, as the column board's "+ NEW
  * JOB" does; the draft it creates arrives on the map like any other card.
  *
+ * Drawings (lib/agentmap/drawings.ts) are strokes, lines, rectangles, ovals
+ * and text labels on the plane, one SVG element each in `svg#map-drawings`,
+ * which paints above every card and below the corner and takes no pointer
+ * events. Its one `<g>` carries the view as a transform that applyView
+ * writes, so a drawing's geometry stays in world units and a pan or zoom
+ * changes one attribute. The tool row above the zoom buttons (`#map-tools`)
+ * arms one tool at a time; while one is armed, `#map-draw-surface` covers the
+ * map above the cards and takes every press there, so a card cannot be
+ * moved, opened or selected and the view does not pan (the wheel still
+ * pans and zooms). A shape is a gesture like a card drag: its draft is
+ * written straight to its element as the pointer moves, and the release adds
+ * the drawing. The text tool opens a textarea at the press instead, which
+ * applyView keeps on that world point through pans and zooms, and Enter, a
+ * blur or the map's unmount commits it. Escape drops a draft in flight, else
+ * disarms the tool, else empties the selection. Drawings save on their own
+ * queue, independent of the positions': every change is an op (`set` or
+ * `remove` by id), sent 400 ms after the last one with at most one POST in
+ * flight, kept in this browser (`kraken.mapDrawUnsaved`) until a POST
+ * carrying it succeeds, put back on a failure without a retry (a POST
+ * unanswered after 20 s is aborted and is one), dropped on a refusal (400
+ * or 413, which reloads the drawings), and sent once more on unmount. Neither waits for the other's load, and the drawings' load is
+ * applied under every op made before it answered.
+ *
  * The animation loop is built to be cheap on a board that is mostly asleep:
  * it reads no layout (sizes come from a ResizeObserver, the map's own size
  * from resize events, the palette from a theme change), allocates nothing in
@@ -601,6 +773,43 @@ export function MapView({ search, actions, boardNodeID, hidden }: MapViewProps) 
     },
     [rerender],
   );
+  // ---- drawings (see the header). The shown set is replaced, never
+  // mutated, on every change, so the memoized layer re-renders only then.
+  /** The armed tool, or none; never saved. Mirrored in a ref for the window's handlers. */
+  const [tool, setToolState] = useState<DrawTool | null>(null);
+  const toolRef = useRef<DrawTool | null>(null);
+  /** Ops restored from this browser at mount: shown at once, queued again, and applied over the load. */
+  const restoredDraw = useRef<DrawOps | null>(null);
+  if (restoredDraw.current === null) restoredDraw.current = readUnsavedDrawOps();
+  const [drawings, setDrawings] = useState<Record<string, Drawing>>(() => applyOps(restoredDraw.current!, {}));
+  const drawRef = useRef(drawings);
+  /** Ops not yet sent. */
+  const drawPending = useRef<DrawOps>(mergeOps(noOps(), restoredDraw.current));
+  /** The ops the one POST in flight carries, or null when none is. */
+  const drawInflight = useRef<DrawOps | null>(null);
+  /** A save came due (or the map unmounted) while a POST was in flight: send when it answers. */
+  const drawDue = useRef(false);
+  /** Every op made since mount, until the load answers and is applied under them; then null. */
+  const drawEarly = useRef<DrawOps | null>(mergeOps(noOps(), restoredDraw.current));
+  /** Which load may still apply its answer: a refusal's reload supersedes the one before it. */
+  const drawLoadSeq = useRef(0);
+  const drawTimer = useRef<number | null>(null);
+  const drawAlive = useRef(true);
+  /** The draft shape while a draw press is held: the element mounts with it, moves write to it. */
+  const [draft, setDraft] = useState<{ kind: ShapeKind; size: number } | null>(null);
+  const draftEl = useRef<SVGElement | null>(null);
+  const drawG = useRef<SVGGElement | null>(null);
+  /** The drawing the eraser is over (class `erase-hit`), written straight to its element. */
+  const eraseHit = useRef<string | null>(null);
+  const [editor, setEditor] = useState<EditorAt | null>(null);
+  const editorRef = useRef<EditorAt | null>(null);
+  const editorInput = useRef<HTMLTextAreaElement | null>(null);
+  /** The open editor's text as of its last change: what an unmount commits once the textarea is detached. */
+  const editorText = useRef("");
+  const editorSeq = useRef(0);
+  /** commitOpenEditor, for the drawings effect's cleanup (declared before the function itself). */
+  const commitOpenEditorRef = useRef<() => void>(() => {});
+
   /** The marquee: shown while a shift-drag is in flight; its rectangle is written straight to the element. */
   const [marqueeOn, setMarqueeOn] = useState(false);
   const marqueeRef = useRef<HTMLDivElement | null>(null);
@@ -1213,6 +1422,159 @@ export function MapView({ search, actions, boardNodeID, hidden }: MapViewProps) 
     };
   }, [nodes, dirty, draggedEarly, rerender, scheduleSave, markDirty, sendFinal]);
 
+  // ---- the saved drawings: their own queue, independent of the positions'
+
+  /** Every op not yet carried to success by a POST: the one in flight, then the pending ones. */
+  const queuedDrawOps = useCallback(() => mergeOps(drawInflight.current ?? noOps(), drawPending.current), []);
+  /** This browser's record is exactly the queued ops. */
+  const persistDrawOps = useCallback(() => writeUnsavedDrawOps(queuedDrawOps()), [queuedDrawOps]);
+
+  /**
+   * Ask for the saved drawings again (after a refusal) and show the answer
+   * with every queued op applied over it. It supersedes any load still
+   * waiting, the mount's included, whose ops-since-mount record would
+   * otherwise bring the refused ops back.
+   */
+  const reloadDrawings = useCallback(() => {
+    const seq = ++drawLoadSeq.current;
+    drawEarly.current = null;
+    fetchMapDrawings().then(
+      (d) => {
+        if (!drawAlive.current || seq !== drawLoadSeq.current) return;
+        drawRef.current = applyOps(queuedDrawOps(), sanitizeDrawings(d));
+        setDrawings(drawRef.current);
+      },
+      () => {},
+    );
+  }, [queuedDrawOps]);
+
+  /**
+   * Send everything pending in one POST; at most one is in flight. A flush
+   * while one is (the save timer, or the unmount) is remembered and runs
+   * when it answers, carrying every op queued by then, so an op never
+   * overtakes an older one on the same id. A failure (network, 5xx, 403)
+   * puts the ops back under every op made since, so a later erase still
+   * wins, and sends nothing by itself: the next change or the unmount
+   * carries them. A refusal (400 or 413) can never pass: its ops are dropped
+   * and the drawings reloaded, while ops queued after it save as usual. A
+   * POST not answered within DRAW_SAVE_TIMEOUT_MS is aborted, which is a
+   * failure like any other, so a hung request holds later saves for at most
+   * that long. Its timer belongs to the POST, not the mount: an unmount
+   * leaves it running, since the unmount's remaining ops go out only when
+   * this POST answers.
+   */
+  const flushDraw = useCallback(() => {
+    drawTimer.current = null;
+    if (drawInflight.current) {
+      drawDue.current = true;
+      return;
+    }
+    const ops = drawPending.current;
+    if (opsEmpty(ops)) return;
+    drawPending.current = noOps();
+    drawInflight.current = ops;
+    const answered = () => {
+      if (!drawDue.current) return;
+      drawDue.current = false;
+      flushDraw();
+    };
+    const ac = new AbortController();
+    const giveUp = window.setTimeout(() => ac.abort(), DRAW_SAVE_TIMEOUT_MS);
+    void saveMapDrawings(ops, ac.signal).then(
+      () => {
+        window.clearTimeout(giveUp);
+        drawInflight.current = null;
+        persistDrawOps();
+        answered();
+      },
+      (err: unknown) => {
+        window.clearTimeout(giveUp);
+        drawInflight.current = null;
+        const refused = err instanceof ApiError && (err.status === 400 || err.status === 413);
+        if (!refused) drawPending.current = mergeOps(ops, drawPending.current);
+        persistDrawOps();
+        if (refused && drawAlive.current) reloadDrawings();
+        answered();
+      },
+    );
+  }, [persistDrawOps, reloadDrawings]);
+
+  const scheduleDrawSave = useCallback(() => {
+    if (drawTimer.current !== null) window.clearTimeout(drawTimer.current);
+    drawTimer.current = window.setTimeout(() => flushDraw(), SAVE_DELAY_MS);
+  }, [flushDraw]);
+
+  /** Apply one op to what is shown and to every queue that tracks it, then save it later. */
+  const changeDrawings = useCallback(
+    (op: (o: DrawOps) => void, next: Record<string, Drawing>) => {
+      drawRef.current = next;
+      setDrawings(next);
+      op(drawPending.current);
+      if (drawEarly.current) op(drawEarly.current);
+      persistDrawOps();
+      scheduleDrawSave();
+    },
+    [persistDrawOps, scheduleDrawSave],
+  );
+  const addDrawing = useCallback(
+    (d: Drawing) => {
+      // a drawing the save route would refuse is never queued: it would hold
+      // every later op back with it. That covers a full map too (the route
+      // refuses a result past MAX_DRAWINGS); erasing still works there.
+      if (!validDrawing(d) || Object.keys(drawRef.current).length >= MAX_DRAWINGS) return;
+      const id = newDrawingId();
+      changeDrawings((o) => opSet(o, id, d), { ...drawRef.current, [id]: d });
+    },
+    [changeDrawings],
+  );
+  const removeDrawing = useCallback(
+    (id: string) => {
+      if (eraseHit.current === id) eraseHit.current = null;
+      const next = { ...drawRef.current };
+      delete next[id];
+      changeDrawings((o) => opRemove(o, id), next);
+    },
+    [changeDrawings],
+  );
+
+  useEffect(() => {
+    drawAlive.current = true;
+    let live = true;
+    const seq = drawLoadSeq.current;
+    const ac = new AbortController();
+    const settleLoad = (saved: Record<string, Drawing> | null) => {
+      // a refusal's reload, if one ran, has already applied everything
+      if (!live || seq !== drawLoadSeq.current) return;
+      const early = drawEarly.current;
+      drawEarly.current = null;
+      // a failed load shows none of the server's and blocks nothing
+      if (saved === null) return;
+      drawRef.current = applyOps(early ?? noOps(), saved);
+      setDrawings(drawRef.current);
+    };
+    fetchMapDrawings(ac.signal).then(
+      (d) => settleLoad(sanitizeDrawings(d)),
+      () => settleLoad(null),
+    );
+    // ops restored from this browser are queued again
+    if (!opsEmpty(drawPending.current)) scheduleDrawSave();
+    return () => {
+      live = false;
+      // an open editor is committed first, so its text rides the unmount's save
+      commitOpenEditorRef.current();
+      drawAlive.current = false;
+      ac.abort();
+      if (drawTimer.current !== null) {
+        window.clearTimeout(drawTimer.current);
+        drawTimer.current = null;
+      }
+      // leaving sends whatever is queued, a failed POST's ops included (they
+      // have no timer of their own), in one POST; with a POST in flight it
+      // goes when that one answers. Nothing is sent after that.
+      flushDraw();
+    };
+  }, [flushDraw, scheduleDrawSave]);
+
   // ---- pan and zoom
   /**
    * Put the view on the DOM. The card layer is laid out at `committedZ` (CSS
@@ -1240,6 +1602,26 @@ export function MapView({ search, actions, boardNodeID, hidden }: MapViewProps) 
     if (w) {
       const t = `translate(${v.x}px, ${v.y}px)`;
       if (w.style.transform !== t) w.style.transform = t;
+    }
+    // the drawings follow the view as one transform on their group; their
+    // own geometry stays in world units
+    const g = drawG.current;
+    if (g) {
+      const t = `translate(${v.x} ${v.y}) scale(${v.z})`;
+      if (g.getAttribute("transform") !== t) g.setAttribute("transform", t);
+    }
+    // an open text editor stays on the world point it was opened at, at the
+    // size its text will be drawn
+    const ed = editorRef.current;
+    const ta = editorInput.current;
+    if (ed && ta) {
+      const s = ta.style;
+      const l = `${ed.wx * v.z + v.x}px`;
+      const tp = `${ed.wy * v.z + v.y}px`;
+      const fs = `${ed.size * v.z}px`;
+      if (s.left !== l) s.left = l;
+      if (s.top !== tp) s.top = tp;
+      if (s.fontSize !== fs) s.fontSize = fs;
     }
     const z = zoomRef.current;
     if (z) {
@@ -1353,31 +1735,232 @@ export function MapView({ search, actions, boardNodeID, hidden }: MapViewProps) 
     return { x: (cx - left - v.x) / v.z, y: (cy - top - v.y) / v.z };
   }, []);
   /**
+   * The map's page offset, read from layout. A press reads it once (a press
+   * is not an animation frame) and keeps it for its drag, so a banner or chip
+   * row that appeared above the map since the last window resize does not put
+   * the gesture off the cursor; where layout cannot be read the resize
+   * handler's cached offset stands in.
+   */
+  const pageOffset = useCallback(() => {
+    let left = sizeRef.current.left;
+    let top = sizeRef.current.top;
+    try {
+      const r = rootRef.current?.getBoundingClientRect();
+      if (r && Number.isFinite(r.left) && Number.isFinite(r.top)) {
+        left = r.left;
+        top = r.top;
+      }
+    } catch {
+      // no layout to read: keep the cached offset
+    }
+    return { left, top };
+  }, []);
+  /**
    * Start a Shift press: the marquee drag, from page point (sx, sy), on a
-   * card (`card`) or on the background (null). The map's page offset is read
-   * from layout here, once per press (a press is not an animation frame), so
-   * a banner or chip row that appeared above the map since the last window
-   * resize does not put the box off the cursor; where layout cannot be read
-   * the resize handler's cached offset stands in.
+   * card (`card`) or on the background (null), with the page offset read at
+   * the press (pageOffset).
    */
   const startMarquee = useCallback(
     (sx: number, sy: number, card: string | null) => {
-      let left = sizeRef.current.left;
-      let top = sizeRef.current.top;
-      try {
-        const r = rootRef.current?.getBoundingClientRect();
-        if (r && Number.isFinite(r.left) && Number.isFinite(r.top)) {
-          left = r.left;
-          top = r.top;
-        }
-      } catch {
-        // no layout to read: keep the cached offset
-      }
+      const { left, top } = pageOffset();
       const w = toWorld(sx, sy, left, top);
       dragRef.current = { kind: "marquee", sx, sy, left, top, wx: w.x, wy: w.y, moved: false, card, lx: sx, ly: sy };
     },
-    [toWorld],
+    [toWorld, pageOffset],
   );
+
+  // ---- drawing gestures
+
+  /**
+   * The ids in the layer's order and each drawing's box, for the eraser:
+   * rebuilt only when the shown set is replaced, never per pointer move.
+   */
+  const hitIndex = useRef<{ rec: Record<string, Drawing> | null; ids: string[]; boxes: DrawBox[] }>({
+    rec: null,
+    ids: [],
+    boxes: [],
+  });
+  /** The drawing an eraser at world point (x, y) would delete: the latest in the layer's order that it touches. */
+  const drawingAt = useCallback((x: number, y: number): string | null => {
+    const rec = drawRef.current;
+    const ix = hitIndex.current;
+    if (ix.rec !== rec) {
+      ix.rec = rec;
+      ix.ids = Object.keys(rec).sort();
+      ix.boxes = ix.ids.map((id) => drawingBox(rec[id]!));
+    }
+    const tol = ERASE_TOL_PX / viewRef.current.z;
+    for (let i = ix.ids.length - 1; i >= 0; i--) {
+      const d = rec[ix.ids[i]!]!;
+      // a point farther than the reach from the box cannot touch the drawing
+      const r = tol + d.size / 2;
+      const b = ix.boxes[i]!;
+      if (x < b.x - r || x > b.x + b.w + r || y < b.y - r || y > b.y + b.h + r) continue;
+      if (hitDrawing(d, x, y, tol)) return ix.ids[i]!;
+    }
+    return null;
+  }, []);
+  /** Mark one drawing (or none) as the one the eraser is over; class writes only. */
+  const setEraseHit = useCallback((id: string | null) => {
+    if (eraseHit.current === id) return;
+    const g = drawG.current;
+    const find = (want: string) => {
+      if (!g) return null;
+      for (const el of Array.from(g.children)) if (el.getAttribute("data-draw-id") === want) return el;
+      return null;
+    };
+    if (eraseHit.current !== null) find(eraseHit.current)?.classList.remove("erase-hit");
+    eraseHit.current = id;
+    if (id !== null) find(id)?.classList.add("erase-hit");
+  }, []);
+  const eraseAt = useCallback(
+    (x: number, y: number) => {
+      const id = drawingAt(x, y);
+      if (id !== null) removeDrawing(id);
+    },
+    [drawingAt, removeDrawing],
+  );
+  /** Write the draft's geometry from the press in flight; writes only. */
+  const writeDraft = useCallback(() => {
+    const d = dragRef.current;
+    const el = draftEl.current;
+    if (!el || d?.kind !== "draw") return;
+    if (d.tool === "pen") {
+      if (el.getAttribute("d") !== d.path) el.setAttribute("d", d.path);
+      return;
+    }
+    const geom = shapeGeom(d.tool, [d.wx, d.wy, d.cx, d.cy]);
+    for (const [k, val] of Object.entries(geom)) el.setAttribute(k, String(val));
+  }, []);
+  /** The draft element mounts at the geometry the press already set. */
+  const setDraftEl = useCallback(
+    (el: SVGElement | null) => {
+      draftEl.current = el;
+      if (el) writeDraft();
+    },
+    [writeDraft],
+  );
+
+  /**
+   * Close the text editor `id` (a late blur from an editor already replaced
+   * does nothing). `value` null closes it without a drawing; otherwise the
+   * text trimmed of the whitespace the save route judges by (trimDrawText),
+   * cut to MAX_TEXT_RUNES, becomes a text drawing at the point and size fixed
+   * when it opened, unless nothing but whitespace is left (addDrawing's
+   * validDrawing check refuses that).
+   */
+  const closeEditor = useCallback(
+    (id: number, value: string | null) => {
+      const ed = editorRef.current;
+      if (!ed || ed.id !== id) return;
+      editorRef.current = null;
+      editorInput.current = null;
+      setEditor(null);
+      if (value === null) return;
+      const text = [...trimDrawText(value)].slice(0, MAX_TEXT_RUNES).join("");
+      addDrawing({ kind: "text", pts: [ed.wx, ed.wy], size: ed.size, text });
+    },
+    [addDrawing],
+  );
+  /** Commit the open editor, if any, with what it holds now (its last change once the textarea is detached). */
+  const commitOpenEditor = useCallback(() => {
+    const ed = editorRef.current;
+    if (ed) closeEditor(ed.id, editorInput.current?.value ?? editorText.current);
+  }, [closeEditor]);
+  commitOpenEditorRef.current = commitOpenEditor;
+
+  /**
+   * Arm a tool, or none. An open editor is committed first; a press in
+   * flight on the surface stops (a draft is dropped, an eraser stops
+   * erasing), since the surface it started on goes away or changes tool.
+   */
+  const armTool = useCallback(
+    (t: DrawTool | null) => {
+      if (toolRef.current === t) return;
+      commitOpenEditor();
+      const d = dragRef.current;
+      if (d?.kind === "erase") dragRef.current = null;
+      else if (d?.kind === "draw" && !d.dead) {
+        d.dead = true;
+        setDraft(null);
+      }
+      setEraseHit(null);
+      toolRef.current = t;
+      setToolState(t);
+    },
+    [commitOpenEditor, setEraseHit],
+  );
+
+  /**
+   * A press on the drawing surface. The compatibility mousedown's default is
+   * always prevented, whether or not it is the event handled: the focus move
+   * it would make would blur (and so commit) a text editor the press just
+   * opened. Nothing under the surface ever sees the press.
+   */
+  const onSurfacePointerDown = (ev: ReactMouseEvent<HTMLDivElement>) => {
+    if (ev.type === "mousedown" && (ev.button ?? 0) === 0) ev.preventDefault();
+    ev.stopPropagation();
+    if (!gestureEvent(ev)) return;
+    if (ev.button !== undefined && ev.button !== 0) return;
+    const t = toolRef.current;
+    if (!t || dragRef.current) return;
+    const { left, top } = pageOffset();
+    const sx = num(ev.clientX);
+    const sy = num(ev.clientY);
+    const w = toWorld(sx, sy, left, top);
+    const z = viewRef.current.z;
+    if (t === "text") {
+      commitOpenEditor();
+      const ed: EditorAt = {
+        id: ++editorSeq.current,
+        wx: round1(w.x),
+        wy: round1(w.y),
+        size: round2(DRAW_TEXT_PX / z),
+      };
+      editorRef.current = ed;
+      editorText.current = "";
+      setEditor(ed);
+      return;
+    }
+    if (t === "erase") {
+      setEraseHit(null);
+      dragRef.current = { kind: "erase", left, top };
+      eraseAt(w.x, w.y);
+      return;
+    }
+    const wx = round1(w.x);
+    const wy = round1(w.y);
+    const size = round2(DRAW_STROKE_PX / z);
+    dragRef.current = {
+      kind: "draw",
+      tool: t,
+      sx,
+      sy,
+      left,
+      top,
+      wx,
+      wy,
+      cx: wx,
+      cy: wy,
+      pts: [wx, wy],
+      path: penPath([wx, wy]),
+      size,
+      moved: false,
+      lx: sx,
+      ly: sy,
+      dead: false,
+    };
+    setDraft({ kind: t, size });
+  };
+  /** With the eraser armed and no press held, mark the drawing a press here would delete. */
+  const onSurfacePointerMove = (ev: ReactMouseEvent<HTMLDivElement>) => {
+    if (!gestureEvent(ev)) return;
+    if (toolRef.current !== "erase" || dragRef.current) return;
+    const { left, top } = pageOffset();
+    const w = toWorld(num(ev.clientX), num(ev.clientY), left, top);
+    setEraseHit(drawingAt(w.x, w.y));
+  };
+  const onSurfaceLeave = () => setEraseHit(null);
   /** The overview's frame for the cards and view as they stand. */
   const currentMiniFrame = useCallback(() => {
     const placedNow = entriesRef.current.map((e) => nodes.get(e.key)).filter((n): n is MapNode => !!n && finiteXY(n));
@@ -1488,7 +2071,8 @@ export function MapView({ search, actions, boardNodeID, hidden }: MapViewProps) 
   }, [zoomAt, applyView, persistView]);
 
   // ---- pointer: drag a card (or the selected group), pan the background,
-  // or draw the marquee
+  // draw the marquee, or carry on a drawing tool's press (a shape's draft, or
+  // the eraser)
   useEffect(() => {
     /** The cards on the map that have a place: what a marquee can select. */
     const placedNodes = () =>
@@ -1541,6 +2125,30 @@ export function MapView({ search, actions, boardNodeID, hidden }: MapViewProps) 
       if (d.kind === "mini") {
         const [wx, wy] = miniToWorld(num(ev.clientX) - d.left, num(ev.clientY) - d.top, d.f);
         centreOn(wx, wy);
+        return;
+      }
+      if (d.kind === "erase") {
+        const w = toWorld(num(ev.clientX), num(ev.clientY), d.left, d.top);
+        eraseAt(w.x, w.y);
+        return;
+      }
+      if (d.kind === "draw") {
+        if (d.dead) return;
+        const cx = num(ev.clientX);
+        const cy = num(ev.clientY);
+        d.lx = cx;
+        d.ly = cy;
+        if (Math.abs(cx - d.sx) + Math.abs(cy - d.sy) > DRAG_SLOP) d.moved = true;
+        const w = toWorld(cx, cy, d.left, d.top);
+        d.cx = round1(w.x);
+        d.cy = round1(w.y);
+        const n = d.pts.length;
+        if (d.tool === "pen" && (d.pts[n - 2] !== d.cx || d.pts[n - 1] !== d.cy)) {
+          d.pts.push(d.cx, d.cy);
+          // the same text penPath writes for this point
+          d.path += ` L ${String(d.cx)} ${String(d.cy)}`;
+        }
+        writeDraft();
         return;
       }
       const dx = num(ev.clientX) - d.sx;
@@ -1600,6 +2208,7 @@ export function MapView({ search, actions, boardNodeID, hidden }: MapViewProps) 
         persistView();
         return;
       }
+      if (d.kind === "erase") return;
       // The release point: the release event's own position, or the last
       // position a move reported when the release carries none. A browser's
       // release always carries one; an event built without coordinates reads
@@ -1616,6 +2225,27 @@ export function MapView({ search, actions, boardNodeID, hidden }: MapViewProps) 
         cx = given ? ex : d.lx;
         cy = given ? ey : d.ly;
         far = Math.abs(cx - d.sx) + Math.abs(cy - d.sy) > DRAG_SLOP;
+      }
+      if (d.kind === "draw") {
+        // the draft goes in every case; a drawing is made only by a real
+        // drag that no Escape or cancel ended
+        setDraft(null);
+        if (d.dead || ev.type === "pointercancel" || (!d.moved && !far)) return;
+        const w = toWorld(cx, cy, d.left, d.top);
+        const ex = round1(w.x);
+        const ey = round1(w.y);
+        let pts: number[];
+        if (d.tool === "pen") {
+          const raw = d.pts.slice();
+          const n = raw.length;
+          if (raw[n - 2] !== ex || raw[n - 1] !== ey) raw.push(ex, ey);
+          pts = simplifyStroke(raw, 1 / viewRef.current.z, MAX_PEN_POINTS);
+        } else {
+          pts = [d.wx, d.wy, ex, ey];
+          if ((d.tool === "rect" || d.tool === "ellipse") && (ex === d.wx || ey === d.wy)) return;
+        }
+        addDrawing({ kind: d.tool, pts, size: d.size });
+        return;
       }
       if (d.kind === "pan") {
         persistView();
@@ -1709,6 +2339,9 @@ export function MapView({ search, actions, boardNodeID, hidden }: MapViewProps) 
     setSelection,
     marqueeHits,
     gestureEvent,
+    eraseAt,
+    writeDraft,
+    addDrawing,
   ]);
 
   const onCardPointerDown = useCallback(
@@ -1781,7 +2414,8 @@ export function MapView({ search, actions, boardNodeID, hidden }: MapViewProps) 
     if (!gestureEvent(ev)) return;
     if (ev.button !== undefined && ev.button !== 0) return;
     const t = ev.target as Element | null;
-    if (t && typeof t.closest === "function" && t.closest(".map-card, .map-corner")) return;
+    // the drawing surface stops its own presses; the text editor's are the editor's
+    if (t && typeof t.closest === "function" && t.closest(".map-card, .map-corner, #map-draw-surface, #map-text-input")) return;
     // a second finger never takes over a card drag or a marquee (see onMiniPointerDown)
     const cur = dragRef.current?.kind;
     if (cur === "card" || cur === "marquee") return;
@@ -1797,26 +2431,39 @@ export function MapView({ search, actions, boardNodeID, hidden }: MapViewProps) 
     rootRef.current?.classList.add("panning");
   };
 
-  // Escape empties the selection, but only an Escape meant for the map. The
-  // listener is on the window in the bubble phase, so it sees a key last:
+  // Escape, but only an Escape meant for the map. The listener is on the
+  // window in the bubble phase, so it sees a key last:
   //  - an open overlay (steer, editor, thread, artifact, usage) closes through
   //    useEscapeStack's document listener, which calls preventDefault, so
   //    `defaultPrevented` says the key was spent;
   //  - the search box, a goal edit, a menu and a thread rename stop the key
   //    from propagating, so it never arrives here;
   //  - an Escape typed in any other text field (an input, a textarea, a
-  //    contenteditable) is that field's, so it is ignored too.
-  // An Escape with nothing else to do still empties the selection.
+  //    contenteditable, the map's own text editor) is that field's, so it is
+  //    ignored too.
+  // An Escape meant for the map does one thing, the first that applies: it
+  // drops a draft whose press is still held (the tool stays armed), else it
+  // disarms the armed tool, else it empties the selection.
   useEffect(() => {
     const onKey = (ev: KeyboardEvent) => {
-      if (ev.key !== "Escape" || ev.defaultPrevented || hidden || !selRef.current.size) return;
+      if (ev.key !== "Escape" || ev.defaultPrevented || hidden) return;
       const t = ev.target;
       if (t instanceof HTMLElement && (t.isContentEditable || t.closest("input, textarea, select"))) return;
-      setSelection(new Set());
+      const d = dragRef.current;
+      if (d?.kind === "draw" && !d.dead) {
+        d.dead = true;
+        setDraft(null);
+        return;
+      }
+      if (toolRef.current) {
+        armTool(null);
+        return;
+      }
+      if (selRef.current.size) setSelection(new Set());
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [hidden, setSelection]);
+  }, [hidden, setSelection, armTool]);
 
   // ---- the animation loop. An ordinary frame reads no layout and runs no
   // physics; it redraws only what is due.
@@ -2139,6 +2786,7 @@ export function MapView({ search, actions, boardNodeID, hidden }: MapViewProps) 
       id="agent-map"
       hidden={hidden}
       ref={rootRef}
+      data-tool={tool ?? undefined}
       onPointerDown={onRootPointerDown}
       onMouseDown={onRootPointerDown}
       aria-label="agent map"
@@ -2174,13 +2822,46 @@ export function MapView({ search, actions, boardNodeID, hidden }: MapViewProps) 
           })}
         </div>
       </div>
+      <DrawLayer drawings={drawings} draft={draft} gRef={drawG} draftRef={setDraftEl} />
       {actorsOn && <canvas className="map-over" ref={overRef} aria-hidden="true" />}
       {/* the shift-drag marquee, only while one is in flight; MapView writes
           its rectangle straight to the element as the pointer moves */}
       {marqueeOn && <div id="map-marquee" ref={setMarqueeEl} aria-hidden="true" />}
-      {/* the bottom-left corner: the zoom buttons above the overview, so
-          the overview never covers them */}
+      {/* while a tool is armed, every press on the map above the cards is
+          the tool's */}
+      {tool && (
+        <div
+          id="map-draw-surface"
+          aria-hidden="true"
+          onPointerDown={onSurfacePointerDown}
+          onMouseDown={onSurfacePointerDown}
+          onPointerMove={onSurfacePointerMove}
+          onMouseMove={onSurfacePointerMove}
+          onPointerLeave={onSurfaceLeave}
+          onMouseLeave={onSurfaceLeave}
+        />
+      )}
+      {editor && (
+        <TextEditor key={editor.id} at={editor} inputRef={editorInput} textRef={editorText} onClose={closeEditor} />
+      )}
+      {/* the bottom-left corner: the drawing tools, then the zoom buttons,
+          above the overview, so the overview never covers them */}
       <div className="map-corner">
+        <div id="map-tools" className="map-tools" role="toolbar" aria-label="drawing tools">
+          {DRAW_TOOLS.map((t) => (
+            <button
+              key={t}
+              type="button"
+              className="map-hud-btn map-tool"
+              data-tool={t}
+              aria-pressed={tool === t}
+              title={TOOL_TITLE[t]}
+              onClick={() => armTool(toolRef.current === t ? null : t)}
+            >
+              {TOOL_LABEL[t]}
+            </button>
+          ))}
+        </div>
         <div className="map-hud">
           {/* the column board's "+ NEW JOB", which the map has no draft
               column to carry: the same id, since only one of the two views
@@ -2361,3 +3042,137 @@ const MapCard = memo(function MapCard({
     </div>
   );
 }, sameCard);
+
+interface DrawLayerProps {
+  drawings: Record<string, Drawing>;
+  /** The shape being drawn, while its press is held: its element mounts here and MapView writes its geometry. */
+  draft: { kind: ShapeKind; size: number } | null;
+  /** The group MapView's applyView puts the view on, as a transform. */
+  gRef: RefObject<SVGGElement | null>;
+  draftRef: (el: SVGElement | null) => void;
+}
+
+/**
+ * The drawings layer: one element per drawing in ascending id order, then
+ * the draft. Memoized, so a board poll (which re-renders MapView) leaves it
+ * alone; it re-renders when a drawing is added or erased, or a draft starts
+ * or ends, never per pointer move.
+ */
+const DrawLayer = memo(function DrawLayer({ drawings, draft, gRef, draftRef }: DrawLayerProps) {
+  const ids = useMemo(() => Object.keys(drawings).sort(), [drawings]);
+  let draftEl: ReactNode = null;
+  if (draft) {
+    const p = { "data-draft": "true", ref: draftRef, strokeWidth: draft.size };
+    if (draft.kind === "pen") draftEl = <path {...p} />;
+    else if (draft.kind === "line") draftEl = <line {...p} />;
+    else if (draft.kind === "rect") draftEl = <rect {...p} />;
+    else draftEl = <ellipse {...p} />;
+  }
+  return (
+    <svg id="map-drawings" className="map-drawings" aria-hidden="true">
+      <g ref={gRef}>
+        {ids.map((id) => (
+          <DrawingEl key={id} id={id} d={drawings[id]!} />
+        ))}
+        {draftEl}
+      </g>
+    </svg>
+  );
+});
+
+/**
+ * One saved drawing. Re-rendered only when its drawing object changes (they
+ * are replaced, never mutated); its class is MapView's to write (the
+ * eraser's `erase-hit`), so it sets none.
+ */
+const DrawingEl = memo(function DrawingEl({ id, d }: { id: string; d: Drawing }) {
+  if (d.kind === "text") {
+    const [x, y] = d.pts as [number, number];
+    const lines = (d.text ?? "").split("\n");
+    return (
+      <text data-draw-id={id} data-kind="text" x={x} y={y} fontSize={d.size}>
+        {lines.map((line, i) => (
+          // each line's baseline sits where the editor's line box put it
+          <tspan key={i} x={x} y={y + d.size * (1.25 * i + TEXT_BASELINE_EM)}>
+            {line}
+          </tspan>
+        ))}
+      </text>
+    );
+  }
+  const p = { "data-draw-id": id, "data-kind": d.kind, strokeWidth: d.size, ...shapeGeom(d.kind, d.pts) };
+  if (d.kind === "pen") return <path {...p} />;
+  if (d.kind === "line") return <line {...p} />;
+  if (d.kind === "rect") return <rect {...p} />;
+  return <ellipse {...p} />;
+});
+
+interface TextEditorProps {
+  at: EditorAt;
+  inputRef: RefObject<HTMLTextAreaElement | null>;
+  /** Kept at the text as of the last change, for a commit after the textarea is gone. */
+  textRef: RefObject<string>;
+  onClose: (id: number, value: string | null) => void;
+}
+
+/**
+ * The text tool's editor, focused on mount. MapView's applyView places it
+ * (left, top, font size) on its world point through the camera, so this
+ * sets no position. Its text sits at the textarea's top-left corner with no
+ * padding or border, in the face and line height the committed drawing is
+ * drawn with, and it grows with what is typed. Enter (without Shift, and not
+ * while an input method is composing) or a blur commits; Escape closes it
+ * with nothing made, and goes no further, so the tool stays armed.
+ */
+function TextEditor({ at, inputRef, textRef, onClose }: TextEditorProps) {
+  const [value, setValue] = useState("");
+  const local = useRef<HTMLTextAreaElement | null>(null);
+  useLayoutEffect(() => {
+    local.current?.focus();
+  }, []);
+  const setEl = useCallback(
+    (el: HTMLTextAreaElement | null) => {
+      // the next editor's mount may already have taken the shared ref
+      if (el) inputRef.current = el;
+      else if (inputRef.current === local.current) inputRef.current = null;
+      local.current = el;
+    },
+    [inputRef],
+  );
+  const onKeyDown = (ev: ReactKeyboardEvent<HTMLTextAreaElement>) => {
+    // an Enter that confirms an input method's candidate is the method's
+    const composing = ev.nativeEvent.isComposing || ev.keyCode === 229;
+    if (ev.key === "Enter" && !ev.shiftKey && !composing) {
+      ev.preventDefault();
+      onClose(at.id, ev.currentTarget.value);
+    } else if (ev.key === "Escape") {
+      ev.preventDefault();
+      ev.stopPropagation();
+      onClose(at.id, null);
+    }
+  };
+  const lines = value.split("\n");
+  let cols = 0;
+  for (const l of lines) cols = Math.max(cols, [...l].length);
+  const style: CSSProperties = {
+    width: `${cols + 2}ch`,
+    height: `${lines.length * 1.25}em`,
+  };
+  return (
+    <textarea
+      id="map-text-input"
+      ref={setEl}
+      style={style}
+      value={value}
+      rows={1}
+      spellCheck={false}
+      aria-label="map text"
+      onChange={(ev) => {
+        textRef.current = ev.currentTarget.value;
+        setValue(ev.currentTarget.value);
+      }}
+      onKeyDown={onKeyDown}
+      onBlur={(ev) => onClose(at.id, ev.currentTarget.value)}
+    />
+  );
+}
