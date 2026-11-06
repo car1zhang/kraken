@@ -17,8 +17,9 @@ import (
 // behind a written record; and direct, the one-agent override a quick job's
 // spec opens with (or the operator types) that makes zeus run aim/info/do
 // itself with no crew — plus humanizer, vendored unchanged from
-// github.com/blader/humanizer, the edit pass zeus' brief applies to every
-// operator-facing text — embedded into the binary at build time. Root's
+// github.com/blader/humanizer, the writing rule zeus' brief makes mandatory
+// on every artifact and that each artifact-writing skill carries the
+// procedure for — embedded into the binary at build time. Root's
 // skills_embed.go assigns this during init(), sub-FS'd to the .claude/skills
 // root so each top-level entry here is one skill's own directory. Left nil
 // when the jobs package is exercised without root's init running (e.g. unit

@@ -79,25 +79,81 @@ func TestSkillsFSContainsExpectedSkills(t *testing.T) {
 // skill it is then followed in tandem with is the real stage: a `direct`
 // stage would badge every quick job with a word that is not a phase. `mind`
 // is the system prompt of a headless mind run, which has no cell to badge.
-// `humanizer` is an edit pass zeus' brief applies to every operator-facing
-// text in every phase, so a read of it says nothing about which phase a cell
-// is in.
+// `humanizer` is the writing rule every artifact-writing skill applies in
+// every phase, so a read of it says nothing about which phase a cell is in.
 var nonStageSkills = map[string]bool{"load": true, "handoff": true, "direct": true, "mind": true, "humanizer": true}
 
+// humanizerSkillPath is the worktree-relative path every mandate names; the
+// skill is materialized there in each cell, and the tests below check the
+// path resolves in the bundle so no instruction points at nothing.
+const humanizerSkillPath = ".claude/skills/humanizer/SKILL.md"
+
 // TestHermesReadsHumanizer pins the operator's rule that every hermes reads
-// the humanizer skill. The contract is the load-bearing copy, since every
-// hermes brief must send its renderer there and the renderer must read it in
-// full; the aim and info brief lists name it as well so a lead writing a brief
-// sees the requirement. The path must resolve in the bundle, or the
-// instruction points at nothing.
+// the humanizer skill BEFORE it writes a label. The contract is the
+// load-bearing copy, since every hermes brief must send its renderer there
+// and the renderer must read it in full; the aim and info brief lists name it
+// as well so a lead writing a brief sees the requirement.
 func TestHermesReadsHumanizer(t *testing.T) {
-	const path = ".claude/skills/humanizer/SKILL.md"
-	if _, err := fs.ReadFile(jobs.SkillsFS, strings.TrimPrefix(path, ".claude/skills/")); err != nil {
-		t.Fatalf("%s is not in the embedded bundle: %v", path, err)
+	if _, err := fs.ReadFile(jobs.SkillsFS, strings.TrimPrefix(humanizerSkillPath, ".claude/skills/")); err != nil {
+		t.Fatalf("%s is not in the embedded bundle: %v", humanizerSkillPath, err)
 	}
 	for _, file := range []string{"aim/assets/hermes-contract.md", "aim/SKILL.md", "info/SKILL.md"} {
-		if !strings.Contains(readEmbedded(t, file), path) {
-			t.Errorf("%s no longer names %s — hermes would render labels without the humanizer pass", file, path)
+		if !strings.Contains(readEmbedded(t, file), humanizerSkillPath) {
+			t.Errorf("%s no longer names %s — hermes would render labels without the humanizer pass", file, humanizerSkillPath)
+		}
+	}
+	// the renderer reads it before its first label, not after: the contract
+	// is the only text hermes reads in full, so a weakening here to an
+	// after-the-fact pass is invisible everywhere else
+	contract := readEmbedded(t, "aim/assets/hermes-contract.md")
+	for _, want := range []string{"Before you write a single label, Read `" + humanizerSkillPath + "`", "in full"} {
+		if !strings.Contains(contract, want) {
+			t.Errorf("hermes-contract.md no longer says %q — hermes would write labels before reading the skill", want)
+		}
+	}
+}
+
+// TestArtifactSkillsMandateHumanizer pins the operator's rule that every
+// user-facing artifact is written under the humanizer skill (job 803):
+// zeus and hermes always write artifacts with it in mind, never as an edit
+// pass left for the end. The brief states the rule in one clause
+// (internal/jobs' TestZeusBriefNamesHumanizer); the PROCEDURE — read the
+// skill in full before the first artifact of the phase, write in its
+// embedded mode, check each artifact before it lands in the set root — is
+// each artifact-writing skill's own, and every one of them is pinned here
+// because each is read INSTEAD of the others: aim and info on the two doc
+// paths, do for the build report and the contract, dream for the night's
+// report, handoff for the handoff doc, and direct because a direct job
+// writes every artifact itself with no teammate brief to carry the pass.
+// Deleting the clause from any one file is otherwise silent, and the
+// symptom is an artifact set on the board that reads like a chatbot wrote
+// it. The pinned substrings are the operative clause all six copies share,
+// not each file's wording around it.
+func TestArtifactSkillsMandateHumanizer(t *testing.T) {
+	if _, err := fs.ReadFile(jobs.SkillsFS, strings.TrimPrefix(humanizerSkillPath, ".claude/skills/")); err != nil {
+		t.Fatalf("%s is not in the embedded bundle: %v", humanizerSkillPath, err)
+	}
+	for _, skill := range []string{"aim", "info", "do", "dream", "handoff", "direct"} {
+		text := readEmbedded(t, skill+"/SKILL.md")
+		for _, want := range []string{
+			"written under `" + humanizerSkillPath + "`",
+			"Read it in full before writing the first artifact",
+			"embedded mode",
+		} {
+			if !strings.Contains(text, want) {
+				t.Errorf(".claude/skills/%s/SKILL.md no longer says %q — the artifacts that skill writes "+
+					"would ship without the humanizer pass", skill, want)
+			}
+		}
+	}
+	// the mandate never silently rewrites what an artifact SAYS: the five
+	// skills that write artifacts themselves each carry the content guard
+	// in the same words, so a drop of it in one file is a drop of the whole
+	// guard on that path
+	for _, skill := range []string{"aim", "info", "do", "dream", "handoff"} {
+		if !strings.Contains(readEmbedded(t, skill+"/SKILL.md"), "It edits wording, never content") {
+			t.Errorf(".claude/skills/%s/SKILL.md no longer carries the wording-never-content guard — "+
+				"the pass could then drop a fact, a count or a code ref from an artifact", skill)
 		}
 	}
 }

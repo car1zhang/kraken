@@ -219,11 +219,16 @@ func zeusBrief(j *Job) string {
 	// raise or dismiss one (jobs/mmflags.go refuses any other session on a
 	// job's flag), and a pending flag left unsettled never reaches carl.
 	// The humanizer clause rides this sentence for the same every-moment
-	// reason and covers the same texts: it is the edit pass after the
-	// calibration. The skill is vendored from upstream byte for byte
-	// (.claude/skills/humanizer/UPSTREAM.md), so WHEN it applies has to live
-	// here rather than in its SKILL.md.
-	b.WriteString("Before writing anything " + op + " reads — an overview, a caption, a final message, a report — check what they know (the full `kraken` binary, as its own command: a guardrail kills any compound with a bare `k`): `kraken mm get --q \"<subject>\"` (plus `--file <path>` per file you cite), `kraken mm show <id>` for each relevant hit, `kraken mm source <id>` only when the body is not enough. Abstract what they know, spell out what they do not, then edit the draft against `.claude/skills/humanizer/SKILL.md` (skill-fixed formats stay verbatim); carry the same '" + op + " knows / is unfamiliar with' lines and that edit pass into every teammate brief. Any agent that sees an item contradicting another or the work runs `kraken mm flag --item <id> --note \"<why>\"` and proceeds; only you, the lead, run `kraken mm flag raise <id> --note \"<why>\"` or `kraken mm flag dismiss <id> --note \"<why>\"`: settle every pending flag before you stop and say so in your final message.\n")
+	// reason and covers the same texts. It is a MANDATE, not an edit pass:
+	// every artifact in the set root is written under the skill, and the
+	// brief carries the rule while each artifact-writing skill (aim, info,
+	// do, dream, handoff, direct) carries the procedure — read it in full
+	// before the first artifact, embedded mode, checked before it lands —
+	// pinned by root's TestArtifactSkillsMandateHumanizer. The skill itself
+	// is vendored from upstream byte for byte
+	// (.claude/skills/humanizer/UPSTREAM.md), so WHEN it applies can never
+	// live in its SKILL.md.
+	b.WriteString("Before writing anything " + op + " reads — an artifact, a caption, a final message — check what they know (spelled `kraken`, its own command: a guardrail kills any compound with a bare `k`): `kraken mm get --q \"<subject>\"` (plus `--file <path>` per file you cite), `kraken mm show <id>` for each relevant hit, `kraken mm source <id>` when the body is not enough. Abstract what they know, spell out what they do not, writing under `.claude/skills/humanizer/SKILL.md` (mandatory on every artifact in the set root; skill-fixed formats stay verbatim); carry the same '" + op + " knows / is unfamiliar with' lines and that pass into every teammate brief. Any agent that sees an item contradict another or the work runs `kraken mm flag --item <id> --note \"<why>\"` and proceeds; only you, the lead, run `kraken mm flag raise <id> --note \"<why>\"` or `kraken mm flag dismiss <id> --note \"<why>\"`: settle every pending flag before you stop and say so in your final message.\n")
 	b.WriteString("`[image: <path>]` lines in specs or steering messages are images " + op + " attached — treat their visual content as part of the message (Claude Code auto-reads them; Read the path if it wasn't ingested).\n")
 	// The tier is RESOLVED rather than named: zeus is spawned on
 	// zeusLaunchModel(j) — codexZeusModel(j) for a codex cell, the same rule

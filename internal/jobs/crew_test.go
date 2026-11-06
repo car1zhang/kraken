@@ -517,6 +517,17 @@ const zeusBriefCeiling = 13_500
 // unchanged at nine. Nine bytes is arithmetic, not headroom: the next clause
 // here has to be funded by a trim or a move, as this one was.
 //
+// RESTATED 2026-11-06 for the humanizer MANDATE (job 803), under the same
+// condition: the ceiling did NOT move. The clause's "then edit the draft
+// against" became "writing under … (mandatory on every artifact in the set
+// root; …)", funded by trims in the same sentence: the texts list lost
+// "a report" for "an artifact" (which now names the thing the mandate is
+// on), the guardrail aside lost "the full … binary, as", the source rung
+// lost "only", the teammate clause lost "edit", and "contradicting" became
+// "contradict". The procedure went to the skills, where it belongs.
+// Measured: 13,491 -> 13,488 at the 48-char slug, leaving **12** under the
+// ceiling, interpolation count unchanged at nine.
+//
 // However much headroom the latest restatement records — read the live number
 // from the test log, never from prose here — the way to fund a new clause is
 // unchanged: look for a trim in the paragraph the clause belongs to first
@@ -1071,22 +1082,28 @@ func TestZeusBriefNamesDirect(t *testing.T) {
 	}
 }
 
-// TestZeusBriefNamesHumanizer pins the one clause that makes every cell use
-// the vendored humanizer skill. The skill's SKILL.md is upstream's, byte for
-// byte, so nothing inside it can say when a cell applies it; the brief is the
-// only place that does, and it is in context every turn, in every phase and
-// in a job that runs none. The teammate half is pinned too, since operator
-// prose a teammate writes would otherwise skip the pass.
+// TestZeusBriefNamesHumanizer pins the clause that makes every cell use the
+// vendored humanizer skill. The skill's SKILL.md is upstream's, byte for
+// byte, so nothing inside it can say when a cell applies it. The brief
+// states the RULE — mandatory on every artifact in the set root — and is in
+// context every turn, in every phase and in a job that runs none; the
+// procedure (read in full before the first artifact, embedded mode, checked
+// before it lands) is each artifact-writing skill's, pinned by root's
+// TestArtifactSkillsMandateHumanizer. The teammate half is pinned here too,
+// since operator prose a teammate writes would otherwise skip the pass.
 func TestZeusBriefNamesHumanizer(t *testing.T) {
 	for _, j := range []*Job{{Slug: "humanizer-plain"}, {Slug: "humanizer-solo", Solo: true}} {
 		brief := zeusBrief(j)
 		for _, want := range []string{
-			"edit the draft against `.claude/skills/humanizer/SKILL.md`",
+			"writing under `.claude/skills/humanizer/SKILL.md`",
+			// the mandate, worded on the ARTIFACT: "edit the draft against"
+			// read as an optional pass after the fact, and cells skipped it
+			"mandatory on every artifact in the set root",
 			// the humanizer bans one-line closers, bold labels and dashes,
 			// which are exactly the shapes of the skills' fixed closing lines
 			// (`manual test ready: …`) and PR titles
-			"(skill-fixed formats stay verbatim)",
-			"and that edit pass into every teammate brief",
+			"skill-fixed formats stay verbatim",
+			"and that pass into every teammate brief",
 		} {
 			if !strings.Contains(brief, want) {
 				t.Errorf("%s (solo=%v) brief missing %q — cells would ship operator-facing text "+
