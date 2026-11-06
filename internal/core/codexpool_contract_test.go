@@ -520,7 +520,7 @@ func TestContractCxpSlotUsageWithCredsButNoEvidenceIsAZeroPercentRow(t *testing.
 		t.Fatalf("NoCreds = true — the slot holds an auth.json; only the usage evidence is missing")
 	}
 	if got.Session == nil {
-		t.Fatalf("Session = nil — a no-evidence slot is eligible at 0 percent, which needs a non-nil Session")
+		t.Fatalf("Session = nil — a no-evidence slot is eligible at 0 percent, which with no weekly window needs a non-nil Session")
 	}
 	if got.Session.Percent != 0 || got.Session.ResetsAt != 0 {
 		t.Errorf("Session = %+v, want {Percent: 0, ResetsAt: 0}", got.Session)

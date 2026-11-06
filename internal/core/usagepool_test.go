@@ -105,6 +105,67 @@ func TestParseUsageResponseFallback(t *testing.T) {
 	}
 }
 
+// A limits list with no session entry and no five_hour object yields a nil
+// session window beside the windows the list did carry.
+func TestParseUsageResponseLimitsWithoutSession(t *testing.T) {
+	const body = `{"limits": [
+    {"kind": "weekly_all", "percent": 35, "resets_at": "2026-11-09T08:59:59Z", "scope": null},
+    {"kind": "weekly_scoped", "percent": 42, "resets_at": "2026-11-09T08:59:59Z",
+      "scope": {"model": {"id": null, "display_name": "Fable"}, "surface": null}}
+  ]}`
+	session, weekly, models, err := parseUsageResponse([]byte(body))
+	if err != nil {
+		t.Fatalf("parseUsageResponse: %v", err)
+	}
+	if session != nil {
+		t.Errorf("session = %+v, want nil", session)
+	}
+	if weekly == nil || weekly.Percent != 35 {
+		t.Fatalf("weekly = %+v, want 35%%", weekly)
+	}
+	if len(models) != 1 || models[0].Name != "Fable" || models[0].Percent != 42 {
+		t.Fatalf("models = %+v, want one Fable window at 42%%", models)
+	}
+}
+
+// The top-level objects fill only the windows the limits list left out: here
+// the list has no session entry, so five_hour supplies it, while the list's
+// own weekly entry wins over seven_day.
+func TestParseUsageResponseTopLevelFillsMissingWindows(t *testing.T) {
+	const body = `{
+  "limits": [
+    {"kind": "weekly_all", "percent": 35, "resets_at": "2026-11-09T08:59:59Z", "scope": null}
+  ],
+  "five_hour": {"utilization": 12, "resets_at": "2026-11-06T05:00:00Z"},
+  "seven_day": {"utilization": 99, "resets_at": "2026-11-09T08:59:59Z"}
+}`
+	session, weekly, _, err := parseUsageResponse([]byte(body))
+	if err != nil {
+		t.Fatalf("parseUsageResponse: %v", err)
+	}
+	if session == nil || session.Percent != 12 || session.ResetsAt == 0 {
+		t.Fatalf("session = %+v, want 12%% with a reset time from five_hour", session)
+	}
+	if weekly == nil || weekly.Percent != 35 {
+		t.Fatalf("weekly = %+v, want the limits entry's 35%%", weekly)
+	}
+}
+
+// A session entry in the limits list is never overridden by five_hour.
+func TestParseUsageResponseLimitsSessionWinsOverFiveHour(t *testing.T) {
+	const body = `{
+  "limits": [{"kind": "session", "percent": 53, "resets_at": "2026-11-06T05:00:00Z", "scope": null}],
+  "five_hour": {"utilization": 7, "resets_at": "2026-11-06T05:00:00Z"}
+}`
+	session, _, _, err := parseUsageResponse([]byte(body))
+	if err != nil {
+		t.Fatalf("parseUsageResponse: %v", err)
+	}
+	if session == nil || session.Percent != 53 {
+		t.Fatalf("session = %+v, want the limits entry's 53%%", session)
+	}
+}
+
 func TestParseUsageResponseSkipsEmptyModelName(t *testing.T) {
 	const body = `{"limits": [
     {"kind": "weekly_scoped", "percent": 5, "resets_at": "", "scope": {"model": {"display_name": ""}}}
