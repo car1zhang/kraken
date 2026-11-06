@@ -1,6 +1,7 @@
 import { Fragment, useState, type CSSProperties, type ReactNode } from "react";
 
 import type { WebJob } from "../../api/types.ts";
+import { mapStatus } from "../../lib/agentmap/activity.ts";
 import type { Column } from "../../lib/columns.ts";
 import { age, columnFor, isFrozen, jobColorVar, repoColorVar } from "../../lib/format.ts";
 import { ownerChipText, remoteMode } from "../../lib/fleet.ts";
@@ -206,6 +207,10 @@ export function JobCard({
   // it. The card is being drawn in WORKING while the job's own state still
   // says draft — see useDragReorder's Submitting.
   const submitting = useCardSubmitting(key);
+  // On the map only: the card's status as a word, drawn as a coloured square
+  // beside the slug (`.map-status`), so the status reads without the
+  // characters. The same mapStatus the map card's frame colour comes from.
+  const status = mapMode ? mapStatus(job) : null;
   // True while an "attach tmux" POST is in flight. The server now waits for
   // the Ghostty window's client to appear before answering (up to a few
   // seconds on a cold launch), and a button that looks idle for that long
@@ -373,6 +378,9 @@ export function JobCard({
             which card it is. It leads the slug for the same reason the ROI
             badge leads its row — the mark lines up down the column edge. */}
         {submitting ? <span className="submit-spinner" aria-hidden="true" /> : null}
+        {status ? (
+          <span className="map-status" role="img" data-status={status} title={status} aria-label={`status: ${status}`} />
+        ) : null}
         <span className="slug">{job.slug}</span>
         {/* No `.state` chip beside the slug any more — the state token moved to
             the end of the .meta line below (STATUS_TEXT). The queued ✕ went

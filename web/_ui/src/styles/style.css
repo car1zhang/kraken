@@ -3907,8 +3907,19 @@ button.spawn-chip.spawn-draft:hover { background: color-mix(in srgb, var(--ac) 1
 .map-card[data-status="limit"] { --map-sc: var(--stopped); }
 .map-card[data-status="done"] { --map-sc: var(--ok); }
 .map-card[data-status="draft"] { --map-sc: var(--muted); }
+/* the status again as a plain square beside the card's name, in the frame's
+   status colour, so it reads where the characters are switched off or cannot
+   be drawn */
+.map-card .map-status { flex: none; width: 9px; height: 9px; background: var(--map-sc); }
 /* the status colour frames the whole map card — JobCard inside it keeps its
-   own job-colour edge, which says WHICH job rather than where it is */
+   own job-colour edge, which says WHICH job rather than where it is. The
+   frame is a 2px box-shadow spread on the .map-card wrapper, not anything on
+   the .card: .card carries the column board's notched-corner clip-path,
+   which clips whatever is painted outside its box. A shadow takes no layout,
+   so a card's measured size (offsetHeight, which physics reads) is
+   unchanged, and it sits inside the selected and marquee-preview outlines
+   below, which start 3px out from the same box. */
+.map-card { box-shadow: 0 0 0 2px var(--map-sc); }
 /* The card is laid out at --map-text-scale (a CSS zoom on the card alone), so
    its text and chips render that much larger while the .map-card around it
    stays 300 world pixels wide: the card's width is auto, so it fills its
@@ -3919,13 +3930,37 @@ button.spawn-chip.spawn-draft:hover { background: color-mix(in srgb, var(--ac) 1
    lays out that card alone. */
 .map-card > .card {
   margin: 0;
-  outline: 1px solid var(--map-sc); outline-offset: 0;
   background: var(--surface);
   zoom: var(--map-text-scale, 1);
   contain: layout style;
 }
-.map-card[data-status="working"] > .card { box-shadow: 0 0 14px color-mix(in srgb, var(--ac) 22%, transparent); }
-:root[data-theme="light"] .map-card[data-status="working"] > .card { box-shadow: none; }
+/* a selected card (shift-click or the marquee): a ring in the text colour,
+   which is light on the dark theme and dark on the light one and is no
+   status colour. It is drawn on the .map-card wrapper, never on the .card
+   inside it: .card carries the notched-corner clip-path, which clips
+   anything painted outside its box, a box-shadow or an outline included.
+   The wrapper is not clipped, and its box is the card's (the characters'
+   canvas inside it is absolutely positioned). The ring is 5 world pixels
+   wide, 3 out from the card, so it still reads at the far zoom, where the
+   layer is scaled down to a quarter; 3 + 5 on each side of the 16px gap
+   between two cards keeps two selected neighbours' rings from crossing. A
+   card the marquee would select if released now wears a fainter ring of
+   the same shape. */
+#agent-map .map-card.selected {
+  outline: 5px solid var(--fg); outline-offset: 3px;
+}
+#agent-map .map-card.marquee-hit {
+  outline: 5px solid color-mix(in srgb, var(--fg) 45%, transparent); outline-offset: 3px;
+}
+/* the shift-drag marquee: a thin outline over a light fill, above the cards
+   and below the corner's buttons, taking no pointer events */
+#map-marquee {
+  position: absolute; z-index: 2;
+  border: 1px solid var(--fg);
+  background: color-mix(in srgb, var(--fg) 8%, transparent);
+  pointer-events: none;
+}
+.agent-map.marqueeing { cursor: crosshair; }
 /* the characters' canvas paints IN FRONT of its own card's face (it follows
    the card in the markup and sits one level up inside the .map-card's own
    stacking context), so a card stacked in front still covers both; it takes
@@ -4005,6 +4040,8 @@ button.spawn-chip.spawn-draft:hover { background: color-mix(in srgb, var(--ac) 1
   border: 1px solid var(--border); padding: 5px 10px;
 }
 .map-hud-btn:hover { color: var(--fg); border-color: var(--ac); }
+/* a toggle that is off (the characters switch) reads struck out */
+.map-hud-btn[aria-pressed="false"] { color: var(--muted); text-decoration: line-through; }
 
 /* the steer modal's recent-activity disclosure (EventsPanel), where the zeus
    transcript panel was: the toggle wears the transcript head's look, the

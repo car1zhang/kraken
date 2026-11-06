@@ -17,7 +17,15 @@ import { readLS, writeLS } from "../../hooks/useLocalStorage.ts";
 import { shouldStartDrag } from "../../hooks/useDragReorder.ts";
 import { leadPose, mapStatus } from "../../lib/agentmap/activity.ts";
 import { readPalette, type Palette } from "../../lib/agentmap/draw.ts";
-import { freeSpot, overlaps, seedLayout, settle, stackOrder, type MapNode } from "../../lib/agentmap/layout.ts";
+import {
+  freeSpot,
+  marqueeKeys,
+  overlaps,
+  seedLayout,
+  settle,
+  stackOrder,
+  type MapNode,
+} from "../../lib/agentmap/layout.ts";
 import { drawMinimap, miniFrame, miniToWorld, type MiniFrame } from "../../lib/agentmap/minimap.ts";
 import {
   drawCrossMsg,
@@ -135,6 +143,8 @@ const ZOOM_MAX = 2.5;
  * not accepted yet, which waits under UNSAVED_KEY.
  */
 const MAP_CAMERA_KEY = "kraken.mapView";
+/** Per browser: "off" when the operator switched the characters off; anything else is on. */
+const MAP_ACTORS_KEY = "kraken.mapActors";
 
 /** CSS `zoom` keeps cards as real, sharp DOM; a scale transform is the fallback. */
 const ZOOM_OK = (() => {
@@ -152,18 +162,23 @@ const ZOOM_OK = (() => {
  * press on and no gesture runs twice. jsdom has no PointerEvent constructor,
  * so a pointer event there is a bare Event with no coordinates: it is ignored
  * (it could not place a card anyway) and does not switch the mouse path off.
+ *
+ * Whether a pointer event has been seen belongs to the MOUNTED map: each
+ * MapView keeps its own flag in a ref and passes it here, so a fresh mount
+ * handles its first press the same way whatever an earlier mount (or an
+ * earlier test in the same file) was sent. Within one mount the card,
+ * background, marquee and overview paths all read the same flag, so one
+ * physical press still acts once.
  */
-let pointerSeen = false;
-/** Whether a gesture event should be handled at all. */
-function gestureEvent(ev: { type: string; clientX?: number }): boolean {
+function gestureEventFor(pointerSeen: { current: boolean }, ev: { type: string; clientX?: number }): boolean {
   if (!ev.type.startsWith("mouse")) {
     // pointerup/cancel carry coordinates too in a browser; a coordinate-less
     // one ends nothing that a coordinate-less down could have started
     if (typeof ev.clientX !== "number" || !Number.isFinite(ev.clientX)) return false;
-    pointerSeen = true;
+    pointerSeen.current = true;
     return true;
   }
-  return !pointerSeen;
+  return !pointerSeen.current;
 }
 
 /**
@@ -201,9 +216,51 @@ interface ViewState {
   z: number;
 }
 
+/** One card moving with a group drag, and where it was at the press. */
+interface GroupMember {
+  key: string;
+  ox: number;
+  oy: number;
+}
+
+/** A press has turned into a drag once the pointer has gone this far (screen px, |dx| + |dy|). */
+const DRAG_SLOP = 4;
+
 type Drag =
-  | { kind: "card"; key: string; sx: number; sy: number; ox: number; oy: number; moved: boolean }
-  | { kind: "pan"; sx: number; sy: number; ox: number; oy: number }
+  | {
+      kind: "card";
+      key: string;
+      sx: number;
+      sy: number;
+      ox: number;
+      oy: number;
+      moved: boolean;
+      /** the selection, when the pressed card is in it: every one of these moves with it */
+      group: GroupMember[] | null;
+    }
+  /** `lx`/`ly`: the last pointer position a move reported (the release point's fallback, see onUp) */
+  | { kind: "pan"; sx: number; sy: number; ox: number; oy: number; moved: boolean; lx: number; ly: number }
+  /**
+   * A press with Shift held. Dragged, it draws the marquee from the press
+   * point (world units, `wx`/`wy`); released without a drag on a card
+   * (`card`), it toggles that card in the selection. `left`/`top` is the
+   * map's page offset, read from layout once at the press and kept for the
+   * drag, so the box follows the cursor even when something above the map
+   * changed height since the last window resize.
+   */
+  | {
+      kind: "marquee";
+      sx: number;
+      sy: number;
+      left: number;
+      top: number;
+      wx: number;
+      wy: number;
+      moved: boolean;
+      card: string | null;
+      lx: number;
+      ly: number;
+    }
   /** a press on the overview: its frame and page offset, held for the whole drag */
   | { kind: "mini"; left: number; top: number; f: MiniFrame };
 
@@ -377,6 +434,19 @@ export interface MapViewProps {
  * one that comes back (or a new one) yields, moving to a free spot near
  * where it would have been while every card already showing stays put.
  *
+ * Cards can be selected as a group. A press with Shift held that turns into
+ * a drag (on the background or on a card) draws the marquee (`#map-marquee`)
+ * instead of panning or moving anything, and its release selects exactly the
+ * cards whose boxes it touches (`marqueeKeys`); a Shift click on a card
+ * toggles that card. Dragging a selected card moves every selected card by
+ * the same amount, and the drop holds them all (settle's set form) while the
+ * other cards make way, in one save. A plain drag of an unselected card moves
+ * it alone and empties the selection; an Escape nothing else handled (no
+ * overlay closing, no text field), or a plain click on the background,
+ * empties it too. The selection lives in this component only: it is never
+ * saved, and a card that leaves the map leaves it (a group member that leaves
+ * mid-drag goes back to where it stood at the press).
+ *
  * Zooming never moves a card. Below a zoom of 1 the card layer stays laid
  * out at 1 and is only scaled (`layoutZoom`), so no card re-wraps or grows;
  * above 1 it is laid out at the zoom, and takeSize discounts the size change
@@ -387,7 +457,12 @@ export interface MapViewProps {
  * In the bottom-left corner, the zoom buttons sit above the overview
  * (`#map-minimap`): every card as a rectangle in its status colour and the
  * visible area as an outline, redrawn only when one of those changed. A
- * press or drag on it centres the view on the point under the pointer.
+ * press or drag on it centres the view on the point under the pointer. The
+ * `dinos` button beside the zoom buttons switches the characters off for
+ * this browser (MAP_ACTORS_KEY): no card then has a characters canvas and
+ * the crossing-bubble layer is not rendered, so the frame loop draws
+ * neither. A card's status still shows as its frame colour and as the square
+ * beside its name (JobCard's `.map-status`).
  *
  * The animation loop is built to be cheap on a board that is mostly asleep:
  * it reads no layout (sizes come from a ResizeObserver, the map's own size
@@ -480,6 +555,10 @@ export function MapView({ search, actions, boardNodeID, hidden }: MapViewProps) 
   const sizeRef = useRef({ w: 0, h: 0, left: 0, top: 0 });
   const fitPending = useRef(readView() === null);
   const dragRef = useRef<Drag | null>(null);
+  /** This mount's input state: whether it has seen a pointer event (see gestureEventFor). */
+  const pointerSeen = useRef(false);
+  /** Whether a gesture event should be handled at all, by this mount's rule. */
+  const gestureEvent = useCallback((ev: { type: string; clientX?: number }) => gestureEventFor(pointerSeen, ev), []);
   const suppressClick = useRef(false);
   const phase = useRef<LoadPhase>("waiting");
   const crossRef = useRef<CrossMsg[]>([]);
@@ -492,6 +571,51 @@ export function MapView({ search, actions, boardNodeID, hidden }: MapViewProps) 
   const aliveRef = useRef(true);
   const [, setVersion] = useState(0);
   const rerender = useCallback(() => setVersion((v) => v + 1), []);
+  // Whether the characters are drawn. Off unmounts every card's characters
+  // canvas and the crossing-bubble canvas, which is all the frame loop needs
+  // to skip them.
+  const [actorsOn, setActorsOn] = useState(() => readLS(MAP_ACTORS_KEY) !== "off");
+  const toggleActors = () => {
+    const next = !actorsOn;
+    writeLS(MAP_ACTORS_KEY, next ? null : "off");
+    // the canvases that mount when the characters come back draw at once
+    lastDraw.clear();
+    setActorsOn(next);
+  };
+  /**
+   * The selected cards' keys: component state only, never saved or sent, and
+   * empty at mount. Held in a ref so the window's pointer handlers read the
+   * current set; every change goes through setSelection, which re-renders so
+   * each card's `selected` prop follows. Selecting moves nothing and saves
+   * nothing.
+   */
+  const selRef = useRef<ReadonlySet<string>>(new Set());
+  const setSelection = useCallback(
+    (next: ReadonlySet<string>) => {
+      const cur = selRef.current;
+      if (cur.size === next.size && [...next].every((k) => cur.has(k))) return;
+      selRef.current = next;
+      rerender();
+    },
+    [rerender],
+  );
+  /** The marquee: shown while a shift-drag is in flight; its rectangle is written straight to the element. */
+  const [marqueeOn, setMarqueeOn] = useState(false);
+  const marqueeRef = useRef<HTMLDivElement | null>(null);
+  /** The marquee's rectangle in the map's own pixels (left, top, width, height). */
+  const marqueeBox = useRef<[number, number, number, number]>([0, 0, 0, 0]);
+  /** Cards the marquee would select if released now: they wear `marquee-hit` until it is. */
+  const marqueeHits = useRef(new Set<string>()).current;
+  /** The marquee element mounts at the rectangle the first move already computed. */
+  const setMarqueeEl = useCallback((el: HTMLDivElement | null) => {
+    marqueeRef.current = el;
+    if (!el) return;
+    const [l, t, w, h] = marqueeBox.current;
+    el.style.left = `${l}px`;
+    el.style.top = `${t}px`;
+    el.style.width = `${w}px`;
+    el.style.height = `${h}px`;
+  }, []);
 
   // ---- nodes, kept in step with the cards on screen. Mutating refs during
   // render is idempotent here (a second StrictMode pass finds nothing to do).
@@ -540,6 +664,11 @@ export function MapView({ search, actions, boardNodeID, hidden }: MapViewProps) 
   }, [entries, byKey]);
   const byKeyRef = useRef(byKey);
   byKeyRef.current = byKey;
+  // A card that left the map (filtered out, archived) leaves the selection,
+  // so it is not selected again if it comes back. Idempotent during render.
+  if ([...selRef.current].some((k) => !byKey.has(k))) {
+    selRef.current = new Set([...selRef.current].filter((k) => byKey.has(k)));
+  }
   const talkRef = useRef(talkLinks);
   talkRef.current = talkLinks;
   /**
@@ -713,9 +842,18 @@ export function MapView({ search, actions, boardNodeID, hidden }: MapViewProps) 
    * step bound with overlaps left (a pile of cards saved on one point) asks
    * for another run on a later frame, so the pile still comes apart without
    * one frame paying for all of it.
+   *
+   * `held` may also be the set of cards a group drag just dropped: all of
+   * them hold, so they keep the offsets they were dragged with (settle leaves
+   * a pair of held cards alone) and only the unselected cards make way. An
+   * unselected card can be caught between two held ones and pushed back and
+   * forth, so a group run that reaches its step bound does not carry on over
+   * later frames: each card still overlapping is moved to the nearest free
+   * spot instead (freeSpot, the arriving card's way out), in this same run,
+   * so the group's drop is one save.
    */
   const settleToRest = useCallback(
-    (held?: string) => {
+    (held?: string | ReadonlySet<string>) => {
       settleMore.current = null;
       const cur = entriesRef.current
         .map((e) => nodes.get(e.key))
@@ -724,7 +862,14 @@ export function MapView({ search, actions, boardNodeID, hidden }: MapViewProps) 
       const before = new Map(cur.map((n) => [n.key, [n.x, n.y] as const]));
       let still = true;
       for (let i = 0; i < SETTLE_STEPS && still; i++) still = settle(cur, held);
-      if (still) settleMore.current = { held };
+      if (still) {
+        if (typeof held === "object") {
+          for (const n of cur) {
+            if (held.has(n.key)) continue;
+            if (cur.some((o) => o !== n && overlaps(n, o))) freeSpot(n, cur);
+          }
+        } else settleMore.current = { held };
+      }
       const moved: string[] = [];
       for (const n of cur) {
         const b = before.get(n.key)!;
@@ -1164,6 +1309,41 @@ export function MapView({ search, actions, boardNodeID, hidden }: MapViewProps) 
     const s = sizeRef.current;
     return { x: -v.x / v.z, y: -v.y / v.z, w: s.w / v.z, h: s.h / v.z };
   }, []);
+  /**
+   * A page point (clientX, clientY) in world units, through the current view,
+   * for a map whose top-left corner is at page point (left, top). Reads no
+   * layout itself: the marquee passes the offset it read at its press.
+   */
+  const toWorld = useCallback((cx: number, cy: number, left: number, top: number) => {
+    const v = viewRef.current;
+    return { x: (cx - left - v.x) / v.z, y: (cy - top - v.y) / v.z };
+  }, []);
+  /**
+   * Start a Shift press: the marquee drag, from page point (sx, sy), on a
+   * card (`card`) or on the background (null). The map's page offset is read
+   * from layout here, once per press (a press is not an animation frame), so
+   * a banner or chip row that appeared above the map since the last window
+   * resize does not put the box off the cursor; where layout cannot be read
+   * the resize handler's cached offset stands in.
+   */
+  const startMarquee = useCallback(
+    (sx: number, sy: number, card: string | null) => {
+      let left = sizeRef.current.left;
+      let top = sizeRef.current.top;
+      try {
+        const r = rootRef.current?.getBoundingClientRect();
+        if (r && Number.isFinite(r.left) && Number.isFinite(r.top)) {
+          left = r.left;
+          top = r.top;
+        }
+      } catch {
+        // no layout to read: keep the cached offset
+      }
+      const w = toWorld(sx, sy, left, top);
+      dragRef.current = { kind: "marquee", sx, sy, left, top, wx: w.x, wy: w.y, moved: false, card, lx: sx, ly: sy };
+    },
+    [toWorld],
+  );
   /** The overview's frame for the cards and view as they stand. */
   const currentMiniFrame = useCallback(() => {
     const placedNow = entriesRef.current.map((e) => nodes.get(e.key)).filter((n): n is MapNode => !!n && finiteXY(n));
@@ -1191,9 +1371,10 @@ export function MapView({ search, actions, boardNodeID, hidden }: MapViewProps) 
     if (!gestureEvent(ev)) return;
     if (ev.button !== undefined && ev.button !== 0) return;
     ev.stopPropagation();
-    // a second finger never takes over a card drag: the drop must still be
-    // written, settled and saved
-    if (dragRef.current?.kind === "card") return;
+    // a second finger never takes over a card drag (the drop must still be
+    // written, settled and saved) or a marquee (its release still selects)
+    const cur = dragRef.current?.kind;
+    if (cur === "card" || cur === "marquee") return;
     let left = 0;
     let top = 0;
     try {
@@ -1272,8 +1453,54 @@ export function MapView({ search, actions, boardNodeID, hidden }: MapViewProps) 
     return () => root.removeEventListener("wheel", onWheel);
   }, [zoomAt, applyView, persistView]);
 
-  // ---- pointer: drag a card, or pan the background
+  // ---- pointer: drag a card (or the selected group), pan the background,
+  // or draw the marquee
   useEffect(() => {
+    /** The cards on the map that have a place: what a marquee can select. */
+    const placedNodes = () =>
+      entriesRef.current.map((e) => nodes.get(e.key)).filter((n): n is MapNode => !!n && finiteXY(n));
+    /**
+     * Draw the marquee from the press point to the pointer, and mark the
+     * cards it would select. The press point is kept in world units and put
+     * through the current view, so the box stays on the same spot of the
+     * plane if the view moves under it; the pointer is placed through the
+     * page offset read at the press. A gesture: its allocations are its own,
+     * and nothing here runs on an idle frame.
+     */
+    const updateMarquee = (d: Extract<Drag, { kind: "marquee" }>, cx: number, cy: number) => {
+      const v = viewRef.current;
+      const ax = d.wx * v.z + v.x;
+      const ay = d.wy * v.z + v.y;
+      const bx = cx - d.left;
+      const by = cy - d.top;
+      const box = marqueeBox.current;
+      box[0] = Math.min(ax, bx);
+      box[1] = Math.min(ay, by);
+      box[2] = Math.abs(bx - ax);
+      box[3] = Math.abs(by - ay);
+      const el = marqueeRef.current;
+      if (el) {
+        el.style.left = `${box[0]}px`;
+        el.style.top = `${box[1]}px`;
+        el.style.width = `${box[2]}px`;
+        el.style.height = `${box[3]}px`;
+      }
+      const hits = new Set(marqueeKeys(placedNodes(), { x: d.wx, y: d.wy }, toWorld(cx, cy, d.left, d.top)));
+      for (const k of marqueeHits) {
+        if (hits.has(k)) continue;
+        marqueeHits.delete(k);
+        cardEls.get(k)?.classList.remove("marquee-hit");
+      }
+      for (const k of hits) {
+        if (marqueeHits.has(k)) continue;
+        marqueeHits.add(k);
+        cardEls.get(k)?.classList.add("marquee-hit");
+      }
+    };
+    const clearMarqueeHits = () => {
+      for (const k of marqueeHits) cardEls.get(k)?.classList.remove("marquee-hit");
+      marqueeHits.clear();
+    };
     const onMove = (ev: MouseEvent) => {
       const d = dragRef.current;
       if (!d) return;
@@ -1284,46 +1511,133 @@ export function MapView({ search, actions, boardNodeID, hidden }: MapViewProps) 
       }
       const dx = num(ev.clientX) - d.sx;
       const dy = num(ev.clientY) - d.sy;
+      if (d.kind !== "card") {
+        d.lx = num(ev.clientX);
+        d.ly = num(ev.clientY);
+      }
       if (d.kind === "pan") {
+        if (Math.abs(dx) + Math.abs(dy) > DRAG_SLOP) d.moved = true;
         viewRef.current.x = d.ox + dx;
         viewRef.current.y = d.oy + dy;
         applyView();
         return;
       }
-      if (Math.abs(dx) + Math.abs(dy) > 4) d.moved = true;
-      if (!d.moved) return;
-      const node = nodes.get(d.key);
-      if (!node) return;
-      const z = viewRef.current.z;
-      node.x = d.ox + dx / z;
-      node.y = d.oy + dy / z;
-      // the dragged card only: nothing is pushed while it is in the air
-      const el = cardEls.get(d.key);
-      if (el) {
-        el.style.left = `${node.x}px`;
-        el.style.top = `${node.y}px`;
+      if (d.kind === "marquee") {
+        if (!d.moved && Math.abs(dx) + Math.abs(dy) > DRAG_SLOP) {
+          d.moved = true;
+          rootRef.current?.classList.add("marqueeing");
+          setMarqueeOn(true);
+        }
+        if (d.moved) updateMarquee(d, num(ev.clientX), num(ev.clientY));
+        return;
       }
+      if (Math.abs(dx) + Math.abs(dy) > DRAG_SLOP && !d.moved) {
+        d.moved = true;
+        // a plain drag of a card outside the selection moves that card alone
+        // and empties the selection
+        if (!d.group) setSelection(new Set());
+      }
+      if (!d.moved) return;
+      const z = viewRef.current.z;
+      // the dragged card, or every card of the group by the same world
+      // delta: nothing is pushed while they are in the air
+      const moveOne = (key: string, ox: number, oy: number) => {
+        const node = nodes.get(key);
+        if (!node) return;
+        node.x = ox + dx / z;
+        node.y = oy + dy / z;
+        const el = cardEls.get(key);
+        if (el) {
+          el.style.left = `${node.x}px`;
+          el.style.top = `${node.y}px`;
+        }
+      };
+      if (d.group) for (const m of d.group) moveOne(m.key, m.ox, m.oy);
+      else moveOne(d.key, d.ox, d.oy);
       underDirty.current = true;
       miniDirty.current = true;
     };
-    const onUp = () => {
+    const onUp = (ev: Event) => {
       const d = dragRef.current;
       if (!d) return;
       dragRef.current = null;
       rootRef.current?.classList.remove("panning");
-      if (d.kind === "pan" || d.kind === "mini") {
+      if (d.kind === "mini") {
         persistView();
+        return;
+      }
+      // The release point: the release event's own position, or the last
+      // position a move reported when the release carries none. A browser's
+      // release always carries one; an event built without coordinates reads
+      // as the page's corner (0, 0), which is taken as "none". A release far
+      // from its press is a drag even if no move was reported.
+      let cx = 0;
+      let cy = 0;
+      let far = false;
+      if (d.kind !== "card") {
+        const me = ev as MouseEvent;
+        const ex = typeof me.clientX === "number" && Number.isFinite(me.clientX) ? me.clientX : 0;
+        const ey = typeof me.clientY === "number" && Number.isFinite(me.clientY) ? me.clientY : 0;
+        const given = ex !== 0 || ey !== 0;
+        cx = given ? ex : d.lx;
+        cy = given ? ey : d.ly;
+        far = Math.abs(cx - d.sx) + Math.abs(cy - d.sy) > DRAG_SLOP;
+      }
+      if (d.kind === "pan") {
+        persistView();
+        // a plain press and release on the background empties the selection;
+        // a background drag only pans
+        if (!d.moved && !far && ev.type !== "pointercancel") setSelection(new Set());
+        return;
+      }
+      if (d.kind === "marquee") {
+        rootRef.current?.classList.remove("marqueeing");
+        clearMarqueeHits();
+        setMarqueeOn(false);
+        // the click that ends a shift gesture on a card opens nothing
+        if (d.card) suppressClick.current = true;
+        if (ev.type === "pointercancel") return;
+        if (d.moved || far) {
+          setSelection(new Set(marqueeKeys(placedNodes(), { x: d.wx, y: d.wy }, toWorld(cx, cy, d.left, d.top))));
+        } else if (d.card) {
+          const next = new Set(selRef.current);
+          if (next.has(d.card)) next.delete(d.card);
+          else next.add(d.card);
+          setSelection(next);
+        }
         return;
       }
       rootRef.current?.classList.remove("dragging");
       if (d.moved) {
         // the click that ends this gesture is not a click on the card
         suppressClick.current = true;
-        if (phase.current !== "final") draggedEarly.add(d.key);
-        markDirty([d.key]);
-        writePositions([d.key]);
-        // the drop: the cards it landed on make way, the dropped one holds
-        settleToRest(d.key);
+        // the group's members still on the map, or the one dragged card. A
+        // member that left the map mid-drag (filtered out, archived) goes back
+        // to where it stood at the press: it is not saved, so the dragged spot
+        // would otherwise be where it reappears in this mount while the server
+        // and this browser's record still hold the old one
+        let keys: string[] = [d.key];
+        if (d.group) {
+          keys = [];
+          for (const m of d.group) {
+            if (byKeyRef.current.has(m.key)) {
+              keys.push(m.key);
+              continue;
+            }
+            const n = nodes.get(m.key);
+            if (n) {
+              n.x = m.ox;
+              n.y = m.oy;
+            }
+          }
+        }
+        if (phase.current !== "final") for (const k of keys) draggedEarly.add(k);
+        markDirty(keys);
+        writePositions(keys);
+        // the drop: the cards it landed on make way, the dropped ones hold.
+        // Every card that moved is queued here and goes out in the one
+        // debounced save below.
+        settleToRest(d.group ? new Set(keys) : d.key);
         scheduleSave();
         rerender();
       }
@@ -1332,7 +1646,7 @@ export function MapView({ search, actions, boardNodeID, hidden }: MapViewProps) 
       if (gestureEvent(ev)) onMove(ev);
     };
     const up = (ev: Event) => {
-      if (gestureEvent(ev)) onUp();
+      if (gestureEvent(ev)) onUp(ev);
     };
     const types = [
       ["pointermove", move],
@@ -1357,30 +1671,50 @@ export function MapView({ search, actions, boardNodeID, hidden }: MapViewProps) 
     writePositions,
     settleToRest,
     centreOn,
+    toWorld,
+    setSelection,
+    marqueeHits,
+    gestureEvent,
   ]);
 
   const onCardPointerDown = useCallback(
     (key: string, ev: ReactMouseEvent<HTMLDivElement>) => {
       if (!gestureEvent(ev)) return;
       if (ev.button !== undefined && ev.button !== 0) return;
+      // a second finger landing on a card never takes over a card drag or a
+      // marquee in flight, as on the background and the overview: the drop
+      // must still be written, settled and saved, and the marquee's release
+      // still has to select and take its box down
+      const cur = dragRef.current?.kind;
+      if (cur === "card" || cur === "marquee") return;
       suppressClick.current = false;
       // a press on a control inside the card is that control's, never a drag
       if (!shouldStartDrag(ev.target)) return;
       const node = nodes.get(key);
       if (!node || !finiteXY(node)) return;
       ev.stopPropagation();
-      dragRef.current = {
-        kind: "card",
-        key,
-        sx: num(ev.clientX),
-        sy: num(ev.clientY),
-        ox: node.x,
-        oy: node.y,
-        moved: false,
-      };
+      const sx = num(ev.clientX);
+      const sy = num(ev.clientY);
+      if (ev.shiftKey) {
+        // Shift: a drag draws the marquee, a click toggles this card; neither
+        // moves a card or opens one
+        startMarquee(sx, sy, key);
+        return;
+      }
+      // a selected card carries the whole selection with it, each card from
+      // where it stood at the press
+      let group: GroupMember[] | null = null;
+      if (selRef.current.has(key)) {
+        group = [];
+        for (const k of selRef.current) {
+          const m = nodes.get(k);
+          if (m && finiteXY(m) && byKeyRef.current.has(k)) group.push({ key: k, ox: m.x, oy: m.y });
+        }
+      }
+      dragRef.current = { kind: "card", key, sx, sy, ox: node.x, oy: node.y, moved: false, group };
       rootRef.current?.classList.add("dragging");
     },
-    [nodes],
+    [nodes, startMarquee, gestureEvent],
   );
 
   const onCardClickCapture = useCallback((ev: ReactMouseEvent) => {
@@ -1414,12 +1748,41 @@ export function MapView({ search, actions, boardNodeID, hidden }: MapViewProps) 
     if (ev.button !== undefined && ev.button !== 0) return;
     const t = ev.target as Element | null;
     if (t && typeof t.closest === "function" && t.closest(".map-card, .map-corner")) return;
-    // a second finger never takes over a card drag (see onMiniPointerDown)
-    if (dragRef.current?.kind === "card") return;
+    // a second finger never takes over a card drag or a marquee (see onMiniPointerDown)
+    const cur = dragRef.current?.kind;
+    if (cur === "card" || cur === "marquee") return;
+    const sx = num(ev.clientX);
+    const sy = num(ev.clientY);
+    if (ev.shiftKey) {
+      // Shift on the background draws the marquee instead of panning
+      startMarquee(sx, sy, null);
+      return;
+    }
     const v = viewRef.current;
-    dragRef.current = { kind: "pan", sx: num(ev.clientX), sy: num(ev.clientY), ox: v.x, oy: v.y };
+    dragRef.current = { kind: "pan", sx, sy, ox: v.x, oy: v.y, moved: false, lx: sx, ly: sy };
     rootRef.current?.classList.add("panning");
   };
+
+  // Escape empties the selection, but only an Escape meant for the map. The
+  // listener is on the window in the bubble phase, so it sees a key last:
+  //  - an open overlay (steer, editor, thread, artifact, usage) closes through
+  //    useEscapeStack's document listener, which calls preventDefault, so
+  //    `defaultPrevented` says the key was spent;
+  //  - the search box, a goal edit, a menu and a thread rename stop the key
+  //    from propagating, so it never arrives here;
+  //  - an Escape typed in any other text field (an input, a textarea, a
+  //    contenteditable) is that field's, so it is ignored too.
+  // An Escape with nothing else to do still empties the selection.
+  useEffect(() => {
+    const onKey = (ev: KeyboardEvent) => {
+      if (ev.key !== "Escape" || ev.defaultPrevented || hidden || !selRef.current.size) return;
+      const t = ev.target;
+      if (t instanceof HTMLElement && (t.isContentEditable || t.closest("input, textarea, select"))) return;
+      setSelection(new Set());
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [hidden, setSelection]);
 
   // ---- the animation loop. An ordinary frame reads no layout and runs no
   // physics; it redraws only what is due.
@@ -1765,6 +2128,8 @@ export function MapView({ search, actions, boardNodeID, hidden }: MapViewProps) 
                 y={at ? n.y : 0}
                 z={order.get(key) ?? 1}
                 placed={at}
+                selected={selRef.current.has(key)}
+                actors={actorsOn}
                 cardRef={cardRefFor}
                 canvasEls={canvasEls}
                 onPointerDown={onCardPointerDown}
@@ -1775,7 +2140,10 @@ export function MapView({ search, actions, boardNodeID, hidden }: MapViewProps) 
           })}
         </div>
       </div>
-      <canvas className="map-over" ref={overRef} aria-hidden="true" />
+      {actorsOn && <canvas className="map-over" ref={overRef} aria-hidden="true" />}
+      {/* the shift-drag marquee, only while one is in flight; MapView writes
+          its rectangle straight to the element as the pointer moves */}
+      {marqueeOn && <div id="map-marquee" ref={setMarqueeEl} aria-hidden="true" />}
       {/* the bottom-left corner: the zoom buttons above the overview, so
           the overview never covers them */}
       <div className="map-corner">
@@ -1800,6 +2168,15 @@ export function MapView({ search, actions, boardNodeID, hidden }: MapViewProps) 
           </button>
           <button type="button" className="map-hud-btn" title="fit every card in view" onClick={fit}>
             fit
+          </button>
+          <button
+            type="button"
+            className="map-hud-btn"
+            aria-pressed={actorsOn}
+            title={actorsOn ? "hide the characters" : "show the characters"}
+            onClick={toggleActors}
+          >
+            dinos
           </button>
         </div>
         {entries.length > 0 && (
@@ -1832,6 +2209,10 @@ interface MapCardProps {
   y: number;
   z: number;
   placed: boolean;
+  /** Whether the card is in the selection (class `selected`, `data-selected="true"`). */
+  selected: boolean;
+  /** Whether the card carries its characters' canvas. */
+  actors: boolean;
   cardRef: (key: string, el: HTMLDivElement | null) => void;
   canvasEls: Map<string, HTMLCanvasElement>;
   onPointerDown: (key: string, ev: ReactMouseEvent<HTMLDivElement>) => void;
@@ -1855,6 +2236,8 @@ function sameCard(a: MapCardProps, b: MapCardProps): boolean {
     a.y === b.y &&
     a.z === b.z &&
     a.placed === b.placed &&
+    a.selected === b.selected &&
+    a.actors === b.actors &&
     a.cardRef === b.cardRef &&
     a.canvasEls === b.canvasEls &&
     a.onPointerDown === b.onPointerDown &&
@@ -1865,8 +2248,8 @@ function sameCard(a: MapCardProps, b: MapCardProps): boolean {
 
 /**
  * One card on the map: the board's own JobCard (in map mode, so it is no
- * sortable, and carrying the activity band as its own last band) and its
- * characters' canvas above it.
+ * sortable, and carrying the activity band as its own last band) and, unless
+ * the characters are switched off, its characters' canvas above it.
  * The status rides as `data-status`, which style.css turns into the card's
  * status colour.
  */
@@ -1880,6 +2263,8 @@ const MapCard = memo(function MapCard({
   y,
   z,
   placed,
+  selected,
+  actors,
   cardRef,
   canvasEls,
   onPointerDown,
@@ -1902,9 +2287,10 @@ const MapCard = memo(function MapCard({
   };
   return (
     <div
-      className="map-card"
+      className={selected ? "map-card selected" : "map-card"}
       data-key={cardKey}
       data-status={mapStatus(job)}
+      data-selected={selected ? "true" : undefined}
       style={style}
       ref={setCard}
       onPointerDown={(ev) => onPointerDown(cardKey, ev)}
@@ -1918,12 +2304,14 @@ const MapCard = memo(function MapCard({
       {/* After the card, and lifted by style.css, so the characters paint IN
           FRONT of their own card's face; still inside this .map-card, so a
           card stacked in front covers both. It takes no pointer events. */}
-      <canvas
-        className="map-actors"
-        ref={canvasRef}
-        aria-hidden="true"
-        style={{ left: -PAD_X, top: -PAD_TOP, height: PAD_TOP + PAD_BOTTOM }}
-      />
+      {actors && (
+        <canvas
+          className="map-actors"
+          ref={canvasRef}
+          aria-hidden="true"
+          style={{ left: -PAD_X, top: -PAD_TOP, height: PAD_TOP + PAD_BOTTOM }}
+        />
+      )}
     </div>
   );
 }, sameCard);

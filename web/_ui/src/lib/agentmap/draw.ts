@@ -1263,13 +1263,15 @@ function drawArm(c: Ctx, col: DinoColors, sx: number, hx: number, hy: number) {
 // ------------------------------------------------------------------ the hats
 
 /**
- * The hats' colours: off-white, steel, brown and oatmeal, none of them near
+ * The hats' colours: steel, off-white, brown and oatmeal, none of them near
  * a status colour (violet working, magenta blocked, amber question, red
- * limit, green done), so a hat never reads as its card's state.
+ * limit, green done), so a hat never reads as its card's state. The hard hat
+ * is the exception by the operator's ask: construction yellow, with a dark
+ * olive edge so it still shows on the yellow Fable coat.
  */
 const HAT_INK = {
-  shell: "#ece6d6",
-  shellEdge: "#7d7566",
+  shell: "#ffd83a",
+  shellEdge: "#8f6b0a",
   steel: "#b4b8c2",
   steelEdge: "#555a66",
   crest: "#6b5644",

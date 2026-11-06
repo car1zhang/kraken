@@ -801,3 +801,340 @@ describe("MapView minimap (W7)", () => {
     expect(agentMapContractCards(container).map((c) => c.getAttribute("data-key")).sort()).toEqual(["alpha", "beta", "gamma"]);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Round 9: W12 (closer cards) and W13 (group select, group move)
+//
+// A saved view of { x: 0, y: 0, z: 1 } makes a screen point a world point
+// (jsdom measures the map at the origin), so a client coordinate here is the
+// world coordinate a card's inline left/top is written in. A map card is 300
+// world pixels wide; the cards are saved far enough apart vertically that
+// their (estimated) heights never matter.
+// ---------------------------------------------------------------------------
+
+const agentMapContractR9Jobs = () => [
+  agentMapContractJob({ slug: "a", state: "working", live: true }),
+  agentMapContractJob({ slug: "b", state: "draft" }),
+  agentMapContractJob({ slug: "c", state: "blocked", live: true }),
+];
+
+type AgentMapContractR9Saved = Record<string, [number, number]>;
+
+// a: x 100..400, b: x 600..900, both at y 100; c far below.
+const agentMapContractR9Spread = (): AgentMapContractR9Saved => ({ a: [100, 100], b: [600, 100], c: [100, 3000] });
+
+/** Opens the map on a saved layout and waits until it has been placed and has gone quiet. */
+async function agentMapContractR9Open(saved: AgentMapContractR9Saved = agentMapContractR9Spread(), jobs: WebJob[] = agentMapContractR9Jobs()) {
+  localStorage.setItem("kraken.mapView", JSON.stringify({ x: 0, y: 0, z: 1 }));
+  const stub = agentMapContractStubFetch(saved);
+  const actions = agentMapContractActions();
+  const utils = render(<AgentMapContractMap board={agentMapContractModel(jobs)} actions={actions} />);
+  const last = Object.keys(saved).at(-1)!;
+  await waitFor(() => expect(agentMapContractR9Card(utils.container, last).style.top).toBe(`${saved[last]![1]}px`));
+  await new Promise((r) => setTimeout(r, 300));
+  const rerenderJobs = (next: WebJob[]) => utils.rerender(<AgentMapContractMap board={agentMapContractModel(next)} actions={actions} />);
+  return { ...utils, ...stub, actions, rerenderJobs };
+}
+
+const agentMapContractR9Card = (root: ParentNode, key: string) => root.querySelector<HTMLElement>(`.map-card[data-key="${key}"]`)!;
+
+/** The JobCard face inside a map card: where a press on "the card" lands. */
+const agentMapContractR9Face = (root: ParentNode, key: string) => agentMapContractR9Card(root, key).querySelector<HTMLElement>(".card")!;
+
+const agentMapContractR9Root = (root: ParentNode) => root.querySelector<HTMLElement>("#agent-map")!;
+
+const agentMapContractR9Pos = (root: ParentNode, key: string) => {
+  const el = agentMapContractR9Card(root, key);
+  return [el.style.left, el.style.top];
+};
+
+const agentMapContractR9AllPos = (root: ParentNode) =>
+  Object.fromEntries(agentMapContractCards(root).map((c) => [c.getAttribute("data-key") ?? "", [c.style.left, c.style.top]]));
+
+/**
+ * The selected keys, sorted. W13: a selected card carries the class
+ * `selected` and `data-selected="true"`; an unselected card carries neither.
+ */
+function agentMapContractR9Selected(root: ParentNode): string[] {
+  const out: string[] = [];
+  for (const c of agentMapContractCards(root)) {
+    const sel = c.classList.contains("selected");
+    expect(c.getAttribute("data-selected"), `data-selected on ${c.getAttribute("data-key")}`).toBe(sel ? "true" : null);
+    if (sel) out.push(c.getAttribute("data-key") ?? "");
+  }
+  return out.sort();
+}
+
+/** A press and release with no movement between (jsdom has no PointerEvent). */
+function agentMapContractR9Click(el: HTMLElement, x: number, y: number, shiftKey: boolean) {
+  fireEvent.mouseDown(el, { clientX: x, clientY: y, button: 0, buttons: 1, shiftKey });
+  fireEvent.mouseUp(el, { clientX: x, clientY: y, button: 0, shiftKey });
+  fireEvent.click(el, { clientX: x, clientY: y, button: 0, shiftKey });
+}
+
+/** A mouse drag from `from` to `to`, with `during` run while the button is still down. */
+function agentMapContractR9Drag(
+  el: HTMLElement,
+  from: [number, number],
+  to: [number, number],
+  shiftKey: boolean,
+  during?: () => void,
+) {
+  fireEvent.mouseDown(el, { clientX: from[0], clientY: from[1], button: 0, buttons: 1, shiftKey });
+  fireEvent.mouseMove(window, { clientX: (from[0] + to[0]) / 2, clientY: (from[1] + to[1]) / 2, buttons: 1, shiftKey });
+  fireEvent.mouseMove(window, { clientX: to[0], clientY: to[1], buttons: 1, shiftKey });
+  during?.();
+  fireEvent.mouseUp(window, { clientX: to[0], clientY: to[1], button: 0, shiftKey });
+}
+
+function agentMapContractR9ExpectNothingOpened(actions: BoardActions) {
+  expect(actions.onOpenSteer).not.toHaveBeenCalled();
+  expect(actions.onOpenEditor).not.toHaveBeenCalled();
+}
+
+const agentMapContractR9Storage = () => {
+  const out: Record<string, string | null> = {};
+  for (let i = 0; i < localStorage.length; i++) {
+    const k = localStorage.key(i)!;
+    out[k] = localStorage.getItem(k);
+  }
+  return out;
+};
+
+describe("MapView: a layout saved under the old gap is at rest (W12)", () => {
+  it("moves no card and sends no save for cards kept just clear of the old gap", async () => {
+    // 300 wide + 37: clear of the old 36 sideways gap
+    const saved: AgentMapContractR9Saved = { a: [0, 0], b: [337, 0], c: [0, 3000] };
+    const { container, posts } = await agentMapContractR9Open(saved);
+    expect(agentMapContractR9AllPos(container)).toEqual({
+      a: ["0px", "0px"],
+      b: ["337px", "0px"],
+      c: ["0px", "3000px"],
+    });
+    expect(posts).toHaveLength(0);
+  });
+});
+
+describe("MapView selection (W13)", () => {
+  it("is empty at mount", async () => {
+    const { container } = await agentMapContractR9Open();
+    expect(agentMapContractR9Selected(container)).toEqual([]);
+  });
+
+  it("toggles a card on shift-click, opens nothing, moves nothing and saves nothing", async () => {
+    const { container, posts, actions, fetchMock } = await agentMapContractR9Open();
+    const where = agentMapContractR9AllPos(container);
+    const stored = agentMapContractR9Storage();
+    const postsBefore = posts.length;
+    const callsBefore = fetchMock.mock.calls.length;
+
+    agentMapContractR9Click(agentMapContractR9Face(container, "a"), 150, 120, true);
+    expect(agentMapContractR9Selected(container)).toEqual(["a"]);
+    agentMapContractR9Click(agentMapContractR9Face(container, "b"), 650, 120, true);
+    expect(agentMapContractR9Selected(container)).toEqual(["a", "b"]);
+    agentMapContractR9Click(agentMapContractR9Face(container, "a"), 150, 120, true);
+    expect(agentMapContractR9Selected(container)).toEqual(["b"]);
+
+    await new Promise((r) => setTimeout(r, 300));
+    agentMapContractR9ExpectNothingOpened(actions);
+    expect(agentMapContractR9AllPos(container)).toEqual(where);
+    expect(posts).toHaveLength(postsBefore);
+    // never saved, never sent
+    const postsOfAnyKind = fetchMock.mock.calls
+      .slice(callsBefore)
+      .filter(([, init]) => ((init as RequestInit | undefined)?.method ?? "GET").toUpperCase() !== "GET");
+    expect(postsOfAnyKind).toHaveLength(0);
+    expect(agentMapContractR9Storage()).toEqual(stored);
+  });
+
+  it("drops a card that leaves the map and keeps the others", async () => {
+    const { container, rerenderJobs } = await agentMapContractR9Open();
+    agentMapContractR9Click(agentMapContractR9Face(container, "a"), 150, 120, true);
+    agentMapContractR9Click(agentMapContractR9Face(container, "b"), 650, 120, true);
+    expect(agentMapContractR9Selected(container)).toEqual(["a", "b"]);
+
+    const [a, b, c] = agentMapContractR9Jobs();
+    rerenderJobs([b!, c!]);
+    await waitFor(() => expect(container.querySelector('.map-card[data-key="a"]')).toBeNull());
+    expect(agentMapContractR9Selected(container)).toEqual(["b"]);
+
+    // back on the map, it is not selected
+    rerenderJobs([a!, b!, c!]);
+    await waitFor(() => expect(container.querySelector('.map-card[data-key="a"]')).not.toBeNull());
+    expect(agentMapContractR9Selected(container)).toEqual(["b"]);
+  });
+});
+
+describe("MapView shift-drag draws a marquee (W13)", () => {
+  it("from the background: #map-marquee only while dragging, then the selection is what it caught", async () => {
+    const { container, posts, actions } = await agentMapContractR9Open();
+    const where = agentMapContractR9AllPos(container);
+    const postsBefore = posts.length;
+    const root = agentMapContractR9Root(container);
+    expect(container.querySelector("#map-marquee")).toBeNull();
+
+    // world rectangle (50, 50)-(700, 200) catches a (100..400) and b (600..900), not c (y 3000)
+    let during: Element | null = null;
+    agentMapContractR9Drag(root, [50, 50], [700, 200], true, () => {
+      during = root.querySelector("#map-marquee");
+    });
+    expect(during).not.toBeNull();
+    expect(container.querySelector("#map-marquee")).toBeNull();
+    expect(agentMapContractR9Selected(container)).toEqual(["a", "b"]);
+
+    await new Promise((r) => setTimeout(r, 300));
+    expect(agentMapContractR9AllPos(container)).toEqual(where);
+    expect(posts).toHaveLength(postsBefore);
+    agentMapContractR9ExpectNothingOpened(actions);
+  });
+
+  it("from a card: it neither moves nor opens that card", async () => {
+    const { container, posts, actions } = await agentMapContractR9Open();
+    const where = agentMapContractR9AllPos(container);
+    const postsBefore = posts.length;
+    const root = agentMapContractR9Root(container);
+
+    let during: Element | null = null;
+    // (150, 120) is on a; the rectangle reaches into b
+    agentMapContractR9Drag(agentMapContractR9Face(container, "a"), [150, 120], [650, 130], true, () => {
+      during = root.querySelector("#map-marquee");
+    });
+    expect(during).not.toBeNull();
+    expect(container.querySelector("#map-marquee")).toBeNull();
+    expect(agentMapContractR9Selected(container)).toEqual(["a", "b"]);
+
+    await new Promise((r) => setTimeout(r, 300));
+    expect(agentMapContractR9AllPos(container)).toEqual(where);
+    expect(posts).toHaveLength(postsBefore);
+    agentMapContractR9ExpectNothingOpened(actions);
+  });
+
+  it("replaces the selection with exactly what the rectangle caught", async () => {
+    const { container } = await agentMapContractR9Open();
+    agentMapContractR9Click(agentMapContractR9Face(container, "c"), 150, 3020, true);
+    expect(agentMapContractR9Selected(container)).toEqual(["c"]);
+    agentMapContractR9Drag(agentMapContractR9Root(container), [50, 50], [450, 200], true);
+    expect(agentMapContractR9Selected(container)).toEqual(["a"]);
+  });
+});
+
+describe("MapView group move (W13)", () => {
+  it("moves every selected card by the same delta, keeps it on the drop, and saves them in one save", async () => {
+    const { container, posts, actions } = await agentMapContractR9Open();
+    agentMapContractR9Click(agentMapContractR9Face(container, "a"), 150, 120, true);
+    agentMapContractR9Click(agentMapContractR9Face(container, "b"), 650, 120, true);
+    expect(agentMapContractR9Selected(container)).toEqual(["a", "b"]);
+    const postsBefore = posts.length;
+
+    let midA: string[] = [];
+    let midB: string[] = [];
+    agentMapContractR9Drag(agentMapContractR9Face(container, "a"), [150, 120], [190, 140], false, () => {
+      midA = agentMapContractR9Pos(container, "a");
+      midB = agentMapContractR9Pos(container, "b");
+    });
+    // while in flight, both had moved by (40, 20)
+    expect(midA).toEqual(["140px", "120px"]);
+    expect(midB).toEqual(["640px", "120px"]);
+    // the drop keeps that offset; c did not move
+    expect(agentMapContractR9AllPos(container)).toEqual({
+      a: ["140px", "120px"],
+      b: ["640px", "120px"],
+      c: ["100px", "3000px"],
+    });
+    // the selection is unchanged and nothing opened
+    expect(agentMapContractR9Selected(container)).toEqual(["a", "b"]);
+    agentMapContractR9ExpectNothingOpened(actions);
+
+    // ONE save carries both
+    await waitFor(() => expect(posts.slice(postsBefore).some((p) => "a" in p)).toBe(true));
+    await new Promise((r) => setTimeout(r, 300));
+    const after = posts.slice(postsBefore).filter((p) => "a" in p || "b" in p);
+    expect(after).toHaveLength(1);
+    expect(after[0]!.a).toEqual([140, 120]);
+    expect(after[0]!.b).toEqual([640, 120]);
+    expect("c" in after[0]!).toBe(false);
+  });
+
+  it("holds the whole selection on the drop: an unselected card in the way yields, and the one save carries it too", async () => {
+    // c sits exactly where b will land
+    const saved: AgentMapContractR9Saved = { a: [100, 100], b: [600, 100], c: [1200, 100] };
+    const { container, posts } = await agentMapContractR9Open(saved);
+    agentMapContractR9Click(agentMapContractR9Face(container, "a"), 150, 120, true);
+    agentMapContractR9Click(agentMapContractR9Face(container, "b"), 650, 120, true);
+    const postsBefore = posts.length;
+
+    agentMapContractR9Drag(agentMapContractR9Face(container, "a"), [150, 120], [750, 120], false);
+    await waitFor(() => expect(agentMapContractR9Pos(container, "c")).not.toEqual(["1200px", "100px"]));
+    await new Promise((r) => setTimeout(r, 300));
+    // the selected cards never moved off their drop
+    expect(agentMapContractR9Pos(container, "a")).toEqual(["700px", "100px"]);
+    expect(agentMapContractR9Pos(container, "b")).toEqual(["1200px", "100px"]);
+    expect(agentMapContractR9Selected(container)).toEqual(["a", "b"]);
+
+    await waitFor(() => expect(posts.slice(postsBefore).some((p) => "c" in p)).toBe(true));
+    await new Promise((r) => setTimeout(r, 300));
+    const after = posts.slice(postsBefore).filter((p) => "a" in p || "b" in p || "c" in p);
+    expect(after).toHaveLength(1);
+    expect(after[0]!.a).toEqual([700, 100]);
+    expect(after[0]!.b).toEqual([1200, 100]);
+    expect(after[0]!.c).toBeDefined();
+    expect(after[0]!.c).not.toEqual([1200, 100]);
+  });
+
+  it("a plain drag of an unselected card moves that card alone and empties the selection", async () => {
+    const { container, posts, actions } = await agentMapContractR9Open();
+    agentMapContractR9Click(agentMapContractR9Face(container, "a"), 150, 120, true);
+    agentMapContractR9Click(agentMapContractR9Face(container, "b"), 650, 120, true);
+    const postsBefore = posts.length;
+
+    agentMapContractR9Drag(agentMapContractR9Face(container, "c"), [150, 3020], [200, 3020], false);
+    expect(agentMapContractR9AllPos(container)).toEqual({
+      a: ["100px", "100px"],
+      b: ["600px", "100px"],
+      c: ["150px", "3000px"],
+    });
+    expect(agentMapContractR9Selected(container)).toEqual([]);
+    agentMapContractR9ExpectNothingOpened(actions);
+
+    await waitFor(() => expect(posts.slice(postsBefore).some((p) => "c" in p)).toBe(true));
+    await new Promise((r) => setTimeout(r, 300));
+    const after = posts.slice(postsBefore);
+    expect(after.find((p) => "c" in p)!.c).toEqual([150, 3000]);
+    expect(after.some((p) => "a" in p || "b" in p)).toBe(false);
+  });
+});
+
+describe("MapView clearing the selection (W13)", () => {
+  async function selectedTwo() {
+    const opened = await agentMapContractR9Open();
+    agentMapContractR9Click(agentMapContractR9Face(opened.container, "a"), 150, 120, true);
+    agentMapContractR9Click(agentMapContractR9Face(opened.container, "b"), 650, 120, true);
+    expect(agentMapContractR9Selected(opened.container)).toEqual(["a", "b"]);
+    return opened;
+  }
+
+  it("Escape empties it", async () => {
+    const { container } = await selectedTwo();
+    fireEvent.keyDown(agentMapContractR9Root(container), { key: "Escape", code: "Escape" });
+    expect(agentMapContractR9Selected(container)).toEqual([]);
+  });
+
+  it("a press and release on the background with no Shift and no drag empties it", async () => {
+    const { container, actions } = await selectedTwo();
+    agentMapContractR9Click(agentMapContractR9Root(container), 2000, 1500, false);
+    expect(agentMapContractR9Selected(container)).toEqual([]);
+    agentMapContractR9ExpectNothingOpened(actions);
+  });
+
+  it("a background drag without Shift keeps it and moves no card", async () => {
+    const { container, posts } = await selectedTwo();
+    const where = agentMapContractR9AllPos(container);
+    const postsBefore = posts.length;
+    agentMapContractR9Drag(agentMapContractR9Root(container), [2000, 1500], [2100, 1600], false);
+    expect(container.querySelector("#map-marquee")).toBeNull();
+    expect(agentMapContractR9Selected(container)).toEqual(["a", "b"]);
+    await new Promise((r) => setTimeout(r, 300));
+    expect(agentMapContractR9AllPos(container)).toEqual(where);
+    expect(posts).toHaveLength(postsBefore);
+  });
+});
