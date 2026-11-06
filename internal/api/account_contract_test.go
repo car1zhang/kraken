@@ -125,7 +125,7 @@ func TestContractAcctArchivedWebJobWithholdsTheAccount(t *testing.T) {
 		AccountSlug: "slot-a", AccountEmail: "one@example.com",
 	}
 
-	got := archivedWebJob(a, st, map[int64]store.JobTokens{}, nil)
+	got := archivedWebJob(a, feedbackIndex(st), artifactPathsIndex(st), map[int64]store.JobTokens{}, nil)
 	if got.Account != nil {
 		t.Errorf("archivedWebJob served an account: %+v", got.Account)
 	}
