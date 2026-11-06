@@ -265,6 +265,16 @@ var probeOnline = func() bool {
 // daemonState holds the scheduler's cross-tick dedup state. newDaemon constructs
 // one; tick runs a single scheduler pass.
 type daemonState struct {
+	// Awake is fed once per tick and read by the mind run pass, which holds
+	// a run until the machine has been continuously awake for
+	// mindAwakeFloor: a run launched into a dark wake is cut off by the next
+	// sleep. In-process only, like the maps below: a restart reads as a
+	// fresh awake span, which costs one floor's wait.
+	Awake awakeClock
+	// MindHeld is set while mindRunPass is holding a queued run for the
+	// awake floor, so the hold is logged once per hold — when it begins,
+	// until the gate next opens — rather than per tick.
+	MindHeld bool
 	Notified map[string]int64 // dedup key (err/repo file mtime, or "blocked:"/"health:" slug) → notified marker
 	Poked    map[string]int64 // "retry:" + slug → unix time last auto-retried
 	// Repaired marks a job's PR-repair pass as fully done for this process
@@ -595,6 +605,7 @@ func (d *daemonState) tick(mirror bool) (int, error) {
 	all, _ := core.OrderAll(core.DiscoverAll())
 	times := liveSessionTimes()
 	now := time.Now()
+	d.Awake.Note(now)
 	cells := 0
 	// side-thread panes, ONE unscoped query for the whole tick rather than a
 	// ListThreads per job: the roll call below (cellActive) must not count a
