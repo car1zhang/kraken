@@ -922,7 +922,7 @@ var backgroundAgentsNoticeRE = regexp.MustCompile(`^\d+ background agents? (?:wa
 // user turns whose text was never queued still both render, and the
 // enqueue/attachment double-write dedupe is unaffected.
 func (r *reducer) queuedAlready(text string) bool {
-	t := strings.TrimSpace(text)
+	t := midTurnKey(strings.TrimSpace(text))
 	if _, queued := r.midTurnSeen[t]; !queued {
 		return false
 	}
@@ -937,14 +937,17 @@ func (r *reducer) queuedAlready(text string) bool {
 }
 
 // midTurn emits one queued mid-turn message as [user mid-turn] — or as
-// [teammate <id> mid-turn] when it carries a teammate envelope, the same
-// routing writeUserish gives ordinary user records, since mislabelling
-// another agent's words as carl's is the one thing the reduction must never
-// do. Dropped: blanks, the task-notifications that queue through the same
-// channel in bulk (system bookkeeping, exactly the mass the reduction
-// exists to drop), the harness's stopped-agents notice, and ANY text
-// already emitted (the enqueue/attachment double-write of one message —
-// see midTurnSeen for why a set rather than adjacency).
+// [teammate <id> mid-turn] when it carries a teammate envelope, or as
+// [peer <name> mid-turn] when it carries another Claude session's
+// cross-session envelope (an <agent-message> envelope takes
+// [teammate <name> mid-turn] through the same branch), the same routing
+// writeUserish gives ordinary user records, since mislabelling another agent's words as carl's is the one
+// thing the reduction must never do. Dropped: blanks, the
+// task-notifications that queue through the same channel in bulk (system
+// bookkeeping, exactly the mass the reduction exists to drop), the
+// harness's stopped-agents notice, and any text whose collapse key
+// (midTurnKey) was already emitted (the enqueue/attachment double-write of
+// one message — see midTurnSeen for why a set rather than adjacency).
 func (r *reducer) midTurn(out reduceSink, text string) {
 	t := strings.TrimSpace(text)
 	if t == "" || strings.HasPrefix(t, "<task-notification>") || backgroundAgentsNoticeRE.MatchString(t) {
@@ -953,15 +956,100 @@ func (r *reducer) midTurn(out reduceSink, text string) {
 	if r.midTurnSeen == nil {
 		r.midTurnSeen = make(map[string]struct{})
 	}
-	if _, dup := r.midTurnSeen[t]; dup {
+	key := midTurnKey(t)
+	if _, dup := r.midTurnSeen[key]; dup {
 		return
 	}
-	r.midTurnSeen[t] = struct{}{}
+	r.midTurnSeen[key] = struct{}{}
 	if b, ok := teammateBlock(t); ok {
 		writeReduced(out, "[teammate "+b.From+" mid-turn]", b.Text)
 		return
 	}
+	if kind, from, body, ok := peerBlock(t); ok {
+		writeReduced(out, "["+kind+" "+from+" mid-turn]", body)
+		return
+	}
 	writeReduced(out, "[user mid-turn]", t)
+}
+
+// crossSessionRE matches the harness's envelope for a message from another
+// Claude session: a peer's SendMessage over the harness's cross-session
+// channel. (A `kraken s` send, and the daemon's own bumps, are typed into
+// the pane and read as typed text; they never carry this envelope.) The
+// harness writes two tag names on the same channels — `<cross-session-message>`
+// with `from`, `hop-chain`, `from-name` and `from-mode` attributes for a
+// message from another session, and `<agent-message>` with `from` alone,
+// which the harness's own trailer describes as an agent working inside this
+// same session (a subagent or teammate) — so both are read, and the second
+// takes the teammate label. The delivered `user` copy prefixes the envelope with
+// relayedPrefix (activity.go's constant, shared rather than copied) and
+// follows it with the harness's own advice; neither is the sender's text.
+// Groups: 1 the preamble when present; 2 and 3, or 4 and 5, the tag's
+// attributes and the sender's text up to the LAST closing tag (a sender may
+// quote the tag); 6 whatever follows the close.
+var crossSessionRE = regexp.MustCompile(`(?s)^(` + regexp.QuoteMeta(relayedPrefix) + `\s*)?(?:<cross-session-message\b((?:[^>"]|"[^"]*")*)>(.*)</cross-session-message>|<agent-message\b((?:[^>"]|"[^"]*")*)>(.*)</agent-message>)(.*)$`)
+
+// crossSessionNameRE and crossSessionFromRE read the sender off the tag's
+// attributes: `from-name` is the peer's own name, `from` its socket address
+// (or, on the `<agent-message>` tag, the name itself), the fallback when
+// `from-name` is absent.
+var (
+	crossSessionNameRE = regexp.MustCompile(`\bfrom-name="([^"]*)"`)
+	crossSessionFromRE = regexp.MustCompile(`\bfrom="([^"]*)"`)
+)
+
+// peerLabelMax bounds a sender's name in the section label.
+const peerLabelMax = 64
+
+// peerBlock detects a cross-session envelope in a queued or delivered text
+// and returns which kind it is ("peer" for another session's
+// `<cross-session-message>`, "teammate" for a same-session agent's
+// `<agent-message>`), who sent it and what they said. A peer message is stored
+// twice — the enqueue, then either the `queued_command` attachment or the
+// delivered `user` record — and the two copies differ outside the sender's
+// text: the enqueue carries a `hop-chain` attribute the attachment lacks,
+// and the delivered copy wraps the envelope in the harness's preamble and
+// trailer. The sender and the inner text are what the copies agree on.
+func peerBlock(s string) (kind, from, text string, ok bool) {
+	m := crossSessionRE.FindStringSubmatch(strings.TrimSpace(s))
+	if m == nil {
+		return "", "", "", false
+	}
+	kind = "peer"
+	preamble, attrs, body, trailer := m[1], m[2], m[3], m[6]
+	if strings.HasPrefix(strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(s), preamble)), "<agent-message") {
+		kind, attrs, body = "teammate", m[4], m[5] // the <agent-message> arm matched
+	}
+	// text after the closing tag is the harness's trailer only on a
+	// delivered copy, which the preamble marks; anywhere else it is the
+	// record's own prose (an envelope pasted and then asked about), and the
+	// whole record stays the operator's
+	if preamble == "" && strings.TrimSpace(trailer) != "" {
+		return "", "", "", false
+	}
+	if n := crossSessionNameRE.FindStringSubmatch(attrs); n != nil && n[1] != "" {
+		from = n[1]
+	} else if n := crossSessionFromRE.FindStringSubmatch(attrs); n != nil && n[1] != "" {
+		from = n[1]
+	} else {
+		from = kind
+	}
+	// one line, bounded: a name carrying a newline would open a section of
+	// its own in the reduced view
+	from = TruncateOneLine(strings.Join(strings.Fields(from), " "), peerLabelMax)
+	return kind, from, strings.TrimSpace(body), true
+}
+
+// midTurnKey is the collapse key one mid-turn text folds on: the text itself,
+// or for an envelope its kind, the sender and the sender's text, since the
+// two copies of one such message differ in their attributes and wrapping.
+// Keying on the raw text printed every peer message twice, under the
+// operator's label.
+func midTurnKey(t string) string {
+	if kind, from, body, ok := peerBlock(t); ok {
+		return kind + "\x00" + from + "\x00" + body
+	}
+	return t
 }
 
 // ReduceJSONLBytes reduces a JSONL span already in memory, per reducer.line's
@@ -1003,8 +1091,13 @@ func ReduceJSONLBytes(data []byte) []byte {
 // The [user] label means CARL, and only carl. A message another agent sent
 // into this session — every brief zeus hands hephaestus/athena/hermes, every
 // idle heartbeat — arrives inside a user record wrapped in a
-// <teammate-message> envelope, and is labelled [teammate <id>] instead. This
-// is not cosmetic: a reader of this output is asked what carl's own prompting
+// <teammate-message> envelope, and is labelled [teammate <id>] instead; a
+// message another Claude SESSION sent arrives inside a cross-session
+// envelope (peerBlock) and is labelled [peer <name>], or
+// [peer <name> mid-turn] while it waited in the queue, and the harness's
+// <agent-message> envelope, a same-session subagent's, takes the teammate
+// label by the same route. This is not cosmetic: a reader of this output is
+// asked what carl's own prompting
 // did to an agent, and mislabelling would quote KRAKEN's prompts back to him
 // as his own — confidently wrong about the one thing the reduction exists to
 // say. (Measured over 300 real transcripts: teammate traffic is 29% of user
@@ -1051,12 +1144,19 @@ func ReduceTranscript(path string, since int64) ([]byte, error) {
 
 // writeUserish appends one text part of a user record under the label that
 // says who actually spoke: [teammate <id>] when it carries another agent's
-// message envelope, [user] — meaning carl — otherwise. This is userBlocks'
-// full treatment, both halves of it: the <system-reminder> drop AND the
-// teammate routing, via the same teammateBlock read.go's own reader uses.
+// message envelope, [peer <name>] when it carries another Claude session's
+// cross-session envelope (peerBlock; its same-session <agent-message> arm
+// takes the teammate label), [user] — meaning carl — otherwise. This is
+// userBlocks' full treatment (the <system-reminder> drop and the teammate
+// routing, via the same teammateBlock read.go's own reader uses) plus the
+// envelope routing userBlocks does not do.
 func writeUserish(out reduceSink, text string) {
 	if b, ok := teammateBlock(text); ok {
 		writeReduced(out, "[teammate "+b.From+"]", b.Text)
+		return
+	}
+	if kind, from, body, ok := peerBlock(text); ok {
+		writeReduced(out, "["+kind+" "+from+"]", body)
 		return
 	}
 	writeReduced(out, "[user]", text)
