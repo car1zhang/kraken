@@ -38,8 +38,9 @@ import (
 // modifier over aim/info/do (one agent, no crew) that a job reads FIRST and
 // then follows in tandem with the phase skill it modifies, so the phase
 // skill's read is the real signal and a `direct` stage would badge every
-// quick job with a word that is not a phase; `humanizer` is a vendored
-// writing-edit pass the brief applies in every phase, so its read names none.
+// quick job with a word that is not a phase; `humanizer` is the vendored
+// writing rule every artifact-writing skill applies in every phase, so its
+// read names none.
 // Every other skill a cell might touch
 // (personal skills, a target repo's own project skills) is ignored by virtue
 // of not being in this set. Kept as a literal rather than derived from SkillsFS,
