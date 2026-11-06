@@ -80,8 +80,15 @@ func findModel(models []ModelWindow, name string) *ModelWindow {
 // spot for a machine-wide swap and SelectBindTarget picks one for a single
 // cell, but "is this slot usable at all" is the same question with the same
 // answer, and two copies would agree on the day they were written and not
-// after. The reason strings are the ones SelectRotationTarget has always
-// emitted, so a caller logging them reads the same sentences it used to.
+// after. Every reason string opens with the slug it is about, so a caller
+// joining them can log which slot each exclusion belongs to.
+//
+// A row is refused for want of DATA only when it carries neither a session
+// nor a weekly window — the shape a fetch that never succeeded leaves behind.
+// A row with a weekly window and no session window is a successful fetch whose
+// response had no session entry, and it stays eligible with its session load
+// read as 0 (sessionPercent): the same "missing is not evidence of exhaustion"
+// convention the Fable and weekly checks below already follow.
 func candidateGates(a AccountUsage, now int64) (fablePct float64, reason string) {
 	switch {
 	case a.NoCreds:
@@ -90,8 +97,8 @@ func candidateGates(a AccountUsage, now int64) (fablePct float64, reason string)
 		return 0, fmt.Sprintf("%s: reauth required", a.Slug)
 	case a.Email == "":
 		return 0, fmt.Sprintf("%s: no identity", a.Slug)
-	case a.Session == nil:
-		return 0, fmt.Sprintf("%s: no session data", a.Slug)
+	case a.Session == nil && a.Weekly == nil:
+		return 0, fmt.Sprintf("%s: no usage data", a.Slug)
 	case a.CooldownUntil > now:
 		return 0, fmt.Sprintf("%s: cooling", a.Slug)
 	}
@@ -104,8 +111,8 @@ func candidateGates(a AccountUsage, now int64) (fablePct float64, reason string)
 			return fablePct, fmt.Sprintf("%s: fable %g%% ≥ %d%%", a.Slug, fablePct, candidateFablePct)
 		}
 	}
-	if a.Session.Percent >= candidateSessionPct {
-		return fablePct, fmt.Sprintf("%s: session %g%% ≥ %d%%", a.Slug, a.Session.Percent, candidateSessionPct)
+	if pct := sessionPercent(a); pct >= candidateSessionPct {
+		return fablePct, fmt.Sprintf("%s: session %g%% ≥ %d%%", a.Slug, pct, candidateSessionPct)
 	}
 	// A nil Weekly window (couldn't be fetched) stays eligible, same
 	// convention as a missing Fable window above — rotating on missing
@@ -114,6 +121,16 @@ func candidateGates(a AccountUsage, now int64) (fablePct float64, reason string)
 		return fablePct, fmt.Sprintf("%s: weekly %g%% ≥ %d%%", a.Slug, a.Weekly.Percent, candidateWeeklyPct)
 	}
 	return fablePct, ""
+}
+
+// sessionPercent is a row's session-window load, 0 when the row carries no
+// session window. Both selectors gate and rank through it, so a row without
+// the window is never dereferenced and sorts as an idle session.
+func sessionPercent(a AccountUsage) float64 {
+	if a.Session == nil {
+		return 0
+	}
+	return a.Session.Percent
 }
 
 // SelectRotationTarget ranks pool rows from a usage snapshot and picks the
@@ -171,8 +188,8 @@ func SelectRotationTarget(accounts []AccountUsage, mainEmail string, now int64) 
 
 	sort.SliceStable(eligible, func(i, j int) bool {
 		ci, cj := eligible[i], eligible[j]
-		if ci.acct.Session.Percent != cj.acct.Session.Percent {
-			return ci.acct.Session.Percent < cj.acct.Session.Percent
+		if si, sj := sessionPercent(ci.acct), sessionPercent(cj.acct); si != sj {
+			return si < sj
 		}
 		if ci.fablePct != cj.fablePct {
 			return ci.fablePct < cj.fablePct
@@ -310,8 +327,8 @@ func SelectBindTarget(candidates []AccountUsage, excludeEmails []string, boundCo
 		if ci.fresh != cj.fresh {
 			return ci.fresh
 		}
-		if ci.acct.Session.Percent != cj.acct.Session.Percent {
-			return ci.acct.Session.Percent < cj.acct.Session.Percent
+		if si, sj := sessionPercent(ci.acct), sessionPercent(cj.acct); si != sj {
+			return si < sj
 		}
 		if ci.fablePct != cj.fablePct {
 			return ci.fablePct < cj.fablePct
