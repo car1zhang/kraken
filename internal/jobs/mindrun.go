@@ -815,6 +815,15 @@ func ApplyMindOps(st *store.Store, run store.MindRun, ans MindAnswer, markIDs []
 	for i := range ans.Ops {
 		op := &ans.Ops[i]
 		op.Quote = mindNormQuote(op.Quote)
+		// The skill's op table puts an add's or a supersede's quote inside
+		// the item and says one written on the operation instead is taken as
+		// the item's. This is where it is taken: such an answer is
+		// unambiguous, since the item has no other quote it could mean, and
+		// without this the op would fail validation below, which would
+		// apply none of the answer.
+		if (op.Op == "add" || op.Op == "supersede") && op.Item != nil && mindNormQuote(op.Item.Quote) == "" {
+			op.Item.Quote = op.Quote
+		}
 		if err := mindValidateOp(st, op); err != nil {
 			return MindApply{}, fmt.Errorf("op %d: %w", i, err)
 		}
