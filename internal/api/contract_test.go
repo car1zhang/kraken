@@ -2034,6 +2034,15 @@ var finderRevealSpec = map[string]fieldSpec{
 	"ok": {kind: wireBool, required: true},
 }
 
+// --- /api/sleep (sleep.go sleepHandler) ---
+//
+// One shape for the GET and the POST's success, asserted in sleep_test.go
+// behind the two core seams. Refusals use the shared {"error"} shape, except
+// the mirror-mode 403, which is plain text like every inline mirror gate.
+var sleepSpec = map[string]fieldSpec{
+	"disabled": {kind: wireBool, required: true},
+}
+
 // editorOpenRepo makes a checkout under ~/Developer that jobs.ResolveRepo can
 // find (a dir with a .git entry), and returns its path.
 func editorOpenRepo(t *testing.T) string {

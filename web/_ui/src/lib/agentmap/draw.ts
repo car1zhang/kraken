@@ -18,7 +18,7 @@
 // behind (the lead's profile, 2026-11-05); those two are what these choices
 // remove.
 
-import { COAT_HUE, type Coat, type Hat } from "./avatar.ts";
+import { COAT_HUE, type Branch, type Coat, type Hat } from "./avatar.ts";
 
 const PI = Math.PI;
 const TAU = PI * 2;
@@ -1495,12 +1495,70 @@ function drawHairTie(c: Ctx, col: DinoColors, hx: number) {
   inked(c, col.lite, col.hairEdge, 0.8);
 }
 
+// ------------------------------------------------------------------ the branch look
+
+/**
+ * The twig's colours: bark brown and a muted sage leaf. The leaf is green
+ * but greyed well away from the done status' bright green, and nothing else
+ * on a character is brown or sage, so a twig reads as a twig.
+ */
+const TWIG_INK = { stem: "#7a5a3a", leaf: "#a9b784", leafEdge: "#5f6b45" } as const;
+
+/**
+ * A branch's mark (a side thread, artifacts/22-branched-nailongs.html): a
+ * small forked twig with a leaf at each tip, sprouting from the crown of the
+ * head (y = -34) where a crew member wears a hat, and swaying a little on the
+ * character's own phase. It stays within 9 units of the head's centre and
+ * below y = -48, inside the hats' reach.
+ */
+function drawTwig(c: Ctx, hx: number, t: number, seed: number) {
+  const sw = sin(t * 2.2 + seed * 11) * 0.5;
+  c.strokeStyle = TWIG_INK.stem;
+  c.lineCap = "round";
+  c.lineWidth = 1.5;
+  c.beginPath();
+  c.moveTo(hx + 1, -33.2);
+  c.quadraticCurveTo(hx + 1.5, -37, hx + 2 + sw, -40);
+  c.stroke();
+  c.lineWidth = 1.2;
+  c.beginPath();
+  c.moveTo(hx + 2 + sw, -40);
+  c.quadraticCurveTo(hx - 0.5 + sw, -42.5, hx - 3.2 + sw, -44.2);
+  c.moveTo(hx + 2 + sw, -40);
+  c.quadraticCurveTo(hx + 4.5 + sw, -42, hx + 6.6 + sw, -45);
+  c.stroke();
+  c.beginPath();
+  c.ellipse(hx - 4.4 + sw, -45.2, 2.9, 1.6, -0.7, 0, TAU);
+  inked(c, TWIG_INK.leaf, TWIG_INK.leafEdge, 0.8);
+  c.beginPath();
+  c.ellipse(hx + 7.8 + sw, -46.2, 2.9, 1.6, 0.6, 0, TAU);
+  inked(c, TWIG_INK.leaf, TWIG_INK.leafEdge, 0.8);
+}
+
+/**
+ * A headless branch's wisp: the tapering tail a ghost has where its feet
+ * would be, in the body's own colours, drawn before the body so the body
+ * covers its root. Its tip drifts side to side.
+ */
+function drawWisp(c: Ctx, col: DinoColors, t: number, seed: number) {
+  const sw = sin(t * 2.4 + seed * 5) * 2.2;
+  c.beginPath();
+  c.moveTo(-8.4, -2.5);
+  c.bezierCurveTo(-8.5, 4, -2 + sw, 3, 1.5 + sw, 10.5);
+  c.bezierCurveTo(3 + sw, 4.5, 7.5, 3.5, 8.4, -2.5);
+  c.closePath();
+  inked(c, col.body, col.dark, 1.3);
+}
+
 /**
  * Draw one dino with pose `P` (already filled), feet at (x, y), scale `s`,
  * facing `flip`, wearing `hat` (none by default; a lead never wears one) and,
- * when `girl` is set, round glasses and a ponytail. An unhatched egg wears
- * neither. Uses one save/restore pair for the whole figure, since the scale,
- * the lean and the bob nest; every effect inside undoes its own state.
+ * when `girl` is set, round glasses and a ponytail. A `branch` (a side
+ * thread) wears a twig on its head; a headless one is also drawn without
+ * feet, on a wisp, and the caller makes it translucent and lifts it off the
+ * ground. An unhatched egg wears none of these. Uses one save/restore pair
+ * for the whole figure, since the scale, the lean and the bob nest; every
+ * effect inside undoes its own state.
  */
 export function drawKraken(
   c: Ctx,
@@ -1514,6 +1572,7 @@ export function drawKraken(
   walking: boolean,
   hat: Hat = "none",
   girl = false,
+  branch: Branch = "none",
 ): void {
   const t = P.t;
   const keep = FLIP;
@@ -1561,8 +1620,10 @@ export function drawKraken(
   const lean = P.lean;
   c.rotate(lean);
   // feet: two stubs with toe claws, on the ground, or dangling over the card
-  // edge when seated
-  for (let sx = -1; sx <= 1; sx += 2) {
+  // edge when seated. A headless branch has none: it floats, and a wisp is
+  // drawn where they would be, below.
+  const ghost = branch === "headless";
+  for (let sx = -1; !ghost && sx <= 1; sx += 2) {
     let fx = sx * 5.4 + (front ? 0 : 1);
     let fy = 0;
     if (sit) {
@@ -1607,6 +1668,7 @@ export function drawKraken(
   const h = P.hands;
   const farFwd = !front && h[2] > -3;
   if (farFwd) drawArm(c, col, 5, h[2], h[3]);
+  if (ghost) drawWisp(c, col, t, P.seed);
   // body, narrower than the head, with the cream belly
   c.fillStyle = col.body;
   c.strokeStyle = col.dark;
@@ -1696,6 +1758,7 @@ export function drawKraken(
   if (girl) drawGlasses(c, col, hx, fsh, front);
   if (hat !== "none") HAT[hat](c, hx, front);
   if (girl) drawHairTie(c, col, hx);
+  if (branch !== "none") drawTwig(c, hx, t, P.seed);
   if (!farFwd) drawArm(c, col, -9.5, h[2], h[3]);
   drawArm(c, col, 9.5, h[0], h[1]);
   PROP[P.kind]?.(c, P, o);

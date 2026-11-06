@@ -885,7 +885,7 @@ func TestEdgeCxpSlotUsageWithNoEvidenceIsStaleButEligible(t *testing.T) {
 				t.Fatal("NoCreds = true, want false — the slot has an auth.json")
 			}
 			if row.Session == nil {
-				t.Fatal("Session = nil; a credentialled slot with no evidence must still be eligible, which means a non-nil Session")
+				t.Fatal("Session = nil; a credentialled slot with no evidence must still be eligible, which with no weekly window means a non-nil Session")
 			}
 			if row.Session.Percent != 0 || row.Session.ResetsAt != 0 {
 				t.Errorf("Session = %+v, want {Percent:0 ResetsAt:0}", *row.Session)

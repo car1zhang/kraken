@@ -2300,6 +2300,15 @@ Response: `{"ok": true}`. The file is selected in a Finder window on this Mac (`
 The web artifact viewer's `finder` button sends it, offered only for a `cell`-home artifact url on a job this node owns: a done or archived job's artifacts are kraken.db rows with no file to reveal. The name resolves through `ArtifactPath`, the guard every cell artifact read passes. The source IP must be local exactly as for `/api/editor/open`, and mirror mode 403s it the same way.
 Errors: 403 (non-local origin, or mirror mode), 400 (bad json), 409 (unknown slug; a name that is empty, escapes the artifacts dir, has a dot-prefixed segment, or names no file in a live cell; or a launch failure). POST only (405 otherwise) and requires `Content-Type: application/json` (415 otherwise).
 
+### `GET /api/sleep`, `POST /api/sleep` → `webSleep` (api/sleep.go) — not called by the iOS app; not modeled in Models.swift/APIClient.swift
+
+Whether the Mac running `kraken serve` has sleep disabled, and the switch for it. The web header's sleep button polls the GET every 10s and sends the POST.
+GET response: `{"disabled": bool}` — pmset's `SleepDisabled`, read on every request, so a change made in a terminal shows at the next poll.
+POST request: `{"disabled": bool}` — the state WANTED, never a flip; the key is required. Body limited to 1MB, unknown keys refused.
+POST response: `{"disabled": bool}` — the state pmset reports after the write. Disabling runs `sudo -n /usr/bin/pmset -a disablesleep 1` and starts a `caffeinate -d -i -s -u` unless one already runs; enabling writes `0` and ends that caffeinate (core/sleep.go).
+Paired tier like the rest of the board, so a paired device may switch it. Mirror mode 403s the POST and still serves the GET.
+Errors: GET 500 (pmset could not be read). POST 400 (bad json, an unknown key, or no `disabled`), 403 (mirror mode, plain text), 409 (the switch failed — the body's `error` says why, and names the sudoers rule when sudo has no passwordless entry for `/usr/bin/pmset`; when pmset was written and only the caffeinate step failed, it says which state the machine is now in), 413 (body over 1MB), 500 (the write landed but the read-back failed). Other methods 405.
+
 ---
 
 ## Unified event log

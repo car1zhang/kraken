@@ -277,6 +277,10 @@ func registerRoutes(mux routeMux) {
 	// that can never be reused. Its status GET is a read and stays open.
 	mux.HandleFunc("/api/ship-ios", mirrorGated(shipIOSHandler))
 	mux.HandleFunc("/api/ship-ios/status", shipIOSStatusHandler)
+	// The header's sleep button (sleep.go): GET reads whether this Mac's
+	// sleep is disabled, POST sets it. The POST gates itself inline so the
+	// GET stays reachable under --mirror.
+	mux.HandleFunc("/api/sleep", sleepHandler)
 	// Visibility is a one-field route for colour's reasons (jobvisibility.go):
 	// usable on a live cell, and never cleared by a form save from a client
 	// that predates it. Not mirror-gated: it writes a row and types nothing.

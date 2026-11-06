@@ -552,35 +552,37 @@ func isoMillis(iso string) int64 {
 	return t.UnixMilli()
 }
 
+// parseUsageResponse reads the three kinds of window out of a usage response.
+// The `limits` list is preferred; the top-level `five_hour` and `seven_day`
+// objects fill whichever of session and weekly the list did not carry, so a
+// response whose list has no `session` entry still yields a session window
+// when `five_hour` is present. A window neither source names comes back nil.
 func parseUsageResponse(data []byte) (session, weekly *UsageWindow, models []ModelWindow, err error) {
 	var resp usageResponse
 	if err = json.Unmarshal(data, &resp); err != nil {
 		return nil, nil, nil, err
 	}
-	if len(resp.Limits) > 0 {
-		for _, l := range resp.Limits {
-			switch l.Kind {
-			case "session":
-				session = &UsageWindow{Percent: l.Percent, ResetsAt: isoMillis(l.ResetsAt)}
-			case "weekly_all":
-				weekly = &UsageWindow{Percent: l.Percent, ResetsAt: isoMillis(l.ResetsAt)}
-			case "weekly_scoped":
-				if l.Scope == nil || l.Scope.Model.DisplayName == "" {
-					continue
-				}
-				models = append(models, ModelWindow{
-					Name:     l.Scope.Model.DisplayName,
-					Percent:  l.Percent,
-					ResetsAt: isoMillis(l.ResetsAt),
-				})
+	for _, l := range resp.Limits {
+		switch l.Kind {
+		case "session":
+			session = &UsageWindow{Percent: l.Percent, ResetsAt: isoMillis(l.ResetsAt)}
+		case "weekly_all":
+			weekly = &UsageWindow{Percent: l.Percent, ResetsAt: isoMillis(l.ResetsAt)}
+		case "weekly_scoped":
+			if l.Scope == nil || l.Scope.Model.DisplayName == "" {
+				continue
 			}
+			models = append(models, ModelWindow{
+				Name:     l.Scope.Model.DisplayName,
+				Percent:  l.Percent,
+				ResetsAt: isoMillis(l.ResetsAt),
+			})
 		}
-		return session, weekly, models, nil
 	}
-	if resp.FiveHour != nil {
+	if session == nil && resp.FiveHour != nil {
 		session = &UsageWindow{Percent: resp.FiveHour.Utilization, ResetsAt: isoMillis(resp.FiveHour.ResetsAt)}
 	}
-	if resp.SevenDay != nil {
+	if weekly == nil && resp.SevenDay != nil {
 		weekly = &UsageWindow{Percent: resp.SevenDay.Utilization, ResetsAt: isoMillis(resp.SevenDay.ResetsAt)}
 	}
 	return session, weekly, models, nil

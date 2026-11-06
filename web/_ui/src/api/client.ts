@@ -894,6 +894,20 @@ export const requestUpdate = (opts: { force?: boolean; test?: boolean } = {}) =>
 export const requestShipIOS = () =>
   postJSON<{ ok: boolean; phase: string }>("/api/ship-ios", {});
 
+// ------------------------------------------------------------ sleep
+//
+// The header's sleep button. The POST names the state it wants and is
+// answered with the state the Mac reports afterwards. Off the shared mutation
+// path like the two above, and for a related reason: its one likely refusal
+// (sudo has no passwordless rule for pmset) is a sentence with a fix in it,
+// which belongs in a toast and not in the clock corner.
+
+export const fetchSleep = (signal?: AbortSignal) =>
+  getJSON<import("./types.ts").WebSleep>("/api/sleep", signal);
+
+export const setSleepDisabled = (disabled: boolean) =>
+  postJSON<import("./types.ts").WebSleep>("/api/sleep", { disabled });
+
 // ------------------------------------------------------------ uploads
 
 export async function uploadImage(

@@ -15,9 +15,18 @@
 // through scratch numbers or a caller's tuple, and text comes from draw.ts'
 // cached bitmaps.
 
-import type { AgentEvent, WebActivity, WebAgent, WebJob } from "../../api/types.ts";
+import type { AgentEvent, WebActivity, WebAgent, WebJob, WebThread } from "../../api/types.ts";
 import { blockedUrgency, crewPose, freshEvents, mapStatus } from "./activity.ts";
-import { modelCoat, roleHat, type Coat, type Hat } from "./avatar.ts";
+import {
+  modelCoat,
+  roleHat,
+  shownThreads,
+  threadBranch,
+  threadCoat,
+  type Branch,
+  type Coat,
+  type Hat,
+} from "./avatar.ts";
 import {
   clamp,
   dot,
@@ -70,6 +79,8 @@ export interface Actor {
   hat: Hat;
   /** drawn as a girl (round glasses, ponytail); about one character in three, see `isGirl` */
   girl: boolean;
+  /** the branch look of a side thread (avatar.ts `Branch`); "none" for the lead and the crew */
+  branch: Branch;
   seed: number;
   /** offset along the card from its home slot */
   x: number;
@@ -127,6 +138,8 @@ export interface CardScene {
   sent: Map<string, number> | null;
   /** the roster by name and the job's activity, taken at the last sync */
   roster: Map<string, WebAgent>;
+  /** the side threads drawn as branches, by their actor's name (`threadActorName`), taken at the last sync */
+  threads: Map<string, WebThread>;
   activity: WebActivity | undefined;
   hover: boolean;
   crewRR: number;
@@ -153,6 +166,33 @@ function tagText(name: string, kind: string): string {
   return (kind === "subagent" ? "◌ " : "") + (name.length > 18 ? name.slice(0, 17) + "…" : name);
 }
 
+/**
+ * A branch's actor name: its thread id under a prefix no roster name
+ * carries, so a thread titled like a crew member is still its own character.
+ */
+export function threadActorName(t: Pick<WebThread, "tid">): string {
+  return "branch:" + t.tid;
+}
+
+/** A branch's hover tag: the branch glyph and its title (its id when it has none), cut like any tag. */
+function branchTag(t: Pick<WebThread, "tid" | "title">): string {
+  const name = t.title || t.tid;
+  return "⑂ " + (name.length > 18 ? name.slice(0, 17) + "…" : name);
+}
+
+/**
+ * A branch's pose: `think` while a headless thread's question is being
+ * answered (the one thing the wire says about what a branch is doing), and
+ * `idle` otherwise, a thread no longer on the wire included.
+ */
+export function branchPose(t: Pick<WebThread, "answering"> | undefined): string {
+  return t?.answering ? "think" : "idle";
+}
+
+/** A headless branch is drawn this see-through, and this far off the ground (in its own units, plus a slow bob). */
+const GHOST_ALPHA = 0.62;
+const GHOST_LIFT = 9;
+
 function mkActor(name: string, kind: string, mini: boolean, now: number): Actor {
   return {
     name,
@@ -162,6 +202,7 @@ function mkActor(name: string, kind: string, mini: boolean, now: number): Actor 
     coat: "fable",
     hat: "none",
     girl: false,
+    branch: "none",
     seed: seedOf(name + "|" + kind),
     x: 0,
     home: 0,
@@ -194,6 +235,7 @@ export function newScene(key: string, now: number): CardScene {
     seen: null,
     sent: null,
     roster: new Map(),
+    threads: new Map(),
     activity: undefined,
     hover: false,
     crewRR: 0,
@@ -281,7 +323,8 @@ export function syncScene(
   }
   s.roster = want;
   for (const m of s.crew) {
-    if (m.leaving === null && !want.has(m.name)) m.leaving = now;
+    // a branch is not on the roster; the branch loop below decides when it leaves
+    if (m.leaving === null && m.branch === "none" && !want.has(m.name)) m.leaving = now;
   }
   for (const [name, a] of want) {
     let m = s.crew.find((c) => c.name === name && c.leaving === null);
@@ -300,6 +343,32 @@ export function syncScene(
     m.working = a.working;
     m.coat = modelCoat(a.model);
     m.hat = roleHat(a);
+  }
+
+  // ---- branches: the job's live side threads stand with the crew, each in
+  // its own model's coat with a twig on its head; a headless one is a ghost.
+  // They are added after the crew, so on a card with no room left it is a
+  // branch that goes undrawn, and a branch never takes a crew member's name
+  // (its actor is named by its thread id).
+  const branches = new Map<string, WebThread>();
+  for (const t of shownThreads(job.threads)) branches.set(threadActorName(t), t);
+  s.threads = branches;
+  for (const m of s.crew) {
+    if (m.leaving === null && m.branch !== "none" && !branches.has(m.name)) m.leaving = now;
+  }
+  for (const [name, t] of branches) {
+    let m = s.crew.find((c) => c.name === name && c.leaving === null);
+    if (!m) {
+      if (liveCount(s) >= CREW_MAX) continue;
+      m = mkActor(name, "branch", true, now);
+      m.girl = isGirl(name);
+      m.home = s.lead.home + s.lead.x;
+      s.crew.push(m);
+    }
+    m.branch = threadBranch(t);
+    m.coat = threadCoat(t);
+    m.tag = branchTag(t);
+    m.working = !!t.answering;
   }
   crewSlots(s);
 
@@ -440,11 +509,22 @@ function stepActor(a: Actor, now: number, dt: number, R: number, C: Palette) {
  * Every character wears its model's coat; a lead that hit a usage limit
  * keeps the greyed-out spent coat it always had, since that is its status.
  * Crew wear their role hats; the lead's hat is always none. A girl keeps
- * her glasses and ponytail under any coat and any hat.
+ * her glasses and ponytail under any coat and any hat. A branch wears its
+ * twig; a headless one is a ghost, drawn see-through and lifted off the
+ * ground on a slow bob of its own.
  */
 function drawActor(c: Ctx, s: CardScene, a: Actor, C: Palette) {
   const col = !a.mini && a.act === "limit" ? C.dino.spent : C.coats[a.coat];
-  drawKraken(c, headX(s, a), 1, actorScale(s, a), a.flip, a.P, a.o!, col, a.moving, a.hat, a.girl);
+  const sc = actorScale(s, a);
+  if (a.branch !== "headless") {
+    drawKraken(c, headX(s, a), 1, sc, a.flip, a.P, a.o!, col, a.moving, a.hat, a.girl, a.branch);
+    return;
+  }
+  const was = c.globalAlpha;
+  c.globalAlpha = was * GHOST_ALPHA;
+  const y = 1 - (GHOST_LIFT + Math.sin(a.P.t * 2.1 + a.seed * 7) * 1.6) * sc;
+  drawKraken(c, headX(s, a), y, sc, a.flip, a.P, a.o!, col, a.moving, a.hat, a.girl, a.branch);
+  c.globalAlpha = was;
 }
 
 /**
@@ -479,9 +559,14 @@ export function drawScene(
     const agent = s.roster.get(m.name);
     let pose = agent ? crewPose(agent, s.activity, nowMs) : "idle";
     if (pose === "work") pose = WORK_LOOP[Math.floor(now / 7 + m.seed * 40) % WORK_LOOP.length] ?? "think";
+    // a branch has no calls on the wire: a headless one thinks while its
+    // question is being answered, and any branch otherwise stands idle
+    if (m.branch !== "none") pose = branchPose(s.threads.get(m.name));
     setAct(m, pose, now);
     stepActor(m, now, dt, 4, C);
-    let al = m.kind === "teammate" ? 1 : 0.55;
+    // a teammate and a branch are drawn solid (a headless branch's ghost
+    // fade is drawActor's); a subagent or monitor is fainter
+    let al = m.kind === "teammate" || m.branch !== "none" ? 1 : 0.55;
     if (m.leaving !== null) al *= 1 - (now - m.leaving) / 0.6;
     al *= min(1, (now - m.born) / 0.3);
     c.globalAlpha = max(0, al);
@@ -528,7 +613,7 @@ function drawCrewTags(c: Ctx, s: CardScene, C: Palette) {
     rr(c, hx - w / 2, y - 5.5 * k, w, 11 * k, 2.5 * k);
     c.fill();
     c.globalAlpha = 1;
-    drawText(c, m.tag, hx, y + 0.5 * k, px, m.kind === "teammate" ? C.fg : C.steel, 600);
+    drawText(c, m.tag, hx, y + 0.5 * k, px, m.kind === "teammate" || m.branch !== "none" ? C.fg : C.steel, 600);
     i++;
   }
 }

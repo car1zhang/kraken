@@ -125,9 +125,39 @@ func TestEdgeSelectBindTargetGateBoundaries(t *testing.T) {
 			wantReason: "a: no identity",
 		},
 		{
-			name:       "no session data",
+			name:       "no usage data: neither a session nor a weekly window",
 			cand:       func() AccountUsage { a := edgeAcctHealthy("a"); a.Session = nil; return a }(),
-			wantReason: "a: no session data",
+			wantReason: "a: no usage data",
+		},
+		{
+			name: "a weekly window with no session window is eligible (missing session = 0%)",
+			cand: func() AccountUsage {
+				a := edgeAcctHealthy("a")
+				a.Session = nil
+				a.Weekly = &UsageWindow{Percent: 35}
+				return a
+			}(),
+			wantPick: true,
+		},
+		{
+			name: "no session window does not excuse a weekly window at the gate",
+			cand: func() AccountUsage {
+				a := edgeAcctHealthy("a")
+				a.Session = nil
+				a.Weekly = &UsageWindow{Percent: 90}
+				return a
+			}(),
+			wantReason: fmt.Sprintf("a: weekly %g%% ≥ %d%%", 90.0, candidateWeeklyPct),
+		},
+		{
+			name: "no session window does not excuse fable at the gate",
+			cand: func() AccountUsage {
+				a := edgeAcctWithFable(edgeAcctHealthy("a"), 80)
+				a.Session = nil
+				a.Weekly = &UsageWindow{Percent: 35}
+				return a
+			}(),
+			wantReason: fmt.Sprintf("a: fable %g%% ≥ %d%%", 80.0, candidateFablePct),
 		},
 		{
 			name:       "cooling: one milli PAST now is still cooling",

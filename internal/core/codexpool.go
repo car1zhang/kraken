@@ -537,9 +537,9 @@ func CodexSlotUsage(slug string) AccountUsage {
 		row.Session, row.Weekly = session, weekly
 		row.FetchedAt = rec.fetchedAt()
 		if row.Weekly != nil && row.Session == nil {
-			// Some accounts report only the long window. The selector gates on
-			// Session, so leaving it nil would exclude a perfectly healthy slot
-			// over a shape difference rather than over its usage.
+			// Some accounts report only the long window. The long window
+			// stands in for the session one, so the selector's session gate
+			// and its session ranking both read the slot's weekly load.
 			w := *row.Weekly
 			row.Session = &w
 		}

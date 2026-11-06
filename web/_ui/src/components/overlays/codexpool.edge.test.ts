@@ -190,10 +190,11 @@ describe("codexBars — which bars a codex row draws", () => {
   });
 
   // THE case this function exists for. `CodexSlotUsage` copies a lone weekly
-  // window into `Session` so the binder's selector — which excludes a row with
-  // no session — can still rank the slot. That copy is an artifact of the
-  // SELECTOR's requirements, and drawing it would show one measurement twice
-  // under two names, as though the account had two independent budgets.
+  // window into `Session` so the binder's selector gates and ranks the slot on
+  // its weekly load rather than reading a missing session as 0%. That copy is
+  // an artifact of the SELECTOR's ranking, and drawing it would show one
+  // measurement twice under two names, as though the account had two
+  // independent budgets.
   it("draws one bar when the session window is the weekly copy", () => {
     const bars = codexBars(edgeCxpWindowed({ percent: 37.5, resets_at: 1790208555000 }, { percent: 37.5, resets_at: 1790208555000 }));
     expect(bars).toEqual([{ label: "weekly", percent: 37.5 }]);

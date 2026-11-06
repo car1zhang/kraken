@@ -196,7 +196,7 @@ func TestContractAcctSelectBindTargetHonoursEveryRotationGate(t *testing.T) {
 		{"no creds", AccountUsage{Slug: "nocreds", Email: "n@example.com", Session: &UsageWindow{Percent: 1}, FetchedAt: contractAcctFreshAt, NoCreds: true}},
 		{"reauth required", AccountUsage{Slug: "reauth", Email: "r@example.com", Session: &UsageWindow{Percent: 1}, FetchedAt: contractAcctFreshAt, Reauth: true}},
 		{"no identity", AccountUsage{Slug: "noidentity", Session: &UsageWindow{Percent: 1}, FetchedAt: contractAcctFreshAt}},
-		{"no session data", AccountUsage{Slug: "nosession", Email: "s@example.com", FetchedAt: contractAcctFreshAt}},
+		{"no usage data", AccountUsage{Slug: "nousage", Email: "s@example.com", FetchedAt: contractAcctFreshAt}},
 		{"cooling", AccountUsage{Slug: "cooling", Email: "c@example.com", Session: &UsageWindow{Percent: 1}, FetchedAt: contractAcctFreshAt, CooldownUntil: contractAcctNow + 1}},
 		{"fable at the gate", contractAcctFable(contractAcctRow("fabled", "f@example.com", 1), 80)},
 		{"session at the gate", contractAcctRow("sessioned", "x@example.com", 80)},

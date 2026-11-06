@@ -55,14 +55,68 @@ func TestSelectRotationTargetSkipsMainSlugAndSameEmail(t *testing.T) {
 	}
 }
 
+// weeklyOnlyRow is a row shaped like a usage fetch whose response carried a
+// weekly window and no session window.
+func weeklyOnlyRow(slug string, weeklyPct float64) AccountUsage {
+	return AccountUsage{Slug: slug, Email: slug + "@example.com", Weekly: &UsageWindow{Percent: weeklyPct}}
+}
+
+// A pool in which NO row carries a session window must still yield a target:
+// a missing session window is read as 0%, never as a reason to exclude.
+func TestSelectRotationTargetAcceptsRowsWithoutSessionWindow(t *testing.T) {
+	rows := []AccountUsage{
+		func() AccountUsage { a := weeklyOnlyRow("b-slot", 20); a.Models = modelWindow("Fable", 30); return a }(),
+		func() AccountUsage { a := weeklyOnlyRow("a-slot", 50); a.Models = modelWindow("Fable", 10); return a }(),
+	}
+	slug, reason := SelectRotationTarget(rows, "main@example.com", 1000)
+	// Both sessions read 0, so the Fable tie-break decides.
+	if slug != "a-slot" || reason != "" {
+		t.Fatalf("slug=%q reason=%q, want a-slot (lowest Fable among equal sessions)", slug, reason)
+	}
+}
+
+// Mixed pools sort without dereferencing a nil window, and a row with no
+// session window ranks as an idle session ahead of a loaded one.
+func TestSelectRotationTargetRanksMissingSessionAsIdle(t *testing.T) {
+	rows := []AccountUsage{acctRow("loaded-slot", 40), weeklyOnlyRow("weekly-only-slot", 60)}
+	slug, reason := SelectRotationTarget(rows, "main@example.com", 1000)
+	if slug != "weekly-only-slot" || reason != "" {
+		t.Fatalf("slug=%q reason=%q, want weekly-only-slot", slug, reason)
+	}
+}
+
+// The bind selector takes the same weekly-only rows, still ranking bound count
+// first and still gating on the weekly window.
+func TestSelectBindTargetAcceptsRowsWithoutSessionWindow(t *testing.T) {
+	const now = int64(1_000_000_000)
+	rows := []AccountUsage{acctRow("loaded-slot", 40), weeklyOnlyRow("weekly-only-slot", 60)}
+	slug, email, reason := SelectBindTarget(rows, nil, nil, "", now)
+	if slug != "weekly-only-slot" || email != "weekly-only-slot@example.com" || reason != "" {
+		t.Fatalf("slug=%q email=%q reason=%q, want weekly-only-slot", slug, email, reason)
+	}
+
+	// The bound count still outranks the health numbers.
+	slug, _, _ = SelectBindTarget(rows, nil, map[string]int{"weekly-only-slot": 1}, "", now)
+	if slug != "loaded-slot" {
+		t.Fatalf("slug=%q, want loaded-slot when weekly-only-slot already carries a cell", slug)
+	}
+
+	// A weekly-only row is still gated on what it does carry.
+	spent := weeklyOnlyRow("spent-slot", 90)
+	_, _, reason = SelectBindTarget([]AccountUsage{spent}, nil, nil, "", now)
+	if !strings.Contains(reason, "spent-slot: weekly 90% ≥ 90%") {
+		t.Fatalf("reason=%q, want the weekly gate to name spent-slot", reason)
+	}
+}
+
 func TestSelectRotationTargetEligibilityMatrix(t *testing.T) {
 	now := int64(1_000_000)
 	// Every non-{no-creds,reauth} row below MUST carry an Email: those two
 	// checks run before the Email == "" guard in SelectRotationTarget's
 	// switch, so they hit their intended branch regardless: but
-	// nil-session-slot/cooling-slot/fable-high-slot/session-high-slot are
+	// no-usage-slot/cooling-slot/fable-high-slot/session-high-slot are
 	// emailless would short-circuit at "no identity" instead of their
-	// intended exclusion (Session == nil / CooldownUntil / fable / session
+	// intended exclusion (no usage windows / CooldownUntil / fable / session
 	// thresholds) — deleting any of those later checks would keep this
 	// suite green if the rows had no Email (X5).
 	//
@@ -74,7 +128,7 @@ func TestSelectRotationTargetEligibilityMatrix(t *testing.T) {
 	excludedRows := []AccountUsage{
 		{Slug: "no-creds-slot", NoCreds: true, Session: &UsageWindow{Percent: 5}},
 		{Slug: "reauth-slot", Reauth: true, Session: &UsageWindow{Percent: 5}},
-		{Slug: "nil-session-slot", Email: "nil-session-slot@example.com"},
+		{Slug: "no-usage-slot", Email: "no-usage-slot@example.com"},
 		{Slug: "cooling-slot", Email: "cooling-slot@example.com", Session: &UsageWindow{Percent: 5}, CooldownUntil: now + 1},
 		{Slug: "fable-high-slot", Email: "fable-high-slot@example.com", Session: &UsageWindow{Percent: 5}, Models: modelWindow("Fable", 80)},
 		{Slug: "session-high-slot", Email: "session-high-slot@example.com", Session: &UsageWindow{Percent: 80}},
@@ -96,7 +150,7 @@ func TestSelectRotationTargetEligibilityMatrix(t *testing.T) {
 	wantSubstrings := []string{
 		"no-creds-slot: no creds",
 		"reauth-slot: reauth required",
-		"nil-session-slot: no session data",
+		"no-usage-slot: no usage data",
 		"cooling-slot: cooling",
 		"fable-high-slot: fable 80% ≥ 80%",
 		"session-high-slot: session 80% ≥ 80%",
