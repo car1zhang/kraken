@@ -73,8 +73,32 @@ import (
 // per-run cap are all decided here, in one function.
 
 // MindRunTimeout is the deadline one run's child process gets; past it the
-// child is killed and the run fails with a note starting "timed out".
+// child is killed and the run fails with a note starting "timed out". It is
+// enforced twice over: by the context's own deadline, and by a wall-clock
+// check (mindWallNow, every mindWallTick) — the context's clock does not
+// advance while the machine sleeps, so on a sleep-cycling night the deadline
+// alone measures ten AWAKE minutes, and a child retrying a suspended stream
+// can run for hours.
 var MindRunTimeout = 10 * time.Minute
+
+// mindAwakeFloor is how long the daemon must have ticked without measured
+// sleep (daemonState.Awake) before mindRunPass claims a run: a dark wake
+// lasts seconds, a few minutes at the outside, a real wake lasts hours, and
+// a child launched into a dark wake loses its stream to the next sleep. Ten
+// minutes is about twice the longest dark wake seen on a laptop. The queued
+// row waits, and a daily run kicked at midnight runs on the morning's first
+// long wake.
+var mindAwakeFloor = 10 * time.Minute
+
+// mindWallNow and mindWallTick are the wall-clock bound's seams: the clock
+// read (unix millis, never a monotonic reading) and how often it is read.
+// The ticker itself runs on the monotonic clock, which stops while the
+// machine sleeps, so the read has to be frequent in AWAKE time for the cut
+// to land in the first dark wake past the deadline: once a second.
+var (
+	mindWallNow  = func() int64 { return time.Now().UnixMilli() }
+	mindWallTick = time.Second
+)
 
 // MindBundleRetention is how long a run's bundle bytes are kept. Older
 // bundles are pruned by the nightly backup pass; rows, manifests and answers
@@ -1246,9 +1270,42 @@ func mindLaunch(j *Job, stdin string) (stdout, model, sha string, err error) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), MindRunTimeout)
 	defer cancel()
+	// the wall-clock half of the deadline: the context's clock stops while
+	// the machine sleeps, this one does not. Every seam is read here, before
+	// the goroutine starts, so nothing in it races a later write to the
+	// package variables; the goroutine is waited for before this returns.
+	var wallExpired atomic.Bool
+	wallNow, wallLimit := mindWallNow, MindRunTimeout.Milliseconds()
+	wallStart := wallNow()
+	wallTicker := time.NewTicker(mindWallTick)
+	wallStop, wallDone := make(chan struct{}), make(chan struct{})
+	go func() {
+		defer close(wallDone)
+		defer wallTicker.Stop()
+		for {
+			select {
+			case <-wallStop:
+				return
+			case <-wallTicker.C:
+				if wallNow()-wallStart >= wallLimit {
+					wallExpired.Store(true)
+					cancel()
+					return
+				}
+			}
+		}
+	}()
 	out, stderr, lerr := mindLauncher(ctx, argv, cwd, env, stdin)
+	close(wallStop)
+	<-wallDone
+	if lerr == nil {
+		return out, model, sha, nil // a finished answer stands whatever clock passed meanwhile
+	}
 	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
 		return out, model, sha, fmt.Errorf("timed out after %s", MindRunTimeout)
+	}
+	if wallExpired.Load() {
+		return out, model, sha, fmt.Errorf("timed out after %s on the wall clock (the machine slept during the run)", MindRunTimeout)
 	}
 	if lerr != nil {
 		msg := lerr.Error()
@@ -1630,6 +1687,18 @@ func (d *daemonState) mindRunPass(st *store.Store, now time.Time) {
 	}
 	failStaleMindRuns(st, now)
 	kickMindDaily(st, now)
+	// a queued run waits for a machine that has been awake long enough to
+	// be a real wake rather than a dark one; an unfed clock holds nothing.
+	// The hold is logged when it begins, whether or not a row is queued,
+	// so the line says what is gated rather than claiming a run is waiting.
+	if awake := d.Awake.For(now); awake != awakeUnknown && awake < mindAwakeFloor {
+		if !d.MindHeld {
+			d.MindHeld = true
+			dlogEvent("info", "mind-run-held", "mind: no run is claimed until the machine has been awake %s (awake %s so far)", mindAwakeFloor, awake.Truncate(time.Second))
+		}
+		return
+	}
+	d.MindHeld = false
 	if !mindRunning.CompareAndSwap(false, true) {
 		return
 	}
