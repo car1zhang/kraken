@@ -74,8 +74,9 @@ const LOAD_TIMEOUT_MS = 4000;
 /**
  * Per-card redraw intervals, by the lead's pose (`intervalFor`). A working
  * lead acting out a call draws at ~30 fps. A held pose (blocked, question,
- * and a working lead in think or wait) moves gently enough for 12. A sleeper,
- * an egg or a spent lead reads the same at four. A busy card (a bubble in
+ * and a working lead in think or wait) moves gently enough for 12. A sleeper
+ * (parked or frozen), an egg, a headstone or a spent lead reads the same at
+ * four. A busy card (a bubble in
  * flight, crew walking, the pointer on it) draws at the fast rate whatever
  * its pose.
  */
@@ -83,7 +84,7 @@ const FAST_MS = 33;
 const HELD_MS = 84;
 const SLOW_MS = 250;
 const HELD_POSES = new Set(["blocked", "question", "think", "wait"]);
-const SLOW_POSES = new Set(["parked", "limit", "done", "draft"]);
+const SLOW_POSES = new Set(["parked", "frozen", "limit", "done", "draft"]);
 /** Below this zoom the characters are a few pixels tall: every quiet card drops to the slow rate. */
 const FAR_ZOOM = 0.45;
 /** While an arrow is hot (its parent delegating) the under layer redraws this often for the dash run. */

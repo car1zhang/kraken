@@ -559,6 +559,8 @@ export interface Pose {
   sit: number;
   tap: number;
   egg: number;
+  /** set by the done pose: the figure is drawn as a headstone, like `egg` for a draft */
+  grave: number;
   seed: number;
   a: number;
   b: number;
@@ -591,6 +593,7 @@ export function newPose(): Pose {
     sit: 0,
     tap: 0,
     egg: 0,
+    grave: 0,
     seed: 0,
     a: 0,
     b: 0,
@@ -612,6 +615,7 @@ function reset(P: Pose, kind: string, t: number) {
   P.sit = 0;
   P.tap = 0;
   P.egg = 0;
+  P.grave = 0;
   P.a = P.b = P.cc = P.d = P.e = P.f = 0;
   const e = P.eyes;
   e.x = e.y = e.lid = 0;
@@ -856,7 +860,13 @@ const FILL: Readonly<Record<string, Fill>> = {
     eyes(P, 0.5, -0.7);
   },
   parked: fillSleep,
-  done: fillSleep,
+  // on hold: asleep until its cell wakes it
+  frozen: fillSleep,
+  // finished: a headstone stands where the character was
+  done: (P) => {
+    P.grave = 1;
+    P.face = 0;
+  },
   limit: (P) => {
     P.sit = 1;
     P.face = 0;
@@ -1190,16 +1200,7 @@ const FX: Readonly<Record<string, Draw>> = {
   blocked: (c, P, o) => flag(c, o.C, 21, -49 - P.a, 1 + 0.13 * sin(P.t * 6), o.hue, "!"),
   question: (c, P, o) => flag(c, o.C, 19, -50 + sin(P.t * 2.4) * 1.5, 1, o.hue, "?"),
   parked: fxSleep,
-  done: (c, P, o) => {
-    fxSleep(c, P, o);
-    line(c, -19, 0, -19, -24, o.C.steel, 1.4);
-    c.fillStyle = o.hue;
-    c.beginPath();
-    c.moveTo(-19, -24);
-    c.lineTo(-8.5, -20 + sin(P.t * 3) * 1.1);
-    c.lineTo(-19, -16.5);
-    c.fill();
-  },
+  frozen: fxSleep,
   limit: (c, P, o) => {
     const on = fr(P.t * 1.2) < 0.5;
     c.strokeStyle = o.C.bad;
@@ -1227,6 +1228,36 @@ export function fillPose(P: Pose, kind: string, t: number, o: PoseOpts): void {
 
 /** The egg's yellow spots: x, y, r. */
 const EGG_SPOTS = [-3.5, -15, 2, 3.2, -9, 2.4, -2, -5, 1.5, 3.5, -17, 1.2];
+/** The grass at the foot of a headstone: each blade's root x, its tip's x offset, its height. */
+const GRAVE_GRASS = [-15, -1.8, 4.6, -12.6, 0.7, 6.2, 12.8, -0.7, 5.8, 15.2, 1.7, 4.2];
+
+/**
+ * A done job's figure: a headstone on the card's edge, where the egg of a
+ * draft would sit. Stone and inscription come from the palette's fixed prop
+ * colours, so it reads on both themes; the grass is the pose's hue, which for
+ * done is the done green, the one colour that still says how the job ended.
+ */
+function drawGrave(c: Ctx, o: PoseOpts) {
+  const C = o.C;
+  c.fillStyle = C.steel;
+  c.strokeStyle = C.edge;
+  c.lineWidth = 1.4;
+  c.beginPath();
+  c.moveTo(-11, 0);
+  c.lineTo(-11, -20);
+  c.bezierCurveTo(-11, -34.5, 11, -34.5, 11, -20);
+  c.lineTo(11, 0);
+  c.closePath();
+  c.fill();
+  c.stroke();
+  T(c, "RIP", 0, -19, 8, C.ink);
+  line(c, -5.5, -11.5, 5.5, -11.5, C.edge, 1.1);
+  line(c, -3.5, -7.5, 3.5, -7.5, C.edge, 1.1);
+  for (let i = 0; i < GRAVE_GRASS.length; i += 3) {
+    const x = GRAVE_GRASS[i]!;
+    line(c, x, 0.6, x + GRAVE_GRASS[i + 1]!, -GRAVE_GRASS[i + 2]!, o.hue, 1.3);
+  }
+}
 
 function drawArm(c: Ctx, col: DinoColors, sx: number, hx: number, hy: number) {
   const sy = -13;
@@ -1419,6 +1450,13 @@ export function drawKraken(
       c.arc(EGG_SPOTS[i]!, EGG_SPOTS[i + 1]!, EGG_SPOTS[i + 2]!, 0, TAU);
       c.fill();
     }
+    c.restore();
+    FLIP = keep;
+    return;
+  }
+  if (P.grave) {
+    // a done job is laid to rest: no body, no hat, no effects
+    drawGrave(c, o);
     c.restore();
     FLIP = keep;
     return;

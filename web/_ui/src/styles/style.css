@@ -884,9 +884,11 @@ input[type="password"], .thread-name-label {
    above, under class names of its own (.frozen-drawer/-head/-cards) so a
    selector for one drawer never matches the other; only what differs is
    here. A card on hold is dimmed the way an archived one is, since being out
-   of the way is the point. */
-.card.frozen { opacity: 0.7; }
-.card.frozen:hover { opacity: 1; }
+   of the way is the point — but only IN the drawer. The agent map draws the
+   same card with the same .frozen class, and there it stays at full
+   strength: on the map its sleeping character says it is on hold. */
+.frozen-cards > .card.frozen { opacity: 0.7; }
+.frozen-cards > .card.frozen:hover { opacity: 1; }
 .status-frozen { color: var(--text-2); }
 .btn.freeze {
   background: transparent; color: var(--muted);
@@ -3905,6 +3907,8 @@ button.spawn-chip.spawn-draft:hover { background: color-mix(in srgb, var(--ac) 1
 .map-card[data-status="question"] { --map-sc: var(--warn); }
 .map-card[data-status="parked"] { --map-sc: color-mix(in srgb, var(--ac2) 55%, var(--g1)); }
 .map-card[data-status="limit"] { --map-sc: var(--stopped); }
+/* on hold: the quiet frame a draft has, since neither is asking for anything */
+.map-card[data-status="frozen"] { --map-sc: var(--muted); }
 .map-card[data-status="done"] { --map-sc: var(--ok); }
 .map-card[data-status="draft"] { --map-sc: var(--muted); }
 /* the status colour frames the whole map card — JobCard inside it keeps its
@@ -3980,6 +3984,8 @@ button.spawn-chip.spawn-draft:hover { background: color-mix(in srgb, var(--ac) 1
 /* parked is the frame's and the dino's colour too (draw.ts Palette.parked) */
 [data-act="parked"] { --act: color-mix(in srgb, var(--ac2) 55%, var(--g1)); }
 [data-act="draft"] { --act: var(--muted); }
+/* frozen is muted on the frame, the band and the canvas alike (hueOf's default) */
+[data-act="frozen"] { --act: var(--muted); }
 [data-act="limit"] { --act: var(--stopped); }
 [data-act="done"] { --act: var(--ok); }
 
