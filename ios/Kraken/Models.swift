@@ -83,6 +83,15 @@ struct WebBoard: Decodable {
     // the "this Mac" row of Settings' machine filter; absent, that row reads
     // the bare words.
     let nodeLabel: String?
+    // How many jobs the archive holds (`archived_count`, additive: absent on
+    // a server older than the key), and goal id → how many archived jobs
+    // link that goal (`archived_goal_counts`, additive and `omitempty`). They
+    // are what a client polling `/api/board?archived=0` knows of the archive
+    // before it fetches `GET /api/archived`. This app polls the full board,
+    // whose `jobs` still carries every archived card, so both are decoded
+    // and not read.
+    let archivedCount: Int?
+    let archivedGoalCounts: [String: Int]?
 
     enum CodingKeys: String, CodingKey {
         case daemon
@@ -99,6 +108,8 @@ struct WebBoard: Decodable {
         case nodesBox = "nodes"
         case nodeId = "node_id"
         case nodeLabel = "node_label"
+        case archivedCount = "archived_count"
+        case archivedGoalCounts = "archived_goal_counts"
     }
 }
 

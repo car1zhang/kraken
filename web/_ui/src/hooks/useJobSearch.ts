@@ -93,6 +93,9 @@ export function useJobSearch(
 ): JobSearchModel {
   const [query, setQuery] = useState("");
   const { byColumn, archived } = board;
+  // The archive's size for the `N of M` readout: the board's count, since the
+  // archived cards themselves load only once a search (or the drawer) asks.
+  const archiveSize = board.archivedCount ?? archived.length;
   const terms = useMemo(() => parseTerms(query), [query]);
   // One spelling of "no filter" from here down: the prop may arrive as
   // undefined (a host that never passes one) or null (App's cleared state),
@@ -100,7 +103,7 @@ export function useJobSearch(
   const goal = goalFilter ?? null;
 
   return useMemo(() => {
-    let total = archived.length;
+    let total = archiveSize;
     for (const col of COLUMNS) total += byColumn[col].length;
 
     // Idle returns the board's OWN arrays by identity rather than copies:
@@ -172,5 +175,5 @@ export function useJobSearch(
       active: true,
       goalFilter: goal,
     };
-  }, [byColumn, archived, terms, query, goal]);
+  }, [byColumn, archived, archiveSize, terms, query, goal]);
 }

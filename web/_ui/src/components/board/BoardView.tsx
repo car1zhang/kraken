@@ -1,11 +1,11 @@
-import { useMemo } from "react";
+import { useEffect, useMemo } from "react";
 
 import type { BoardModel } from "../../hooks/useBoard.ts";
 import type { JobSearchModel } from "../../hooks/useJobSearch.ts";
 import { useLocalStorage } from "../../hooks/useLocalStorage.ts";
 import { COLUMNS } from "../../lib/columns.ts";
 import { isFrozen } from "../../lib/format.ts";
-import { goalJobCounts } from "../../lib/goals.ts";
+import { addArchivedGoalCounts, goalJobCounts } from "../../lib/goals.ts";
 import { jobKey } from "../../lib/jobKey.ts";
 import type { SteerMode } from "../../lib/moves.ts";
 import { ArchiveDrawer } from "./ArchiveDrawer.tsx";
@@ -206,17 +206,17 @@ export function BoardView({
   const setView = (v: BoardViewMode) => setStoredView(v);
 
   /**
-   * How many jobs link each goal, and every goal's text — both from the ONE
-   * payload this view already holds, so a per-row count costs no wire key and
-   * no second source that could disagree with the cards on screen.
+   * How many jobs link each goal, and every goal's text — from the cards this
+   * view already holds, so the count cannot disagree with the cards on screen.
    *
    * The counting itself is `goalJobCounts` (lib/goals.ts), a pure function
-   * over the flat job array rather than a loop here: it is the number the
+   * over a flat job array rather than a loop here: it is the number the
    * panel's badges promise and the board's filter has to deliver, so it is
-   * worth being nameable and testable on its own. It is fed
-   * `board.board?.jobs` — the flat array, not the bucketed columns — because
-   * archived jobs ride that same array, link goals like any other, and the
-   * archive drawer is on this board.
+   * worth being nameable and testable on its own. It is fed every local card,
+   * active and archived alike — not the bucketed columns — because an
+   * archived job links goals like any other and the archive drawer is on this
+   * board. The one case the cards cannot answer is an archive not loaded yet,
+   * which the payload's own per-goal tally covers (see below).
    *
    * The text index is this view's own half, and stays here because it is
    * board-shaped rather than count-shaped: the bar's chip has to NAME the
@@ -230,19 +230,39 @@ export function BoardView({
    */
   // LOCAL cards only: a remote card's goal ids are its owner's goals, and
   // counting them here would credit this board's goal of the same id.
+  //
+  // The archived cards are not on the poll: the active ones come off the
+  // payload and the archived ones off the model (`board.archived`), which is
+  // empty until something has asked for them. Until then the payload's own
+  // tally of archived jobs per goal (`archived_goal_counts`) stands in, so a
+  // badge reads the same before and after the archive loads.
   const allJobs = board.board?.jobs;
-  const jobs = useMemo(() => allJobs?.filter((j) => !j.owner), [allJobs]);
+  const archivedJobs = board.archived;
+  const archivedLoaded = board.archivedLoaded ?? true;
+  const archivedTally = board.board?.archived_goal_counts;
+  const jobs = useMemo(
+    () => [...(allJobs ?? []).filter((j) => !j.owner && !j.archived), ...archivedJobs],
+    [allJobs, archivedJobs],
+  );
   const goalIndex = useMemo(() => {
-    const counts = goalJobCounts(jobs ?? []);
+    const counts = goalJobCounts(jobs);
+    if (!archivedLoaded) addArchivedGoalCounts(counts, archivedTally);
     const text = new Map<number, string>();
     for (const g of board.board?.goals?.week ?? []) text.set(g.id, g.text);
     for (const g of board.board?.goals?.day ?? []) text.set(g.id, g.text);
-    for (const job of jobs ?? []) {
+    for (const job of jobs) {
       for (const g of job.goals ?? []) if (!text.has(g.id)) text.set(g.id, g.text);
       if (job.goal && !text.has(job.goal.id)) text.set(job.goal.id, job.goal.text);
     }
     return { counts, text };
-  }, [jobs, board.board?.goals]);
+  }, [jobs, archivedLoaded, archivedTally, board.board?.goals]);
+
+  // A search or a goal filter reaches into the archive, so either one asks
+  // for the archived cards; an open archive drawer asks for itself.
+  const needArchived = board.needArchived;
+  useEffect(() => {
+    if (search.active) needArchived?.();
+  }, [search.active, needArchived]);
 
   /**
    * The BLOCKED column, split for rendering: the cards that need the operator
@@ -355,7 +375,9 @@ export function BoardView({
                     <ArchiveDrawer
                       archived={search.archived}
                       actions={actions}
-                      total={search.active ? board.archived.length : undefined}
+                      total={search.active ? (board.archivedCount ?? board.archived.length) : undefined}
+                      count={board.archivedCount}
+                      onNeed={board.needArchived}
                       // A search reaches an archived job ONLY through this: with
                       // no status filter, a match inside a collapsed drawer would
                       // otherwise be counted in the readout and invisible.

@@ -801,6 +801,20 @@ export interface WebBoard {
    * key — the picker then says the bare words "this Mac".
    */
   node_label?: string;
+  /**
+   * How many jobs the archive holds (`webBoard.archived_count`). This board is
+   * polled with `?archived=0`, so `jobs` carries no archived card: useBoard
+   * fetches them from `/api/archived` when the drawer or a search needs them,
+   * and re-fetches when this number moves. Absent only on a server older than
+   * the key, whose board still carries the archived cards in `jobs`.
+   */
+  archived_count?: number;
+  /**
+   * Goal id (as a string key) → how many ARCHIVED jobs link it. Added to a
+   * goal's badge while the archived cards themselves are not loaded, so the
+   * number is the same before and after. Absent when none does.
+   */
+  archived_goal_counts?: Record<string, number>;
 }
 
 /** `webJobOwner` (internal/api/board.go): the node a remote card runs on. */

@@ -1,3 +1,5 @@
+import { useEffect } from "react";
+
 import type { WebJob } from "../../api/types.ts";
 import { useLocalStorageFlag } from "../../hooks/useLocalStorage.ts";
 import { jobKey } from "../../lib/jobKey.ts";
@@ -28,6 +30,20 @@ export interface ArchiveDrawerProps {
    * header goes `disabled` for as long as it holds; see the docblock.
    */
   forceOpen?: boolean;
+  /**
+   * How many jobs the archive holds when no query is running, from the board
+   * payload. The archived cards are fetched only once something needs them,
+   * so with the drawer shut `archived` is empty while the archive is not:
+   * this is the head's number then, and what keeps the head pressable.
+   * Absent reads as `archived.length` (every card already in hand).
+   */
+  count?: number;
+  /**
+   * Called while the drawer is open: asks the board for the archived cards
+   * (`BoardModel.needArchived`). Until they land an open drawer over a
+   * non-empty archive shows a loading line.
+   */
+  onNeed?: () => void;
 }
 
 /**
@@ -74,16 +90,26 @@ export function ArchiveDrawer({
   actions,
   total,
   forceOpen,
+  count,
+  onNeed,
 }: ArchiveDrawerProps) {
   const [stored, setStored] = useLocalStorageFlag("kraken-archive-open", false);
   const open = stored || !!forceOpen;
   const shown = archived.length;
+  // The archive's size with no query running: the board's count, since the
+  // cards themselves may not be loaded yet.
+  const size = count ?? shown;
   // Does the ARCHIVE hold anything, as opposed to the query having matched
   // something in it — the triangle's question, and the one place the two
-  // differ. `total ?? shown` collapses to today's behaviour with no query,
-  // where the two numbers are the same.
-  const hasArchived = (total ?? shown) > 0;
+  // differ.
+  const hasArchived = (total ?? size) > 0;
+  // What a press could reveal: the matches under a query, else the archive.
+  const revealable = total === undefined ? size : shown;
   const drop = useColumnDrop(ARCHIVED);
+  // an open drawer needs its cards; the board fetches them once and keeps them
+  useEffect(() => {
+    if (open) onNeed?.();
+  }, [open, onNeed]);
 
   return (
     <div
@@ -94,16 +120,20 @@ export function ArchiveDrawer({
       <button
         className="archive-head"
         id="archive-toggle"
-        // `shown`, not the archive's size: a press can only ever reveal the
-        // cards below, and there are none to reveal at zero.
-        disabled={shown === 0 || !!forceOpen}
+        // What a press could reveal, not always the archive's size: under a
+        // query it can only reveal the matches, and there are none at zero.
+        disabled={revealable === 0 || !!forceOpen}
         // Reachable only when `forceOpen` is off, so `open` and `stored` are
         // the same value here and the toggle is a plain flip of the flag.
         onClick={() => setStored(!stored)}
       >
         <span className="tri">{hasArchived ? (open ? "▾" : "▸") : "·"}</span> ARCHIVED{" "}
-        <span className="n">{total === undefined ? shown : `${shown}/${total}`}</span>
+        <span className="n">{total === undefined ? size : `${shown}/${total}`}</span>
       </button>
+      {/* open over an archive whose cards have not landed yet */}
+      {open && shown === 0 && total === undefined && size > 0 ? (
+        <div className="archive-loading">loading…</div>
+      ) : null}
       {/* the CARDS follow the query, not the archive: a drawer held open over
           zero matches renders its head and nothing else, which is what the
           `0/1` count is there to explain. */}

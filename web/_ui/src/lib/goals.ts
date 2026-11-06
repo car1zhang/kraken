@@ -130,6 +130,29 @@ export function goalJobCounts(jobs: WebJob[]): Map<number, number> {
   return counts;
 }
 
+/**
+ * Fold the board's per-goal tally of ARCHIVED jobs (`archived_goal_counts`,
+ * goal id as a string key → count) into `counts`, in place, and return it.
+ *
+ * The archived cards are off the poll and load only when the drawer or a
+ * search asks, so until then `goalJobCounts` cannot see them; the board sends
+ * this tally so a goal's badge reads the same before and after they load. The
+ * caller applies it ONLY while the archive is not loaded, or every archived
+ * job would count twice. A key that is not a positive integer, and a count
+ * that is not a positive number, are skipped.
+ */
+export function addArchivedGoalCounts(
+  counts: Map<number, number>,
+  tally: Readonly<Record<string, number>> | undefined,
+): Map<number, number> {
+  for (const [key, n] of Object.entries(tally ?? {})) {
+    const id = Number(key);
+    if (!Number.isInteger(id) || id <= 0 || !Number.isFinite(n) || n <= 0) continue;
+    counts.set(id, (counts.get(id) ?? 0) + n);
+  }
+  return counts;
+}
+
 /** The chip's character budget. One number, read by every chip renderer. */
 const GOAL_CHIP_MAX = 24;
 

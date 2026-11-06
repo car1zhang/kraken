@@ -210,6 +210,13 @@ var webBoardSpec = map[string]fieldSpec{
 	// This node's device label, for the machines dropdown's self row.
 	// Absent with the fleet off. Additive.
 	"node_label": {kind: wireString, required: false},
+	// How many jobs the archive holds; always rides, 0 for an empty archive.
+	// With archived_goal_counts it is what a client polling `?archived=0`
+	// knows of the archive before it fetches GET /api/archived. Additive.
+	"archived_count": {kind: wireNumber, required: true},
+	// goal id → how many archived jobs link it; absent when none does.
+	// Additive.
+	"archived_goal_counts": {kind: wireObject, required: false},
 }
 
 // webBackgroundSpec covers background.go's webBackground — webBoard's
