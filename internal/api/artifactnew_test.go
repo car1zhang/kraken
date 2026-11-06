@@ -31,7 +31,7 @@ func TestMarkNewArtifactsFlagsTheUnreadAndTheChanged(t *testing.T) {
 	seedSeen(t, st, j.ID, map[string]int64{"00-overview.md": 1_500, "50-contract.md": 1_500})
 
 	index := artifactPathsIndex(st)
-	seen := jobs.ArtifactSeenIndex(st)
+	seen := jobs.ArtifactSeenIndex(st, nil)
 	got := markNewArtifacts(boardArtifacts(index, j, false), seen[j.ID])
 	want := map[string]bool{"00-overview.md": false, "50-contract.md": true, "legacy.md": false}
 	if len(got) != len(want) {
@@ -67,6 +67,38 @@ func TestArtifactNewRidesTheWireOnlyWhenTrue(t *testing.T) {
 		t.Errorf("a read artifact carries neither key: %s", s)
 	}
 	assertShape(t, "webArtifact(read)", read, webArtifactSpec)
+}
+
+func TestNodeCardClearsNewOnACopy(t *testing.T) {
+	arts := []webArtifact{
+		{Name: "a.md", URL: "/api/artifact/x/pluto/a.md", New: true, mtime: 5},
+		{Name: "b.md", URL: "/api/artifact/x/pluto/b.md"},
+	}
+	card := webJob{Slug: "x", Artifacts: arts}
+	got := nodeCard(card)
+	for _, a := range got.Artifacts {
+		if a.New {
+			t.Errorf("sibling card artifact %s still carries new", a.Name)
+		}
+	}
+	if got.Artifacts[0].Name != "a.md" || got.Artifacts[0].URL != arts[0].URL || len(got.Artifacts) != 2 {
+		t.Errorf("sibling card artifacts = %+v, want the same names and urls", got.Artifacts)
+	}
+	// the board's cached slice is shared with every reader: the clear must not reach it
+	if !arts[0].New {
+		t.Error("nodeCard cleared new on the shared slice instead of a copy")
+	}
+	data, err := json.Marshal(got.Artifacts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(data), "new") {
+		t.Errorf("sibling wire carries new: %s", data)
+	}
+	// an artifact-less card stays artifact-less (nil, not an empty array)
+	if n := nodeCard(webJob{Slug: "y"}); n.Artifacts != nil {
+		t.Errorf("artifacts = %v, want nil", n.Artifacts)
+	}
 }
 
 func TestArchivedCardArtifactsNeverReadAsNew(t *testing.T) {

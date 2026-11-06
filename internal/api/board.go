@@ -66,8 +66,9 @@ type webArtifact struct {
 	// New says the operator has not opened this artifact since it last
 	// changed (jobs.ArtifactIsNew over the `artifacts_seen:<id>` record the
 	// GET /api/artifact read stamps). Set by markNewArtifacts on the board's
-	// own active cards only — never on an archived card, and never on a card
-	// served to a sibling node, whose operator's reads these are not — and
+	// own active cards only — never on an archived card, and cleared again by
+	// nodeCard before a card goes to a sibling node, whose operator's reads
+	// these are not (the receiver's strippedCards would drop it anyway) — and
 	// omitted when false, so a client that predates it renders the list
 	// exactly as before. Additive, so apiContract stays put.
 	New bool `json:"new,omitempty"`
@@ -1584,9 +1585,15 @@ func buildWebBoard() webBoard {
 	// they matter: the pair once ran per job ever archived, on every build.
 	feedback := feedbackIndex(activeStore)
 	artifactPaths := artifactPathsIndex(activeStore)
-	// Which artifacts the operator has opened, every job's record in one
-	// read, so each active card can flag the ones changed since.
-	artifactSeen := jobs.ArtifactSeenIndex(activeStore)
+	// Which artifacts the operator has opened, every non-archived job's
+	// record in one read (the rows of archived and hard-deleted jobs are
+	// skipped unparsed), so each card the active loop builds can flag the
+	// ones changed since.
+	activeIDs := make(map[int64]bool, len(js))
+	for _, j := range js {
+		activeIDs[j.ID] = true
+	}
+	artifactSeen := jobs.ArtifactSeenIndex(activeStore, func(id int64) bool { return activeIDs[id] })
 	// Two more one-query indexes for the lead's context fill (webContextFor):
 	// every `cell_ctx:*` row and every `auto_handoff:*` row, read once here
 	// rather than per job for the token index's reason. Only the active loop

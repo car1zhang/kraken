@@ -25,7 +25,7 @@ import { newScene, syncScene } from "./scene.ts";
 
 const T0 = 1_800_000_000_000;
 
-// pose text (the drifting ?s, the sleeper's z) comes from sprite canvases;
+// pose text (the flags' ? and ?!, the sleeper's z) comes from sprite canvases;
 // jsdom has no 2D context, and the drawing code skips a null one
 beforeEach(() => {
   vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockImplementation(() => null);

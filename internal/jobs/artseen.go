@@ -25,11 +25,13 @@ import (
 // immutable job id, like every other per-job kv row: archiving frees a slug,
 // and a new job must not inherit a dead generation's reads.
 //
-// The read itself is the mark. Nothing the operator does on the board or the
-// phone opens an artifact without fetching it from that route, and no agent
-// or node proxy goes through it (a cell reads the files, a sibling node calls
-// the resolvers directly), so a mark means the operator saw it, with no
-// client change and no second request.
+// The read itself is the mark. Every artifact the operator opens on the
+// board or the phone is fetched from that route (revealing a file in Finder
+// is the one way to open it that is not), the phone's pager fetches only the
+// page on screen (ArtifactView.swift `isSelected`, so a swipe-neighbour is
+// not a read), and no agent or node proxy goes through it (a cell reads the
+// files, a sibling node calls the resolvers directly), so a mark means the
+// operator saw it, with no second request.
 
 // artifactsSeenPrefix is the kv key family; a job's row is the prefix plus
 // its id.
@@ -53,10 +55,17 @@ func artifactsSeenKey(jobID int64) string {
 	return artifactsSeenPrefix + strconv.FormatInt(jobID, 10)
 }
 
+// errSeenParse marks a row whose value is not the JSON object this file
+// writes: the one read failure the mark may REPLACE. Any other read error (a
+// busy database) is transient, and writing over a row that could not be read
+// would turn one lost read into every earlier read forgotten.
+var errSeenParse = errors.New("artifacts_seen row does not parse")
+
 // MarkArtifactSeen records that the operator opened name on j, now. A job
 // with no id (a file-mode job in a test), no wired store, or a row that
 // cannot be read or written is a logged no-op: the read that triggered it
-// must still be served.
+// must still be served. A row that does not parse is replaced; a row that
+// could not be read is left alone.
 func MarkArtifactSeen(j *Job, name string) {
 	markArtifactSeenAt(j, name, time.Now().UnixMilli())
 }
@@ -70,9 +79,12 @@ func markArtifactSeenAt(j *Job, name string, now int64) {
 	defer artifactsSeenMu.Unlock()
 	key := artifactsSeenKey(j.ID)
 	seen, err := readArtifactSeen(st, key)
-	if err != nil {
+	if errors.Is(err, errSeenParse) {
 		util.LogEvent("jobs", "error", "artifact-seen-read", err.Error()+" (replaced)")
 		seen = ArtifactSeen{}
+	} else if err != nil {
+		util.LogEvent("jobs", "error", "artifact-seen-read", err.Error()+" (mark dropped)")
+		return
 	}
 	seen[name] = now
 	evictOldestSeen(seen, name)
@@ -101,7 +113,7 @@ func readArtifactSeen(st *store.Store, key string) (ArtifactSeen, error) {
 func parseArtifactSeen(key, raw string) (ArtifactSeen, error) {
 	var out ArtifactSeen
 	if err := json.Unmarshal([]byte(raw), &out); err != nil {
-		return ArtifactSeen{}, fmt.Errorf("parse %s: %v", key, err)
+		return ArtifactSeen{}, fmt.Errorf("%w: %s: %v", errSeenParse, key, err)
 	}
 	if out == nil {
 		out = ArtifactSeen{}
@@ -137,9 +149,14 @@ func evictOldestSeen(seen ArtifactSeen, keep string) {
 
 // ArtifactSeenIndex reads every job's record in ONE query, keyed by job id,
 // for the board build: a payload rebuilt every ~2s must not run one GetKV
-// per card. A row that does not parse is skipped and logged; nil store means
-// an empty index, under which every artifact with an mtime reads as new.
-func ArtifactSeenIndex(st *store.Store) map[int64]ArtifactSeen {
+// per card. `keep` says which job ids the caller will look up; a row for any
+// other id (the board passes its non-archived jobs, so an archived or
+// hard-deleted job's row, never deleted itself) is skipped before it is
+// parsed, so the build's cost follows the board's cards rather than the
+// whole job history. nil keeps every row. A row that does
+// not parse is skipped and logged; nil store means an empty index, under
+// which every artifact with an mtime reads as new.
+func ArtifactSeenIndex(st *store.Store, keep func(jobID int64) bool) map[int64]ArtifactSeen {
 	out := map[int64]ArtifactSeen{}
 	if st == nil {
 		return out
@@ -151,7 +168,7 @@ func ArtifactSeenIndex(st *store.Store) map[int64]ArtifactSeen {
 	}
 	for key, raw := range rows {
 		id, err := strconv.ParseInt(strings.TrimPrefix(key, artifactsSeenPrefix), 10, 64)
-		if err != nil || id == 0 {
+		if err != nil || id == 0 || (keep != nil && !keep(id)) {
 			continue
 		}
 		seen, err := parseArtifactSeen(key, raw)

@@ -42,7 +42,7 @@ func TestMarkArtifactSeenRoundTripsThroughTheIndex(t *testing.T) {
 	markArtifactSeenAt(j, "sub dir/a#b.png", 700)
 	markArtifactSeenAt(other, "00-overview.md", 900)
 
-	idx := ArtifactSeenIndex(st)
+	idx := ArtifactSeenIndex(st, nil)
 	if got := idx[41]["00-overview.md"]; got != 500 {
 		t.Errorf("job 41 overview read at %d, want 500", got)
 	}
@@ -58,7 +58,7 @@ func TestMarkArtifactSeenRoundTripsThroughTheIndex(t *testing.T) {
 	// a second read moves the stamp forward, so an artifact rewritten after
 	// the first read and opened again stops being new
 	markArtifactSeenAt(j, "00-overview.md", 1_200)
-	idx = ArtifactSeenIndex(st)
+	idx = ArtifactSeenIndex(st, nil)
 	if ArtifactIsNew(idx[41], "00-overview.md", 1_100) {
 		t.Error("an artifact opened after its change must not read as new")
 	}
@@ -75,7 +75,7 @@ func TestMarkArtifactSeenIsANoOpWithoutAJobOrStore(t *testing.T) {
 	markArtifactSeenAt(&Job{Slug: "fileonly"}, "a.md", 1) // no id: no row to key on
 	markArtifactSeenAt(nil, "a.md", 1)
 	markArtifactSeenAt(&Job{ID: 7}, "", 1)
-	if idx := ArtifactSeenIndex(st); len(idx) != 0 {
+	if idx := ArtifactSeenIndex(st, nil); len(idx) != 0 {
 		t.Errorf("index = %v, want nothing recorded", idx)
 	}
 }
@@ -89,7 +89,7 @@ func TestArtifactSeenIndexSkipsARowThatDoesNotParse(t *testing.T) {
 		t.Fatal(err)
 	}
 	markArtifactSeenAt(&Job{ID: 4}, "b.md", 2)
-	idx := ArtifactSeenIndex(st)
+	idx := ArtifactSeenIndex(st, nil)
 	if _, ok := idx[3]; ok {
 		t.Error("a row that does not parse must be skipped, not served")
 	}
@@ -99,9 +99,17 @@ func TestArtifactSeenIndexSkipsARowThatDoesNotParse(t *testing.T) {
 	if len(idx) != 1 {
 		t.Errorf("index has %d jobs, want the one good row", len(idx))
 	}
+	// the caller's keep filter skips a row before it is parsed: the corrupt
+	// row 3 is neither parsed nor logged, and row 4 is kept only when asked
+	if got := ArtifactSeenIndex(st, func(id int64) bool { return id == 4 }); len(got) != 1 || got[4]["b.md"] != 2 {
+		t.Errorf("filtered index = %v, want job 4 alone", got)
+	}
+	if got := ArtifactSeenIndex(st, func(id int64) bool { return false }); len(got) != 0 {
+		t.Errorf("index with nothing kept = %v, want empty", got)
+	}
 	// a corrupt row is replaced by the next mark rather than wedging the job
 	markArtifactSeenAt(&Job{ID: 3}, "c.md", 9)
-	if got := ArtifactSeenIndex(st)[3]["c.md"]; got != 9 {
+	if got := ArtifactSeenIndex(st, nil)[3]["c.md"]; got != 9 {
 		t.Errorf("after replacing the corrupt row, job 3 read at %d, want 9", got)
 	}
 }
@@ -113,7 +121,7 @@ func TestMarkArtifactSeenEvictsTheOldestReadsPastTheCap(t *testing.T) {
 		markArtifactSeenAt(j, fmt.Sprintf("gen-%04d.png", i), int64(10+i))
 	}
 	markArtifactSeenAt(j, "00-overview.md", 5) // older than every generated read, but just marked: kept
-	seen := ArtifactSeenIndex(st)[5]
+	seen := ArtifactSeenIndex(st, nil)[5]
 	if len(seen) != artifactsSeenMax {
 		t.Fatalf("record holds %d names, want the cap %d", len(seen), artifactsSeenMax)
 	}

@@ -42,7 +42,7 @@ func TestArtifactHandlerStampsTheRead(t *testing.T) {
 	if code := get("/api/artifact/seen-art/pluto/missing.md"); code != 404 {
 		t.Fatalf("missing status = %d", code)
 	}
-	seen := jobs.ArtifactSeenIndex(st)[id]
+	seen := jobs.ArtifactSeenIndex(st, nil)[id]
 	if seen["00-overview.md"] == 0 || seen["sub dir/a#b.png"] == 0 {
 		t.Errorf("served artifacts not stamped: %v", seen)
 	}
@@ -65,7 +65,7 @@ func TestArtifactHandlerStampsTheRead(t *testing.T) {
 	if code := get("/api/artifact/seen-art/cell/cards/10-map.md"); code != 200 {
 		t.Fatalf("cell status = %d", code)
 	}
-	if jobs.ArtifactSeenIndex(st)[id]["cards/10-map.md"] == 0 {
+	if jobs.ArtifactSeenIndex(st, nil)[id]["cards/10-map.md"] == 0 {
 		t.Error("a disk-served artifact was not stamped")
 	}
 }
@@ -87,7 +87,7 @@ func TestArtifactHandlerDoesNotStampAnArchiveOrAMirror(t *testing.T) {
 	if rec.Code != 200 {
 		t.Fatalf("mirror status = %d", rec.Code)
 	}
-	if got := jobs.ArtifactSeenIndex(st); len(got) != 0 {
+	if got := jobs.ArtifactSeenIndex(st, nil); len(got) != 0 {
 		t.Errorf("a mirror stamped a read: %v", got)
 	}
 	api.SetMirrorMode(false)
@@ -101,7 +101,7 @@ func TestArtifactHandlerDoesNotStampAnArchiveOrAMirror(t *testing.T) {
 	if rec.Code != 200 {
 		t.Fatalf("archive status = %d", rec.Code)
 	}
-	if got := jobs.ArtifactSeenIndex(st); len(got) != 0 {
+	if got := jobs.ArtifactSeenIndex(st, nil); len(got) != 0 {
 		t.Errorf("an archived job's read was stamped: %v", got)
 	}
 }

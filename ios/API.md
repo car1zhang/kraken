@@ -246,10 +246,12 @@ since it last changed: every GET of `/api/artifact/<slug>/<cell|pluto>/<name>`
 records the moment per job in the `artifacts_seen:<job id>` kv row, and an
 artifact whose mtime is newer than that moment, or that was never opened, is
 new; an artifact with no known mtime never is. Set on this board's own active
-cards only — an archived card and a card relayed from a sibling node never
-carry it, since the reads it answers are this operator's. The web map draws a
-blocked card's lead holding a sheet of paper per new artifact; the app
-decodes the key without rendering it yet. Additive, no contract bump).
+cards only — an archived card never carries it, and `nodeCard` clears it
+before a card goes to a sibling, since the reads it answers are this
+operator's. The web map draws a blocked card's lead holding a sheet of paper
+per new artifact; the app decodes the key without rendering it yet, and its
+artifact pager fetches only the page on screen so a swipe-neighbour is not
+counted as a read. Additive, no contract bump).
 The `artifacts` array is **sorted by `name`**, lexicographically over the full
 path, however many sources the server unioned to build it. That is what makes
 the `00-`/`10-`/`50-`/`90-` filename prefixes read as an order rather than a

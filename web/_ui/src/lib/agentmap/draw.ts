@@ -928,7 +928,7 @@ const FILL: Readonly<Record<string, Fill>> = {
     eyes(P, 0.5, -0.7);
   },
   // open P1 question rows (artifacts/20-question-gestures.html, P1-A): the
-  // blocked wave turned up one step, both arms up and waving, the same hop
+  // blocked wave's both-arms form held whatever the urgency, a hop of 7
   // every 2.2s, and a `?` flag over the head where blocked has its `!`. A
   // question outranks a plain block, so the gesture must read as more than
   // the wave: the wave's big sibling, in red.
