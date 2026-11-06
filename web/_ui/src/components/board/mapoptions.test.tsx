@@ -118,6 +118,32 @@ describe("the status square on a map card", () => {
   });
 });
 
+describe("the new job button", () => {
+  it("leads the button row and opens the job editor in new-job mode, not a card's modal", async () => {
+    stubFetch();
+    const acts = actions();
+    function WithActions({ board }: { board: BoardModel }) {
+      const search = useJobSearch(board);
+      return <MapView search={search} actions={acts} />;
+    }
+    const { container } = render(<WithActions board={model(twoJobs())} />);
+    await waitFor(() => expect(container.querySelectorAll(".map-card").length).toBe(2));
+    const btn = container.querySelector("#agent-map #new-job") as HTMLButtonElement;
+    expect(btn.textContent?.trim()).toBe("new job");
+    expect(container.querySelector(".map-hud > button")).toBe(btn);
+    fireEvent.click(btn);
+    expect(acts.onOpenEditor).toHaveBeenCalledTimes(1);
+    expect(acts.onOpenEditor).toHaveBeenCalledWith(null);
+    expect(acts.onOpenSteer).not.toHaveBeenCalled();
+  });
+
+  it("is there on a map with no cards", () => {
+    stubFetch();
+    const { container } = render(<Harness board={model([])} />);
+    expect(container.querySelector("#agent-map #new-job")).not.toBeNull();
+  });
+});
+
 describe("the characters switch", () => {
   it("is on by default: every card has its characters canvas", async () => {
     stubFetch();

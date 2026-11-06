@@ -1852,6 +1852,20 @@ button.spawn-chip.spawn-draft:hover { background: color-mix(in srgb, var(--ac) 1
 }
 .toast.show { opacity: 1; transform: translate(-50%, 0); }
 
+/* the job's characters at the top of the steer modal (SteerCast): one canvas
+   of a fixed size, a map card's stage plus room around it, centred; where the
+   modal is narrower than the canvas the strip clips its two ends evenly. The
+   component sets both sizes inline, from the numbers it draws with. The
+   modal's body is a flex column and the strip clips its overflow, so without
+   `flex: none` it would be the first thing shrunk to nothing when the body's
+   content is taller than the modal */
+.steer-cast {
+  flex: none;
+  display: flex; justify-content: center; overflow: hidden;
+  margin-bottom: 6px;
+}
+.steer-cast canvas { flex: none; }
+
 /* unblock/steer context: cell's last message, carl's last sent message, and
    artifact chips, shown above the composer so unblocking has the info needed */
 .steer-context {
@@ -4045,6 +4059,8 @@ button.spawn-chip.spawn-draft:hover { background: color-mix(in srgb, var(--ac) 1
   border: 1px solid var(--border); padding: 5px 10px;
 }
 .map-hud-btn:hover { color: var(--fg); border-color: var(--ac); }
+/* the one button in the row that makes something rather than moving the view */
+.map-hud-btn.map-hud-new { color: var(--ac); border-color: var(--ac); }
 /* a toggle that is off (the characters switch) reads struck out */
 .map-hud-btn[aria-pressed="false"] { color: var(--muted); text-decoration: line-through; }
 

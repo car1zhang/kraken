@@ -27,6 +27,7 @@ import {
   type MapNode,
 } from "../../lib/agentmap/layout.ts";
 import { drawMinimap, miniFrame, miniToWorld, type MiniFrame } from "../../lib/agentmap/minimap.ts";
+import { actorsShown, setActorsShown } from "../../lib/agentmap/prefs.ts";
 import {
   drawCrossMsg,
   drawScene,
@@ -143,8 +144,6 @@ const ZOOM_MAX = 2.5;
  * not accepted yet, which waits under UNSAVED_KEY.
  */
 const MAP_CAMERA_KEY = "kraken.mapView";
-/** Per browser: "off" when the operator switched the characters off; anything else is on. */
-const MAP_ACTORS_KEY = "kraken.mapActors";
 
 /** CSS `zoom` keeps cards as real, sharp DOM; a scale transform is the fallback. */
 const ZOOM_OK = (() => {
@@ -459,10 +458,12 @@ export interface MapViewProps {
  * visible area as an outline, redrawn only when one of those changed. A
  * press or drag on it centres the view on the point under the pointer. The
  * `dinos` button beside the zoom buttons switches the characters off for
- * this browser (MAP_ACTORS_KEY): no card then has a characters canvas and
+ * this browser (`MAP_ACTORS_KEY`, lib/agentmap/prefs.ts): no card then has a characters canvas and
  * the crossing-bubble layer is not rendered, so the frame loop draws
  * neither. A card's status still shows as its frame colour and as the square
- * beside its name (JobCard's `.map-status`).
+ * beside its name (JobCard's `.map-status`). The `new job` button in the same
+ * row opens the job editor in new-job mode, as the column board's "+ NEW
+ * JOB" does; the draft it creates arrives on the map like any other card.
  *
  * The animation loop is built to be cheap on a board that is mostly asleep:
  * it reads no layout (sizes come from a ResizeObserver, the map's own size
@@ -574,10 +575,10 @@ export function MapView({ search, actions, boardNodeID, hidden }: MapViewProps) 
   // Whether the characters are drawn. Off unmounts every card's characters
   // canvas and the crossing-bubble canvas, which is all the frame loop needs
   // to skip them.
-  const [actorsOn, setActorsOn] = useState(() => readLS(MAP_ACTORS_KEY) !== "off");
+  const [actorsOn, setActorsOn] = useState(actorsShown);
   const toggleActors = () => {
     const next = !actorsOn;
-    writeLS(MAP_ACTORS_KEY, next ? null : "off");
+    setActorsShown(next);
     // the canvases that mount when the characters come back draw at once
     lastDraw.clear();
     setActorsOn(next);
@@ -2148,6 +2149,18 @@ export function MapView({ search, actions, boardNodeID, hidden }: MapViewProps) 
           the overview never covers them */}
       <div className="map-corner">
         <div className="map-hud">
+          {/* the column board's "+ NEW JOB", which the map has no draft
+              column to carry: the same id, since only one of the two views
+              is ever mounted, and the same editor in new-job mode */}
+          <button
+            type="button"
+            className="map-hud-btn map-hud-new"
+            id="new-job"
+            title="draft a new job"
+            onClick={() => actions.onOpenEditor(null)}
+          >
+            new job
+          </button>
           <button
             type="button"
             className="map-hud-btn"

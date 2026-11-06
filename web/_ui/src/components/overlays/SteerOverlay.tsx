@@ -78,6 +78,7 @@ import {
 import { TokensPanel } from "./TokensPanel.tsx";
 import { ContextPanel } from "./ContextPanel.tsx";
 import { EventsPanel } from "./EventsPanel.tsx";
+import { SteerCast } from "./SteerCast.tsx";
 import { RemoteSteerBody, VisibilityControl } from "./RemoteSteer.tsx";
 import {
   AttChips,
@@ -1052,6 +1053,8 @@ function SteerBody({
             it — the same placement the editor gives it, and the same reason:
             it is about the job the title names, not about the cell's state */}
         <RenameRow id="steer-rename-row" state={rename} />
+        {/* the job's characters, as the agent map draws them on its card */}
+        {job && !job.archived ? <SteerCast job={job} open={open} /> : null}
         <div className="steer-context" id="steer-context" hidden={!showContext}>
           {/* `crew`, not `steer-crew`: .crew is the class on this element
               itself, exactly as .threads is on #steer-threads, and style.css

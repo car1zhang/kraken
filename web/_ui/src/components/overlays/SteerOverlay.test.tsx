@@ -1,6 +1,6 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { makeJob } from "../../test/fixtures.ts";
 import {
   SteerOverlay,
@@ -53,6 +53,13 @@ import {
 } from "../../api/client.ts";
 
 const job = makeJob({ slug: "j", state: "working", live: true });
+
+// the modal draws the job's characters on a canvas (SteerCast); jsdom has no
+// 2D context and logs a stack trace for every ask, so every test here gets a
+// canvas with none, which the strip treats as nothing to draw on
+beforeEach(() => {
+  vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue(null);
+});
 
 const mutate = async <T,>(op: () => Promise<T>) => op();
 
@@ -1509,5 +1516,40 @@ describe("questions panel ask wiring", () => {
     // (BranchButton), and getByText would find both
     await user.click(document.querySelector(".dq-ask-send") as HTMLElement);
     await waitFor(() => expect(onOpenThread).toHaveBeenCalledWith("j", "t1"));
+  });
+});
+
+describe("the job's characters (SteerCast)", () => {
+  afterEach(() => localStorage.removeItem("kraken.mapActors"));
+
+  it("stand in the modal's body, after the rename row and above the context block", () => {
+    mount("steer");
+    const cast = document.querySelector("#steer-overlay .panel-body #steer-cast") as HTMLElement;
+    expect(cast).not.toBeNull();
+    const context = document.querySelector("#steer-context") as HTMLElement;
+    expect(cast.compareDocumentPosition(context) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    // the rename row is mounted only while renaming; the strip is the body's
+    // first child without it
+    expect(cast.parentElement?.firstElementChild).toBe(cast);
+  });
+
+  it("are not drawn for an archived job", () => {
+    render(
+      <Steer
+        open
+        slug="archive:j.job.md"
+        mode="view"
+        job={makeJob({ slug: "archive:j.job.md", state: "archived", archived: true, live: false })}
+        onClose={() => {}}
+        mutate={mutate}
+      />,
+    );
+    expect(document.querySelector("#steer-cast")).toBeNull();
+  });
+
+  it("are not drawn when the map's characters are switched off", () => {
+    localStorage.setItem("kraken.mapActors", "off");
+    mount("steer");
+    expect(document.querySelector("#steer-cast")).toBeNull();
   });
 });
