@@ -254,7 +254,8 @@ func TestMapDrawEdgeBadBodies400(t *testing.T) {
 		{"remove is a string", `{"remove":"seed"}`},
 		{"remove holds a number", `{"remove":[1]}`},
 		{"unknown top key", `{"remove":["seed"],"extra":1}`},
-		{"unknown drawing key", `{"set":{"a":{"kind":"line","pts":[0,0,1,1],"size":2,"color":"red"}}}`},
+		// "color" became a known key with Amendment 3, so the unknown one is "width"
+		{"unknown drawing key", `{"set":{"a":{"kind":"line","pts":[0,0,1,1],"size":2,"width":4}}}`},
 		{"drawing is a string", `{"set":{"a":"line"}}`},
 		{"pts as strings", `{"set":{"a":{"kind":"line","pts":["0","0","1","1"],"size":2}}}`},
 		{"size as string", `{"set":{"a":{"kind":"line","pts":[0,0,1,1],"size":"2"}}}`},

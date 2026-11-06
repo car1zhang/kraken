@@ -65,6 +65,11 @@ type MapDrawing struct {
 	Pts  []float64 `json:"pts"`
 	Size float64   `json:"size"`
 	Text string    `json:"text,omitempty"`
+	// Color is the drawing's ink: one of Palette's eight names, or empty
+	// for the theme's foreground. The job palette rather than a free hex,
+	// because each name has a dark and a light hex (style.css's --job-*), so
+	// one stored value reads on both themes.
+	Color string `json:"color,omitempty"`
 }
 
 // validMapDrawing says why d is not a drawing the board can draw, or nil.
@@ -85,6 +90,9 @@ func validMapDrawing(d MapDrawing) error {
 		}
 	default:
 		return fmt.Errorf("a drawing's kind is pen, line, rect, ellipse or text")
+	}
+	if d.Color != "" && !ValidColor(d.Color) {
+		return fmt.Errorf("a drawing's color is one of the job palette's names, or absent")
 	}
 	for _, c := range d.Pts {
 		if math.IsNaN(c) || math.IsInf(c, 0) || math.Abs(c) > mapCoordMax {

@@ -4107,6 +4107,21 @@ button.spawn-chip.spawn-draft:hover { background: color-mix(in srgb, var(--ac) 1
   fill: none; stroke: var(--fg); stroke-linecap: round; stroke-linejoin: round;
 }
 .map-drawings text { fill: var(--fg); font-family: var(--mono); white-space: pre; }
+/* a drawing's ink is one of the job palette's names (data-color), each with
+   a dark and a light hex in the --job-* blocks, or the theme's foreground
+   when absent; the editor shows the text in the ink it will commit with. The
+   eraser's mark comes after, so it wins over the ink */
+.map-drawings [data-color="red"], #map-text-input[data-color="red"] { --ink: var(--job-red); }
+.map-drawings [data-color="blue"], #map-text-input[data-color="blue"] { --ink: var(--job-blue); }
+.map-drawings [data-color="green"], #map-text-input[data-color="green"] { --ink: var(--job-green); }
+.map-drawings [data-color="yellow"], #map-text-input[data-color="yellow"] { --ink: var(--job-yellow); }
+.map-drawings [data-color="purple"], #map-text-input[data-color="purple"] { --ink: var(--job-purple); }
+.map-drawings [data-color="orange"], #map-text-input[data-color="orange"] { --ink: var(--job-orange); }
+.map-drawings [data-color="pink"], #map-text-input[data-color="pink"] { --ink: var(--job-pink); }
+.map-drawings [data-color="cyan"], #map-text-input[data-color="cyan"] { --ink: var(--job-cyan); }
+.map-drawings [data-color] { stroke: var(--ink); }
+.map-drawings text[data-color] { fill: var(--ink); stroke: none; }
+#map-text-input[data-color] { color: var(--ink); }
 .map-drawings .erase-hit { stroke: var(--stopped); }
 .map-drawings text.erase-hit { fill: var(--stopped); }
 .map-drawings [data-draft="true"] { opacity: 0.7; }
@@ -4131,10 +4146,37 @@ button.spawn-chip.spawn-draft:hover { background: color-mix(in srgb, var(--ac) 1
 /* the tool buttons wear the HUD buttons' look (they carry .map-hud-btn too);
    an unarmed tool is not a switched-off toggle, so it undoes the struck-out
    look .map-hud-btn[aria-pressed="false"] gives the characters switch */
-.map-tools { display: flex; gap: 2px; }
+/* the panel: the tool row over the ink row */
+.map-tools { display: flex; flex-direction: column; align-items: flex-start; gap: 4px; }
+.map-tool-row, .map-inks { display: flex; gap: 2px; }
 .map-tool[aria-pressed="false"] { color: var(--body); text-decoration: none; }
 .map-tool[aria-pressed="false"]:hover { color: var(--fg); }
-.map-tool[aria-pressed="true"] { background: var(--ac); color: var(--accent-ink); border-color: var(--ac); }
+.map-tool[aria-pressed="true"],
+.map-tools-toggle[aria-expanded="true"] { background: var(--ac); color: var(--accent-ink); border-color: var(--ac); }
+/* the tool buttons and the panel switch show an icon, not a word: the glyph
+   is a 16-unit stroke drawing in the button's text colour, sized to the
+   buttons' cap height so the row lines up with the word buttons beside it */
+.map-tool, .map-tools-toggle { padding: 4px 7px; line-height: 0; }
+.map-tool svg, .map-tools-toggle svg {
+  display: block; width: 14px; height: 14px;
+  fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round;
+}
+/* the ink swatches: a square of each colour, the theme's foreground first;
+   the chosen one wears the accent ring the armed tool button wears */
+.map-ink {
+  width: 16px; height: 16px; padding: 0; border: 1px solid var(--border);
+  background: var(--ink, var(--fg)); cursor: pointer;
+}
+.map-ink[data-color="red"] { --ink: var(--job-red); }
+.map-ink[data-color="blue"] { --ink: var(--job-blue); }
+.map-ink[data-color="green"] { --ink: var(--job-green); }
+.map-ink[data-color="yellow"] { --ink: var(--job-yellow); }
+.map-ink[data-color="purple"] { --ink: var(--job-purple); }
+.map-ink[data-color="orange"] { --ink: var(--job-orange); }
+.map-ink[data-color="pink"] { --ink: var(--job-pink); }
+.map-ink[data-color="cyan"] { --ink: var(--job-cyan); }
+.map-ink:hover { border-color: var(--ac); }
+.map-ink[aria-checked="true"] { outline: 2px solid var(--ac); outline-offset: 1px; }
 
 /* the steer modal's recent-activity disclosure (EventsPanel), where the zeus
    transcript panel was: the toggle wears the transcript head's look, the

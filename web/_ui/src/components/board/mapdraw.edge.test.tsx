@@ -31,6 +31,8 @@ afterEach(async () => {
   localStorage.removeItem("kraken.mapView");
   localStorage.removeItem("kraken.mapUnsaved");
   localStorage.removeItem("kraken.mapDrawUnsaved");
+  localStorage.removeItem("kraken.mapTools");
+  localStorage.removeItem("kraken.mapInk");
 });
 
 // ---- harness
@@ -114,6 +116,8 @@ function mapDrawEdgeServer(o: MapDrawEdgeOpts) {
 
 async function mapDrawEdgeMount(o: MapDrawEdgeOpts = {}) {
   localStorage.setItem("kraken.mapView", JSON.stringify(o.view ?? { x: 0, y: 0, z: 1 }));
+  // the tool panel is closed to begin with (AM18); these tests arm tools, so it starts open
+  localStorage.setItem("kraken.mapTools", "open");
   const srv = mapDrawEdgeServer(o);
   const actions = mapDrawEdgeActions();
   const jobs = o.jobs ?? [makeJob({ slug: "a", state: "draft" })];
@@ -203,7 +207,8 @@ describe("B3.1 the toolbar with no card on the map", () => {
     const { container } = await mapDrawEdgeMount({ jobs: [], positions: {} });
     const buttons = [...container.querySelectorAll<HTMLElement>(".map-corner #map-tools button.map-tool")];
     expect(buttons.map((b) => b.getAttribute("data-tool"))).toEqual(["pen", "line", "rect", "ellipse", "text", "erase"]);
-    expect(buttons.map((b) => b.textContent?.trim())).toEqual(["pen", "line", "rect", "oval", "text", "erase"]);
+    // the buttons show icons (AM18): the word is the accessible name
+    expect(buttons.map((b) => b.getAttribute("aria-label"))).toEqual(["pen", "line", "rect", "oval", "text", "erase"]);
     expect(container.querySelector("#agent-map svg#map-drawings")).not.toBeNull();
   });
 });
