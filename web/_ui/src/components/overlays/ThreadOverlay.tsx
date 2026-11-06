@@ -20,6 +20,7 @@ import {
   threadOriginBadge,
 } from "../../lib/threadquick.ts";
 import { Overlay, useOpenTmux, type Mutate } from "./Overlay.tsx";
+import { ThreadCast } from "./SteerCast.tsx";
 
 // A side thread: a fork of zeus' session — somewhere to ASK without disturbing
 // zeus. Two KINDS, by the row's `kind`:
@@ -648,6 +649,8 @@ function RemoteThreadBody({
         <span className="spacer"></span>
       </div>
       <div className="panel-body answer-body">
+        {/* the branch's own character; this body is mounted only while the modal is open */}
+        {rec ? <ThreadCast thread={rec} open /> : null}
         <div className="thread-view" id="thread-view">
           <div className="convo" id="thread-convo" ref={convoRef} />
           {composer ? (
@@ -1085,6 +1088,9 @@ function ThreadBody({
         </button>
       </div>
       <div className="panel-body answer-body">
+        {/* the branch's own character, once the thread exists; this body is
+            mounted only while the modal is open */}
+        {tid && rec ? <ThreadCast thread={rec} open /> : null}
         <div className="thread-new" id="thread-new" hidden={!!tid}>
           <div className="thread-banner">
             <b>⑂ branch a side thread</b>
