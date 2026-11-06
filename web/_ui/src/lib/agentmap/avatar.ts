@@ -3,7 +3,9 @@
 // (artifacts/12-model-avatars.html); none of them sits on a status colour, so
 // a character's body never reads as its card's state. The drawing lives in
 // draw.ts (`coatColors`, the `HAT` table); this file is the mapping alone, so the
-// two rules can be read, and tested, without a canvas.
+// two rules can be read, and tested, without a canvas. The third thing a
+// character may wear, a girl's round glasses and ponytail, is picked by name
+// in scene.ts (`isGirl`), beside the name hash it uses.
 
 import type { WebAgent } from "../../api/types.ts";
 

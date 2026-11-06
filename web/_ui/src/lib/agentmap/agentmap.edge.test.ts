@@ -16,6 +16,7 @@ import {
 import { MAP_GAP, overlaps, seedLayout, settle, stackOrder, type MapNode } from "./layout.ts";
 import { miniFrame, miniToWorld, type MiniFrame } from "./minimap.ts";
 import { COAT_HUE, modelCoat, roleHat } from "./avatar.ts";
+import { marqueeKeys } from "./layout.ts";
 
 // athena-edge's blind suite for the map's pure logic (50-contract.md W2, W3):
 // missing activity, `open` events and the hold boundary in leadPose, the
@@ -761,5 +762,229 @@ describe("roleHat — edges (W9)", () => {
   it("an unrecognised kind falls to the name rule", () => {
     expect(roleHat(who({ kind: "something-new", name: "hermes-x" }))).toBe("wings");
     expect(roleHat(who({ kind: "something-new", name: "zed" }))).toBe("cap");
+  });
+});
+
+// ---- Round 9 (50-contract.md W12, W13): the smaller gap at its boundary, a
+// layout saved under the old gap, and marqueeKeys' corners, edges and refusals.
+
+function agentMapEdgeR9Node(key: string, x: number, y: number, w = 300, h = 180): MapNode {
+  return { key, x, y, w, h };
+}
+
+/** A grid of `cols` x `rows` cards spaced at exactly the OLD gap ({36, 112}). */
+function agentMapEdgeR9OldGapGrid(cols: number, rows: number, w = 300, h = 180): MapNode[] {
+  const out: MapNode[] = [];
+  for (let r = 0; r < rows; r++) {
+    for (let c = 0; c < cols; c++) {
+      out.push(agentMapEdgeR9Node(`g${r}-${c}`, c * (w + 36), r * (h + 112), w, h));
+    }
+  }
+  return out;
+}
+
+const agentMapEdgeR9Pos = (nodes: readonly MapNode[]) => nodes.map((n) => [n.key, n.x, n.y, n.w, n.h]);
+
+describe("W12 — overlaps at the new gap's boundary", () => {
+  const a = agentMapEdgeR9Node("a", 0, 0, 100, 50);
+
+  it("sideways: one past 16 is clear, one inside it overlaps", () => {
+    expect(overlaps(a, agentMapEdgeR9Node("b", 100 + 17, 0, 100, 50))).toBe(false);
+    expect(overlaps(a, agentMapEdgeR9Node("b", 100 + 15, 0, 100, 50))).toBe(true);
+    expect(overlaps(agentMapEdgeR9Node("b", -(100 + 17), 0, 100, 50), a)).toBe(false);
+    expect(overlaps(agentMapEdgeR9Node("b", -(100 + 15), 0, 100, 50), a)).toBe(true);
+  });
+
+  it("vertically: one past 64 is clear, one inside it overlaps", () => {
+    expect(overlaps(a, agentMapEdgeR9Node("b", 0, 50 + 65, 100, 50))).toBe(false);
+    expect(overlaps(a, agentMapEdgeR9Node("b", 0, 50 + 63, 100, 50))).toBe(true);
+    expect(overlaps(agentMapEdgeR9Node("b", 0, -(50 + 65), 100, 50), a)).toBe(false);
+    expect(overlaps(agentMapEdgeR9Node("b", 0, -(50 + 63), 100, 50), a)).toBe(true);
+  });
+
+  it("distances between the new gap and the old one no longer overlap", () => {
+    for (const dx of [17, 20, 30, 35, 36, 37]) {
+      expect(overlaps(a, agentMapEdgeR9Node("b", 100 + dx, 0, 100, 50)), `dx ${dx}`).toBe(false);
+    }
+    for (const dy of [65, 80, 100, 111, 112, 113]) {
+      expect(overlaps(a, agentMapEdgeR9Node("b", 0, 50 + dy, 100, 50)), `dy ${dy}`).toBe(false);
+    }
+  });
+});
+
+describe("W12 — a layout saved under the old gap is at rest", () => {
+  it("settle moves nothing and reports no movement, with no hold", () => {
+    const nodes = agentMapEdgeR9OldGapGrid(4, 3);
+    const before = agentMapEdgeR9Pos(nodes);
+    expect(agentMapEdgeAnyOverlap(nodes)).toBe(false);
+    expect(settle(nodes)).toBe(false);
+    expect(agentMapEdgeR9Pos(nodes)).toEqual(before);
+  });
+
+  it("settle moves nothing with a held key or a held set either", () => {
+    const nodes = agentMapEdgeR9OldGapGrid(4, 3);
+    const before = agentMapEdgeR9Pos(nodes);
+    expect(settle(nodes, "g1-1")).toBe(false);
+    expect(settle(nodes, new Set(["g0-0", "g2-3"]))).toBe(false);
+    expect(settle(nodes, new Set<string>())).toBe(false);
+    expect(agentMapEdgeR9Pos(nodes)).toEqual(before);
+  });
+
+  it("cards of mixed sizes spaced at the old gap stay at rest", () => {
+    const nodes: MapNode[] = [];
+    let y = -400;
+    for (let i = 0; i < 6; i++) {
+      const h = 90 + i * 37;
+      nodes.push(agentMapEdgeR9Node(`m${i}`, (i % 2) * (300 + 36), y, 300, h));
+      if (i % 2 === 1) y += Math.max(h, 90 + (i - 1) * 37) + 112;
+    }
+    const before = agentMapEdgeR9Pos(nodes);
+    expect(settle(nodes)).toBe(false);
+    expect(agentMapEdgeR9Pos(nodes)).toEqual(before);
+  });
+
+  it("seedLayout leaves an old-gap layout exactly where it was", () => {
+    const nodes = agentMapEdgeR9OldGapGrid(3, 3);
+    const before = agentMapEdgeR9Pos(nodes);
+    seedLayout(nodes, [["g0-0", "g1-1"], ["g1-1", "g2-2"]]);
+    expect(agentMapEdgeR9Pos(nodes)).toEqual(before);
+  });
+});
+
+describe("W13 — marqueeKeys: corners", () => {
+  const nodes = [
+    agentMapEdgeR9Node("a", 0, 0, 100, 50),
+    agentMapEdgeR9Node("b", 500, 0, 100, 50),
+    agentMapEdgeR9Node("c", 0, 500, 100, 50),
+  ];
+
+  it("the four orders of the same two corners give the same answer", () => {
+    const want = ["a", "b"];
+    expect(marqueeKeys(nodes, { x: -10, y: -10 }, { x: 550, y: 20 })).toEqual(want);
+    expect(marqueeKeys(nodes, { x: 550, y: 20 }, { x: -10, y: -10 })).toEqual(want);
+    expect(marqueeKeys(nodes, { x: -10, y: 20 }, { x: 550, y: -10 })).toEqual(want);
+    expect(marqueeKeys(nodes, { x: 550, y: -10 }, { x: -10, y: 20 })).toEqual(want);
+  });
+
+  it("a zero-size rectangle (a click point) inside a box selects that box", () => {
+    expect(marqueeKeys(nodes, { x: 50, y: 25 }, { x: 50, y: 25 })).toEqual(["a"]);
+  });
+
+  it("a rectangle entirely inside one box selects it", () => {
+    expect(marqueeKeys(nodes, { x: 510, y: 10 }, { x: 520, y: 20 })).toEqual(["b"]);
+  });
+
+  it("a rectangle over empty world selects nothing", () => {
+    expect(marqueeKeys(nodes, { x: 200, y: 200 }, { x: 300, y: 300 })).toEqual([]);
+  });
+
+  it("negative world coordinates work like any other", () => {
+    const neg = [agentMapEdgeR9Node("n", -900, -700, 100, 50), agentMapEdgeR9Node("p", 900, 700, 100, 50)];
+    expect(marqueeKeys(neg, { x: -850, y: -680 }, { x: -1000, y: -1000 })).toEqual(["n"]);
+  });
+});
+
+describe("W13 — marqueeKeys: edges count, MAP_GAP does not", () => {
+  const box = agentMapEdgeR9Node("a", 0, 0, 100, 50);
+
+  it("touching any one of the four edges counts as intersecting", () => {
+    expect(marqueeKeys([box], { x: 100, y: 10 }, { x: 200, y: 20 })).toEqual(["a"]); // right edge
+    expect(marqueeKeys([box], { x: -100, y: 10 }, { x: 0, y: 20 })).toEqual(["a"]); // left edge
+    expect(marqueeKeys([box], { x: 10, y: 50 }, { x: 20, y: 90 })).toEqual(["a"]); // bottom edge
+    expect(marqueeKeys([box], { x: 10, y: -90 }, { x: 20, y: 0 })).toEqual(["a"]); // top edge
+  });
+
+  it("touching only a corner counts", () => {
+    expect(marqueeKeys([box], { x: 100, y: 50 }, { x: 150, y: 90 })).toEqual(["a"]);
+    expect(marqueeKeys([box], { x: -50, y: -50 }, { x: 0, y: 0 })).toEqual(["a"]);
+  });
+
+  it("a zero-size rectangle on an edge counts", () => {
+    expect(marqueeKeys([box], { x: 100, y: 25 }, { x: 100, y: 25 })).toEqual(["a"]);
+  });
+
+  it("just past an edge does not intersect", () => {
+    expect(marqueeKeys([box], { x: 100.5, y: 10 }, { x: 200, y: 20 })).toEqual([]);
+    expect(marqueeKeys([box], { x: -100, y: 10 }, { x: -0.5, y: 20 })).toEqual([]);
+    expect(marqueeKeys([box], { x: 10, y: 50.5 }, { x: 20, y: 90 })).toEqual([]);
+    expect(marqueeKeys([box], { x: 10, y: -90 }, { x: 20, y: -0.5 })).toEqual([]);
+  });
+
+  it("inside the gap the map keeps between cards, but outside the box, is not selected", () => {
+    expect(marqueeKeys([box], { x: 100 + MAP_GAP.x / 4, y: 10 }, { x: 300, y: 20 })).toEqual([]);
+    expect(marqueeKeys([box], { x: 10, y: 50 + MAP_GAP.y / 4 }, { x: 20, y: 300 })).toEqual([]);
+  });
+});
+
+describe("W13 — marqueeKeys: order, refusals and purity", () => {
+  it("returns keys in the order of nodes, not sorted", () => {
+    const nodes = [
+      agentMapEdgeR9Node("zeta", 0, 0, 10, 10),
+      agentMapEdgeR9Node("alpha", 20, 0, 10, 10),
+      agentMapEdgeR9Node("mid", 40, 0, 10, 10),
+    ];
+    expect(marqueeKeys(nodes, { x: -1, y: -1 }, { x: 100, y: 100 })).toEqual(["zeta", "alpha", "mid"]);
+    expect(marqueeKeys([...nodes].reverse(), { x: -1, y: -1 }, { x: 100, y: 100 })).toEqual(["mid", "alpha", "zeta"]);
+  });
+
+  it("no nodes is no keys", () => {
+    expect(marqueeKeys([], { x: -1e6, y: -1e6 }, { x: 1e6, y: 1e6 })).toEqual([]);
+  });
+
+  it("leaves out a node with any non-finite coordinate or size", () => {
+    const good = agentMapEdgeR9Node("good", 0, 0, 100, 50);
+    const bad = [
+      agentMapEdgeR9Node("nan-x", NaN, 0, 100, 50),
+      agentMapEdgeR9Node("nan-y", 0, NaN, 100, 50),
+      agentMapEdgeR9Node("inf-x", Infinity, 0, 100, 50),
+      agentMapEdgeR9Node("ninf-y", 0, -Infinity, 100, 50),
+      agentMapEdgeR9Node("inf-w", 0, 0, Infinity, 50),
+      agentMapEdgeR9Node("nan-h", 0, 0, 100, NaN),
+      { key: "missing", w: 100, h: 50 } as unknown as MapNode,
+      { key: "no-size", x: 0, y: 0 } as unknown as MapNode,
+    ];
+    expect(marqueeKeys([...bad, good], { x: -1e9, y: -1e9 }, { x: 1e9, y: 1e9 })).toEqual(["good"]);
+  });
+
+  it("a non-finite corner returns no keys", () => {
+    const nodes = [agentMapEdgeR9Node("a", 0, 0, 100, 50)];
+    const corners: Array<[{ x: number; y: number }, { x: number; y: number }]> = [
+      [{ x: NaN, y: 0 }, { x: 200, y: 200 }],
+      [{ x: 0, y: NaN }, { x: 200, y: 200 }],
+      [{ x: -10, y: -10 }, { x: Infinity, y: 200 }],
+      [{ x: -10, y: -10 }, { x: 200, y: -Infinity }],
+      [{ x: -Infinity, y: -Infinity }, { x: Infinity, y: Infinity }],
+    ];
+    for (const [a, b] of corners) {
+      expect(marqueeKeys(nodes, a, b), JSON.stringify([a, b])).toEqual([]);
+    }
+  });
+
+  it("mutates neither the nodes nor the corners", () => {
+    const nodes = [
+      agentMapEdgeR9Node("a", 0, 0, 100, 50),
+      agentMapEdgeR9Node("b", NaN, 0, 100, 50),
+      agentMapEdgeR9Node("c", 400, 400, 100, 50),
+    ];
+    const a = { x: 300, y: 300 };
+    const b = { x: -5, y: -5 };
+    const before = JSON.stringify(nodes);
+    const order = nodes.map((n) => n.key);
+    marqueeKeys(nodes, a, b);
+    expect(JSON.stringify(nodes)).toBe(before);
+    expect(nodes.map((n) => n.key)).toEqual(order);
+    expect(a).toEqual({ x: 300, y: 300 });
+    expect(b).toEqual({ x: -5, y: -5 });
+  });
+
+  it("works on frozen input", () => {
+    const nodes = Object.freeze([
+      Object.freeze(agentMapEdgeR9Node("a", 0, 0, 100, 50)),
+      Object.freeze(agentMapEdgeR9Node("b", 200, 0, 100, 50)),
+    ]);
+    const a = Object.freeze({ x: -1, y: -1 });
+    const b = Object.freeze({ x: 150, y: 60 });
+    expect(() => marqueeKeys(nodes, a, b)).not.toThrow();
+    expect(marqueeKeys(nodes, a, b)).toEqual(["a"]);
   });
 });

@@ -3,6 +3,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { fetchNodeJobRaw, postNodeAction, setJobVisibility } from "../../api/client.ts";
 import type { WebJob } from "../../api/types.ts";
 import { useHTML, useRenderedMD } from "../../hooks/useRenderedMD.ts";
+import { SteerCast } from "./SteerCast.tsx";
 import {
   ownerChipText,
   ownerTurnLabel,
@@ -512,6 +513,9 @@ export function RemoteSteerBody({
         ) : null}
       </div>
       <div className="panel-body answer-body remote-steer" data-remote-mode={mode}>
+        {/* the card's characters, as the map draws them on it; this body is
+            mounted only while the modal is open */}
+        {!job.archived ? <SteerCast job={job} open /> : null}
         {/* The local body's containers, in its order and with its ids and
             classes, so style.css dresses both alike — but each is MOUNTED
             only when it has something to show, rather than hidden. */}

@@ -13,7 +13,7 @@ import {
   mapStatus,
   ribbon,
 } from "./activity.ts";
-import { MAP_GAP, overlaps, seedLayout, settle, stackOrder, type MapNode } from "./layout.ts";
+import { MAP_GAP, freeSpot, marqueeKeys, overlaps, seedLayout, settle, stackOrder, type MapNode } from "./layout.ts";
 import { COAT_HUE, modelCoat, roleHat } from "./avatar.ts";
 import { miniFrame, miniToWorld, type MiniFrame } from "./minimap.ts";
 
@@ -224,18 +224,19 @@ function anyOverlap(nodes: MapNode[]): boolean {
 }
 
 describe("MAP_GAP and overlaps", () => {
-  it("MAP_GAP is { x: 36, y: 112 }", () => {
-    expect(MAP_GAP).toEqual({ x: 36, y: 112 });
+  // Round 9, W12 replaces the earlier pin of { x: 36, y: 112 }.
+  it("MAP_GAP is { x: 16, y: 64 } (W12)", () => {
+    expect(MAP_GAP).toEqual({ x: 16, y: 64 });
   });
 
   it("is true when the boxes grown by half the gap intersect, false when clear of it", () => {
     const a = node("a", 0, 0, 100, 50);
     // sideways: the boxes themselves are apart, but closer than MAP_GAP.x
-    expect(overlaps(a, node("b", 100 + 30, 0, 100, 50))).toBe(true);
-    expect(overlaps(a, node("b", 100 + 40, 0, 100, 50))).toBe(false);
+    expect(overlaps(a, node("b", 100 + MAP_GAP.x - 4, 0, 100, 50))).toBe(true);
+    expect(overlaps(a, node("b", 100 + MAP_GAP.x + 4, 0, 100, 50))).toBe(false);
     // vertically: closer than MAP_GAP.y, then clear of it
-    expect(overlaps(a, node("b", 0, 50 + 100, 100, 50))).toBe(true);
-    expect(overlaps(a, node("b", 0, 50 + 120, 100, 50))).toBe(false);
+    expect(overlaps(a, node("b", 0, 50 + MAP_GAP.y - 8, 100, 50))).toBe(true);
+    expect(overlaps(a, node("b", 0, 50 + MAP_GAP.y + 8, 100, 50))).toBe(false);
     // on top of each other, and far apart
     expect(overlaps(a, node("b", 10, 10, 100, 50))).toBe(true);
     expect(overlaps(a, node("b", 5000, 5000, 100, 50))).toBe(false);
@@ -522,5 +523,147 @@ describe("roleHat (W9)", () => {
   it("matches a role only at the start of the name", () => {
     expect(roleHat(agent({ kind: "teammate", name: "my-hephaestus" }))).toBe("cap");
     expect(roleHat(agent({ kind: "teammate", name: "x-athena" }))).toBe("cap");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Round 9, W12: cards keep less distance (lib/agentmap/layout.ts)
+// ---------------------------------------------------------------------------
+
+const agentMapContractR9Node = (key: string, x: number, y: number, w = 100, h = 50): MapNode => ({ key, x, y, w, h });
+
+function agentMapContractR9AnyOverlap(nodes: MapNode[]): boolean {
+  for (let i = 0; i < nodes.length; i++)
+    for (let j = i + 1; j < nodes.length; j++) if (overlaps(nodes[i]!, nodes[j]!)) return true;
+  return false;
+}
+
+describe("overlaps in terms of the new MAP_GAP (W12)", () => {
+  it("keeps 16 sideways and 64 above and below, and no more", () => {
+    const a = agentMapContractR9Node("a", 0, 0);
+    // sideways: closer than 16, then clear of it
+    expect(overlaps(a, agentMapContractR9Node("b", 100 + 15, 0))).toBe(true);
+    expect(overlaps(a, agentMapContractR9Node("b", 100 + 17, 0))).toBe(false);
+    // vertically: closer than 64, then clear of it
+    expect(overlaps(a, agentMapContractR9Node("b", 0, 50 + 63))).toBe(true);
+    expect(overlaps(a, agentMapContractR9Node("b", 0, 50 + 65))).toBe(false);
+    // the old gap's distances are now clear
+    expect(overlaps(a, agentMapContractR9Node("b", 100 + 30, 0))).toBe(false);
+    expect(overlaps(a, agentMapContractR9Node("b", 0, 50 + 100))).toBe(false);
+  });
+});
+
+describe("a layout at rest under the old gap is at rest under the new one (W12)", () => {
+  // A 3x3 grid kept just clear of the OLD gap ({ x: 36, y: 112 }).
+  const grid = () => {
+    const nodes: MapNode[] = [];
+    for (let r = 0; r < 3; r++)
+      for (let c = 0; c < 3; c++) nodes.push(agentMapContractR9Node(`g${r}${c}`, c * (100 + 37), r * (50 + 113)));
+    return nodes;
+  };
+
+  it("has no overlapping pair, so settle moves nothing and reports no movement", () => {
+    const nodes = grid();
+    expect(agentMapContractR9AnyOverlap(nodes)).toBe(false);
+    const before = nodes.map((n) => [n.x, n.y]);
+    expect(settle(nodes)).toBe(false);
+    expect(settle(nodes, "g11")).toBe(false);
+    expect(settle(nodes, new Set(["g00", "g22"]))).toBe(false);
+    expect(nodes.map((n) => [n.x, n.y])).toEqual(before);
+  });
+
+  it("is left alone by seedLayout, every node being placed", () => {
+    const nodes = grid();
+    const before = nodes.map((n) => [n.x, n.y]);
+    seedLayout(nodes, [["g00", "g11"]]);
+    expect(nodes.map((n) => [n.x, n.y])).toEqual(before);
+  });
+
+  // freeSpot's signature is the one the lead's own maprepair.test.ts uses:
+  // freeSpot(card, allNodes) → whether it moved the card.
+  it("does not move a card freeSpot finds clear under the new gap, though the old gap would not", () => {
+    const other = agentMapContractR9Node("a", 0, 0);
+    const n = agentMapContractR9Node("x", 100 + 20, 0);
+    expect(freeSpot(n, [other, n])).toBe(false);
+    expect([n.x, n.y]).toEqual([120, 0]);
+    expect([other.x, other.y]).toEqual([0, 0]);
+  });
+});
+
+describe("settle clears crowded nodes under the new gap (W12)", () => {
+  it("still clears 12 crowded nodes within 400 calls, and then reports no movement", () => {
+    const nodes = Array.from({ length: 12 }, (_, i) => agentMapContractR9Node(`n${i}`, i * 3, i * 2, 300, 160));
+    let calls = 0;
+    while (agentMapContractR9AnyOverlap(nodes) && calls < 400) {
+      settle(nodes);
+      calls++;
+    }
+    expect(agentMapContractR9AnyOverlap(nodes)).toBe(false);
+    expect(settle(nodes)).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Round 9, W13: marqueeKeys (lib/agentmap/layout.ts)
+// ---------------------------------------------------------------------------
+
+describe("marqueeKeys (W13)", () => {
+  const four = () => [
+    agentMapContractR9Node("n1", 0, 0), // 0..100 x 0..50
+    agentMapContractR9Node("n2", 200, 0), // 200..300 x 0..50
+    agentMapContractR9Node("n3", 0, 200), // 0..100 x 200..250
+    agentMapContractR9Node("n4", 500, 500, 10, 10),
+  ];
+
+  it("returns the keys of every node the rectangle intersects, in the order of nodes", () => {
+    expect(marqueeKeys(four(), { x: 50, y: 25 }, { x: 250, y: 30 })).toEqual(["n1", "n2"]);
+    expect(marqueeKeys([...four()].reverse(), { x: 50, y: 25 }, { x: 250, y: 30 })).toEqual(["n2", "n1"]);
+    expect(marqueeKeys(four(), { x: -1000, y: -1000 }, { x: 1000, y: 1000 })).toEqual(["n1", "n2", "n3", "n4"]);
+  });
+
+  it("takes the two corners in either order", () => {
+    const want = ["n1", "n2"];
+    expect(marqueeKeys(four(), { x: 250, y: 30 }, { x: 50, y: 25 })).toEqual(want);
+    expect(marqueeKeys(four(), { x: 50, y: 30 }, { x: 250, y: 25 })).toEqual(want);
+    expect(marqueeKeys(four(), { x: 250, y: 25 }, { x: 50, y: 30 })).toEqual(want);
+  });
+
+  it("includes a node the rectangle lies wholly inside", () => {
+    expect(marqueeKeys(four(), { x: 10, y: 10 }, { x: 20, y: 20 })).toEqual(["n1"]);
+  });
+
+  it("counts touching edges and corners as intersecting", () => {
+    // touches n2's right edge, x = 300
+    expect(marqueeKeys(four(), { x: 300, y: 10 }, { x: 400, y: 20 })).toEqual(["n2"]);
+    // touches n1's bottom-right corner, (100, 50)
+    expect(marqueeKeys(four(), { x: 100, y: 50 }, { x: 150, y: 60 })).toEqual(["n1"]);
+    // touches n3's top edge, y = 200, from above
+    expect(marqueeKeys(four(), { x: 10, y: 150 }, { x: 20, y: 200 })).toEqual(["n3"]);
+  });
+
+  it("adds no MAP_GAP: a rectangle in the gap between boxes catches nothing", () => {
+    // between n1 and n2 sideways
+    expect(marqueeKeys(four(), { x: 101, y: 0 }, { x: 199, y: 50 })).toEqual([]);
+    // between n1 and n3 vertically
+    expect(marqueeKeys(four(), { x: 0, y: 51 }, { x: 100, y: 199 })).toEqual([]);
+    // one unit off n4
+    expect(marqueeKeys(four(), { x: 511, y: 511 }, { x: 600, y: 600 })).toEqual([]);
+  });
+
+  it("returns [] when the rectangle meets no node", () => {
+    expect(marqueeKeys(four(), { x: 2000, y: 2000 }, { x: 3000, y: 3000 })).toEqual([]);
+    expect(marqueeKeys([], { x: 0, y: 0 }, { x: 100, y: 100 })).toEqual([]);
+  });
+
+  it("mutates nothing", () => {
+    const nodes = four().map((n) => Object.freeze(n));
+    Object.freeze(nodes);
+    const a = Object.freeze({ x: 50, y: 25 });
+    const b = Object.freeze({ x: 250, y: 30 });
+    const before = JSON.stringify(nodes);
+    expect(marqueeKeys(nodes, a, b)).toEqual(["n1", "n2"]);
+    expect(JSON.stringify(nodes)).toBe(before);
+    expect(a).toEqual({ x: 50, y: 25 });
+    expect(b).toEqual({ x: 250, y: 30 });
   });
 });

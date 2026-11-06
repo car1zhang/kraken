@@ -398,3 +398,124 @@ describe("MapView: the overview redraws only on its triggers", () => {
     await waitFor(() => expect(clears).toBeGreaterThan(settled));
   });
 });
+
+/** A pointer event carrying coordinates, as a browser sends one (jsdom builds none with them). */
+function pointerEvent(type: string, x: number, y: number): Event {
+  const ev = new Event(type, { bubbles: true, cancelable: true });
+  Object.assign(ev, { clientX: x, clientY: y, button: 0 });
+  return ev;
+}
+
+describe("MapView: input state belongs to the mounted map (amendment 10)", () => {
+  it("a fresh mount handles a mouse press after an earlier mount saw pointer events", async () => {
+    localStorage.setItem("kraken.mapView", JSON.stringify({ x: 0, y: 0, z: 1 }));
+    routeFetch(
+      async () => new Response(JSON.stringify({ positions: { a: [0, 0], b: [1000, 0] } }), { status: 200 }),
+      () => new Response('{"ok":true}', { status: 200 }),
+    );
+    const first = render(<Harness board={model(jobs())} />);
+    await waitFor(() => expect(card(first.container, "a").style.left).toBe("0px"));
+    // the first mount is sent a whole pointer drag: it acts on it...
+    act(() => {
+      card(first.container, "a").dispatchEvent(pointerEvent("pointerdown", 100, 100));
+      window.dispatchEvent(pointerEvent("pointermove", 130, 100));
+      window.dispatchEvent(pointerEvent("pointerup", 130, 100));
+    });
+    expect(card(first.container, "a").style.left).toBe("30px");
+    // ...and from then on ignores mouse events, as a browser's compatibility
+    // twins of a pointer press must be
+    drag(card(first.container, "a"), 60, 0);
+    expect(card(first.container, "a").style.left).toBe("30px");
+    first.unmount();
+
+    const second = render(<Harness board={model(jobs())} />);
+    // placed (the first mount's drag may come back from this browser's
+    // unsaved record, so the start is read rather than assumed)
+    await waitFor(() => expect(card(second.container, "a").style.visibility).not.toBe("hidden"));
+    const x0 = parseFloat(card(second.container, "a").style.left);
+    // a mouse drag on the fresh mount moves the card
+    drag(card(second.container, "a"), 60, 0);
+    expect(parseFloat(card(second.container, "a").style.left)).toBe(x0 + 60);
+  });
+});
+
+// Review round of round 9: a second press during a marquee, an Escape meant
+// for something else, and a group member that leaves the map mid-drag.
+describe("MapView: selection review pins", () => {
+  const placedAt = { a: [0, 0], b: [1000, 0] };
+  const mount = async (list: WebJob[] = jobs()) => {
+    localStorage.setItem("kraken.mapView", JSON.stringify({ x: 0, y: 0, z: 1 }));
+    const posts = routeFetch(
+      async () => new Response(JSON.stringify({ positions: placedAt }), { status: 200 }),
+      () => new Response('{"ok":true}', { status: 200 }),
+    );
+    const r = render(<Harness board={model(list)} />);
+    await waitFor(() => expect(card(r.container, "b").style.left).toBe("1000px"));
+    return { ...r, posts };
+  };
+  const shiftClick = (el: HTMLElement) => {
+    fireEvent.mouseDown(el, { clientX: 50, clientY: 50, button: 0, shiftKey: true });
+    fireEvent.mouseUp(window, { clientX: 50, clientY: 50 });
+  };
+  const selected = (c: HTMLElement) =>
+    [...c.querySelectorAll<HTMLElement>(".map-card[data-selected='true']")].map((e) => e.dataset.key).sort();
+
+  it("a press on a card never takes over a marquee in flight", async () => {
+    const { container } = await mount();
+    const root = container.querySelector("#agent-map") as HTMLElement;
+    fireEvent.mouseDown(root, { clientX: 500, clientY: 500, button: 0, shiftKey: true });
+    fireEvent.mouseMove(window, { clientX: 200, clientY: 200 });
+    expect(container.querySelector("#map-marquee")).not.toBeNull();
+    // a second press lands on card b mid-marquee
+    fireEvent.mouseDown(card(container, "b"), { clientX: 1100, clientY: 50, button: 0 });
+    fireEvent.mouseMove(window, { clientX: -10, clientY: -10 });
+    fireEvent.mouseUp(window, { clientX: -10, clientY: -10 });
+    // the marquee still ended: box gone, its cards selected, b unmoved
+    expect(container.querySelector("#map-marquee")).toBeNull();
+    expect(selected(container)).toEqual(["a"]);
+    expect(card(container, "b").style.left).toBe("1000px");
+  });
+
+  it("Escape spent elsewhere, or typed in a field, keeps the selection; a free Escape empties it", async () => {
+    const { container } = await mount();
+    shiftClick(card(container, "a"));
+    expect(selected(container)).toEqual(["a"]);
+    // an overlay's escape layer already handled it
+    act(() => {
+      const ev = new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true });
+      ev.preventDefault();
+      window.dispatchEvent(ev);
+    });
+    expect(selected(container)).toEqual(["a"]);
+    // typed in a text field
+    const input = document.createElement("input");
+    document.body.appendChild(input);
+    fireEvent.keyDown(input, { key: "Escape" });
+    input.remove();
+    expect(selected(container)).toEqual(["a"]);
+    // nothing else wanted it
+    fireEvent.keyDown(window, { key: "Escape" });
+    expect(selected(container)).toEqual([]);
+  });
+
+  it("a group member that leaves the map mid-drag goes back to where it stood", async () => {
+    const { container, rerender, posts } = await mount();
+    shiftClick(card(container, "a"));
+    shiftClick(card(container, "b"));
+    expect(selected(container)).toEqual(["a", "b"]);
+    const all = jobs();
+    fireEvent.mouseDown(card(container, "a"), { clientX: 100, clientY: 100, button: 0 });
+    fireEvent.mouseMove(window, { clientX: 100, clientY: 400 });
+    // b leaves the map (filtered out) while the group is in the air
+    rerender(<Harness board={model(all.filter((j) => j.slug === "a"))} />);
+    fireEvent.mouseUp(window, { clientX: 100, clientY: 400 });
+    expect(card(container, "a").style.top).toBe("300px");
+    // b comes back where it was, and nothing saved it anywhere else
+    rerender(<Harness board={model(all)} />);
+    expect(card(container, "b").style.left).toBe("1000px");
+    expect(card(container, "b").style.top).toBe("0px");
+    await new Promise((r) => setTimeout(r, 600));
+    const saved = posts.map((p) => (p.body as { positions: Record<string, [number, number]> }).positions);
+    expect(saved.some((p) => p.b)).toBe(false);
+  });
+});

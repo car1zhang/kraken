@@ -68,6 +68,8 @@ export interface Actor {
   coat: Coat;
   /** a crew member's role hat; the lead's is always "none" */
   hat: Hat;
+  /** drawn as a girl (round glasses, ponytail); about one character in three, see `isGirl` */
+  girl: boolean;
   seed: number;
   /** offset along the card from its home slot */
   x: number;
@@ -136,6 +138,17 @@ function seedOf(s: string): number {
   return hsh(h % 100003);
 }
 
+/**
+ * Whether the character with this name is drawn as a girl, with round
+ * glasses and a ponytail: about one name in three, by the name's hash. The
+ * pick is random across names and fixed for a name, so a character keeps its
+ * look between frames, after a reload and on every browser. A lead is asked
+ * by its job's slug, a crew member by its own name.
+ */
+export function isGirl(name: string): boolean {
+  return seedOf(name) < 1 / 3;
+}
+
 function tagText(name: string, kind: string): string {
   return (kind === "subagent" ? "◌ " : "") + (name.length > 18 ? name.slice(0, 17) + "…" : name);
 }
@@ -148,6 +161,7 @@ function mkActor(name: string, kind: string, mini: boolean, now: number): Actor 
     mini,
     coat: "fable",
     hat: "none",
+    girl: false,
     seed: seedOf(name + "|" + kind),
     x: 0,
     home: 0,
@@ -257,6 +271,7 @@ export function syncScene(
   // yet, or a node on an older build) falls back to `agent`, which then says
   // nothing, so that lead is yellow, the coat the map shipped with.
   s.lead.coat = job.agent === "codex" ? "codex" : modelCoat(job.activity?.model || job.agent);
+  s.lead.girl = isGirl(job.slug);
 
   // ---- crew from the roster. Shells are agent-free panes, not characters.
   const want = new Map<string, WebAgent>();
@@ -273,6 +288,7 @@ export function syncScene(
     if (!m) {
       if (liveCount(s) >= CREW_MAX) continue;
       m = mkActor(name, a.kind ?? "teammate", true, now);
+      m.girl = isGirl(name);
       m.home = s.lead.home + s.lead.x;
       s.crew.push(m);
     }
@@ -423,11 +439,12 @@ function stepActor(a: Actor, now: number, dt: number, R: number, C: Palette) {
 /**
  * Every character wears its model's coat; a lead that hit a usage limit
  * keeps the greyed-out spent coat it always had, since that is its status.
- * Crew wear their role hats; the lead's hat is always none.
+ * Crew wear their role hats; the lead's hat is always none. A girl keeps
+ * her glasses and ponytail under any coat and any hat.
  */
 function drawActor(c: Ctx, s: CardScene, a: Actor, C: Palette) {
   const col = !a.mini && a.act === "limit" ? C.dino.spent : C.coats[a.coat];
-  drawKraken(c, headX(s, a), 1, actorScale(s, a), a.flip, a.P, a.o!, col, a.moving, a.hat);
+  drawKraken(c, headX(s, a), 1, actorScale(s, a), a.flip, a.P, a.o!, col, a.moving, a.hat, a.girl);
 }
 
 /**

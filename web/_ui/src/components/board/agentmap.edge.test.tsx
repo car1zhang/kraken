@@ -890,3 +890,400 @@ describe("MapView's #map-minimap — edges (W7)", () => {
     agentMapEdgeR8Minimap(container);
   });
 });
+
+// --- Round 9 (50-contract.md W12, W13) ------------------------------------------
+// The selection's refusals and boundaries: what never moves, opens or saves; a
+// marquee that replaces rather than adds; a card that leaves the map; and an old
+// gap layout that stays at rest. A saved view of {x:0,y:0,z:1} makes a client
+// point a world point here (jsdom measures every element at 0,0).
+
+type AgentMapEdgeR9Pos = Record<string, [number, number]>;
+
+function agentMapEdgeR9Server(saved: AgentMapEdgeR9Pos): AgentMapEdgeR9Pos[] {
+  const posts: AgentMapEdgeR9Pos[] = [];
+  agentMapEdgeStubFetch(async (url, init) => {
+    if (url.includes("/api/map/positions")) {
+      if ((init?.method ?? "GET").toUpperCase() === "POST") {
+        posts.push((JSON.parse(String(init!.body)) as { positions: AgentMapEdgeR9Pos }).positions);
+        return agentMapEdgeJSON({ ok: true });
+      }
+      return agentMapEdgeJSON({ positions: saved });
+    }
+    return agentMapEdgeJSON({});
+  });
+  return posts;
+}
+
+function AgentMapEdgeR9Map({ jobs, actions }: { jobs: WebJob[]; actions: BoardActions }) {
+  const search = useJobSearch(agentMapEdgeModel(jobs));
+  return <MapView search={search} actions={actions} />;
+}
+
+const agentMapEdgeR9Drafts = (...slugs: string[]) => slugs.map((slug) => agentMapEdgeJob({ slug, state: "draft" }));
+
+/** a and b in one column, c far to the right: no pair is near another. */
+const agentMapEdgeR9Saved: AgentMapEdgeR9Pos = { a: [0, 0], b: [0, 600], c: [3000, 0] };
+
+const agentMapEdgeR9Card = (c: HTMLElement, key: string) =>
+  c.querySelector(`.map-card[data-key="${key}"]`) as HTMLElement;
+const agentMapEdgeR9Face = (c: HTMLElement, key: string) =>
+  agentMapEdgeR9Card(c, key).querySelector(".card") as HTMLElement;
+const agentMapEdgeR9Root = (c: HTMLElement) => c.querySelector("#agent-map") as HTMLElement;
+const agentMapEdgeR9World = (c: HTMLElement) => (c.querySelector(".map-world") as HTMLElement | null)?.style.transform;
+
+function agentMapEdgeR9Spots(c: HTMLElement): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const el of c.querySelectorAll<HTMLElement>(".map-card")) out[el.dataset.key!] = `${el.style.left},${el.style.top}`;
+  return out;
+}
+
+function agentMapEdgeR9IsSelected(c: HTMLElement, key: string): boolean {
+  const el = agentMapEdgeR9Card(c, key);
+  const cls = el.classList.contains("selected");
+  const attr = el.getAttribute("data-selected");
+  // a selected card carries both marks, an unselected one carries neither
+  if (cls) expect(attr, `${key} has the class but not data-selected="true"`).toBe("true");
+  else expect(attr, `${key} is unselected but carries data-selected`).toBeNull();
+  return cls;
+}
+
+function agentMapEdgeR9Selected(c: HTMLElement): string[] {
+  return [...c.querySelectorAll<HTMLElement>(".map-card")]
+    .map((el) => el.dataset.key!)
+    .filter((k) => agentMapEdgeR9IsSelected(c, k))
+    .sort();
+}
+
+function agentMapEdgeR9ShiftClick(c: HTMLElement, key: string) {
+  const face = agentMapEdgeR9Face(c, key);
+  fireEvent.mouseDown(face, { clientX: 100, clientY: 100, button: 0, shiftKey: true });
+  fireEvent.mouseUp(face, { clientX: 100, clientY: 100, button: 0, shiftKey: true });
+  fireEvent.click(face, { clientX: 100, clientY: 100, button: 0, shiftKey: true });
+}
+
+/** A press at `from`, a move through the midpoint to `to`, a release at `to`; Shift held throughout or not at all. */
+function agentMapEdgeR9Drag(
+  el: HTMLElement,
+  from: [number, number],
+  to: [number, number],
+  shiftKey: boolean,
+  mid?: () => void,
+) {
+  fireEvent.mouseDown(el, { clientX: from[0], clientY: from[1], button: 0, shiftKey });
+  fireEvent.mouseMove(window, { clientX: (from[0] + to[0]) / 2, clientY: (from[1] + to[1]) / 2, buttons: 1, shiftKey });
+  fireEvent.mouseMove(window, { clientX: to[0], clientY: to[1], buttons: 1, shiftKey });
+  mid?.();
+  fireEvent.mouseUp(window, { clientX: to[0], clientY: to[1], button: 0, shiftKey });
+}
+
+async function agentMapEdgeR9Mount(saved: AgentMapEdgeR9Pos = agentMapEdgeR9Saved, jobs = agentMapEdgeR9Drafts("a", "b", "c")) {
+  localStorage.setItem("kraken.mapView", JSON.stringify({ x: 0, y: 0, z: 1 }));
+  const posts = agentMapEdgeR9Server(saved);
+  const actions = agentMapEdgeActions();
+  const view = render(<AgentMapEdgeR9Map jobs={jobs} actions={actions} />);
+  const first = Object.keys(saved)[0]!;
+  await waitFor(() =>
+    expect(agentMapEdgeR9Card(view.container, first).style.left).toBe(`${saved[first]![0]}px`),
+  );
+  await agentMapEdgeFlush();
+  return { ...view, posts, actions, jobs };
+}
+
+const agentMapEdgeR9Quiet = () => act(async () => {
+  await new Promise((r) => setTimeout(r, 250));
+});
+
+describe("W12 — a layout saved under the old gap", () => {
+  it("opening the map moves no card and sends no save", async () => {
+    // a row spaced 300 + 36 apart and two rows 600 apart: at rest under the old gap
+    const saved: AgentMapEdgeR9Pos = { a: [0, 0], b: [336, 0], c: [672, 0], d: [0, 600], e: [336, 600] };
+    const { container, posts } = await agentMapEdgeR9Mount(saved, agentMapEdgeR9Drafts("a", "b", "c", "d", "e"));
+    await agentMapEdgeR9Quiet();
+    const want = Object.fromEntries(Object.entries(saved).map(([k, [x, y]]) => [k, `${x}px,${y}px`]));
+    expect(agentMapEdgeR9Spots(container)).toEqual(want);
+    expect(posts).toEqual([]);
+  });
+});
+
+describe("W13 — the selection at mount", () => {
+  it("is empty: no card carries the class or the attribute, and no marquee shows", async () => {
+    const { container } = await agentMapEdgeR9Mount();
+    expect(agentMapEdgeR9Selected(container)).toEqual([]);
+    expect(container.querySelector("#map-marquee")).toBeNull();
+  });
+
+  it("is not restored from anything saved: a remount starts empty again", async () => {
+    const first = await agentMapEdgeR9Mount();
+    agentMapEdgeR9ShiftClick(first.container, "a");
+    expect(agentMapEdgeR9Selected(first.container)).toEqual(["a"]);
+    first.unmount();
+    const again = await agentMapEdgeR9Mount();
+    expect(agentMapEdgeR9Selected(again.container)).toEqual([]);
+  });
+});
+
+describe("W13 — shift-click", () => {
+  it("toggles a card in and out, opens nothing, moves nothing and saves nothing", async () => {
+    const { container, posts, actions } = await agentMapEdgeR9Mount();
+    const spots = agentMapEdgeR9Spots(container);
+    agentMapEdgeR9ShiftClick(container, "a");
+    expect(agentMapEdgeR9Selected(container)).toEqual(["a"]);
+    agentMapEdgeR9ShiftClick(container, "c");
+    expect(agentMapEdgeR9Selected(container)).toEqual(["a", "c"]);
+    agentMapEdgeR9ShiftClick(container, "a");
+    expect(agentMapEdgeR9Selected(container)).toEqual(["c"]);
+    agentMapEdgeR9ShiftClick(container, "c");
+    expect(agentMapEdgeR9Selected(container)).toEqual([]);
+    await agentMapEdgeR9Quiet();
+    expect(actions.onOpenSteer).not.toHaveBeenCalled();
+    expect(actions.onOpenEditor).not.toHaveBeenCalled();
+    expect(agentMapEdgeR9Spots(container)).toEqual(spots);
+    expect(posts).toEqual([]);
+  });
+
+  it("a press with Shift but no drag shows no marquee", async () => {
+    const { container } = await agentMapEdgeR9Mount();
+    fireEvent.mouseDown(agentMapEdgeR9Face(container, "a"), { clientX: 100, clientY: 100, button: 0, shiftKey: true });
+    expect(container.querySelector("#map-marquee")).toBeNull();
+    fireEvent.mouseUp(agentMapEdgeR9Face(container, "a"), { clientX: 100, clientY: 100, button: 0, shiftKey: true });
+    expect(container.querySelector("#map-marquee")).toBeNull();
+  });
+});
+
+describe("W13 — shift-drag", () => {
+  it("on the background: a marquee only while in flight, no pan, no move, no save", async () => {
+    const { container, posts, actions } = await agentMapEdgeR9Mount();
+    const spots = agentMapEdgeR9Spots(container);
+    const world = agentMapEdgeR9World(container);
+    let during: Element | null = null;
+    agentMapEdgeR9Drag(agentMapEdgeR9Root(container), [-20, -20], [350, 700], true, () => {
+      // inside #agent-map itself, as the contract places it
+      during = agentMapEdgeR9Root(container).querySelector("#map-marquee");
+      expect(agentMapEdgeR9World(container)).toBe(world);
+      expect(agentMapEdgeR9Spots(container)).toEqual(spots);
+    });
+    expect(during).not.toBeNull();
+    expect(container.querySelector("#map-marquee")).toBeNull();
+    expect(agentMapEdgeR9Selected(container)).toEqual(["a", "b"]);
+    await agentMapEdgeR9Quiet();
+    expect(agentMapEdgeR9World(container)).toBe(world);
+    expect(agentMapEdgeR9Spots(container)).toEqual(spots);
+    expect(posts).toEqual([]);
+    expect(actions.onOpenSteer).not.toHaveBeenCalled();
+    expect(actions.onOpenEditor).not.toHaveBeenCalled();
+  });
+
+  it("starting on a card: the card does not move or open, and a marquee is drawn", async () => {
+    const { container, posts, actions } = await agentMapEdgeR9Mount();
+    const spots = agentMapEdgeR9Spots(container);
+    const world = agentMapEdgeR9World(container);
+    let during: Element | null = null;
+    // from inside a's box down to b's top edge region; c is far to the right
+    agentMapEdgeR9Drag(agentMapEdgeR9Face(container, "a"), [150, 10], [160, 650], true, () => {
+      during = agentMapEdgeR9Root(container).querySelector("#map-marquee");
+      expect(agentMapEdgeR9Spots(container)).toEqual(spots);
+    });
+    expect(during).not.toBeNull();
+    expect(container.querySelector("#map-marquee")).toBeNull();
+    expect(agentMapEdgeR9Selected(container)).toEqual(["a", "b"]);
+    await agentMapEdgeR9Quiet();
+    expect(agentMapEdgeR9Spots(container)).toEqual(spots);
+    expect(agentMapEdgeR9World(container)).toBe(world);
+    expect(posts).toEqual([]);
+    expect(actions.onOpenSteer).not.toHaveBeenCalled();
+    expect(actions.onOpenEditor).not.toHaveBeenCalled();
+  });
+
+  it("replaces the selection rather than adding to it", async () => {
+    const { container } = await agentMapEdgeR9Mount();
+    agentMapEdgeR9ShiftClick(container, "c");
+    expect(agentMapEdgeR9Selected(container)).toEqual(["c"]);
+    // a rectangle over a alone, well clear of b (y 600) and c (x 3000)
+    agentMapEdgeR9Drag(agentMapEdgeR9Root(container), [-40, -40], [50, 20], true);
+    expect(agentMapEdgeR9Selected(container)).toEqual(["a"]);
+  });
+
+  it("over empty world empties the selection", async () => {
+    const { container } = await agentMapEdgeR9Mount();
+    agentMapEdgeR9ShiftClick(container, "a");
+    agentMapEdgeR9ShiftClick(container, "b");
+    // between the column (x 0..300) and c (x 3000), above nothing
+    agentMapEdgeR9Drag(agentMapEdgeR9Root(container), [1000, -500], [2000, -300], true);
+    expect(agentMapEdgeR9Selected(container)).toEqual([]);
+  });
+
+  it("released anywhere, the drag ends: the next plain move changes nothing", async () => {
+    const { container } = await agentMapEdgeR9Mount();
+    const world = agentMapEdgeR9World(container);
+    agentMapEdgeR9Drag(agentMapEdgeR9Root(container), [-20, -20], [350, 700], true);
+    const spots = agentMapEdgeR9Spots(container);
+    fireEvent.mouseMove(window, { clientX: 900, clientY: 900 });
+    expect(container.querySelector("#map-marquee")).toBeNull();
+    expect(agentMapEdgeR9Spots(container)).toEqual(spots);
+    expect(agentMapEdgeR9World(container)).toBe(world);
+  });
+});
+
+describe("W13 — group move", () => {
+  it("moves every selected card by the drag's delta in flight, keeps the offset and the selection on drop, and saves once", async () => {
+    const { container, posts, actions } = await agentMapEdgeR9Mount();
+    agentMapEdgeR9ShiftClick(container, "a");
+    agentMapEdgeR9ShiftClick(container, "b");
+    await agentMapEdgeR9Quiet();
+    expect(posts).toEqual([]);
+    agentMapEdgeR9Drag(agentMapEdgeR9Face(container, "a"), [100, 100], [140, 130], false, () => {
+      expect(agentMapEdgeR9Card(container, "a").style.left).toBe("40px");
+      expect(agentMapEdgeR9Card(container, "a").style.top).toBe("30px");
+      expect(agentMapEdgeR9Card(container, "b").style.left).toBe("40px");
+      expect(agentMapEdgeR9Card(container, "b").style.top).toBe("630px");
+      expect(agentMapEdgeR9Card(container, "c").style.left).toBe("3000px");
+    });
+    expect(agentMapEdgeR9Spots(container)).toEqual({ a: "40px,30px", b: "40px,630px", c: "3000px,0px" });
+    expect(agentMapEdgeR9Selected(container)).toEqual(["a", "b"]);
+    await waitFor(() => expect(posts.length).toBeGreaterThan(0));
+    await agentMapEdgeR9Quiet();
+    expect(posts).toHaveLength(1);
+    expect(posts[0]).toEqual({ a: [40, 30], b: [40, 630] });
+    expect(actions.onOpenSteer).not.toHaveBeenCalled();
+    expect(actions.onOpenEditor).not.toHaveBeenCalled();
+  });
+
+  it("dragging the group onto an unselected card: the group keeps its offset, the other card yields, one save carries all three", async () => {
+    // c sits just right of the column; moving the column 100 right lands a on it
+    const saved: AgentMapEdgeR9Pos = { a: [0, 0], b: [0, 600], c: [400, 0] };
+    const { container, posts } = await agentMapEdgeR9Mount(saved);
+    agentMapEdgeR9ShiftClick(container, "a");
+    agentMapEdgeR9ShiftClick(container, "b");
+    agentMapEdgeR9Drag(agentMapEdgeR9Face(container, "b"), [100, 100], [200, 100], false);
+    expect(agentMapEdgeR9Card(container, "a").style.left).toBe("100px");
+    expect(agentMapEdgeR9Card(container, "a").style.top).toBe("0px");
+    expect(agentMapEdgeR9Card(container, "b").style.left).toBe("100px");
+    expect(agentMapEdgeR9Card(container, "b").style.top).toBe("600px");
+    expect(agentMapEdgeR9Spots(container).c).not.toBe("400px,0px");
+    expect(agentMapEdgeR9Selected(container)).toEqual(["a", "b"]);
+    await waitFor(() => expect(posts.length).toBeGreaterThan(0));
+    await agentMapEdgeR9Quiet();
+    expect(posts).toHaveLength(1);
+    expect(Object.keys(posts[0]!).sort()).toEqual(["a", "b", "c"]);
+    expect(posts[0]!.a).toEqual([100, 0]);
+    expect(posts[0]!.b).toEqual([100, 600]);
+    const c = agentMapEdgeR9Card(container, "c");
+    expect(posts[0]!.c).toEqual([parseFloat(c.style.left), parseFloat(c.style.top)]);
+  });
+
+  it("a one-card selection moves like a group of one and stays selected", async () => {
+    const { container, posts } = await agentMapEdgeR9Mount();
+    agentMapEdgeR9ShiftClick(container, "c");
+    agentMapEdgeR9Drag(agentMapEdgeR9Face(container, "c"), [100, 100], [60, 160], false);
+    expect(agentMapEdgeR9Spots(container)).toEqual({ a: "0px,0px", b: "0px,600px", c: "2960px,60px" });
+    expect(agentMapEdgeR9Selected(container)).toEqual(["c"]);
+    await waitFor(() => expect(posts.length).toBeGreaterThan(0));
+    await agentMapEdgeR9Quiet();
+    expect(posts).toEqual([{ c: [2960, 60] }]);
+  });
+});
+
+describe("W13 — a plain drag of an unselected card", () => {
+  it("moves that card alone and empties the selection", async () => {
+    const { container, posts } = await agentMapEdgeR9Mount();
+    agentMapEdgeR9ShiftClick(container, "a");
+    agentMapEdgeR9ShiftClick(container, "b");
+    agentMapEdgeR9Drag(agentMapEdgeR9Face(container, "c"), [100, 100], [150, 100], false);
+    expect(agentMapEdgeR9Spots(container)).toEqual({ a: "0px,0px", b: "0px,600px", c: "3050px,0px" });
+    expect(agentMapEdgeR9Selected(container)).toEqual([]);
+    await waitFor(() => expect(posts.length).toBeGreaterThan(0));
+    await agentMapEdgeR9Quiet();
+    for (const p of posts) {
+      expect(p.a, "a was not moved and is not saved").toBeUndefined();
+      expect(p.b, "b was not moved and is not saved").toBeUndefined();
+    }
+    expect(posts.find((p) => p.c)?.c).toEqual([3050, 0]);
+  });
+});
+
+describe("W13 — clearing", () => {
+  it("Escape empties the selection, and is harmless with nothing selected", async () => {
+    const { container, posts } = await agentMapEdgeR9Mount();
+    expect(() => fireEvent.keyDown(agentMapEdgeR9Root(container), { key: "Escape" })).not.toThrow();
+    expect(agentMapEdgeR9Selected(container)).toEqual([]);
+    agentMapEdgeR9ShiftClick(container, "a");
+    agentMapEdgeR9ShiftClick(container, "c");
+    fireEvent.keyDown(agentMapEdgeR9Root(container), { key: "Escape" });
+    expect(agentMapEdgeR9Selected(container)).toEqual([]);
+    await agentMapEdgeR9Quiet();
+    expect(posts).toEqual([]);
+  });
+
+  it("a plain press and release on the background empties it", async () => {
+    const { container, posts } = await agentMapEdgeR9Mount();
+    agentMapEdgeR9ShiftClick(container, "a");
+    agentMapEdgeR9ShiftClick(container, "b");
+    const root = agentMapEdgeR9Root(container);
+    fireEvent.mouseDown(root, { clientX: 1500, clientY: 1500, button: 0 });
+    fireEvent.mouseUp(root, { clientX: 1500, clientY: 1500, button: 0 });
+    fireEvent.click(root, { clientX: 1500, clientY: 1500, button: 0 });
+    expect(agentMapEdgeR9Selected(container)).toEqual([]);
+    await agentMapEdgeR9Quiet();
+    expect(posts).toEqual([]);
+  });
+
+  it("a background drag without Shift pans and keeps the selection", async () => {
+    const { container, posts } = await agentMapEdgeR9Mount();
+    agentMapEdgeR9ShiftClick(container, "a");
+    agentMapEdgeR9ShiftClick(container, "b");
+    const spots = agentMapEdgeR9Spots(container);
+    const world = agentMapEdgeR9World(container);
+    agentMapEdgeR9Drag(agentMapEdgeR9Root(container), [1500, 1500], [1700, 1600], false);
+    expect(agentMapEdgeR9World(container)).not.toBe(world);
+    expect(agentMapEdgeR9Spots(container)).toEqual(spots);
+    expect(agentMapEdgeR9Selected(container)).toEqual(["a", "b"]);
+    expect(container.querySelector("#map-marquee")).toBeNull();
+    await agentMapEdgeR9Quiet();
+    expect(posts).toEqual([]);
+  });
+});
+
+describe("W13 — a card that leaves the map leaves the selection", () => {
+  it("an archived card is dropped from the selection and comes back unselected", async () => {
+    const { container, rerender, actions } = await agentMapEdgeR9Mount();
+    agentMapEdgeR9ShiftClick(container, "a");
+    agentMapEdgeR9ShiftClick(container, "b");
+    expect(agentMapEdgeR9Selected(container)).toEqual(["a", "b"]);
+    const gone = [
+      agentMapEdgeJob({ slug: "a", state: "draft" }),
+      agentMapEdgeJob({ slug: "b", state: "done", archived: true }),
+      agentMapEdgeJob({ slug: "c", state: "draft" }),
+    ];
+    rerender(<AgentMapEdgeR9Map jobs={gone} actions={actions} />);
+    await agentMapEdgeFlush();
+    expect(agentMapEdgeR9Card(container, "b")).toBeNull();
+    expect(agentMapEdgeR9Selected(container)).toEqual(["a"]);
+    rerender(<AgentMapEdgeR9Map jobs={agentMapEdgeR9Drafts("a", "b", "c")} actions={actions} />);
+    await agentMapEdgeFlush();
+    expect(agentMapEdgeR9Card(container, "b")).not.toBeNull();
+    expect(agentMapEdgeR9Selected(container)).toEqual(["a"]);
+  });
+
+  it("a group move after a selected card left moves only the cards still showing", async () => {
+    const { container, rerender, actions, posts } = await agentMapEdgeR9Mount();
+    agentMapEdgeR9ShiftClick(container, "a");
+    agentMapEdgeR9ShiftClick(container, "b");
+    const gone = [
+      agentMapEdgeJob({ slug: "a", state: "draft" }),
+      agentMapEdgeJob({ slug: "b", state: "done", archived: true }),
+      agentMapEdgeJob({ slug: "c", state: "draft" }),
+    ];
+    rerender(<AgentMapEdgeR9Map jobs={gone} actions={actions} />);
+    await agentMapEdgeFlush();
+    agentMapEdgeR9Drag(agentMapEdgeR9Face(container, "a"), [100, 100], [120, 100], false);
+    expect(agentMapEdgeR9Spots(container)).toEqual({ a: "20px,0px", c: "3000px,0px" });
+    await waitFor(() => expect(posts.length).toBeGreaterThan(0));
+    await agentMapEdgeR9Quiet();
+    for (const p of posts) expect(p.b, "b is off the map and is not moved").toBeUndefined();
+    // b comes back exactly where it was saved
+    rerender(<AgentMapEdgeR9Map jobs={agentMapEdgeR9Drafts("a", "b", "c")} actions={actions} />);
+    await agentMapEdgeFlush();
+    expect(agentMapEdgeR9Card(container, "b").style.left).toBe("0px");
+    expect(agentMapEdgeR9Card(container, "b").style.top).toBe("600px");
+  });
+});

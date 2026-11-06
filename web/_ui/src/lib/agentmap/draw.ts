@@ -92,6 +92,32 @@ export interface DinoColors {
   belly: string;
   claw: string;
   iris: string;
+  /** the rim of a girl's glasses: light on a dark coat, dark on every other */
+  rim: string;
+  /** a girl's ponytail and its outline, both shades of the coat itself */
+  hair: string;
+  hairEdge: string;
+}
+
+/** Relative luminance (WCAG) of a hex or rgb() colour, 0 black to 1 white. */
+function luminance(c: string): number {
+  const [r, g, b] = hexRGB(c).map((v) => {
+    const u = v / 255;
+    return u <= 0.03928 ? u / 12.92 : Math.pow((u + 0.055) / 1.055, 2.4);
+  });
+  return 0.2126 * r! + 0.7152 * g! + 0.0722 * b!;
+}
+
+/**
+ * The colours of the girl look's additions for a coat (the reference page's
+ * look C, artifacts/14-girl-variants.html). On most coats the ponytail is the
+ * body mixed toward its outline colour and the glasses' rim is a fixed
+ * near-black. A dark body (the slate coat) gets fixed light stand-ins for all
+ * three, or they would vanish into it. None of them is a status colour.
+ */
+function lookColors(body: string, edge: string): Pick<DinoColors, "rim" | "hair" | "hairEdge"> {
+  if (luminance(body) < 0.25) return { rim: "#e8ecf2", hair: "#c9cfdb", hairEdge: "#6b7385" };
+  return { rim: "#2b2f38", hair: mix(body, edge, 0.55), hairEdge: mix(body, edge, 0.85) };
 }
 
 /**
@@ -162,6 +188,7 @@ function coatColors(light: boolean, coat: Coat): DinoColors {
     belly: k.belly,
     claw: (!light && k.clawDark) || k.claw,
     iris: k.iris,
+    ...lookColors(body, k.edge),
   };
 }
 
@@ -175,6 +202,7 @@ function spentColors(light: boolean): DinoColors {
     belly: "#e6e1d2",
     claw: "#7d766a",
     iris: "#8a8f86",
+    ...lookColors(Y, "#6b4300"),
   };
 }
 
@@ -1294,13 +1322,15 @@ function drawArm(c: Ctx, col: DinoColors, sx: number, hx: number, hy: number) {
 // ------------------------------------------------------------------ the hats
 
 /**
- * The hats' colours: off-white, steel, brown and oatmeal, none of them near
+ * The hats' colours: steel, off-white, brown and oatmeal, none of them near
  * a status colour (violet working, magenta blocked, amber question, red
- * limit, green done), so a hat never reads as its card's state.
+ * limit, green done), so a hat never reads as its card's state. The hard hat
+ * is the exception by the operator's ask: construction yellow, with a dark
+ * olive edge so it still shows on the yellow Fable coat.
  */
 const HAT_INK = {
-  shell: "#ece6d6",
-  shellEdge: "#7d7566",
+  shell: "#ffd83a",
+  shellEdge: "#8f6b0a",
   steel: "#b4b8c2",
   steelEdge: "#555a66",
   crest: "#6b5644",
@@ -1407,11 +1437,70 @@ const HAT: Readonly<Record<Exclude<Hat, "none">, (c: Ctx, hx: number, front: boo
   },
 };
 
+// ------------------------------------------------------------------ the girl look
+
+const LENS_FILL = "rgba(255,255,255,.14)";
+const LENS_GLARE = "rgba(255,255,255,.55)";
+
+/**
+ * A girl's round glasses, in the head's frame, drawn after the eyes and
+ * before the hat: a lens ring on each eye's centre (`fsh` is the eyes' shift
+ * when the head is turned), a glint, the bridge, and a temple arm back to
+ * the side of the head. Turned sideways, the far arm is behind the head and
+ * is not drawn.
+ */
+function drawGlasses(c: Ctx, col: DinoColors, hx: number, fsh: number, front: boolean) {
+  const ey = -23.6;
+  for (let sx = -1; sx <= 1; sx += 2) {
+    const ex = hx + sx * 7.4 + fsh * 0.75;
+    c.beginPath();
+    c.arc(ex, ey, 4.4, 0, TAU);
+    inked(c, LENS_FILL, col.rim, 1.5);
+    c.strokeStyle = LENS_GLARE;
+    c.lineWidth = 0.8;
+    c.beginPath();
+    c.arc(ex, ey, 2.9, PI * 1.1, PI * 1.45);
+    c.stroke();
+    if (front || sx < 0) line(c, ex + sx * 4.4, ey - 0.8, hx + sx * 13.3, ey - 1.6, col.rim, 1.1);
+  }
+  const bx = hx + fsh * 0.75;
+  c.strokeStyle = col.rim;
+  c.lineWidth = 1.3;
+  c.beginPath();
+  c.moveTo(bx - 3, ey - 1.2);
+  c.quadraticCurveTo(bx, ey - 2.6, bx + 3, ey - 1.2);
+  c.stroke();
+}
+
+/**
+ * A girl's ponytail, out of the back of the head (-x, away from the way the
+ * character faces), drawn before the head so the head hides its root. It
+ * sways a little, on the character's own phase.
+ */
+function drawPonytail(c: Ctx, col: DinoColors, hx: number, t: number, seed: number) {
+  const sw = sin(t * 2.6 + seed * 9) * 1.1;
+  c.beginPath();
+  c.moveTo(hx - 11.4, -28.6);
+  c.bezierCurveTo(hx - 17.5, -30, hx - 21 + sw, -24.5, hx - 19.5 + sw, -16.8);
+  c.quadraticCurveTo(hx - 16.8 + sw * 0.6, -20.5, hx - 12.2, -23.2);
+  c.closePath();
+  inked(c, col.hair, col.hairEdge, 1.1);
+  line(c, hx - 15, -25.4, hx - 18.4 + sw * 0.8, -19.5, col.hairEdge, 0.7);
+}
+
+/** The ponytail's hair tie, drawn after the hat so a helmet's edge does not cover it. */
+function drawHairTie(c: Ctx, col: DinoColors, hx: number) {
+  c.beginPath();
+  c.ellipse(hx - 12.6, -25.9, 1.3, 2.3, 0.5, 0, TAU);
+  inked(c, col.lite, col.hairEdge, 0.8);
+}
+
 /**
  * Draw one dino with pose `P` (already filled), feet at (x, y), scale `s`,
- * facing `flip`, wearing `hat` (none by default; a lead never wears one).
- * Uses one save/restore pair for the whole figure, since the scale, the lean
- * and the bob nest; every effect inside undoes its own state.
+ * facing `flip`, wearing `hat` (none by default; a lead never wears one) and,
+ * when `girl` is set, round glasses and a ponytail. An unhatched egg wears
+ * neither. Uses one save/restore pair for the whole figure, since the scale,
+ * the lean and the bob nest; every effect inside undoes its own state.
  */
 export function drawKraken(
   c: Ctx,
@@ -1424,6 +1513,7 @@ export function drawKraken(
   col: DinoColors,
   walking: boolean,
   hat: Hat = "none",
+  girl = false,
 ): void {
   const t = P.t;
   const keep = FLIP;
@@ -1534,6 +1624,7 @@ export function drawKraken(
   c.beginPath();
   c.ellipse(fsh * 0.5, -7.4, 6.7, 6, 0, 0, TAU);
   c.fill();
+  if (girl) drawPonytail(c, col, hx, t, P.seed);
   // head: one big rounded loaf, wider than the body
   c.fillStyle = col.body;
   c.strokeStyle = col.dark;
@@ -1602,7 +1693,9 @@ export function drawKraken(
     c.arc(px - 0.5, py - 0.6, 0.45, 0, TAU);
     c.fill();
   }
+  if (girl) drawGlasses(c, col, hx, fsh, front);
   if (hat !== "none") HAT[hat](c, hx, front);
+  if (girl) drawHairTie(c, col, hx);
   if (!farFwd) drawArm(c, col, -9.5, h[2], h[3]);
   drawArm(c, col, 9.5, h[0], h[1]);
   PROP[P.kind]?.(c, P, o);

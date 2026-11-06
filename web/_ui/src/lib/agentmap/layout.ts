@@ -3,8 +3,11 @@
 //
 // Coordinates are WORLD pixels (the map's own space, before pan and zoom), and
 // a node's x/y is its card's top-left corner. The clearance MAP_GAP keeps
-// between cards is what leaves room for the characters standing on a card's
-// top edge, which is why it is so much taller than it is wide.
+// between cards is the distance a settle or a drop pushes cards apart to, so
+// a smaller gap is a shorter push. It is taller than it is wide to leave some
+// room for the characters standing on a card's top edge. Their canvas reaches
+// further above the card than the vertical gap (MapView's PAD_TOP), so with
+// cards this close they may reach over the card above.
 
 export interface MapNode {
   key: string;
@@ -14,7 +17,7 @@ export interface MapNode {
   h: number;
 }
 
-export const MAP_GAP = { x: 36, y: 112 };
+export const MAP_GAP = { x: 16, y: 64 };
 
 /**
  * Extra separation a push adds beyond the exact overlap. Positions are saved
@@ -139,7 +142,7 @@ export function settle(nodes: MapNode[], held?: string | ReadonlySet<string>): b
       // the pair's keys, so the same pair always splits the same way
       const sx = dx > 0 ? 1 : dx < 0 ? -1 : hash01(a.key + "|" + b.key) < 0.5 ? -1 : 1;
       const sy = dy > 0 ? 1 : dy < 0 ? -1 : hash01(b.key + "|" + a.key) < 0.5 ? -1 : 1;
-      // compare relative overlaps: the vertical clearance is three times the
+      // compare relative overlaps: the vertical clearance is four times the
       // horizontal one, and an absolute comparison would push almost every
       // pair sideways
       const horizontal = ox / ((a.w + b.w) / 2 + MAP_GAP.x) <= oy / ((a.h + b.h) / 2 + MAP_GAP.y);
@@ -190,6 +193,31 @@ export function freeSpot(n: MapNode, others: readonly MapNode[]): boolean {
   n.x = x0;
   n.y = y0;
   return false;
+}
+
+/**
+ * The keys, in the order of `nodes`, of every node whose own box (no MAP_GAP)
+ * intersects the rectangle with opposite corners `a` and `b`, given in either
+ * order. Touching edges count. A node with a non-finite coordinate or size is
+ * left out, and a non-finite corner selects nothing. Mutates nothing: this is
+ * the shift-drag marquee's hit test.
+ */
+export function marqueeKeys(
+  nodes: readonly MapNode[],
+  a: { x: number; y: number },
+  b: { x: number; y: number },
+): string[] {
+  if (![a.x, a.y, b.x, b.y].every(Number.isFinite)) return [];
+  const x0 = Math.min(a.x, b.x);
+  const x1 = Math.max(a.x, b.x);
+  const y0 = Math.min(a.y, b.y);
+  const y1 = Math.max(a.y, b.y);
+  const out: string[] = [];
+  for (const n of nodes) {
+    if (![n.x, n.y, n.w, n.h].every(Number.isFinite)) continue;
+    if (n.x <= x1 && x0 <= n.x + n.w && n.y <= y1 && y0 <= n.y + n.h) out.push(n.key);
+  }
+  return out;
 }
 
 /**
