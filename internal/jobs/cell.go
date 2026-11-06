@@ -2432,8 +2432,9 @@ func RetryableHealth(reason string) bool {
 
 // RetryCell pokes a stalled cell agent: a nudge message resumes a claude
 // sitting at its prompt after an errored or interrupted turn. Dead processes
-// can't be poked — that's reported, not papered over. Shared by the web
-// board's retry and the viewer's health rows.
+// can't be poked — that's reported, not papered over. Shared by /api/retry
+// (webRetry: the web board's and the iOS app's retry) and the daemon's own
+// auto-retry.
 func RetryCell(j *Job) error {
 	if !j.Started() || j.State == "done" {
 		return fmt.Errorf("%s has no live cell to retry", j.Slug)
