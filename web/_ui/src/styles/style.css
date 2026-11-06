@@ -3931,19 +3931,35 @@ button.spawn-chip.spawn-draft:hover { background: color-mix(in srgb, var(--ac) 1
    status colour, so it reads where the characters are switched off or cannot
    be drawn */
 .map-card .map-status { flex: none; width: 9px; height: 9px; background: var(--map-sc); }
-/* the status colour frames the map card on its top, right and bottom. The
-   left side has no frame: JobCard inside keeps its own job-colour edge
-   there, which says WHICH job rather than where it is. The frame is box-
-   shadow on the .map-card wrapper, not anything on the .card: .card carries
-   the column board's notched-corner clip-path, which clips whatever is
-   painted outside its box. Two shadows, each spread 1px and shifted 1px
-   right, one a pixel up and one a pixel down, together reach 2px past the
-   top, right and bottom edges and stop flush with the left one. A shadow
-   takes no layout, so a card's measured size (offsetHeight, which physics
-   reads) is unchanged, and it sits inside the selected and marquee-preview
-   outlines below, which start 3px out from the same box. */
-.map-card {
-  box-shadow: 1px -1px 0 1px var(--map-sc), 1px 1px 0 1px var(--map-sc);
+/* the status colour frames the map card on its top, right and bottom, and
+   follows the card's notched top-right corner. The left side has no frame:
+   JobCard inside keeps its own job-colour edge there, which says WHICH job
+   rather than where it is. The frame is a plate of the status colour BEHIND
+   the card, on the .map-card wrapper: 2px larger than the card on those
+   three sides, flush with it on the left, and cut by its own clip-path to
+   the card's shape, so the card covers all of it but a 2px rim. It cannot be
+   anything on the .card, whose notch clip-path removes whatever is painted
+   outside its box, and a box-shadow on the wrapper (what this was) is a
+   rectangle that ignores the notch.
+
+   The plate's corner cut is the card's, grown so the rim is 2px along the
+   diagonal too: the card cuts 12px of its own zoomed units, 12 × the text
+   scale in the wrapper's, and a line parallel to that diagonal 2px further
+   out meets the plate's top and right edges 4 − 2√2 ≈ 1.17px later.
+
+   The plate is absolutely positioned and comes first in the wrapper, so the
+   card (a stacking context of its own, by its clip-path) paints over it and
+   the characters' canvas over both. It takes no layout, so a card's measured
+   size (offsetHeight, which physics reads) is unchanged, and it sits inside
+   the selected and marquee-preview outlines below, which start 3px out from
+   the card's box. */
+.map-card::before {
+  content: "";
+  position: absolute; left: 0; top: -2px; right: -2px; bottom: -2px;
+  background: var(--map-sc);
+  --map-notch: calc(12px * var(--map-text-scale, 1) + 1.17px);
+  clip-path: polygon(0 0, calc(100% - var(--map-notch)) 0, 100% var(--map-notch), 100% 100%, 0 100%);
+  pointer-events: none;
 }
 /* The card is laid out at --map-text-scale (a CSS zoom on the card alone), so
    its text and chips render that much larger while the .map-card around it

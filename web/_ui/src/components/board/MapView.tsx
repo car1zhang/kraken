@@ -692,6 +692,12 @@ export function MapView({ search, actions, boardNodeID, hidden }: MapViewProps) 
   const showing = useRef<Set<string> | null>(null);
   const arriving = useRef(new Set<string>()).current;
   const firstPlacement = showing.current === null;
+  /**
+   * Cards seeded on the middle of the view and not measured yet. A card is
+   * seeded with an estimated height; when its real one arrives it is moved by
+   * half the difference, so its middle stays where it was put.
+   */
+  const centredSeeds = useRef(new Set<string>()).current;
 
   // Seed every unplaced card once the saved positions are in (or the load is
   // slow enough to place provisionally). The seeds are saved by the effect
@@ -699,8 +705,24 @@ export function MapView({ search, actions, boardNodeID, hidden }: MapViewProps) 
   const seededNow: string[] = [];
   if (phase.current !== "waiting" && shown.some((n) => !finiteXY(n))) {
     const before = new Set(shown.filter(finiteXY).map((n) => n.key));
-    seedLayout(shown, spawnLinks);
-    for (const n of shown) if (!before.has(n.key)) seededNow.push(n.key);
+    // A card with no position that turns up after the first placement is a
+    // job that was just added: it starts in the middle of what the operator
+    // is looking at (the nearest free spot to it), not at the middle of the
+    // whole layout, which may be off screen. The first placement, and a map
+    // whose size is not known yet, keep the layout's own centre.
+    let origin: readonly [number, number] | undefined;
+    const size = sizeRef.current;
+    const view = viewRef.current;
+    if (!firstPlacement && size.w > 0 && size.h > 0 && view.z > 0) {
+      origin = [(size.w / 2 - view.x) / view.z, (size.h / 2 - view.y) / view.z];
+    }
+    seedLayout(shown, spawnLinks, origin);
+    for (const n of shown) {
+      if (before.has(n.key)) continue;
+      seededNow.push(n.key);
+      // a card seeded beside its spawn partner was not put on the origin
+      if (origin && !spawnLinks.some(([a, b]) => a === n.key || b === n.key)) centredSeeds.add(n.key);
+    }
   }
 
   /**
@@ -981,8 +1003,17 @@ export function MapView({ search, actions, boardNodeID, hidden }: MapViewProps) 
         changed = first || Math.abs(n.h - nh) > 0.5 || (w > 0 && Math.abs(n.w - w) > 0.5);
       }
       measured.add(key);
+      // a card seeded on the middle of the view keeps its middle there once
+      // its real height replaces the estimate it was seeded with
+      const recentre = first && centredSeeds.delete(key) && Number.isFinite(n.y);
+      if (recentre) n.y = Math.round(n.y + (n.h - nh) / 2);
       n.h = nh;
       if (w > 0) n.w = w;
+      if (recentre) {
+        markDirty([key]);
+        writePositions([key]);
+        scheduleSave();
+      }
       if (changed) {
         // an arriving card's size is part of its arrival (it yields when it
         // is placed); only a showing card's change moves others
@@ -992,7 +1023,7 @@ export function MapView({ search, actions, boardNodeID, hidden }: MapViewProps) 
         lastDraw.delete(key);
       }
     },
-    [nodes, measured, lastDraw, arriving, measuredAtZ, rawH],
+    [nodes, measured, lastDraw, arriving, measuredAtZ, rawH, centredSeeds, markDirty, writePositions, scheduleSave],
   );
 
   // One ResizeObserver for every card. Its callback runs after layout, so the
@@ -1044,6 +1075,7 @@ export function MapView({ search, actions, boardNodeID, hidden }: MapViewProps) 
     const prev = showing.current;
     if (prev) for (const k of keys) if (!prev.has(k)) arriving.add(k);
     for (const k of arriving) if (!keys.has(k)) arriving.delete(k);
+    for (const k of centredSeeds) if (!keys.has(k)) centredSeeds.delete(k);
     showing.current = keys;
   });
 
