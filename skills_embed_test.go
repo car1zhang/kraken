@@ -301,6 +301,11 @@ func TestSkillsOwnTheCellContract(t *testing.T) {
 			"is a QUESTION ROUND", "only a P0 blocks", "questions pending:",
 			"then tell me to continue", "kraken questions add", "kraken questions remove",
 			"never arm a watch to poll the rows", "Kraken types nothing into the pane",
+			// the production floor: the brief carries one sentence bounding
+			// its never-prompt default (crew_test.go pins that), so what
+			// counts as a production change and what a yes covers live here
+			"A production change waits for", "Reads are not changes",
+			"A yes covers the action it named, once",
 			"ONE new Agent call, not three", "only the flagging variant(s)",
 			"BOTH gates have cleared its slice",
 			"correctness, bugs, and scalability", "edge cases and boundary conditions",
