@@ -1145,13 +1145,24 @@ function SteerBody({
             {showArtifacts
               ? artifacts.map((a) => {
                   const name = `${label}/${a.name}`;
+                  // `new` is the server's word that the operator has not
+                  // opened this artifact since it last changed, or never
+                  // opened it (the same flag the map draws as a sheet of
+                  // paper): the chip takes the `unread` class, a dot after
+                  // its name (style.css), and a title that says so. Opening
+                  // it is the read, so the dot goes on a later board poll
+                  // (the modal's job is re-read from the board each poll)
+                  // with no click of its own.
+                  const unread = !!a.new;
                   return (
                     <button
                       key={a.url}
-                      className="chip"
+                      className={unread ? "chip unread" : "chip"}
                       data-url={a.url}
                       data-key={key}
                       data-name={name}
+                      data-unread={unread ? "1" : undefined}
+                      title={unread ? "unread — new or changed since you last opened it" : undefined}
                       onClick={() => onOpenArtifact(a.url, name, key)}
                     >
                       ▤ {a.name}
