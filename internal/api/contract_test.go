@@ -1391,6 +1391,9 @@ func TestActivityAndTalkWireShapes(t *testing.T) {
 var webArtifactSpec = map[string]fieldSpec{
 	"name": {kind: wireString, required: true},
 	"url":  {kind: wireString, required: true},
+	// additive (job 799): true when the operator has not opened the artifact
+	// since it last changed; omitted when false
+	"new": {kind: wireBool, required: false},
 }
 
 var webAgentSpec = map[string]fieldSpec{

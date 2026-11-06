@@ -276,6 +276,7 @@ export function hueOf(C: Palette, id: string): string {
     case "blocked":
       return C.ac2;
     case "question":
+    case "asking":
       return C.warn;
     case "parked":
       return C.parked;
@@ -605,6 +606,12 @@ export interface PoseOpts {
   k: number | null;
   hue: string;
   C: Palette;
+  /**
+   * How many sheets of paper the character holds in its far hand — its
+   * card's new artifacts (activity.ts `heldPapers`). Orthogonal to the pose:
+   * the sheets go wherever that pose put the hand. Absent or 0 draws none.
+   */
+  papers?: number;
 }
 
 export function newPose(): Pose {
@@ -886,6 +893,21 @@ const FILL: Readonly<Record<string, Fill>> = {
     P.lean = sin(t * 1.2) * 0.11;
     hands(P, 16.5, -15 + up, -16.5, -15 + up);
     eyes(P, 0.5, -0.7);
+  },
+  // open P0/P1 question rows: a hand raised straight up, like a pupil with a
+  // question, held there and bobbing a little; the far hand hangs at the
+  // side where it can hold the card's papers. Every 4s or so the whole
+  // figure rises on tiptoe for a beat, which is what makes it read as
+  // waiting to be called on rather than stretching. Eyes up, at the operator.
+  asking: (P, t) => {
+    const cyc = fr(t / 4.2);
+    const tip = cyc < 0.18 ? sin((cyc / 0.18) * PI) : 0;
+    P.face = 0;
+    P.bob = -tip * 2.4;
+    P.lean = -0.05 + sin(t * 1.6) * 0.03;
+    hands(P, 10.5, -45 + sin(t * 2.6) * 1.4 - tip * 2, -11.5, -7);
+    eyes(P, 0.2, -0.9);
+    P.eyes.wide = true;
   },
   parked: fillSleep,
   // on hold: asleep until its cell wakes it
@@ -1227,6 +1249,18 @@ const FX: Readonly<Record<string, Draw>> = {
   },
   blocked: (c, P, o) => flag(c, o.C, 21, -49 - P.a, 1 + 0.13 * sin(P.t * 6), o.hue, "!"),
   question: (c, P, o) => flag(c, o.C, 19, -50 + sin(P.t * 2.4) * 1.5, 1, o.hue, "?"),
+  // question marks drifting up from the raised hand and fading, the
+  // sleeper's z's run the other way: several small ones rather than the one
+  // flag the pane dialog gets, so the two question readings stay apart
+  asking: (c, P, o) => {
+    const t = P.t;
+    for (let i = 0; i < 3; i++) {
+      const p = fr(t * 0.4 + i / 3);
+      const was = fade(c, sin(p * PI));
+      T(c, "?", 13 + sin(p * 6 + i) * 3, -52 - p * 20, 6.5 + p * 4, o.hue);
+      c.globalAlpha = was;
+    }
+  },
   parked: fxSleep,
   frozen: fxSleep,
   limit: (c, P, o) => {
@@ -1284,6 +1318,30 @@ function drawGrave(c: Ctx, o: PoseOpts) {
   for (let i = 0; i < GRAVE_GRASS.length; i += 3) {
     const x = GRAVE_GRASS[i]!;
     line(c, x, 0.6, x + GRAVE_GRASS[i + 1]!, -GRAVE_GRASS[i + 2]!, o.hue, 1.3);
+  }
+}
+
+/** At most this many sheets are drawn, however many artifacts are new; the stack says "some", not the count. */
+const PAPERS_MAX = 3;
+
+/**
+ * The card's new artifacts, held in the far hand at (hx, hy): a short stack
+ * of sheets (draw.ts' `sheet`, the read pose's paper) fanned a little, held
+ * up by their lower edge so a hand hanging at the side shows them against
+ * the chest rather than dangling below the card's edge. Drawn after the arms
+ * so the claws sit over the paper's corner, and in the pose's hue like every
+ * other prop, so a blocked lead's papers are ruled in its magenta and an
+ * asking lead's in amber. The pose decides where the hand is, so a sleeper
+ * holds its papers in its lap and a lead waving both arms holds them aloft.
+ */
+function drawPapers(c: Ctx, o: PoseOpts, hx: number, hy: number) {
+  const n = min(PAPERS_MAX, max(0, Math.floor(o.papers ?? 0)));
+  for (let i = n - 1; i >= 0; i--) {
+    c.translate(hx, hy);
+    c.rotate(-0.1 - i * 0.14);
+    sheet(c, o.C, -4.5 - i * 1.2, -9.5 - i * 1.6, o.hue);
+    c.rotate(0.1 + i * 0.14);
+    c.translate(-hx, -hy);
   }
 }
 
@@ -1761,6 +1819,7 @@ export function drawKraken(
   if (branch !== "none") drawTwig(c, hx, t, P.seed);
   if (!farFwd) drawArm(c, col, -9.5, h[2], h[3]);
   drawArm(c, col, 9.5, h[0], h[1]);
+  if (o.papers) drawPapers(c, o, h[2], h[3]);
   PROP[P.kind]?.(c, P, o);
   // back out of the bob and the lean: the effects draw outside them
   c.translate(0, -oy);

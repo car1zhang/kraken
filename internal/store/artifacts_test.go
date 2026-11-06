@@ -203,12 +203,12 @@ func TestListArtifactPathsCoversEveryJobInPathOrder(t *testing.T) {
 	if _, err := s.CreateJob(&Job{Slug: "paths-none"}); err != nil {
 		t.Fatalf("CreateJob: %v", err)
 	}
-	if err := s.SyncArtifacts(b, []ArtifactFile{{Path: "z.md", Bytes: []byte("z")}}, nil); err != nil {
+	if err := s.SyncArtifacts(b, []ArtifactFile{{Path: "z.md", Bytes: []byte("z"), Mtime: 30}}, nil); err != nil {
 		t.Fatal(err)
 	}
 	if err := s.SyncArtifacts(a, []ArtifactFile{
-		{Path: "sub/b.txt", Bytes: []byte("bbb")},
-		{Path: "a.txt", Bytes: []byte("aaa")},
+		{Path: "sub/b.txt", Bytes: []byte("bbb"), Mtime: 20},
+		{Path: "a.txt", Bytes: []byte("aaa")}, // never stamped: reads as 0
 	}, nil); err != nil {
 		t.Fatal(err)
 	}
@@ -216,7 +216,9 @@ func TestListArtifactPathsCoversEveryJobInPathOrder(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListArtifactPaths: %v", err)
 	}
-	want := []ArtifactPath{{a, "a.txt"}, {a, "sub/b.txt"}, {b, "z.md"}}
+	// each row carries its mtime beside the path, so a reader can tell a
+	// changed artifact from one already opened without a second query
+	want := []ArtifactPath{{JobID: a, Path: "a.txt"}, {JobID: a, Path: "sub/b.txt", Mtime: 20}, {JobID: b, Path: "z.md", Mtime: 30}}
 	if len(got) != len(want) {
 		t.Fatalf("paths = %+v, want %+v", got, want)
 	}

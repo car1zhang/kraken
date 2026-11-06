@@ -3928,6 +3928,8 @@ button.spawn-chip.spawn-draft:hover { background: color-mix(in srgb, var(--ac) 1
 .map-card[data-status="working"] { --map-sc: var(--ac); }
 .map-card[data-status="blocked"] { --map-sc: var(--ac2); }
 .map-card[data-status="question"] { --map-sc: var(--warn); }
+/* open P0/P1 question rows: the question colour, like the pane dialog's */
+.map-card[data-status="asking"] { --map-sc: var(--warn); }
 .map-card[data-status="parked"] { --map-sc: color-mix(in srgb, var(--ac2) 55%, var(--g1)); }
 .map-card[data-status="limit"] { --map-sc: var(--stopped); }
 /* on hold: the quiet frame a draft has, since neither is asking for anything */

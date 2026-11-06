@@ -488,8 +488,31 @@ func holdBlocked(persisted, derived string, live bool, firstTick, tickN int) (st
 // into folders, e.g. icon-variations/) so the board and the app can list and
 // navigate them. Hidden files and dirs are skipped.
 func ListArtifacts(j *Job) []string {
+	infos := ListArtifactInfos(j)
+	if len(infos) == 0 {
+		return nil // a missing or empty dir is nil, as the walk always answered
+	}
+	out := make([]string, 0, len(infos))
+	for _, a := range infos {
+		out = append(out, a.Path)
+	}
+	return out
+}
+
+// ArtifactInfo is one artifact file in a live cell's artifacts dir: its
+// absolute path and its mtime in unix millis (0 when the walk could not
+// stat it), the same clock the store's `artifacts.mtime` column keeps.
+type ArtifactInfo struct {
+	Path  string
+	Mtime int64
+}
+
+// ListArtifactInfos is ListArtifacts with each file's mtime, read off the
+// walk's own DirEntry so the board pays no second stat per artifact. Sorted
+// by path like ListArtifacts.
+func ListArtifactInfos(j *Job) []ArtifactInfo {
 	root := CellArtifacts(j)
-	var out []string
+	var out []ArtifactInfo
 	_ = filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return nil // unreadable entry: skip it, keep walking the rest
@@ -503,9 +526,13 @@ func ListArtifacts(j *Job) []string {
 		if strings.HasPrefix(d.Name(), ".") {
 			return nil
 		}
-		out = append(out, p)
+		a := ArtifactInfo{Path: p}
+		if fi, err := d.Info(); err == nil {
+			a.Mtime = fi.ModTime().UnixMilli()
+		}
+		out = append(out, a)
 		return nil
 	})
-	sort.Strings(out)
+	sort.Slice(out, func(i, k int) bool { return out[i].Path < out[k].Path })
 	return out
 }

@@ -267,6 +267,13 @@ func artifactHandler(w http.ResponseWriter, r *http.Request) {
 			http.NotFound(w, r)
 			return
 		}
+		// The read is the operator's mark (jobs/artseen.go): a served
+		// artifact is one they opened, on the board or the phone. An
+		// archived job's reads are not recorded — its card is settled and
+		// flags nothing as new.
+		if parts[1] != "archive" {
+			markArtifactRead(j, parts[2])
+		}
 		w.Header().Set("Content-Type", mimeType)
 		http.ServeContent(w, r, parts[2], time.Time{}, bytes.NewReader(data))
 		return
@@ -276,12 +283,22 @@ func artifactHandler(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
+	markArtifactRead(j, parts[2])
 	// html deliverables render as pages (local, agent-authored content —
 	// same trust as opening the file); binary formats viewers can render
 	// get their real type; everything else stays plain text for the
 	// in-board markdown viewer
 	w.Header().Set("Content-Type", artifactContentType(p))
 	http.ServeFile(w, r, p)
+}
+
+// markArtifactRead records that the operator opened name on j, unless this
+// serve is a mirror, which never writes (api.SetMirrorMode).
+func markArtifactRead(j *jobs.Job, name string) {
+	if api.MirrorModeOn() {
+		return
+	}
+	jobs.MarkArtifactSeen(j, name)
 }
 
 // artifactContentType picks the served type by extension: renderable pages

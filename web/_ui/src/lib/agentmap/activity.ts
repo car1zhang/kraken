@@ -44,6 +44,7 @@ export const HOLD_MS = 6000;
 export type MapStatus =
   | "working"
   | "blocked"
+  | "asking"
   | "question"
   | "parked"
   | "limit"
@@ -53,6 +54,24 @@ export type MapStatus =
 
 function asksQuestion(job: WebJob): boolean {
   return job.zeus_status === "question" || !!job.question;
+}
+
+/**
+ * How many of the job's question rows are open and at an importance the
+ * operator is expected to act on: an unanswered P0 or P1 (`doc_questions`,
+ * the rows a question round files). An answered row is a decision, and a P2
+ * is a cosmetic default the cell builds on without waiting, so neither
+ * counts. A loop rather than filter(): the map asks this per card per frame.
+ */
+export function openAsks(job: WebJob): number {
+  const rows = job.doc_questions;
+  if (!rows) return 0;
+  let n = 0;
+  for (let i = 0; i < rows.length; i++) {
+    const q = rows[i]!;
+    if (!q.answer && (q.importance === "P0" || q.importance === "P1")) n++;
+  }
+  return n;
 }
 
 /**
@@ -67,6 +86,14 @@ function asksQuestion(job: WebJob): boolean {
  * `isFrozen` is the board's own test (a blocked, non-archived job carrying
  * `frozen_at`), so the map sleeps exactly the cards the board files in its
  * FROZEN drawer.
+ *
+ * Within the blocked readings, a pane dialog (`question`, an AskUserQuestion
+ * the board answers with buttons) comes before open P0/P1 question rows
+ * (`asking`, answered on the board's question panel), and both before a gone
+ * cell (`parked`): the questions are the operator's to answer whether or not
+ * the cell is still up, so they are what the card shows. A WORKING job with
+ * open rows is still working — it filed them and carried on — so `asking` is
+ * a blocked reading only.
  */
 export function mapStatus(job: WebJob): MapStatus {
   if (job.state === "draft") return "draft";
@@ -75,6 +102,7 @@ export function mapStatus(job: WebJob): MapStatus {
   if (job.state === "blocked" || job.health) {
     if (LIMIT_RE.test(job.health ?? "")) return "limit";
     if (asksQuestion(job)) return "question";
+    if (openAsks(job) > 0) return "asking";
     if (!job.live) return "parked";
     return "blocked";
   }
@@ -84,6 +112,36 @@ export function mapStatus(job: WebJob): MapStatus {
 
 /** Hoisted: the map calls mapStatus on every frame, and a literal would be a new RegExp each call. */
 const LIMIT_RE = /limit/i;
+
+/**
+ * The statuses whose lead holds its card's new artifacts as sheets of paper:
+ * every reading of a stopped cell the operator may want to look into. A
+ * working lead's hands are busy with its activity's props, a frozen one is on
+ * hold by the operator's own word (the same reason mapStatus hides its other
+ * readings), and a done or draft card has no figure to hold anything.
+ */
+const PAPER_STATUSES: ReadonlySet<MapStatus> = new Set<MapStatus>([
+  "blocked",
+  "asking",
+  "question",
+  "parked",
+  "limit",
+]);
+
+/**
+ * How many sheets of paper the lead holds: the card's NEW artifacts (the
+ * wire's `artifacts[].new`, an artifact the operator has not opened since it
+ * last changed), on the statuses above, and none otherwise. A loop rather
+ * than filter(), for openAsks' reason.
+ */
+export function heldPapers(job: WebJob): number {
+  if (!PAPER_STATUSES.has(mapStatus(job))) return 0;
+  const arts = job.artifacts;
+  if (!arts) return 0;
+  let n = 0;
+  for (let i = 0; i < arts.length; i++) if (arts[i]!.new) n++;
+  return n;
+}
 
 /**
  * The newest event that is a call the agent made, not a message it received.
