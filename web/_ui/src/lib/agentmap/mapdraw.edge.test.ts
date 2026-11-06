@@ -191,7 +191,8 @@ describe("sanitizeDrawings strips and copies", () => {
   it("keeps only kind, pts, size, and text on a text drawing", () => {
     const out = sanitizeDrawings({
       t: { kind: "text", pts: [1, 2], size: 18, text: "hi", extra: 1 },
-      l: { kind: "line", pts: [0, 0, 1, 1], size: 2, text: "", color: "red" },
+      // `color` became a known key with Amendment 3, so the extra key here is another
+      l: { kind: "line", pts: [0, 0, 1, 1], size: 2, text: "", width: 4 },
     });
     expect(out.t).toEqual({ kind: "text", pts: [1, 2], size: 18, text: "hi" });
     expect(Object.keys(out.t!).sort()).toEqual(["kind", "pts", "size", "text"]);

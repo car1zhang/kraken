@@ -4,19 +4,30 @@
  * server in one kv row (GET/POST /api/map/drawings). They have no effect on
  * cards, physics or jobs. Pure functions only; MapView draws them as SVG.
  *
- * A drawing is `{kind, pts, size, text?}`, addressed by a client-minted id.
- * `validDrawing` is the rule the save route also checks, so a drawing this
+ * A drawing is `{kind, pts, size, text?, color?}`, addressed by a client-minted
+ * id. `validDrawing` is the rule the save route also checks, so a drawing this
  * side keeps is one a save does not refuse for its shape.
  */
 import { readLS, writeLS } from "../../hooks/useLocalStorage.ts";
 
 export type DrawKind = "pen" | "line" | "rect" | "ellipse" | "text";
 export type DrawTool = DrawKind | "erase";
+/**
+ * A drawing's ink: one of the board's eight job colours (style.css's
+ * `--job-*`, the names Claude Code's /color takes, each with a dark and a
+ * light hex so a drawing reads on both themes), or absent for the theme's
+ * foreground.
+ */
+export type DrawColor = "red" | "blue" | "green" | "yellow" | "purple" | "orange" | "pink" | "cyan";
+export const DRAW_COLORS: readonly DrawColor[] = ["red", "blue", "green", "yellow", "purple", "orange", "pink", "cyan"];
+const COLORS: ReadonlySet<string> = new Set(DRAW_COLORS);
+export const validDrawColor = (v: unknown): v is DrawColor => typeof v === "string" && COLORS.has(v);
 export interface Drawing {
   kind: DrawKind;
   pts: number[];
   size: number;
   text?: string;
+  color?: DrawColor;
 }
 export interface DrawOps {
   set: Record<string, Drawing>;
@@ -78,8 +89,9 @@ function isPlainObject(v: unknown): v is Record<string, unknown> {
 /** True exactly when `v` is an object satisfying the shared validity rule; other keys are ignored. */
 export function validDrawing(v: unknown): v is Drawing {
   if (!isPlainObject(v)) return false;
-  const { kind, pts, size, text } = v;
+  const { kind, pts, size, text, color } = v;
   if (typeof kind !== "string" || !KINDS.has(kind)) return false;
+  if (color !== undefined && !validDrawColor(color)) return false;
   if (!Array.isArray(pts)) return false;
   const n = pts.length;
   if (kind === "pen") {
@@ -101,6 +113,7 @@ export function validDrawing(v: unknown): v is Drawing {
 function cleanDrawing(d: Drawing): Drawing {
   const out: Drawing = { kind: d.kind, pts: d.pts.slice(), size: d.size };
   if (d.kind === "text") out.text = d.text;
+  if (d.color !== undefined) out.color = d.color;
   return out;
 }
 

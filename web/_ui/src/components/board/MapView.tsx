@@ -9,6 +9,7 @@ import {
   type CSSProperties,
   type KeyboardEvent as ReactKeyboardEvent,
   type MouseEvent as ReactMouseEvent,
+  type ReactElement,
   type ReactNode,
   type RefObject,
 } from "react";
@@ -47,6 +48,8 @@ import {
   writeUnsavedDrawOps,
   type DrawBox,
   type DrawKind,
+  DRAW_COLORS,
+  type DrawColor,
   type DrawOps,
   type DrawTool,
   type Drawing,
@@ -61,7 +64,14 @@ import {
   type MapNode,
 } from "../../lib/agentmap/layout.ts";
 import { drawMinimap, miniFrame, miniToWorld, type MiniFrame } from "../../lib/agentmap/minimap.ts";
-import { actorsShown, setActorsShown } from "../../lib/agentmap/prefs.ts";
+import {
+  actorsShown,
+  inkChosen,
+  setActorsShown,
+  setInkChosen,
+  setToolsShown,
+  toolsShown,
+} from "../../lib/agentmap/prefs.ts";
 import {
   drawCrossMsg,
   drawScene,
@@ -302,8 +312,8 @@ type Drag =
    * rounded world point of the press, `cx`/`cy` the rounded world point of
    * the last move, `pts` (pen only) every rounded point so far and `path`
    * its path data, grown by one segment per new point rather than rebuilt,
-   * `size` the stroke width fixed at the press. `dead`: an Escape dropped
-   * the draft, so the release creates nothing.
+   * `size` the stroke width and `color` the ink, both fixed at the press.
+   * `dead`: an Escape dropped the draft, so the release creates nothing.
    */
   | {
       kind: "draw";
@@ -319,6 +329,7 @@ type Drag =
       pts: number[];
       path: string;
       size: number;
+      color?: DrawColor;
       moved: boolean;
       lx: number;
       ly: number;
@@ -342,9 +353,11 @@ interface EditorAt {
   wx: number;
   wy: number;
   size: number;
+  /** the ink chosen when the editor opened; null for the theme's foreground */
+  color: DrawColor | null;
 }
 
-/** Each tool button's label. */
+/** Each tool button's name: its accessible label, since the button shows an icon. */
 const TOOL_LABEL: Record<DrawTool, string> = {
   pen: "pen",
   line: "line",
@@ -361,6 +374,31 @@ const TOOL_TITLE: Record<DrawTool, string> = {
   text: "write a label",
   erase: "erase drawings",
 };
+/**
+ * Each tool's icon: one 16-unit glyph drawn in the button's text colour, so
+ * the armed tool's accent fill and the hover colour reach it. The pen is a
+ * stroke, the line a diagonal, the shapes themselves, text a T, and erase an
+ * eraser block with its seam.
+ */
+const TOOL_ICON: Record<DrawTool, ReactElement> = {
+  pen: <path d="M2 11c2-7 4-7 6-3s4 4 6-3" />,
+  line: <path d="M3 13 13 3" />,
+  rect: <rect x="2.5" y="3.5" width="11" height="9" />,
+  ellipse: <ellipse cx="8" cy="8" rx="6" ry="4.5" />,
+  text: <path d="M3 3.5h10M8 3.5v9.5M6 13h4" />,
+  erase: <path d="M9.2 2.8l4 4-6.2 6.2H4.4L2.8 11.4zM6.4 5.6l4 4" />,
+};
+/** The panel toggle's icon: a pencil. */
+const TOOLS_TOGGLE_ICON = <path d="M3 13l.8-3.2 7.4-7.4 2.4 2.4-7.4 7.4zM9.6 4l2.4 2.4" />;
+
+/** One tool icon, sized by style.css (`.map-tool svg`). Hidden from assistive tech: the button carries the name. */
+function ToolIcon({ children }: { children: ReactElement }) {
+  return (
+    <svg viewBox="0 0 16 16" aria-hidden="true" focusable="false">
+      {children}
+    </svg>
+  );
+}
 /**
  * Where a text line's baseline sits below the top of its line, in ems: the
  * half-leading of the editor's 1.25 line height plus the mono face's ascent,
@@ -620,8 +658,11 @@ export interface MapViewProps {
  * which paints above every card and below the corner and takes no pointer
  * events. Its one `<g>` carries the view as a transform that applyView
  * writes, so a drawing's geometry stays in world units and a pan or zoom
- * changes one attribute. The tool row above the zoom buttons (`#map-tools`)
- * arms one tool at a time; while one is armed, `#map-draw-surface` covers the
+ * changes one attribute. The pencil button at the end of the zoom row opens
+ * and closes a panel of icon buttons above it (`#map-tools`, open or closed
+ * per browser under `MAP_TOOLS_KEY`, closed to begin with); the panel arms
+ * one tool at a time, and closing it disarms the tool. While one is armed,
+ * `#map-draw-surface` covers the
  * map above the cards and takes every press there, so a card cannot be
  * moved, opened or selected and the view does not pan (the wheel still
  * pans and zooms). A shape is a gesture like a card drag: its draft is
@@ -778,6 +819,12 @@ export function MapView({ search, actions, boardNodeID, hidden }: MapViewProps) 
   /** The armed tool, or none; never saved. Mirrored in a ref for the window's handlers. */
   const [tool, setToolState] = useState<DrawTool | null>(null);
   const toolRef = useRef<DrawTool | null>(null);
+  /**
+   * Whether the tool panel is open: a per-browser preference (`MAP_TOOLS_KEY`,
+   * lib/agentmap/prefs.ts), closed until the operator opens it. Only an open
+   * panel renders the tool buttons, so closing it disarms the tool too.
+   */
+  const [toolsOpen, setToolsOpen] = useState(toolsShown);
   /** Ops restored from this browser at mount: shown at once, queued again, and applied over the load. */
   const restoredDraw = useRef<DrawOps | null>(null);
   if (restoredDraw.current === null) restoredDraw.current = readUnsavedDrawOps();
@@ -796,7 +843,18 @@ export function MapView({ search, actions, boardNodeID, hidden }: MapViewProps) 
   const drawTimer = useRef<number | null>(null);
   const drawAlive = useRef(true);
   /** The draft shape while a draw press is held: the element mounts with it, moves write to it. */
-  const [draft, setDraft] = useState<{ kind: ShapeKind; size: number } | null>(null);
+  const [draft, setDraft] = useState<{ kind: ShapeKind; size: number; color?: DrawColor } | null>(null);
+  /**
+   * The ink new drawings take: a per-browser preference (`MAP_INK_KEY`), null
+   * for the theme's foreground. Mirrored in a ref for the gesture handlers.
+   */
+  const [ink, setInkState] = useState<DrawColor | null>(inkChosen);
+  const inkRef = useRef(ink);
+  const chooseInk = (c: DrawColor | null) => {
+    inkRef.current = c;
+    setInkChosen(c);
+    setInkState(c);
+  };
   const draftEl = useRef<SVGElement | null>(null);
   const drawG = useRef<SVGGElement | null>(null);
   /** The drawing the eraser is over (class `erase-hit`), written straight to its element. */
@@ -1858,7 +1916,7 @@ export function MapView({ search, actions, boardNodeID, hidden }: MapViewProps) 
       setEditor(null);
       if (value === null) return;
       const text = [...trimDrawText(value)].slice(0, MAX_TEXT_RUNES).join("");
-      addDrawing({ kind: "text", pts: [ed.wx, ed.wy], size: ed.size, text });
+      addDrawing({ kind: "text", pts: [ed.wx, ed.wy], size: ed.size, text, ...(ed.color ? { color: ed.color } : {}) });
     },
     [addDrawing],
   );
@@ -1890,6 +1948,13 @@ export function MapView({ search, actions, boardNodeID, hidden }: MapViewProps) 
     },
     [commitOpenEditor, setEraseHit],
   );
+  /** Open or close the tool panel, remembering it for this browser; closing it disarms the tool. */
+  const toggleTools = () => {
+    const next = !toolsOpen;
+    setToolsShown(next);
+    if (!next) armTool(null);
+    setToolsOpen(next);
+  };
 
   /**
    * A press on the drawing surface. The compatibility mousedown's default is
@@ -1916,6 +1981,7 @@ export function MapView({ search, actions, boardNodeID, hidden }: MapViewProps) 
         wx: round1(w.x),
         wy: round1(w.y),
         size: round2(DRAW_TEXT_PX / z),
+        color: inkRef.current,
       };
       editorRef.current = ed;
       editorText.current = "";
@@ -1945,12 +2011,13 @@ export function MapView({ search, actions, boardNodeID, hidden }: MapViewProps) 
       pts: [wx, wy],
       path: penPath([wx, wy]),
       size,
+      color: inkRef.current ?? undefined,
       moved: false,
       lx: sx,
       ly: sy,
       dead: false,
     };
-    setDraft({ kind: t, size });
+    setDraft({ kind: t, size, color: inkRef.current ?? undefined });
   };
   /** With the eraser armed and no press held, mark the drawing a press here would delete. */
   const onSurfacePointerMove = (ev: ReactMouseEvent<HTMLDivElement>) => {
@@ -2244,7 +2311,7 @@ export function MapView({ search, actions, boardNodeID, hidden }: MapViewProps) 
           pts = [d.wx, d.wy, ex, ey];
           if ((d.tool === "rect" || d.tool === "ellipse") && (ex === d.wx || ey === d.wy)) return;
         }
-        addDrawing({ kind: d.tool, pts, size: d.size });
+        addDrawing({ kind: d.tool, pts, size: d.size, ...(d.color ? { color: d.color } : {}) });
         return;
       }
       if (d.kind === "pan") {
@@ -2844,24 +2911,47 @@ export function MapView({ search, actions, boardNodeID, hidden }: MapViewProps) 
       {editor && (
         <TextEditor key={editor.id} at={editor} inputRef={editorInput} textRef={editorText} onClose={closeEditor} />
       )}
-      {/* the bottom-left corner: the drawing tools, then the zoom buttons,
-          above the overview, so the overview never covers them */}
+      {/* the bottom-left corner: the drawing tools (while their panel is
+          open), then the zoom buttons, above the overview, so the overview
+          never covers them */}
       <div className="map-corner">
-        <div id="map-tools" className="map-tools" role="toolbar" aria-label="drawing tools">
-          {DRAW_TOOLS.map((t) => (
-            <button
-              key={t}
-              type="button"
-              className="map-hud-btn map-tool"
-              data-tool={t}
-              aria-pressed={tool === t}
-              title={TOOL_TITLE[t]}
-              onClick={() => armTool(toolRef.current === t ? null : t)}
-            >
-              {TOOL_LABEL[t]}
-            </button>
-          ))}
-        </div>
+        {toolsOpen && (
+          <div id="map-tools" className="map-tools" role="toolbar" aria-label="drawing tools">
+            <div className="map-tool-row">
+              {DRAW_TOOLS.map((t) => (
+                <button
+                  key={t}
+                  type="button"
+                  className="map-hud-btn map-tool"
+                  data-tool={t}
+                  aria-pressed={tool === t}
+                  aria-label={TOOL_LABEL[t]}
+                  title={TOOL_TITLE[t]}
+                  onClick={() => armTool(toolRef.current === t ? null : t)}
+                >
+                  <ToolIcon>{TOOL_ICON[t]}</ToolIcon>
+                </button>
+              ))}
+            </div>
+            {/* the ink row: the theme's foreground first, then the eight
+                job colours; the chosen one is what every new drawing takes */}
+            <div className="map-inks" role="radiogroup" aria-label="drawing colour">
+              {[null, ...DRAW_COLORS].map((c) => (
+                <button
+                  key={c ?? "ink"}
+                  type="button"
+                  className="map-ink"
+                  role="radio"
+                  data-color={c ?? undefined}
+                  aria-checked={ink === c}
+                  aria-label={c ?? "ink"}
+                  title={c ? `draw in ${c}` : "draw in the theme's ink"}
+                  onClick={() => chooseInk(c)}
+                />
+              ))}
+            </div>
+          </div>
+        )}
         <div className="map-hud">
           {/* the column board's "+ NEW JOB", which the map has no draft
               column to carry: the same id, since only one of the two views
@@ -2904,6 +2994,21 @@ export function MapView({ search, actions, boardNodeID, hidden }: MapViewProps) 
             onClick={toggleActors}
           >
             dinos
+          </button>
+          {/* the drawing tools' panel switch: a pencil, filled while the
+              panel above is open. aria-expanded rather than aria-pressed, so
+              the struck-out look of a switched-off toggle does not apply */}
+          <button
+            type="button"
+            className="map-hud-btn map-tools-toggle"
+            id="map-tools-toggle"
+            aria-expanded={toolsOpen}
+            aria-controls="map-tools"
+            aria-label="drawing tools"
+            title={toolsOpen ? "hide the drawing tools" : "show the drawing tools"}
+            onClick={toggleTools}
+          >
+            <ToolIcon>{TOOLS_TOGGLE_ICON}</ToolIcon>
           </button>
         </div>
         {entries.length > 0 && (
@@ -3046,7 +3151,7 @@ const MapCard = memo(function MapCard({
 interface DrawLayerProps {
   drawings: Record<string, Drawing>;
   /** The shape being drawn, while its press is held: its element mounts here and MapView writes its geometry. */
-  draft: { kind: ShapeKind; size: number } | null;
+  draft: { kind: ShapeKind; size: number; color?: DrawColor } | null;
   /** The group MapView's applyView puts the view on, as a transform. */
   gRef: RefObject<SVGGElement | null>;
   draftRef: (el: SVGElement | null) => void;
@@ -3062,7 +3167,7 @@ const DrawLayer = memo(function DrawLayer({ drawings, draft, gRef, draftRef }: D
   const ids = useMemo(() => Object.keys(drawings).sort(), [drawings]);
   let draftEl: ReactNode = null;
   if (draft) {
-    const p = { "data-draft": "true", ref: draftRef, strokeWidth: draft.size };
+    const p = { "data-draft": "true", "data-color": draft.color, ref: draftRef, strokeWidth: draft.size };
     if (draft.kind === "pen") draftEl = <path {...p} />;
     else if (draft.kind === "line") draftEl = <line {...p} />;
     else if (draft.kind === "rect") draftEl = <rect {...p} />;
@@ -3090,7 +3195,7 @@ const DrawingEl = memo(function DrawingEl({ id, d }: { id: string; d: Drawing })
     const [x, y] = d.pts as [number, number];
     const lines = (d.text ?? "").split("\n");
     return (
-      <text data-draw-id={id} data-kind="text" x={x} y={y} fontSize={d.size}>
+      <text data-draw-id={id} data-kind="text" data-color={d.color} x={x} y={y} fontSize={d.size}>
         {lines.map((line, i) => (
           // each line's baseline sits where the editor's line box put it
           <tspan key={i} x={x} y={y + d.size * (1.25 * i + TEXT_BASELINE_EM)}>
@@ -3100,7 +3205,13 @@ const DrawingEl = memo(function DrawingEl({ id, d }: { id: string; d: Drawing })
       </text>
     );
   }
-  const p = { "data-draw-id": id, "data-kind": d.kind, strokeWidth: d.size, ...shapeGeom(d.kind, d.pts) };
+  const p = {
+    "data-draw-id": id,
+    "data-kind": d.kind,
+    "data-color": d.color,
+    strokeWidth: d.size,
+    ...shapeGeom(d.kind, d.pts),
+  };
   if (d.kind === "pen") return <path {...p} />;
   if (d.kind === "line") return <line {...p} />;
   if (d.kind === "rect") return <rect {...p} />;
@@ -3163,6 +3274,7 @@ function TextEditor({ at, inputRef, textRef, onClose }: TextEditorProps) {
       id="map-text-input"
       ref={setEl}
       style={style}
+      data-color={at.color ?? undefined}
       value={value}
       rows={1}
       spellCheck={false}

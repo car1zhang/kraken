@@ -22,6 +22,8 @@ const drawRepairClear = () => {
   localStorage.removeItem("kraken.mapView");
   localStorage.removeItem("kraken.mapUnsaved");
   localStorage.removeItem(DRAW_UNSAVED_KEY);
+  localStorage.removeItem("kraken.mapTools");
+  localStorage.removeItem("kraken.mapInk");
 };
 beforeEach(drawRepairClear);
 afterEach(() => {
@@ -124,6 +126,8 @@ const drawRepairSleep = (ms: number) =>
 
 async function drawRepairOpen() {
   localStorage.setItem("kraken.mapView", JSON.stringify({ x: 0, y: 0, z: 1 }));
+  // the tool panel is closed to begin with (AM18); these tests arm tools, so it starts open
+  localStorage.setItem("kraken.mapTools", "open");
   const net = drawRepairNet();
   const utils = render(<DrawRepairHarness board={drawRepairModel([])} actions={drawRepairActions()} />);
   await waitFor(() => expect(net.gets).toBe(1));
