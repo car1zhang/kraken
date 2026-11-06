@@ -500,6 +500,22 @@ describe("the editor's artifact list", () => {
       .toBe("artifacts");
   });
 
+  it("marks an artifact not opened since it changed as unread, like the steer modal's list", () => {
+    mount({
+      job: job({
+        state: "done",
+        artifacts: [artifacts[0]!, { ...artifacts[1]!, new: true }, artifacts[2]!],
+      }),
+    });
+    const chips = [...document.querySelectorAll("#editor-chips .chip")] as HTMLElement[];
+    expect(chips.map((c) => c.classList.contains("unread"))).toEqual([false, true, false]);
+    expect(chips[1]).toHaveAttribute("data-unread", "1");
+    expect(chips[1]).toHaveAttribute("title", "unread — changed since you last opened it");
+    expect(chips[0]).not.toHaveAttribute("data-unread");
+    // the text stays the name alone: the dot is the stylesheet's
+    expect(chips[1]?.textContent).toBe("▤ 13-tree.html");
+  });
+
   // web/artifactpager_test.go's TestArtifactChipsCarryJobKey. A chip knows its
   // own url and name and NOTHING else, so nothing downstream can learn the
   // ordered list it sits in from the chip alone — the jobKey is what gets back

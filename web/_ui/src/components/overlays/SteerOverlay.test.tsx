@@ -557,6 +557,31 @@ describe("#steer-chips — the artifact list", () => {
     ]);
   });
 
+  it("marks an artifact the operator has not opened since it changed as unread", () => {
+    const job = makeJob({
+      ...artifactJob,
+      artifacts: [
+        { name: "00-overview.md", url: "/artifact/j/00-overview.md" },
+        { name: "50-contract.md", url: "/artifact/j/50-contract.md", new: true },
+      ],
+    });
+    render(<Steer open slug="j" mode="steer" job={job} onClose={() => {}} mutate={mutate} />);
+    const chips = [...document.querySelectorAll("#steer-chips button.chip")] as HTMLElement[];
+    expect(chips).toHaveLength(2);
+    const [read, unread] = chips as [HTMLElement, HTMLElement];
+    // the read one: the plain chip, exactly as before the flag existed
+    expect(read).not.toHaveClass("unread");
+    expect(read).not.toHaveAttribute("data-unread");
+    expect(read).not.toHaveAttribute("title");
+    // the unread one: the class the dot hangs off, an attribute for the
+    // e2e side, a title that says why — and the same text, since the text
+    // is what the viewer's title and the e2e selectors read
+    expect(unread).toHaveClass("chip", "unread");
+    expect(unread).toHaveAttribute("data-unread", "1");
+    expect(unread).toHaveAttribute("title", "unread — changed since you last opened it");
+    expect(unread.textContent).toBe("▤ 50-contract.md");
+  });
+
   it("carries the job's jobKey on every chip and hands it to onOpenArtifact", async () => {
     const user = userEvent.setup();
     render(
