@@ -229,7 +229,7 @@ func TestArchivedWebJobWithholdsStack(t *testing.T) {
 	}
 	j, _ := st.GetJobBySlug("arch")
 	a := &jobs.Job{ID: j.ID, Slug: j.Slug, State: "done"}
-	wj := archivedWebJob(a, st, nil, nil)
+	wj := archivedWebJob(a, feedbackIndex(st), artifactPathsIndex(st), nil, nil)
 	if wj.Stack != nil {
 		t.Fatalf("archived card carries stack %+v", wj.Stack)
 	}

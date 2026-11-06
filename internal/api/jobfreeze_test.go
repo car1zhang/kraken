@@ -219,7 +219,7 @@ func TestWebFrozenAtPresenceRule(t *testing.T) {
 // An archived card never carries the key, whatever its row holds.
 func TestArchivedWebJobWithholdsFrozenAt(t *testing.T) {
 	a := &jobs.Job{Slug: "old", ArchivedName: "old", State: "blocked", FrozenAt: 9}
-	if wj := archivedWebJob(a, nil, nil, nil); wj.FrozenAt != 0 {
+	if wj := archivedWebJob(a, nil, nil, nil, nil); wj.FrozenAt != 0 {
 		t.Fatalf("archived card served frozen_at = %d, want it withheld", wj.FrozenAt)
 	}
 }

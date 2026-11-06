@@ -155,6 +155,39 @@ func (s *Store) GetArtifact(jobID int64, path string) (*Artifact, error) {
 	return &a, nil
 }
 
+// ArtifactPath names one stored artifact by its owning job and path, without
+// its bytes.
+type ArtifactPath struct {
+	JobID int64
+	Path  string
+}
+
+// ListArtifactPaths returns every stored artifact's job id and path, ordered
+// by job id and then path (ListArtifacts' own order within a job).
+//
+// It exists so a caller listing many jobs' artifacts at once — the board
+// payload names the artifacts of every job that has no live cell, archived
+// ones included — makes ONE query rather than one per job, and reads no
+// artifact's bytes to learn its name: ListArtifacts selects the blob, and
+// this does not. The two columns are exactly the table's UNIQUE(job_id, path)
+// index, so the read never touches a row.
+func (s *Store) ListArtifactPaths() ([]ArtifactPath, error) {
+	rows, err := s.db.Query(`SELECT job_id, path FROM artifacts ORDER BY job_id, path`)
+	if err != nil {
+		return nil, fmt.Errorf("list artifact paths: %w", err)
+	}
+	defer rows.Close()
+	var out []ArtifactPath
+	for rows.Next() {
+		var a ArtifactPath
+		if err := rows.Scan(&a.JobID, &a.Path); err != nil {
+			return nil, fmt.Errorf("list artifact paths: %w", err)
+		}
+		out = append(out, a)
+	}
+	return out, rows.Err()
+}
+
 // ListArtifacts returns job_id's artifacts ordered by path.
 func (s *Store) ListArtifacts(jobID int64) ([]Artifact, error) {
 	rows, err := s.db.Query(

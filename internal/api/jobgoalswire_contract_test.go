@@ -256,7 +256,7 @@ func TestContractJGWArchivedCardCarriesItsGoals(t *testing.T) {
 		{ID: 7, Text: "ship goal boards", Done: false},
 		{ID: 3, Text: "close the intake gap", Done: true},
 	}
-	wj := archivedWebJob(a, st, tokens, chips)
+	wj := archivedWebJob(a, feedbackIndex(st), artifactPathsIndex(st), tokens, chips)
 	if wj.Tokens == nil {
 		t.Fatal("the archived card dropped tokens — the fixture's own control just broke")
 	}
@@ -274,7 +274,7 @@ func TestContractJGWArchivedCardCarriesItsGoals(t *testing.T) {
 	}
 
 	// and an unlinked archived job spells that with neither key on the wire
-	empty := archivedWebJob(a, st, tokens, nil)
+	empty := archivedWebJob(a, feedbackIndex(st), artifactPathsIndex(st), tokens, nil)
 	if len(empty.Goals) != 0 {
 		t.Errorf("an unlinked archived card carries Goals = %+v, want none", empty.Goals)
 	}
