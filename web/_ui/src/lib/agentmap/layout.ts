@@ -57,14 +57,21 @@ function hash01(s: string): number {
  * nodes exactly where they are.
  *
  * A new node starts next to the placed node it is linked to (a spawn link), or
- * at the centre of everything placed, and walks outward along a spiral until
- * it finds a spot clear of every placed node. Placing them one at a time
- * against what is already placed means a fresh map needs almost no settling:
- * settle then only has to fix what the spiral's step size could not.
+ * centred on `origin` when one is given, or else at the centre of everything
+ * placed, and walks outward along a spiral until it finds a spot clear of
+ * every placed node. Placing them one at a time against what is already
+ * placed means a fresh map needs almost no settling: settle then only has to
+ * fix what the spiral's step size could not.
+ *
+ * `origin` is a world point: the map passes the middle of the visible area
+ * for a card that arrives after the first placement, so a job just added
+ * shows up where the operator is looking rather than wherever the middle of
+ * the whole layout happens to be. A non-finite origin is ignored.
  */
 export function seedLayout(
   nodes: MapNode[],
   links: ReadonlyArray<readonly [string, string]>,
+  origin?: readonly [number, number],
 ): void {
   const placed = nodes.filter(finite);
   const byKey = new Map(nodes.map((n) => [n.key, n]));
@@ -77,6 +84,10 @@ export function seedLayout(
     }
     cx /= placed.length;
     cy /= placed.length;
+  }
+  if (origin && Number.isFinite(origin[0]) && Number.isFinite(origin[1])) {
+    cx = origin[0];
+    cy = origin[1];
   }
   for (const n of nodes) {
     if (finite(n)) continue;
