@@ -45,6 +45,7 @@ export type MapStatus =
   | "working"
   | "blocked"
   | "asking"
+  | "urgent"
   | "question"
   | "parked"
   | "limit"
@@ -64,12 +65,21 @@ function asksQuestion(job: WebJob): boolean {
  * counts. A loop rather than filter(): the map asks this per card per frame.
  */
 export function openAsks(job: WebJob): number {
+  return openRows(job, true);
+}
+
+/** How many of the job's question rows are open P0s: the ones the cell cannot build past. */
+export function openP0s(job: WebJob): number {
+  return openRows(job, false);
+}
+
+function openRows(job: WebJob, p1Too: boolean): number {
   const rows = job.doc_questions;
   if (!rows) return 0;
   let n = 0;
   for (let i = 0; i < rows.length; i++) {
     const q = rows[i]!;
-    if (!q.answer && (q.importance === "P0" || q.importance === "P1")) n++;
+    if (!q.answer && (q.importance === "P0" || (p1Too && q.importance === "P1"))) n++;
   }
   return n;
 }
@@ -88,12 +98,14 @@ export function openAsks(job: WebJob): number {
  * FROZEN drawer.
  *
  * Within the blocked readings, a pane dialog (`question`, an AskUserQuestion
- * the board answers with buttons) comes before open P0/P1 question rows
- * (`asking`, answered on the board's question panel), and both before a gone
- * cell (`parked`): the questions are the operator's to answer whether or not
- * the cell is still up, so they are what the card shows. A WORKING job with
- * open rows is still working — it filed them and carried on — so `asking` is
- * a blocked reading only.
+ * the board answers with buttons) comes before the open question rows —
+ * `urgent` for an open P0, `asking` for an open P1 with no P0, both answered
+ * on the board's question panel — and all three before a gone cell
+ * (`parked`): the questions are the operator's to answer whether or not the
+ * cell is still up, so they are what the card shows, and every question
+ * reading outranks a plain block in the gesture and the colour too. A
+ * WORKING job with open rows is still working — it filed them and carried
+ * on — so the two are blocked readings only.
  */
 export function mapStatus(job: WebJob): MapStatus {
   if (job.state === "draft") return "draft";
@@ -102,6 +114,7 @@ export function mapStatus(job: WebJob): MapStatus {
   if (job.state === "blocked" || job.health) {
     if (LIMIT_RE.test(job.health ?? "")) return "limit";
     if (asksQuestion(job)) return "question";
+    if (openP0s(job) > 0) return "urgent";
     if (openAsks(job) > 0) return "asking";
     if (!job.live) return "parked";
     return "blocked";
@@ -123,6 +136,7 @@ const LIMIT_RE = /limit/i;
 const PAPER_STATUSES: ReadonlySet<MapStatus> = new Set<MapStatus>([
   "blocked",
   "asking",
+  "urgent",
   "question",
   "parked",
   "limit",

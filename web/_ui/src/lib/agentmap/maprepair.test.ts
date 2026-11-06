@@ -48,11 +48,11 @@ describe("activity hues: draw.ts and style.css agree", () => {
 
   it("colours parked like the frame and the dino, not muted", () => {
     // the frame's recipe (`.map-card[data-status="parked"]`) and draw.ts'
-    // Palette.parked (ac2 45% of the way to g1) are the same mix
-    expect(cssActHues().get("parked")).toBe("color-mix(in srgb, var(--ac2) 55%, var(--g1))");
+    // Palette.parked (blocked's warn 45% of the way to g1) are the same mix
+    expect(cssActHues().get("parked")).toBe("color-mix(in srgb, var(--warn) 55%, var(--g1))");
     const css = readFileSync("src/styles/style.css", "utf8");
     expect(css).toContain(
-      '.map-card[data-status="parked"] { --map-sc: color-mix(in srgb, var(--ac2) 55%, var(--g1)); }',
+      '.map-card[data-status="parked"] { --map-sc: color-mix(in srgb, var(--warn) 55%, var(--g1)); }',
     );
   });
 });
