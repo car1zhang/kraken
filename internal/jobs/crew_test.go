@@ -517,6 +517,17 @@ const zeusBriefCeiling = 13_500
 // unchanged at nine. Nine bytes is arithmetic, not headroom: the next clause
 // here has to be funded by a trim or a move, as this one was.
 //
+// RESTATED 2026-11-06 for the production floor: the ceiling did NOT move. One
+// sentence joined the never-prompt paragraph ("A production change is never a
+// default: propose it and stop."), funded by a trim in that same paragraph:
+// the spawned-agent ban dropped its restated reason, which the paragraph's
+// first sentence already gives, and its second sentence became a clause of
+// the first. What counts as a production change and what a yes covers are
+// do/SKILL.md step 5's. Measured: 13,491 -> 13,498 at the 48-char slug and a
+// 9-char operator (the test leaves the operator to the environment:
+// `KRAKEN_OPERATOR`, else `$USER`), leaving **2** under the ceiling,
+// interpolation count unchanged at nine.
+//
 // However much headroom the latest restatement records — read the live number
 // from the test log, never from prose here — the way to fund a new clause is
 // unchanged: look for a trim in the paragraph the clause belongs to first
@@ -1092,6 +1103,34 @@ func TestZeusBriefNamesHumanizer(t *testing.T) {
 				t.Errorf("%s (solo=%v) brief missing %q — cells would ship operator-facing text "+
 					"without the humanizer pass", j.Slug, j.Solo, want)
 			}
+		}
+	}
+}
+
+// TestZeusBriefFloorsProductionChanges asserts every brief variant bounds the
+// never-prompt default: a production change is proposed, never defaulted
+// into. The sentence is pinned in the paragraph that states the default, after
+// it, so the two are read together; what counts as a production change and
+// what a yes covers are do/SKILL.md's (pinned in skills_embed_test.go).
+func TestZeusBriefFloorsProductionChanges(t *testing.T) {
+	const floor = "A production change is never a default: propose it and stop."
+	for _, j := range []*Job{{Slug: "prodfloor-plain"}, {Slug: "prodfloor-solo", Solo: true}} {
+		brief := zeusBrief(j)
+		def := strings.Index(brief, "pick the most defensible default")
+		at := strings.Index(brief, floor)
+		if at < 0 {
+			t.Errorf("%s (solo=%v) brief missing %q — the never-prompt default would cover a production change",
+				j.Slug, j.Solo, floor)
+			continue
+		}
+		if def < 0 || at < def {
+			t.Errorf("%s (solo=%v): the production floor (at %d) must follow the default it bounds (at %d)",
+				j.Slug, j.Solo, at, def)
+			continue
+		}
+		if strings.Contains(brief[def:at], "\n") {
+			t.Errorf("%s (solo=%v): the production floor sits in a different paragraph from the default it bounds",
+				j.Slug, j.Solo)
 		}
 	}
 }
