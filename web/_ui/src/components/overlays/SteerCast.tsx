@@ -1,26 +1,41 @@
 import { useEffect, useMemo, useRef } from "react";
 
-import type { WebJob } from "../../api/types.ts";
+import type { WebJob, WebThread } from "../../api/types.ts";
 import { leadPose } from "../../lib/agentmap/activity.ts";
-import { hueOf, readPalette } from "../../lib/agentmap/draw.ts";
+import { threadBranch, threadCoat } from "../../lib/agentmap/avatar.ts";
+import { hueOf, readPalette, type Palette } from "../../lib/agentmap/draw.ts";
 import { actorsShown } from "../../lib/agentmap/prefs.ts";
-import { drawScene, newScene, syncScene, type CardScene } from "../../lib/agentmap/scene.ts";
+import {
+  branchPose,
+  drawScene,
+  isGirl,
+  newScene,
+  syncScene,
+  threadActorName,
+  type CardScene,
+} from "../../lib/agentmap/scene.ts";
 import { jobKey } from "../../lib/jobKey.ts";
 
 /**
- * SteerCast — the job's characters at the top of the steer modal: the same
- * cast the agent map stands on the job's card (the lead in its model's coat,
- * the crew in their role hats, each acting out what it is doing, the bubbles
- * between them), drawn by the same scene code on one small canvas.
+ * The characters in the modals, drawn by the agent map's own scene code on
+ * one small canvas each:
  *
- * The stage is a card's width whatever the modal's, so the cast stands as
- * close together as it does on the map, on a ledge in the job's status
- * colour where the map has the card's top edge. The canvas has a fixed size
- * (the stage plus room each side for a prop held past its end), so nothing
- * is measured, and the strip clips it where the modal is narrower.
+ * - `SteerCast`, at the top of the steer modal: the job's cast as the map
+ *   stands it on the job's card (the lead in its model's coat, the crew in
+ *   their role hats, the job's branches with their twigs, each acting out
+ *   what it is doing, the bubbles between them).
+ * - `ThreadCast`, at the top of the branch modal: that one branch alone, at
+ *   the lead's size.
  *
- * It follows the map's own switch: with the characters switched off there
- * (`dinos`), the modal shows none either. The switch is read when the modal
+ * The stage is a card's width whatever the modal's, so a cast stands as
+ * close together as it does on the map, on a ledge where the map has the
+ * card's top edge: the job's status colour in the steer modal, the branch's
+ * state in the branch modal. The canvas has a fixed size (the stage plus
+ * room each side for a prop held past its end), so nothing is measured, and
+ * the strip clips it where the modal is narrower.
+ *
+ * Both follow the map's own switch: with the characters switched off there
+ * (`dinos`), the modals show none either. The switch is read when a modal
  * opens. The loop runs only while the modal is open and the page visible,
  * and where a canvas has no 2D context the strip stays empty.
  */
@@ -51,29 +66,38 @@ const peerKey = (slug: string) => slug;
 /** No other card is in the modal: a message from another cell drops in from a tag, as it does for a card off the map. */
 const offMap = () => false;
 
-export function SteerCast({ job, open }: { job: WebJob; open: boolean }) {
+/** What a strip draws each frame: its scene, the ledge's colour, and the lead's pose. */
+interface CastSource {
+  scene(): CardScene | null;
+  ledge(C: Palette, s: CardScene): string;
+  pose(nowMs: number): string;
+}
+
+/**
+ * One strip: the canvas, its frame loop and the switch. `source` is read on
+ * every frame through a ref, so a caller may hand a fresh object each render
+ * without restarting the loop.
+ */
+function CastStrip({
+  id,
+  label,
+  open,
+  source,
+  onHover,
+}: {
+  id: string;
+  label: string;
+  open: boolean;
+  source: CastSource;
+  onHover?: (over: boolean) => void;
+}) {
   // read when the strip mounts, and again if `open` ever changes under it.
   // Today the overlay unmounts its body on close, so each open is a fresh
   // mount and reads the switch afresh.
   const shown = useMemo(actorsShown, [open]);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
-  const sceneRef = useRef<CardScene | null>(null);
-  const jobRef = useRef(job);
-  jobRef.current = job;
-
-  // the scene follows the job: a fresh one for another job, brought in line on every payload
-  useEffect(() => {
-    if (!shown || !open) return;
-    const now = performance.now() / 1000;
-    const key = jobKey(job);
-    let s = sceneRef.current;
-    if (!s || s.key !== key) {
-      s = newScene(key, now);
-      s.w = STAGE_W;
-      sceneRef.current = s;
-    }
-    syncScene(s, job, now, peerKey, offMap);
-  }, [job, shown, open]);
+  const sourceRef = useRef(source);
+  sourceRef.current = source;
 
   useEffect(() => {
     if (!shown || !open) return;
@@ -94,7 +118,8 @@ export function SteerCast({ job, open }: { job: WebJob; open: boolean }) {
     let id = 0;
     const frame = (ms: number) => {
       id = raf(frame);
-      const s = sceneRef.current;
+      const src = sourceRef.current;
+      const s = src.scene();
       if (!s || document.hidden) return;
       if (last !== undefined && ms - last < FRAME_MS) return;
       const dt = last === undefined ? 0 : Math.min(0.25, (ms - last) / 1000);
@@ -110,10 +135,10 @@ export function SteerCast({ job, open }: { job: WebJob; open: boolean }) {
       ctx.clearRect(0, 0, w, h);
       ctx.setTransform(bs, 0, 0, bs, PAD_X * bs, PAD_TOP * bs);
       // the ledge the cast stands on, where the map has the card's top edge
-      ctx.fillStyle = hueOf(C, s.status);
+      ctx.fillStyle = src.ledge(C, s);
       ctx.fillRect(0, 1, STAGE_W, 2);
       const nowMs = Date.now();
-      drawScene(ctx, s, leadPose(jobRef.current, nowMs), C, ms / 1000, nowMs, dt);
+      drawScene(ctx, s, src.pose(nowMs), C, ms / 1000, nowMs, dt);
     };
     id = raf(frame);
     return () => {
@@ -123,23 +148,96 @@ export function SteerCast({ job, open }: { job: WebJob; open: boolean }) {
   }, [shown, open]);
 
   if (!shown) return null;
-  const hover = (on: boolean) => {
-    if (sceneRef.current) sceneRef.current.hover = on;
-  };
   return (
     <div
       className="steer-cast"
-      id="steer-cast"
+      id={id}
       style={{ height: CSS_H }}
-      onPointerEnter={() => hover(true)}
-      onPointerLeave={() => hover(false)}
+      onPointerEnter={onHover ? () => onHover(true) : undefined}
+      onPointerLeave={onHover ? () => onHover(false) : undefined}
     >
-      <canvas
-        ref={canvasRef}
-        role="img"
-        aria-label={`${job.slug}: its characters`}
-        style={{ width: CSS_W, height: CSS_H }}
-      />
+      <canvas ref={canvasRef} role="img" aria-label={label} style={{ width: CSS_W, height: CSS_H }} />
     </div>
+  );
+}
+
+/** The job's whole cast, in the steer modal. Hovering the strip shows the crew's and branches' names. */
+export function SteerCast({ job, open }: { job: WebJob; open: boolean }) {
+  const sceneRef = useRef<CardScene | null>(null);
+  const jobRef = useRef(job);
+  jobRef.current = job;
+
+  // the scene follows the job: a fresh one for another job, brought in line on every payload
+  useEffect(() => {
+    if (!open) return;
+    const now = performance.now() / 1000;
+    const key = jobKey(job);
+    let s = sceneRef.current;
+    if (!s || s.key !== key) {
+      s = newScene(key, now);
+      s.w = STAGE_W;
+      sceneRef.current = s;
+    }
+    syncScene(s, job, now, peerKey, offMap);
+  }, [job, open]);
+
+  return (
+    <CastStrip
+      id="steer-cast"
+      label={`${job.slug}: its characters`}
+      open={open}
+      source={{
+        scene: () => sceneRef.current,
+        ledge: (C, s) => hueOf(C, s.status),
+        pose: (nowMs) => leadPose(jobRef.current, nowMs),
+      }}
+      onHover={(over) => {
+        if (sceneRef.current) sceneRef.current.hover = over;
+      }}
+    />
+  );
+}
+
+/**
+ * One branch alone, in the branch modal: the side thread's own character at
+ * the lead's size, in its model's coat with its twig (a ghost when it is
+ * headless), on a ledge in its state's colour: the working colour while a
+ * question is being answered, green while it is live, red once it is closed.
+ * It thinks while answering and otherwise stands idle.
+ */
+export function ThreadCast({ thread, open }: { thread: WebThread; open: boolean }) {
+  const sceneRef = useRef<CardScene | null>(null);
+  const threadRef = useRef(thread);
+  threadRef.current = thread;
+
+  // one scene per thread, its lead dressed as the branch on every payload
+  useEffect(() => {
+    if (!open) return;
+    const key = threadActorName(thread);
+    let s = sceneRef.current;
+    if (!s || s.key !== key) {
+      s = newScene(key, performance.now() / 1000);
+      s.w = STAGE_W;
+      sceneRef.current = s;
+    }
+    s.lead.branch = threadBranch(thread);
+    s.lead.coat = threadCoat(thread);
+    s.lead.girl = isGirl(key);
+  }, [thread, open]);
+
+  return (
+    <CastStrip
+      id="thread-cast"
+      label={`branch ${thread.title || thread.tid}: its character`}
+      open={open}
+      source={{
+        scene: () => sceneRef.current,
+        ledge: (C) => {
+          const t = threadRef.current;
+          return t.state !== "live" ? C.bad : t.answering ? C.ac : C.ok;
+        },
+        pose: () => branchPose(threadRef.current),
+      }}
+    />
   );
 }
