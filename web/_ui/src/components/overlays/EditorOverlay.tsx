@@ -159,7 +159,7 @@ export function ArtifactList({
         const name = `${label}/${a.name}`;
         // `new`: not opened since it last changed (the server's flag, the
         // map's sheet of paper) — the same `unread` class, attribute and
-        // title the steer modal's chips carry, so a done job's list says it
+        // title the steer modal's chips carry, so the editor's list says it
         // too; an archived card never carries the flag, so its chips never
         // take the class
         const unread = !!a.new;
@@ -171,7 +171,7 @@ export function ArtifactList({
             data-key={jobKey}
             data-name={name}
             data-unread={unread ? "1" : undefined}
-            title={unread ? "unread — changed since you last opened it" : undefined}
+            title={unread ? "unread — new or changed since you last opened it" : undefined}
             onClick={() => onOpen?.(a.url, name, jobKey)}
           >
             ▤ {a.name}

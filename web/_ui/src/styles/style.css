@@ -1592,12 +1592,14 @@ button.spawn-chip.spawn-draft:hover { background: color-mix(in srgb, var(--ac) 1
   transition: box-shadow 80ms var(--ease), border-color 80ms var(--ease), color 80ms var(--ease);
 }
 .chip:hover { background: color-mix(in srgb, var(--ac) 12%, transparent); box-shadow: var(--glow); border-color: var(--ac); color: var(--fg); }
-/* an artifact the operator has not opened since it last changed (the wire's
-   `artifacts[].new`, the map's sheet of paper): the name in the full
-   foreground with a second-accent dot after it, so the unread ones stand
-   out of a long list without a word being added to the chip's text */
+/* an artifact the operator has not opened since it last changed, or never
+   opened (the wire's `artifacts[].new`, the map's sheet of paper): the name
+   in the full foreground, an ac2-tinted border and a second-accent dot
+   after it, so the unread ones stand out of a long list without a word
+   being added to the chip's text. The dot's empty alt text keeps it out of
+   the chip's accessible name; the title carries the meaning. */
 .chip.unread { color: var(--fg); border-color: color-mix(in srgb, var(--ac2) 60%, var(--border-strong)); }
-.chip.unread::after { content: "●"; color: var(--ac2); font-size: 7px; margin-left: 5px; vertical-align: 1px; }
+.chip.unread::after { content: "●" / ""; color: var(--ac2); font-size: 7px; margin-left: 5px; vertical-align: 1px; }
 /* no .chip-more any more: .chip is a modal-only renderer now (artifactListHTML
    fills #steer-chips and #editor-chips), and a modal scrolls, so there is
    nothing left to collapse behind a "+N more" toggle. */

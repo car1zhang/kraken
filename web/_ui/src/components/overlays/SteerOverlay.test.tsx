@@ -573,12 +573,12 @@ describe("#steer-chips — the artifact list", () => {
     expect(read).not.toHaveClass("unread");
     expect(read).not.toHaveAttribute("data-unread");
     expect(read).not.toHaveAttribute("title");
-    // the unread one: the class the dot hangs off, an attribute for the
-    // e2e side, a title that says why — and the same text, since the text
-    // is what the viewer's title and the e2e selectors read
+    // the unread one: the class the dot hangs off, a data-unread attribute
+    // a selector can key on, a title that says why — and the same text, since
+    // the text is what the viewer's title and the e2e selectors read
     expect(unread).toHaveClass("chip", "unread");
     expect(unread).toHaveAttribute("data-unread", "1");
-    expect(unread).toHaveAttribute("title", "unread — changed since you last opened it");
+    expect(unread).toHaveAttribute("title", "unread — new or changed since you last opened it");
     expect(unread.textContent).toBe("▤ 50-contract.md");
   });
 

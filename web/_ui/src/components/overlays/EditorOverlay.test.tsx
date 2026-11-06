@@ -510,7 +510,7 @@ describe("the editor's artifact list", () => {
     const chips = [...document.querySelectorAll("#editor-chips .chip")] as HTMLElement[];
     expect(chips.map((c) => c.classList.contains("unread"))).toEqual([false, true, false]);
     expect(chips[1]).toHaveAttribute("data-unread", "1");
-    expect(chips[1]).toHaveAttribute("title", "unread — changed since you last opened it");
+    expect(chips[1]).toHaveAttribute("title", "unread — new or changed since you last opened it");
     expect(chips[0]).not.toHaveAttribute("data-unread");
     // the text stays the name alone: the dot is the stylesheet's
     expect(chips[1]?.textContent).toBe("▤ 13-tree.html");
