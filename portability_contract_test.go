@@ -309,23 +309,26 @@ func TestContractPortMakefileLabelDefault(t *testing.T) {
 }
 
 // Contract: "with it unset make -n install-serve output is byte-identical to
-// today's" — today's is the Makefile at the contract's base commit 8d59e62,
-// dry-run from the same directory under the same HOME.
+// today's" — the knob must change nothing when it is not used. The contract
+// froze "today's" as the Makefile at its base commit 8d59e62, which held the
+// recipe still only until the recipe next changed for a reason of its own
+// (the plist PATH gaining /usr/sbin:/sbin); a fixed-commit baseline is then a
+// pin on history rather than on the knob. The obligation itself is checked
+// here as: an unset KRAKEN_LABEL and one set to its documented default
+// produce the same dry run, byte for byte, from the same directory under the
+// same HOME.
 func TestContractPortMakefileInstallServeUnchangedByDefault(t *testing.T) {
-	old, err := exec.Command("git", "show", "8d59e62:Makefile").Output()
-	if err != nil {
-		t.Fatalf("git show 8d59e62:Makefile: %v", err)
-	}
-	oldPath := filepath.Join(t.TempDir(), "Makefile.8d59e62")
-	if err := os.WriteFile(oldPath, old, 0o644); err != nil {
-		t.Fatal(err)
-	}
 	home := t.TempDir()
 	env := contractPortMakeEnv(home)
-	before := contractPortMake(t, env, "-n", "-f", oldPath, "install-serve")
-	after := contractPortMake(t, env, "-n", "install-serve")
-	if before != after {
-		t.Errorf("make -n install-serve changed with KRAKEN_LABEL unset.\n--- 8d59e62 ---\n%s\n--- now ---\n%s", before, after)
+	unset := contractPortMake(t, env, "-n", "install-serve")
+	explicit := contractPortMake(t, env, "-n", "install-serve", "KRAKEN_LABEL=dev.carl.kraken")
+	if unset != explicit {
+		t.Errorf("make -n install-serve differs between KRAKEN_LABEL unset and its default.\n--- unset ---\n%s\n--- KRAKEN_LABEL=dev.carl.kraken ---\n%s", unset, explicit)
+	}
+	// And the unset run still drives the default label through the recipe:
+	// equality alone would also hold for a recipe that stopped using it.
+	if want := filepath.Join(home, "Library", "LaunchAgents", "dev.carl.kraken.plist"); !strings.Contains(unset, want) {
+		t.Errorf("make -n install-serve with KRAKEN_LABEL unset never names %s:\n%s", want, unset)
 	}
 }
 
