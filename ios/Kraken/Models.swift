@@ -1936,8 +1936,29 @@ struct WebRosterAgent: Decodable {
 struct WebArtifact: Decodable, Identifiable {
     let name: String
     let url: String
+    /// `new` on the wire: the operator has not opened this artifact since it
+    /// last changed. Optional — absent (false) from older servers and from
+    /// every archived or relayed card — and not rendered yet; decoded so a
+    /// later build can show it without a wire change.
+    let isNew: Bool?
 
     var id: String { url }
+
+    enum CodingKeys: String, CodingKey {
+        case name, url
+        case isNew = "new"
+    }
+
+    /// The hand-built form (the artifact tree's regrouped leaves, a library
+    /// item opened as an artifact, test fixtures) carries no read state: a
+    /// `let` optional gets no default in the synthesized memberwise init, so
+    /// this keeps those two-argument call sites as they were. Decoding is
+    /// still synthesized.
+    init(name: String, url: String, isNew: Bool? = nil) {
+        self.name = name
+        self.url = url
+        self.isNew = isNew
+    }
 }
 
 // MARK: - job authoring

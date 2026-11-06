@@ -3926,9 +3926,19 @@ button.spawn-chip.spawn-draft:hover { background: color-mix(in srgb, var(--ac) 1
    pointer */
 .map-card.glide { transition: left 260ms var(--ease), top 260ms var(--ease); }
 .map-card[data-status="working"] { --map-sc: var(--ac); }
-.map-card[data-status="blocked"] { --map-sc: var(--ac2); }
-.map-card[data-status="question"] { --map-sc: var(--warn); }
-.map-card[data-status="parked"] { --map-sc: color-mix(in srgb, var(--ac2) 55%, var(--g1)); }
+/* a plain block is the kit's yellow; every question reading — the pane
+   dialog, an open P1 (asking), an open P0 (urgent) — is its red, since a
+   question outranks a block (draw.ts hueOf, the same ladder) */
+.map-card[data-status="blocked"] { --map-sc: var(--warn); }
+.map-card[data-status="question"] { --map-sc: var(--stopped); }
+.map-card[data-status="asking"] { --map-sc: var(--stopped); }
+.map-card[data-status="urgent"] { --map-sc: var(--stopped); }
+.map-card[data-status="parked"] { --map-sc: color-mix(in srgb, var(--warn) 55%, var(--g1)); }
+/* the light theme's --warn is a dark gold picked for text; a frame in it
+   reads brown, so blocked (and the parked mix off it) take a real yellow
+   there — draw.ts BLOCKED_LIGHT_HUE, the same literal */
+:root[data-theme="light"] .map-card[data-status="blocked"] { --map-sc: #e6b400; }
+:root[data-theme="light"] .map-card[data-status="parked"] { --map-sc: color-mix(in srgb, #e6b400 55%, var(--g1)); }
 .map-card[data-status="limit"] { --map-sc: var(--stopped); }
 /* on hold: the quiet frame a draft has, since neither is asking for anything */
 .map-card[data-status="frozen"] { --map-sc: var(--muted); }
@@ -4068,10 +4078,12 @@ button.spawn-chip.spawn-draft:hover { background: color-mix(in srgb, var(--ac) 1
 [data-act="data"] { --act: #60a5fa; }
 [data-act="build"] { --act: #fbbf24; }
 [data-act="other"] { --act: var(--muted); }
-[data-act="blocked"] { --act: var(--ac2); }
-[data-act="question"] { --act: var(--warn); }
+[data-act="blocked"] { --act: var(--warn); }
+:root[data-theme="light"] [data-act="blocked"] { --act: #e6b400; }
+[data-act="question"], [data-act="asking"], [data-act="urgent"] { --act: var(--stopped); }
 /* parked is the frame's and the dino's colour too (draw.ts Palette.parked) */
-[data-act="parked"] { --act: color-mix(in srgb, var(--ac2) 55%, var(--g1)); }
+[data-act="parked"] { --act: color-mix(in srgb, var(--warn) 55%, var(--g1)); }
+:root[data-theme="light"] [data-act="parked"] { --act: color-mix(in srgb, #e6b400 55%, var(--g1)); }
 [data-act="draft"] { --act: var(--muted); }
 /* frozen is muted on the frame, the band and the canvas alike (hueOf's default) */
 [data-act="frozen"] { --act: var(--muted); }

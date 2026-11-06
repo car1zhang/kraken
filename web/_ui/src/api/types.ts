@@ -78,6 +78,14 @@ export interface GoalsPage {
 export interface WebArtifact {
   name: string;
   url: string;
+  /**
+   * The operator has not opened this artifact since it last changed: the
+   * server stamps every GET of the artifact per job and compares the stamp
+   * with the artifact's mtime. Omitted when false, and never set on an
+   * archived card or a card relayed from another node. The map draws a
+   * blocked card's lead holding one sheet of paper per new artifact.
+   */
+  new?: boolean;
 }
 
 export interface WebQuestionOption {

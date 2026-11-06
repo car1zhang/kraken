@@ -32,6 +32,13 @@ func mirrorModeOn() bool {
 	return mirrorMode.Load()
 }
 
+// MirrorModeOn is mirrorModeOn for the web package, whose artifact handler
+// stamps the operator's read into the store (jobs.MarkArtifactSeen) and must
+// not when it serves a mirror: a mirror process never writes.
+func MirrorModeOn() bool {
+	return mirrorModeOn()
+}
+
 // mirrorGated wraps a handler registered outside the webAction path (the
 // peers surface) with the same 403 refusal the gated actions use. The
 // peers send/spawn/kill/open handlers drive real tmux panes and ghostty

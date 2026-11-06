@@ -279,6 +279,17 @@ struct ArtifactView: View {
     /// on its toolbar can read this document's selection. nil on the two
     /// off-screen neighbours — see `ArtifactWebViewHandle`.
     var webViewHandle: ArtifactWebViewHandle?
+    /// Whether this page is the one on screen. A page loads its artifact only
+    /// once it is: the server counts every GET of `/api/artifact/…` as the
+    /// operator opening that artifact (it is what clears the "new" flag the
+    /// map draws as a sheet of paper), and a page-style TabView materializes
+    /// the neighbours either side of the selection, so a neighbour that
+    /// fetched on materialization would mark artifacts read that were never
+    /// looked at. Loading on selection also means opening the pager renders
+    /// one document rather than three; a page swiped away keeps its
+    /// document, so the window can still reach three — see the pager's doc
+    /// comment. Defaults to true so a lone ArtifactView loads at once.
+    var isSelected: Bool = true
 
     @State private var content: ArtifactContent?
     /// The direct artifact URL, kept beside a viewer-routed `content` so the
@@ -357,7 +368,13 @@ struct ArtifactView: View {
                 }
             }
         }
-        .task { await load() }
+        // Keyed on the selection so a materialized neighbour sits on its
+        // spinner until it is swiped to, then loads once (`content` stays
+        // loaded while it is swiped away again). The Retry button above calls
+        // load() directly, so an error is recoverable without a swipe.
+        .task(id: isSelected) {
+            if isSelected, content == nil { await load() }
+        }
     }
 
     private func load() async {
@@ -451,15 +468,16 @@ private enum ArtifactBookmarkAction {
 /// records that inline WKWebViews once got this app jetsam-killed, and that
 /// the only one left is ArtifactView's. A page-style TabView materializes the
 /// pages either side of the selected one, so this holds up to THREE live
-/// ArtifactViews where today there is one — and a materialized page is not
-/// idle: each runs its own `.task { await load() }`, which on the plain and
-/// markdown paths really does fetch its artifact, cap it at 1 MB and render it
-/// into a WKWebView. Opening the pager therefore fetches and renders BOTH
-/// neighbours immediately, and every swipe pulls in one more. Three live web
-/// views each holding a rendered document is exactly the shape MarkdownText's
-/// history is about, which is why 52-testing-plan.md still owes an Instruments
-/// pass on a ≥10-artifact set — that measurement is not discharged by anything
-/// here.
+/// ArtifactViews where today there is one. A materialized neighbour does NOT
+/// load, though: ArtifactView fetches only once it is the selected page
+/// (`isSelected`), so what is in memory is one rendered document plus two
+/// spinners, and a swipe costs one fetch on arrival rather than one ahead of
+/// it. That is as much for the server as for memory — every GET of
+/// `/api/artifact/…` is recorded as the operator opening that artifact, and a
+/// neighbour fetched on materialization would mark read what was never seen.
+/// A page swiped away keeps its document, so the window can still reach
+/// three while the operator pages back and forth; 52-testing-plan.md's
+/// Instruments pass on a ≥10-artifact set is not discharged by anything here.
 ///
 /// What this code does guarantee is only that it never WIDENS that window:
 /// nothing pre-renders, nothing reaches past the adjacent pages, `pages` is
@@ -544,7 +562,8 @@ struct ArtifactPagerView: View {
                     // The SELECTED page only, for `showsFeedbackButton`'s
                     // reason: there is one toolbar, so there is one document
                     // it can be reading.
-                    webViewHandle: artifact.url == selection ? webHandle : nil
+                    webViewHandle: artifact.url == selection ? webHandle : nil,
+                    isSelected: artifact.url == selection
                 )
                 // Tagging by url — the same value ForEach identifies by — is
                 // what keeps a page's identity stable across a selection

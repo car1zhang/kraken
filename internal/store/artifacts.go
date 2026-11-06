@@ -156,23 +156,25 @@ func (s *Store) GetArtifact(jobID int64, path string) (*Artifact, error) {
 }
 
 // ArtifactPath names one stored artifact by its owning job and path, without
-// its bytes.
+// its bytes, plus its mtime (unix millis, 0 when never stamped) so the board
+// can tell a changed artifact from one the operator has already opened.
 type ArtifactPath struct {
 	JobID int64
 	Path  string
+	Mtime int64
 }
 
-// ListArtifactPaths returns every stored artifact's job id and path, ordered
-// by job id and then path (ListArtifacts' own order within a job).
+// ListArtifactPaths returns every stored artifact's job id, path and mtime,
+// ordered by job id and then path (ListArtifacts' own order within a job).
 //
 // It exists so a caller listing many jobs' artifacts at once — the board
 // payload names the artifacts of every job that has no live cell, archived
 // ones included — makes ONE query rather than one per job, and reads no
 // artifact's bytes to learn its name: ListArtifacts selects the blob, and
-// this does not. The two columns are exactly the table's UNIQUE(job_id, path)
-// index, so the read never touches a row.
+// this does not. The read stays off the blob column; the mtime is a small
+// integer beside the two indexed ones.
 func (s *Store) ListArtifactPaths() ([]ArtifactPath, error) {
-	rows, err := s.db.Query(`SELECT job_id, path FROM artifacts ORDER BY job_id, path`)
+	rows, err := s.db.Query(`SELECT job_id, path, COALESCE(mtime,0) FROM artifacts ORDER BY job_id, path`)
 	if err != nil {
 		return nil, fmt.Errorf("list artifact paths: %w", err)
 	}
@@ -180,7 +182,7 @@ func (s *Store) ListArtifactPaths() ([]ArtifactPath, error) {
 	var out []ArtifactPath
 	for rows.Next() {
 		var a ArtifactPath
-		if err := rows.Scan(&a.JobID, &a.Path); err != nil {
+		if err := rows.Scan(&a.JobID, &a.Path, &a.Mtime); err != nil {
 			return nil, fmt.Errorf("list artifact paths: %w", err)
 		}
 		out = append(out, a)

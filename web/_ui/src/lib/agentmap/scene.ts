@@ -16,7 +16,7 @@
 // cached bitmaps.
 
 import type { AgentEvent, WebActivity, WebAgent, WebJob, WebThread } from "../../api/types.ts";
-import { blockedUrgency, crewPose, freshEvents, mapStatus } from "./activity.ts";
+import { blockedUrgency, crewPose, freshEvents, heldPapers, mapStatus } from "./activity.ts";
 import {
   modelCoat,
   roleHat,
@@ -91,6 +91,8 @@ export interface Actor {
   act: string;
   t0: number;
   k: number | null;
+  /** sheets of paper held in the far hand: the card's new artifacts (lead only; the crew hold none) */
+  papers: number;
   moving: boolean;
   walking: boolean;
   hopAt: number;
@@ -211,6 +213,7 @@ function mkActor(name: string, kind: string, mini: boolean, now: number): Actor 
     act: "think",
     t0: now,
     k: null,
+    papers: 0,
     moving: false,
     walking: false,
     hopAt: -9,
@@ -305,6 +308,7 @@ export function syncScene(
   s.status = mapStatus(job);
   s.compact = s.status === "done" || s.status === "draft";
   s.lead.k = s.status === "blocked" ? blockedUrgency(job) : null;
+  s.lead.papers = heldPapers(job);
   s.activity = job.activity;
   // The lead's coat. A codex cell's lead (`agent` is "codex") is slate
   // whatever its model string says, since a codex `model:` need not name
@@ -476,11 +480,12 @@ function stepActor(a: Actor, now: number, dt: number, R: number, C: Palette) {
   const t = now - a.t0 + a.seed * 10;
   let o = a.o;
   if (!o) {
-    o = { seed: a.seed, moving: false, k: null, hue: "", C };
+    o = { seed: a.seed, moving: false, k: null, hue: "", C, papers: 0 };
     a.o = o;
   }
   o.moving = a.moving;
   o.k = a.k;
+  o.papers = a.papers;
   o.hue = hueOf(C, act);
   o.C = C;
   const P = a.P;

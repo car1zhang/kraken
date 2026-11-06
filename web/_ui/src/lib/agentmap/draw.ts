@@ -84,6 +84,15 @@ export const ACT_HUE: Readonly<Record<string, string>> = {
 };
 /** `ship`'s white would vanish on a light surface; this is its light-theme hue. */
 export const SHIP_LIGHT_HUE = "#55506b";
+/**
+ * Blocked is yellow (the operator's word): the kit's `--warn` on the dark
+ * theme, where it is `#ffb000`, but on the light theme that token is a dark
+ * gold (`#a36f00`, chosen for text contrast) and a card framed in it reads
+ * brown, so the light theme gets this yellow instead. style.css carries the
+ * same literal for the frame and the ribbon (`:root[data-theme="light"]`
+ * rules), pinned equal by askingmap.test.ts.
+ */
+export const BLOCKED_LIGHT_HUE = "#e6b400";
 
 export interface DinoColors {
   body: string;
@@ -138,7 +147,7 @@ export interface Palette {
   b1: string;
   g1: string;
   muted: string;
-  /** a parked cell: ac2 45% of the way to g1, as style.css's `color-mix(ac2 55%, g1)` */
+  /** a parked cell: blocked's yellow 45% of the way to g1, as style.css's `color-mix(warn 55%, g1)` (its light-theme twin mixes BLOCKED_LIGHT_HUE) */
   parked: string;
   ink: string;
   paper: string;
@@ -229,19 +238,20 @@ export function readPalette(root: HTMLElement = document.documentElement): Palet
   const ac2 = v("--ac2", "#ff4fd8", "#c41d9e");
   const g1 = v("--g1", "#90909a", "#6b6a78");
   const b1 = v("--b1", "#0d0c12", "#ecebf3");
+  const warn = v("--warn", "#ffb000", "#a36f00");
   return {
     light,
     ac,
     ac2,
     ok: v("--ok", "#7fd44a", "#3e8f1e"),
-    warn: v("--warn", "#ffb000", "#a36f00"),
+    warn,
     bad: v("--stopped", "#ff5c5c", "#c22a2a"),
     fg: v("--fg", "#f2edff", "#1a1724"),
     b0: v("--b0", "#0a090d", "#f6f4fa"),
     b1,
     g1,
     muted: mix(g1, ac, 0.28),
-    parked: mix(ac2, g1, 0.45),
+    parked: mix(light ? BLOCKED_LIGHT_HUE : warn, g1, 0.45),
     ink: light ? "#1a1724" : "#0d0c12",
     paper: light ? "#ffffff" : "#f2edff",
     steel: light ? "#7c7b8c" : "#b9b6c9",
@@ -273,10 +283,15 @@ export function hueOf(C: Palette, id: string): string {
   const a = ACT_HUE[id];
   if (a) return C.light && id === "ship" ? SHIP_LIGHT_HUE : a;
   switch (id) {
+    // blocked is the kit's yellow and every question reading its red: a
+    // question outranks a plain block (the operator's rule), and the colour
+    // ladder says so before the gesture does
     case "blocked":
-      return C.ac2;
+      return C.light ? BLOCKED_LIGHT_HUE : C.warn;
     case "question":
-      return C.warn;
+    case "asking":
+    case "urgent":
+      return C.bad;
     case "parked":
       return C.parked;
     case "limit":
@@ -537,19 +552,19 @@ function hourglass(c: Ctx, C: Palette, x: number, y: number, rot: number, sand: 
   c.rotate(-rot);
   c.translate(-x, -(y - 8));
 }
-/** A speech flag over the head: the rounded box, its tail, and the glyph. */
-function flag(c: Ctx, C: Palette, x: number, y: number, s: number, hue: string, glyph: string) {
+/** A speech flag over the head: the rounded box (`w` wide, 13 for one glyph), its tail, and the glyph. */
+function flag(c: Ctx, C: Palette, x: number, y: number, s: number, hue: string, glyph: string, w = 13) {
   c.translate(x, y);
   c.scale(s, s);
   c.fillStyle = hue;
-  rr(c, -6.5, -8.5, 13, 15, 3);
+  rr(c, -w / 2, -8.5, w, 15, 3);
   c.fill();
   c.beginPath();
   c.moveTo(-3.5, 6);
   c.lineTo(-7.5, 11.5);
   c.lineTo(1.5, 6);
   c.fill();
-  T(c, glyph, 0, -0.5, 12, C.light ? "#ffffff" : "#15121f");
+  T(c, glyph, 0, -0.5, w > 13 ? 11 : 12, C.light ? "#ffffff" : "#15121f");
   c.scale(1 / s, 1 / s);
   c.translate(-x, -y);
 }
@@ -605,6 +620,12 @@ export interface PoseOpts {
   k: number | null;
   hue: string;
   C: Palette;
+  /**
+   * How many sheets of paper the character holds in its far hand — its
+   * card's new artifacts (activity.ts `heldPapers`). Orthogonal to the pose:
+   * the sheets go wherever that pose put the hand. Absent or 0 draws none.
+   */
+  papers?: number;
 }
 
 export function newPose(): Pose {
@@ -683,6 +704,25 @@ const fxSleep: Draw = (c, P, o) => {
     c.globalAlpha = was;
   }
 };
+
+/**
+ * Both arms up and waving, facing the viewer, with a hop of `hop` units at
+ * the start of every `per` seconds: the blocked wave's top form (its `k > 0.6`
+ * branch), shared by the two question poses, which turn its speed up. `w` is
+ * the wave's angular rate; the hop's height lands in `P.a` for the flag to
+ * ride on.
+ */
+function bothArmsWave(P: Pose, t: number, w: number, per: number, hop: number) {
+  const hc = fr(t / per);
+  const up = hc < 0.25 ? sin((hc / 0.25) * PI) * hop : 0;
+  const wv = sin(t * w);
+  const w2 = sin(t * w + 1.2);
+  P.face = 0;
+  P.bob = -up;
+  hands(P, 15 + wv * 4.5, -31 + abs(wv) * 2, -15 - w2 * 4.5, -31 + abs(w2) * 2);
+  P.eyes.wide = true;
+  P.a = up;
+}
 
 /**
  * Every pose by name: the sixteen activities (plus `think`), the crew's
@@ -887,6 +927,17 @@ const FILL: Readonly<Record<string, Fill>> = {
     hands(P, 16.5, -15 + up, -16.5, -15 + up);
     eyes(P, 0.5, -0.7);
   },
+  // open P1 question rows (artifacts/20-question-gestures.html, P1-A): the
+  // blocked wave's both-arms form held whatever the urgency, a hop of 7
+  // every 2.2s, and a `?` flag over the head where blocked has its `!`. A
+  // question outranks a plain block, so the gesture must read as more than
+  // the wave: the wave's big sibling, in red.
+  asking: (P, t) => bothArmsWave(P, t, 8, 2.2, 7),
+  // open P0 question rows (P0-A): the same again, turned up to the top —
+  // arms waving half again as fast, a higher hop every second, and a wider
+  // `?!` flag that pulses (FX.urgent). The most urgent thing on the map: a
+  // cell that cannot continue until the operator answers.
+  urgent: (P, t) => bothArmsWave(P, t, 12, 1, 9),
   parked: fillSleep,
   // on hold: asleep until its cell wakes it
   frozen: fillSleep,
@@ -1227,6 +1278,10 @@ const FX: Readonly<Record<string, Draw>> = {
   },
   blocked: (c, P, o) => flag(c, o.C, 21, -49 - P.a, 1 + 0.13 * sin(P.t * 6), o.hue, "!"),
   question: (c, P, o) => flag(c, o.C, 19, -50 + sin(P.t * 2.4) * 1.5, 1, o.hue, "?"),
+  // the flags sit over the head, centred, since both arms are up: a `?` for
+  // P1, and for P0 a wider `?!` that pulses harder and rides the higher hop
+  asking: (c, P, o) => flag(c, o.C, 0, -52 - P.a, 1.1 + 0.1 * sin(P.t * 6), o.hue, "?"),
+  urgent: (c, P, o) => flag(c, o.C, 0, -54 - P.a, 1.15 + 0.18 * sin(P.t * 10), o.hue, "?!", 20),
   parked: fxSleep,
   frozen: fxSleep,
   limit: (c, P, o) => {
@@ -1287,6 +1342,30 @@ function drawGrave(c: Ctx, o: PoseOpts) {
   }
 }
 
+/** At most this many sheets are drawn, however many artifacts are new; the stack says "some", not the count. */
+const PAPERS_MAX = 3;
+
+/**
+ * The card's new artifacts, held in the far hand at (hx, hy): a short stack
+ * of sheets (draw.ts' `sheet`, the read pose's paper) fanned a little, held
+ * up by their lower edge so a hand hanging at the side shows them against
+ * the chest rather than dangling below the card's edge. Drawn after the arms
+ * so the claws sit over the paper's corner, and in the pose's hue like every
+ * other prop, so a blocked lead's papers are ruled in its yellow and an
+ * asking lead's in red. The pose decides where the hand is, so a sleeper
+ * holds its papers in its lap and a lead waving both arms holds them aloft.
+ */
+function drawPapers(c: Ctx, o: PoseOpts, hx: number, hy: number) {
+  const n = min(PAPERS_MAX, max(0, Math.floor(o.papers ?? 0)));
+  for (let i = n - 1; i >= 0; i--) {
+    c.translate(hx, hy);
+    c.rotate(-0.1 - i * 0.14);
+    sheet(c, o.C, -4.5 - i * 1.2, -9.5 - i * 1.6, o.hue);
+    c.rotate(0.1 + i * 0.14);
+    c.translate(-hx, -hy);
+  }
+}
+
 function drawArm(c: Ctx, col: DinoColors, sx: number, hx: number, hy: number) {
   const sy = -13;
   const mx = (sx + hx) / 2;
@@ -1323,10 +1402,11 @@ function drawArm(c: Ctx, col: DinoColors, sx: number, hx: number, hy: number) {
 
 /**
  * The hats' colours: steel, off-white, brown and oatmeal, none of them near
- * a status colour (violet working, magenta blocked, amber question, red
- * limit, green done), so a hat never reads as its card's state. The hard hat
- * is the exception by the operator's ask: construction yellow, with a dark
- * olive edge so it still shows on the yellow Fable coat.
+ * a status colour (violet working, yellow blocked, red question and limit,
+ * green done), so a hat never reads as its card's state. The hard hat is the
+ * exception by the operator's ask: construction yellow, with a dark olive
+ * edge so it still shows on the yellow Fable coat — and only a crew member
+ * wears it, while a status colour is the lead's flag and the card's frame.
  */
 const HAT_INK = {
   shell: "#ffd83a",
@@ -1761,6 +1841,7 @@ export function drawKraken(
   if (branch !== "none") drawTwig(c, hx, t, P.seed);
   if (!farFwd) drawArm(c, col, -9.5, h[2], h[3]);
   drawArm(c, col, 9.5, h[0], h[1]);
+  if (o.papers) drawPapers(c, o, h[2], h[3]);
   PROP[P.kind]?.(c, P, o);
   // back out of the bob and the lean: the effects draw outside them
   c.translate(0, -oy);

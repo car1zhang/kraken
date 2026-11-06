@@ -85,11 +85,14 @@ func servedToNodes(wj webJob) bool {
 }
 
 // nodeCard is a card as a sibling receives it: the object this board renders
-// with exactly two keys cleared — the owner stamp (a card served from here is
-// this node's own, and the receiver stamps the owner from its registry row)
-// and the account binding, which names this machine's pool login and is read
-// against this machine's usage snapshot, so it means nothing on another one.
-// Everything else (feedback, tokens, threads, doc questions, artifacts, PRs,
+// with two keys cleared — the owner stamp (a card served from here is this
+// node's own, and the receiver stamps the owner from its registry row) and
+// the account binding, which names this machine's pool login and is read
+// against this machine's usage snapshot, so it means nothing on another one —
+// and each artifact's `new` flag cleared on a copy, since it records this
+// operator's own reads (additive and omitempty, so clearing it is no
+// protocol change). Everything else
+// (feedback, tokens, threads, doc questions, artifacts, PRs,
 // the load estimate, goals, the pending question, crew, detail, the lead's
 // context fill …) is served as built. The artifact URLs left on it address THIS node's /api/artifact/;
 // a receiving node rewrites every one to its own proxy (strippedCards) and
@@ -97,6 +100,17 @@ func servedToNodes(wj webJob) bool {
 func nodeCard(wj webJob) webJob {
 	wj.Owner = nil
 	wj.Account = nil
+	// artifacts[].new answers whether THIS operator has opened an artifact,
+	// which means nothing to a sibling's operator; cleared on a copy, since
+	// the cached board's slice is shared with every other reader of it.
+	if len(wj.Artifacts) > 0 {
+		arts := make([]webArtifact, len(wj.Artifacts))
+		copy(arts, wj.Artifacts)
+		for i := range arts {
+			arts[i].New = false
+		}
+		wj.Artifacts = arts
+	}
 	return wj
 }
 
