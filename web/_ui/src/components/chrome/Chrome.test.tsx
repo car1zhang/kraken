@@ -1,4 +1,4 @@
-import { render } from "@testing-library/react";
+import { render, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -410,5 +410,29 @@ describe("the usage widget", () => {
     expect(widget).not.toHaveAttribute("hidden");
     await userEvent.click(widget);
     expect(onOpenUsage).toHaveBeenCalled();
+  });
+});
+
+describe("the sleep button", () => {
+  it("joins the header once /api/sleep has answered, and not before", async () => {
+    // every other fetch the chrome makes hangs; only the sleep read answers
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((url: RequestInfo | URL) =>
+        String(url) === "/api/sleep"
+          ? Promise.resolve(
+              new Response(JSON.stringify({ disabled: true }), {
+                status: 200,
+                headers: { "Content-Type": "application/json" },
+              }),
+            )
+          : new Promise<Response>(() => {}),
+      ),
+    );
+    renderChrome(model({}));
+    expect(document.getElementById("sleep-toggle")).toBeNull();
+    await waitFor(() =>
+      expect(document.querySelector("header.chrome #sleep-toggle")).toHaveTextContent("☀ ALWAYS ON"),
+    );
   });
 });

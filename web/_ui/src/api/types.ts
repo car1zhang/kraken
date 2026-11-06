@@ -749,6 +749,15 @@ export interface WebShipIOS {
   updated_at?: number;
 }
 
+/**
+ * Mirrors api.webSleep (internal/api/sleep.go): the whole payload of
+ * /api/sleep, GET and POST alike.
+ */
+export interface WebSleep {
+  /** pmset's SleepDisabled: true while the Mac is held awake. */
+  disabled: boolean;
+}
+
 export interface WebBoard {
   daemon: DaemonStatus;
   daemon_ok: boolean;
