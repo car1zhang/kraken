@@ -644,6 +644,10 @@ type MindAnswer struct {
 	Ops      []MindOp        `json:"ops"`
 	Excluded []MindExclusion `json:"excluded"`
 	Coverage map[string]any  `json:"coverage"`
+	// Repaired is set by ParseMindAnswer when the answer arrived without its
+	// final closing brace and was closed before it was read (mindCloseObject).
+	// It is never part of the answer's own JSON.
+	Repaired bool `json:"-"`
 }
 
 // MindOp is one operation. add and supersede carry Item; supersede, retire
@@ -694,8 +698,11 @@ type mindEnvelope struct {
 
 // ParseMindAnswer reads a run's stdout: either claude's JSON envelope (whose
 // result string is the answer and whose usage fills usage) or the bare answer
-// object, with a surrounding ``` fence tolerated. raw is the answer text as
-// found, before the fence is stripped.
+// object, with a surrounding ``` fence tolerated, and with a missing final
+// closing brace supplied when the answer is otherwise whole (mindCloseObject,
+// mindAnswerWhole; the answer then reads Repaired).
+// raw is the answer text as found, before the fence is stripped and before
+// any brace is supplied.
 func ParseMindAnswer(stdout string) (ans MindAnswer, raw string, usage MindUsage, err error) {
 	raw = stdout
 	trimmed := strings.TrimSpace(stdout)
@@ -705,9 +712,14 @@ func ParseMindAnswer(stdout string) (ans MindAnswer, raw string, usage MindUsage
 		usage = MindUsage{In: env.Usage.InputTokens, Out: env.Usage.OutputTokens}
 	}
 	body := stripMindFence(raw)
+	repaired := false
 	var probe map[string]json.RawMessage
 	if err := json.Unmarshal([]byte(body), &probe); err != nil {
-		return MindAnswer{}, raw, usage, &mindParseError{kind: "is not a JSON object", detail: fmt.Sprintf("%v: %s", err, firstBytes(raw, 500))}
+		closed, ok := mindCloseObject(body)
+		if !ok || json.Unmarshal([]byte(closed), &probe) != nil || !mindAnswerWhole(probe) {
+			return MindAnswer{}, raw, usage, &mindParseError{kind: "is not a JSON object", detail: fmt.Sprintf("%v: %s", err, firstBytes(raw, 500))}
+		}
+		body, repaired = closed, true
 	}
 	if _, ok := probe["ops"]; !ok {
 		return MindAnswer{}, raw, usage, &mindParseError{kind: "has no ops key", detail: firstBytes(raw, 500)}
@@ -724,7 +736,71 @@ func ParseMindAnswer(stdout string) (ans MindAnswer, raw string, usage MindUsage
 	if ans.Coverage == nil {
 		ans.Coverage = map[string]any{}
 	}
+	ans.Repaired = repaired
 	return ans, raw, usage, nil
+}
+
+// mindAnswerWhole reports whether a closed answer carries all three keys of
+// the output contract. An answer cut off right after a complete top-level
+// value has the same shape as one missing only its last brace, so the brace
+// is supplied only for an answer that has everything else: one with a key
+// missing is refused, where the same object arriving closed would have a
+// missing `excluded` or `coverage` read as empty.
+func mindAnswerWhole(probe map[string]json.RawMessage) bool {
+	for _, key := range []string{"ops", "excluded", "coverage"} {
+		if _, ok := probe[key]; !ok {
+			return false
+		}
+	}
+	return true
+}
+
+// mindCloseObject returns body with one `}` appended when the only thing
+// between it and a JSON object is the outermost closing brace: every string,
+// array and nested object in it is closed, and exactly one object, the
+// top-level one, is still open where the text ends. Anything else — text cut
+// inside a string, two or more containers left open, a closer with nothing
+// to close — returns false, because supplying more than that one brace would
+// be guessing at content the answer never carried. The caller still has to
+// parse the result: a body ending on a dangling comma or colon passes this
+// scan and is not valid JSON with the brace added either.
+func mindCloseObject(body string) (string, bool) {
+	var open []byte // the containers still open, innermost last
+	inString, escaped := false, false
+	// Bytes, not runes: every character this scan acts on is ASCII, and no
+	// byte of a multi-byte UTF-8 sequence is.
+	for i := 0; i < len(body); i++ {
+		c := body[i]
+		if inString {
+			switch {
+			case escaped:
+				escaped = false
+			case c == '\\':
+				escaped = true
+			case c == '"':
+				inString = false
+			}
+			continue
+		}
+		switch c {
+		case '"':
+			inString = true
+		case '{', '[':
+			open = append(open, c)
+		case '}', ']':
+			if len(open) == 0 {
+				return "", false
+			}
+			if last := open[len(open)-1]; (c == '}') != (last == '{') {
+				return "", false
+			}
+			open = open[:len(open)-1]
+		}
+	}
+	if inString || len(open) != 1 || open[0] != '{' {
+		return "", false
+	}
+	return body + "}", true
 }
 
 // mindParseError is ParseMindAnswer's refusal. Error() carries the first 500
@@ -1151,6 +1227,9 @@ func MindRunReport(run store.MindRun, ans MindAnswer, apply MindApply, man MindM
 	var b strings.Builder
 	fmt.Fprintf(&b, "# Mind run %d — %s (%s): %d added, %d superseded, %d retired, %d folded, %d excluded, %d flagged\n",
 		run.ID, who, run.Trigger, c.Added, c.Superseded, c.Retired, c.Folded, len(ans.Excluded), c.Flagged)
+	if ans.Repaired {
+		b.WriteString("\nThe answer arrived without its final closing brace. Kraken supplied it before reading the answer; the stored answer is the text as it arrived.\n")
+	}
 	section := func(title string, lines []string) {
 		b.WriteString("\n## " + title + "\n\n")
 		if len(lines) == 0 {
@@ -1411,6 +1490,9 @@ func finishMindRun(st *store.Store, run store.MindRun, out, model, sha string, m
 			return fail(errors.New(pe.note()))
 		}
 		return fail(perr)
+	}
+	if ans.Repaired {
+		util.LogEvent("jobs", "info", "mind-answer-repaired", fmt.Sprintf("mind run %d (%s %s): the answer was missing its final closing brace, supplied before parsing", run.ID, run.Trigger, run.Slug))
 	}
 	at := time.Now().UnixMilli()
 	apply, err := ApplyMindOps(st, run, ans, man.MarkIDs, at)
