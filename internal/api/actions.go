@@ -46,6 +46,7 @@ const docAnswerMaxLen = 4000
 // sites, not just the tmux-driving actions a mirror-mode board button most
 // obviously suggests:
 //   - kill (webKill → KillJob → teardownCell), stop (webStop → InterruptCell),
+//     interrupt (webInterrupt → InterruptZeus, one pane's worth of the same),
 //     steer (webSteer → core.SendMessage), question (webAnswerQuestion →
 //     sendDigit), retry (webRetry → RetryCell → core.SendMessage), submit
 //     (webSubmit → jobs.SubmitJob → StartCell) and reactivate
@@ -78,6 +79,7 @@ var mirrorGatedActions = map[string]bool{
 	"submit":       true,
 	"kill":         true,
 	"stop":         true,
+	"interrupt":    true,
 	"steer":        true,
 	"question":     true,
 	"retry":        true,
@@ -469,6 +471,23 @@ func webStop(req webReq) error {
 	}
 	all, _ := core.OrderAll(core.DiscoverAll())
 	return jobs.InterruptCell(j, all)
+}
+
+// webInterrupt interrupts zeus alone: one Escape to the lead's pane
+// (jobs.InterruptZeus), the steer modal's ■ interrupt button. webStop above
+// is the cell-wide form — the working→blocked drag's and the remote card's —
+// and reaches every agent pane; this one leaves a running crew to its work.
+// Same liveness gate as stop, and like stop it writes no job state.
+func webInterrupt(req webReq) error {
+	j, _, err := webJobFor(req.Slug)
+	if err != nil {
+		return err
+	}
+	if _, cellLive := cellSessionIfLive(j); !cellLive {
+		return fmt.Errorf("%s has no live cell to interrupt", j.Slug)
+	}
+	all, _ := core.OrderAll(core.DiscoverAll())
+	return jobs.InterruptZeus(j, all)
 }
 
 // reorderReq is POST /api/reorder's request shape — distinct from webReq

@@ -40,6 +40,53 @@ func InterruptCell(j *Job, all []*core.Peer) error {
 	return nil
 }
 
+// InterruptZeus sends one Escape keystroke to zeus' pane alone — the steer
+// modal's interrupt button. InterruptCell above is the board's Stop and
+// reaches every agent pane in the cell, teammates included; this one leaves a
+// running crew untouched and touches only the lead's pane — ending its turn
+// if one is running, else cancelling whatever dialog it shows — for the case
+// where the lead is the agent going wrong. Zeus is found by CellZeus, the election
+// /api/steer uses, which filters a side thread's pane out — so an interrupt
+// never lands on the conversation the operator is mid-way through. Like
+// InterruptCell it writes no job state: the roll-call reads the idled pane
+// on its next tick.
+func InterruptZeus(j *Job, all []*core.Peer) error {
+	zeus, err := interruptTarget(j, all)
+	if err != nil {
+		return err
+	}
+	return core.SendKey(zeus, "esc")
+}
+
+// interruptTarget is InterruptZeus' pane resolution, split out so the choice
+// can be tested without a tmux server: zeus with a pane to address, else an
+// error naming the job. A zeus with no pane is an in-process peer SendKey
+// would refuse anyway; refusing here keeps the message about the cell.
+//
+// CellZeus' positional fallback elects the lowest depth-0 claude pane in the
+// session when no peer carries zeus' name — which, once zeus' process has
+// exited while its crew still runs, is a crew pane (hephaestus, athena, hermes). Steer
+// lives with that; this verb's whole promise is "zeus only, the crew keeps
+// working", so a peer that carries a name of its own that is not one of
+// zeus' is refused rather than interrupted. A nameless peer stays allowed:
+// a still-starting zeus has no session file and so no name yet.
+func interruptTarget(j *Job, all []*core.Peer) (*core.Peer, error) {
+	zeus := CellZeus(j, all)
+	if zeus == nil || zeus.Pane == "" {
+		return nil, fmt.Errorf("%s: zeus pane not found to interrupt", j.Slug)
+	}
+	// Claude peers only: discovery names a codex peer by its THREAD TITLE
+	// (core/discover.go), never zeus-<slug>, so the name test would refuse
+	// every codex zeus — the same reason CellHealth's codex arm skips it. A
+	// codex cell spawns no claude crew panes for the fallback to mis-elect.
+	if zeus.Agent != "codex" && zeus.Name != "" && !isZeusName(j, zeus.Name) {
+		// isZeusName (crew.go) answers against every slug the job has held,
+		// so a renamed job's zeus, still carrying its spawn-time name, passes
+		return nil, fmt.Errorf("%s: zeus pane not found to interrupt (%s is a crew pane)", j.Slug, zeus.Name)
+	}
+	return zeus, nil
+}
+
 // cellAgentPanes enumerates the panes that hold a cell's own agents, keyed by
 // pane id so each one is listed exactly once, with the value being the
 // FOREGROUND peer keystrokes for that pane must be addressed to.

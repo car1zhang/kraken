@@ -32,8 +32,8 @@ import (
 //     in tmux/process-table dependencies this file avoids).
 //   - webAction-wrapped endpoints (/api/queue — the submit, /api/done,
 //     /api/retry, /api/kill, /api/archive, /api/unarchive, /api/delete,
-//     /api/question, /api/steer, /api/reactivate, /api/stop; /api/dequeue and
-//     /api/start were removed in v6 and are unregistered):
+//     /api/question, /api/steer, /api/reactivate, /api/stop, /api/interrupt;
+//     /api/dequeue and /api/start were removed in v6 and are unregistered):
 //     all share the trivial {"ok": true} success shape or {"error": string}
 //     failure shape, already covered by the generic error-response
 //     convention documented in ios/API.md.

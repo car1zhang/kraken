@@ -2284,6 +2284,14 @@ button.spawn-chip.spawn-draft:hover { background: color-mix(in srgb, var(--ac) 1
   border: 1px solid color-mix(in srgb, var(--ok) 55%, transparent);
 }
 .btn.steer-done:hover { background: color-mix(in srgb, var(--ok) 14%, transparent); border-color: var(--ok); color: var(--ok); box-shadow: none; }
+/* panel-head only — zeus' interrupt, beside tmux. Same yellow family, since
+   both address the lead's pane, but outlined the way steer-done is rather
+   than tinted like tmux, so the head reads as one raise button and one stop. */
+.btn.interrupt {
+  background: transparent; color: var(--warn);
+  border: 1px solid color-mix(in srgb, var(--warn) 55%, transparent);
+}
+.btn.interrupt:hover { background: color-mix(in srgb, var(--warn) 14%, transparent); border-color: var(--warn); color: var(--warn); box-shadow: var(--glow-warn); }
 /* ---- command highlight: mirrored backdrop behind the steer/editor
    textareas, so /direct /info /aim /do /handoff each read highlighted inline in
    their own skill color + glow (direct teal, info blue, aim red, do yellow,

@@ -285,3 +285,23 @@ func TestWebStopRejectsDeadCell(t *testing.T) {
 		t.Fatalf("expected 'no live cell' error, got %v", err)
 	}
 }
+
+// --- POST /api/interrupt ---
+
+// The zeus-only sibling of stop takes the same liveness gate: a job whose
+// cell is not running has no pane to interrupt, and the refusal says so
+// before any discovery runs.
+func TestWebInterruptRejectsDeadCell(t *testing.T) {
+	writeTestJob(t, "interrupt-not-live", "state: working\n")
+	err := webInterrupt(webReq{Slug: "interrupt-not-live"})
+	if err == nil || !strings.Contains(err.Error(), "no live cell") {
+		t.Fatalf("expected 'no live cell' error, got %v", err)
+	}
+}
+
+func TestWebInterruptUnknownJob(t *testing.T) {
+	err := webInterrupt(webReq{Slug: "interrupt-no-such-job"})
+	if err == nil {
+		t.Fatal("expected an error for a job that does not exist")
+	}
+}

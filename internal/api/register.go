@@ -199,6 +199,7 @@ func registerRoutes(mux routeMux) {
 	mux.HandleFunc("/api/delete", webAction("delete", webDelete))
 	mux.HandleFunc("/api/reactivate", webAction("reactivate", webReactivate))
 	mux.HandleFunc("/api/stop", webAction("stop", webStop))
+	mux.HandleFunc("/api/interrupt", webAction("interrupt", webInterrupt))
 	mux.HandleFunc("/api/reorder", webReorderHandler)
 	mux.HandleFunc("/api/job/raw", webJobRaw)
 	mux.HandleFunc("/api/job/create", webJobCreate)
