@@ -23,7 +23,7 @@ var mirrorGatedRoutes = []string{
 	// ungated exception, safe only while it flipped a DB field and nothing
 	// else; it now reaches a real worktree and a real tmux server, so it is
 	// gated like everything else here.
-	"/api/queue", "/api/kill", "/api/stop", "/api/steer",
+	"/api/queue", "/api/kill", "/api/stop", "/api/interrupt", "/api/steer",
 	"/api/question", "/api/retry", "/api/done", "/api/reactivate",
 	"/api/doc-question",
 	// feedback/questions: gated inline in their own handlers (not

@@ -1037,6 +1037,22 @@ tmux-backed team member) — stops short of a teardown. No job state is
 written; the daemon's own roll-call reads the idled cell as `blocked` on its
 next tick, same as an agent that stalled on its own.
 
+### `POST /api/interrupt`
+
+Request: `webReq` — `slug` (string, required), `text` unused.
+Response: same as above.
+
+The zeus-only form of `/api/stop`: one Escape keystroke to the lead's pane
+and nothing else, so a running crew (tmux teammates) keeps working. Zeus is
+found the way `/api/steer` finds it, which excludes the job's side threads.
+Refuses with `no live cell` when the cell is not running and `zeus pane not
+found` when the cell is up but no lead pane can be resolved, which includes
+the case where zeus' process has exited and only crew panes are live (the
+positional fallback would otherwise elect a teammate). No job state is
+written. The web steer modal's `■ interrupt` button posts it; the iOS app
+does not call it yet. Mirror-gated like `/api/stop`. Additive — not a
+contract bump, and not a node action: a remote card still offers only `stop`.
+
 ### `POST /api/reorder`
 
 Persists a manual drag-reorder within one board column. Distinct request

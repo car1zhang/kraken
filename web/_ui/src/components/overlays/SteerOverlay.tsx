@@ -15,6 +15,7 @@ import {
   fetchJobTranscriptTurns,
   fetchNodeTranscript,
   freezeJob,
+  interruptJob,
   killJob,
   openInEditor,
   reactivateJob,
@@ -93,6 +94,9 @@ import {
   type Mutate,
 } from "./Overlay.tsx";
 import { showToast } from "./Toast.tsx";
+
+/** How long ■ interrupt stays disabled after a delivered Escape; see `interrupt`. */
+export const INTERRUPT_HOLD_MS = 1500;
 
 // Message zeus. ONE modal, three modes (app.js:2097 openSteer), which is why
 // the mode is a discriminator on almost everything below rather than three
@@ -418,6 +422,7 @@ function SteerBody({
   const [pending, setPending] = useState(0);
   const [sending, setSending] = useState(false);
   const [killing, setKilling] = useState(false);
+  const [interrupting, setInterrupting] = useState(false);
   const [markingDone, setMarkingDone] = useState(false);
   const [freezing, setFreezing] = useState(false);
   const openTmuxTarget = useOpenTmux(mutate);
@@ -625,6 +630,27 @@ function SteerBody({
     }
   }, [flushDraft, jobSlug, mutate, onClose]);
 
+  // One Escape to zeus' pane (POST /api/interrupt): ends the lead's turn if
+  // one is running, and touches no other pane — teammates keep running, the
+  // modal stays open so the next move is a steer, and the draft is untouched.
+  // The note is the button's only feedback: the card moves only once the
+  // roll-call reads the idled pane, a tick later. After a delivered Escape
+  // the button stays disabled for INTERRUPT_HOLD_MS: the POST itself returns
+  // in well under a second, and a second press landing on the now-idle
+  // prompt is Claude Code's double-Escape gesture, which opens the rewind
+  // picker in zeus' pane and would swallow the operator's next steer.
+  const interrupt = useCallback(async () => {
+    setInterrupting(true);
+    const res = await mutate(() => interruptJob(jobSlug));
+    if (res) {
+      setNote("sent zeus an Escape");
+      window.setTimeout(() => setInterrupting(false), INTERRUPT_HOLD_MS);
+    } else {
+      setInterrupting(false);
+      setNote("interrupt failed — see status bar");
+    }
+  }, [jobSlug, mutate]);
+
   const markDone = useCallback(async () => {
     setMarkingDone(true);
     const res = await mutate(() => doneJob(jobSlug));
@@ -664,6 +690,13 @@ function SteerBody({
   const killable =
     composer && mode !== "reactivate" && (liveCol === "working" || liveCol === "blocked");
   const showTmux = composer && mode !== "reactivate" && !!job?.live;
+  // interrupt takes the tmux button's gate: both address zeus' pane, which
+  // exists exactly while the cell is live. Deliberately not narrowed to the
+  // working column: an unhealthy cell displays as blocked while its lead may
+  // be mid-turn, and that is the pane the operator most wants to stop. On a
+  // lead that really is stopped the Escape is not inert: it cancels whatever
+  // dialog or question the pane is showing.
+  const showInterrupt = showTmux;
   const showDone = composer && mode !== "reactivate" && liveCol === "blocked";
   // Offered where mark-done is, narrowed to a job the SERVER files as blocked:
   // an unhealthy working cell displays as blocked too, and the route refuses
@@ -991,6 +1024,20 @@ function SteerBody({
           onClick={() => void openTmuxTarget({ slug: jobSlug })}
         >
           ⧉ tmux
+        </button>
+        {/* beside tmux because both act on zeus' pane: one raises it, this one
+            sends it an Escape. Zeus only — the cell-wide Stop is the
+            working→blocked drag (lib/moves.ts) and the remote card's button. */}
+        <button
+          className="btn interrupt"
+          id="steer-interrupt"
+          hidden={!showInterrupt}
+          title="interrupt zeus' turn — one Escape to its pane; teammates keep running"
+          data-slug={jobSlug}
+          disabled={interrupting}
+          onClick={() => void interrupt()}
+        >
+          ■ interrupt
         </button>
         <button
           className="btn steer-done"

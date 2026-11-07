@@ -3,6 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { makeJob } from "../../test/fixtures.ts";
 import {
+  INTERRUPT_HOLD_MS,
   SteerOverlay,
   steerEndpoint,
   steerRequiresText,
@@ -19,6 +20,7 @@ vi.mock("../../api/client.ts", () => ({
   steerJob: vi.fn(() => Promise.resolve({ ok: true })),
   reactivateJob: vi.fn(() => Promise.resolve({ ok: true })),
   killJob: vi.fn(() => Promise.resolve({ ok: true })),
+  interruptJob: vi.fn(() => Promise.resolve({ ok: true })),
   doneJob: vi.fn(() => Promise.resolve({ ok: true })),
   freezeJob: vi.fn(() => Promise.resolve({ ok: true, frozen_at: 1 })),
   saveDraft: vi.fn(() => Promise.resolve({ ok: true })),
@@ -46,6 +48,8 @@ import {
   deleteFeedback,
   editFeedback,
   freezeJob,
+  interruptJob,
+  killJob,
   reactivateJob,
   retryJob,
   setJobColor,
@@ -290,15 +294,17 @@ describe("steer mode matrix", () => {
     // reactivate targets a DEAD cell — there is nothing on it to cancel, raise
     // in Ghostty, or mark done
     const { unmount } = mount("reactivate");
-    for (const id of ["steer-kill", "steer-tmux", "steer-markdone"]) {
+    for (const id of ["steer-kill", "steer-tmux", "steer-interrupt", "steer-markdone"]) {
       expect(document.getElementById(id)).toHaveAttribute("hidden");
     }
     unmount();
 
     mount("steer");
-    // live + working: killable and tmux-able, but not mark-done (that is blocked)
+    // live + working: killable, tmux-able and interruptible, but not mark-done
+    // (that is blocked)
     expect(document.getElementById("steer-kill")).not.toHaveAttribute("hidden");
     expect(document.getElementById("steer-tmux")).not.toHaveAttribute("hidden");
+    expect(document.getElementById("steer-interrupt")).not.toHaveAttribute("hidden");
     expect(document.getElementById("steer-markdone")).toHaveAttribute("hidden");
   });
 
@@ -332,6 +338,94 @@ describe("steer mode matrix", () => {
     expect(document.getElementById("steer-markdone")).not.toHaveAttribute(
       "hidden",
     );
+  });
+});
+
+// The interrupt button beside tmux: one Escape to zeus' pane, posted to
+// /api/interrupt — never /api/kill, never the cell-wide /api/stop the drag
+// uses. It leaves the modal open, since the next move is usually a steer.
+describe("steer interrupt — zeus' pane alone", () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  const interruptBtn = () => document.getElementById("steer-interrupt")!;
+  const mountWith = (over: Partial<typeof job>, mode: SteerMode = "steer") => {
+    const onClose = vi.fn();
+    render(
+      <Steer
+        open
+        slug="j"
+        mode={mode}
+        job={{ ...job, ...over }}
+        onClose={onClose}
+        mutate={mutate}
+      />,
+    );
+    return { onClose };
+  };
+
+  it("posts the interrupt for the job, stays open, and holds the button after a delivered Escape", async () => {
+    const { onClose } = mountWith({});
+    expect(interruptBtn()).not.toHaveAttribute("hidden");
+    expect(interruptBtn()).toHaveTextContent("interrupt");
+    await userEvent.click(interruptBtn());
+    expect(interruptJob).toHaveBeenCalledTimes(1);
+    expect(interruptJob).toHaveBeenCalledWith("j");
+    expect(killJob).not.toHaveBeenCalled();
+    // delivered: the note says so and the button is held, so a second press
+    // cannot become Claude Code's double-Escape gesture on the idle prompt
+    await waitFor(() => expect(screen.getByText("sent zeus an Escape")).toBeInTheDocument());
+    expect(interruptBtn()).toBeDisabled();
+    await waitFor(() => expect(interruptBtn()).not.toBeDisabled(), {
+      timeout: INTERRUPT_HOLD_MS + 1000,
+    });
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
+  it("re-enables at once when the interrupt is refused", async () => {
+    vi.mocked(interruptJob).mockRejectedValueOnce(new Error("no live cell"));
+    const mutateNull = async <T,>(op: () => Promise<T>) => op().catch(() => null);
+    render(
+      <Steer open slug="j" mode="steer" job={job} onClose={() => {}} mutate={mutateNull} />,
+    );
+    await userEvent.click(interruptBtn());
+    await waitFor(() => expect(screen.getByText(/interrupt failed/)).toBeInTheDocument());
+    expect(interruptBtn()).not.toBeDisabled();
+  });
+
+  it("is offered on a blocked live cell too — the lead may be mid-turn and misread", () => {
+    const { unmount } = render(
+      <Steer
+        open
+        slug="j"
+        mode="unblock"
+        job={{ ...job, state: "blocked" }}
+        onClose={() => {}}
+        mutate={mutate}
+      />,
+    );
+    expect(interruptBtn()).not.toHaveAttribute("hidden");
+    unmount();
+    mountWith({ state: "working", health: "zeus is gone" });
+    expect(interruptBtn()).not.toHaveAttribute("hidden");
+  });
+
+  it("is hidden when the cell is not live, and in reactivate and view modes", () => {
+    mountWith({ live: false, state: "working" });
+    expect(interruptBtn()).toHaveAttribute("hidden");
+    for (const mode of ["reactivate", "view"] as SteerMode[]) {
+      const { unmount } = render(
+        <Steer
+          open
+          slug="j"
+          mode={mode}
+          job={{ ...job, state: "done", live: false }}
+          onClose={() => {}}
+          mutate={mutate}
+        />,
+      );
+      expect(document.querySelectorAll("#steer-interrupt:not([hidden])")).toHaveLength(0);
+      unmount();
+    }
   });
 });
 
