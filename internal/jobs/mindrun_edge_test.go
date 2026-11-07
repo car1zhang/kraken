@@ -217,8 +217,9 @@ func edgeMRHead(s string, n int) string {
 // ApplyMindOps — validate all, then apply
 // ---------------------------------------------------------------------------
 
-// Every invalid op shape, each after one VALID add: the call errors and
-// writes nothing — no item, no flag, no consumed mark.
+// Every invalid op shape the rest of an answer may depend on, each after one
+// VALID add: the call errors and writes nothing — no item, no flag, no
+// consumed mark.
 func TestEdgeMRApplyOneInvalidOpWritesNothing(t *testing.T) {
 	st := edgeMREnv(t)
 	run := edgeMRDaily(t, st)
@@ -239,7 +240,6 @@ func TestEdgeMRApplyOneInvalidOpWritesNothing(t *testing.T) {
 		"empty op":                     {Op: "", Target: live, Quote: "q"},
 		"add with no item":             {Op: "add", Quote: "q"},
 		"supersede with no item":       {Op: "supersede", Target: live, Quote: "q"},
-		"reading without mark or save": {Op: "add", Item: reading, Quote: reading.Quote},
 		"supersede a code reading":     {Op: "supersede", Target: code, Item: edgeMRProposal("replaces code"), Quote: "replaces code"},
 		"retire a code reading":        {Op: "retire", Target: code, Quote: "func main() {}"},
 		"supersede an invalidated row": {Op: "supersede", Target: dead, Item: edgeMRProposal("replaces dead"), Quote: "replaces dead"},
@@ -266,6 +266,24 @@ func TestEdgeMRApplyOneInvalidOpWritesNothing(t *testing.T) {
 		if m := edgeMRMark(t, st, mark); m.ConsumedRun != 0 {
 			t.Errorf("%s: refused apply consumed mark %d (run %d)", name, mark, m.ConsumedRun)
 		}
+	}
+	// An add or supersede whose ITEM breaks its own rules is the one shape refused alone:
+	// the valid add ahead of it lands, the mark is consumed, and the result
+	// names the rule.
+	before := edgeMRItems(t, st)
+	ans := MindAnswer{Ops: []MindOp{edgeMRAdd("valid add before an item-rule failure"), {Op: "add", Item: reading, Quote: reading.Quote}}}
+	res, err := ApplyMindOps(st, run, ans, []int64{mark}, time.Now().UnixMilli())
+	if err != nil {
+		t.Fatalf("reading without mark or save: ApplyMindOps = %v, want the op refused alone", err)
+	}
+	if len(res.Results) != 2 || res.Results[1].Outcome != "refused" || !strings.Contains(res.Results[1].Reason, "kind reading needs a source") {
+		t.Errorf("reading without mark or save: results = %+v, want op 1 refused for its source", res.Results)
+	}
+	if after := edgeMRItems(t, st); len(after) != len(before)+1 {
+		t.Errorf("reading without mark or save: wrote %d item rows, want the one valid add", len(after)-len(before))
+	}
+	if m := edgeMRMark(t, st, mark); m.ConsumedRun != run.ID {
+		t.Errorf("reading without mark or save: mark %d consumed by run %d, want %d", mark, m.ConsumedRun, run.ID)
 	}
 	// the targets themselves are untouched
 	for _, id := range []int64{live, code} {

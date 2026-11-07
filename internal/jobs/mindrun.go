@@ -68,9 +68,14 @@ import (
 // WHY APPLY IS KRAKEN'S. The answer is a list of operations — add an item,
 // supersede one (a new row replaces an old one, the old row kept dead with a
 // pointer forward), retire one, flag one — and ApplyMindOps checks every
-// operation before applying any, so one bad operation applies nothing.
-// Folding a duplicate quote, suppressing a quote the operator dropped, and the
-// per-run cap are all decided here, in one function.
+// operation before applying any. An add or supersede whose ITEM breaks its own
+// rules (a title over the cap, an empty quote, a repo that is not a checkout's
+// exact name) is refused alone, with its reason in the report, and the rest
+// of the answer lands; an operation the rest of the answer may depend on
+// being well-formed (an unknown op, a missing target, a supersede of a dead
+// target, two valid claims on one target, a code reading targeted) refuses
+// the whole answer. Folding a duplicate quote, suppressing a quote the
+// operator dropped, and the per-run cap are all decided here, in one function.
 
 // MindRunTimeout is the deadline one run's child process gets; past it the
 // child is killed and the run fails with a note starting "timed out".
@@ -876,9 +881,11 @@ type MindOpResult struct {
 }
 
 // ApplyMindOps applies a run's answer to the mental model. Every operation is
-// validated first and one invalid operation applies nothing; then each is
-// applied in order (see the file header), and finally every mark the run's
-// bundle carried is stamped consumed, whether or not an item came of it.
+// validated first: an add or supersede whose item breaks its own rules is
+// refused alone (outcome `refused`, the rule as its reason) and the rest of
+// the answer is applied in order (see the file header), while any other
+// invalid operation applies nothing. Finally every mark the run's bundle
+// carried is stamped consumed, whether or not an item came of it.
 func ApplyMindOps(st *store.Store, run store.MindRun, ans MindAnswer, markIDs []int64, at int64) (MindApply, error) {
 	if st == nil {
 		return MindApply{}, errors.New("no store")
@@ -888,6 +895,12 @@ func ApplyMindOps(st *store.Store, run store.MindRun, ans MindAnswer, markIDs []
 	// same item would pass it and then meet a target this answer already
 	// killed — after a supersede had already inserted its replacement.
 	claimed := map[int64]int{}
+	// refused holds, by index, the operations whose ITEM failed its own
+	// rules. Such a defect is that operation's alone — no later operation
+	// reads the item it would have written — so it is refused by itself and
+	// named in the report, where a whole-answer refusal would discard every
+	// other decision the run drafted over one item's bad field.
+	refused := map[int]string{}
 	for i := range ans.Ops {
 		op := &ans.Ops[i]
 		op.Quote = mindNormQuote(op.Quote)
@@ -896,12 +909,20 @@ func ApplyMindOps(st *store.Store, run store.MindRun, ans MindAnswer, markIDs []
 		// the item's. This is where it is taken: such an answer is
 		// unambiguous, since the item has no other quote it could mean, and
 		// without this the op would fail validation below, which would
-		// apply none of the answer.
+		// refuse it.
 		if (op.Op == "add" || op.Op == "supersede") && op.Item != nil && mindNormQuote(op.Item.Quote) == "" {
 			op.Item.Quote = op.Quote
 		}
+		// Shape and target first: a bad target is never hidden behind a bad
+		// item, since the per-op refusal below skips the rest of this op's checks.
 		if err := mindValidateOp(st, op); err != nil {
 			return MindApply{}, fmt.Errorf("op %d: %w", i, err)
+		}
+		if op.Op == "add" || op.Op == "supersede" {
+			if err := mmValidateProposal(op.Item); err != nil {
+				refused[i] = strings.TrimPrefix(err.Error(), ErrCommitInvalid.Error()+": ")
+				continue
+			}
 		}
 		if op.Op == "supersede" || op.Op == "retire" {
 			if prev, dup := claimed[op.Target]; dup {
@@ -913,9 +934,15 @@ func ApplyMindOps(st *store.Store, run store.MindRun, ans MindAnswer, markIDs []
 	out := MindApply{Results: make([]MindOpResult, 0, len(ans.Ops))}
 	inserted := 0
 	for i, op := range ans.Ops {
-		res, err := mindApplyOp(st, run, op, at, &inserted)
-		if err != nil {
-			return out, fmt.Errorf("op %d (%s): %w", i, op.Op, err)
+		var res MindOpResult
+		if reason, ok := refused[i]; ok {
+			res = MindOpResult{Outcome: "refused", Reason: reason}
+		} else {
+			var err error
+			res, err = mindApplyOp(st, run, op, at, &inserted)
+			if err != nil {
+				return out, fmt.Errorf("op %d (%s): %w", i, op.Op, err)
+			}
 		}
 		res.Index, res.Op = i, op.Op
 		out.Results = append(out.Results, res)
@@ -944,20 +971,17 @@ func ApplyMindOps(st *store.Store, run store.MindRun, ans MindAnswer, markIDs []
 	return out, nil
 }
 
-// mindValidateOp checks one operation against the store as it stands.
+// mindValidateOp checks one operation's shape and target against the store as
+// it stands. The item's own rules (mmValidateProposal) are ApplyMindOps'
+// per-op check, run after this one passes.
 func mindValidateOp(st *store.Store, op *MindOp) error {
 	switch op.Op {
 	case "add", "supersede", "retire", "flag":
 	default:
 		return fmt.Errorf("%w: op %q: want add, supersede, retire or flag", ErrCommitInvalid, op.Op)
 	}
-	if op.Op == "add" || op.Op == "supersede" {
-		if op.Item == nil {
-			return fmt.Errorf("%w: %s needs an item", ErrCommitInvalid, op.Op)
-		}
-		if err := mmValidateProposal(op.Item); err != nil {
-			return err
-		}
+	if (op.Op == "add" || op.Op == "supersede") && op.Item == nil {
+		return fmt.Errorf("%w: %s needs an item", ErrCommitInvalid, op.Op)
 	}
 	if op.Op == "add" {
 		return nil
@@ -1212,7 +1236,7 @@ func mmValidateItem(c *MMProposal) error {
 // ---------------------------------------------------------------------------
 
 // MindRunReport renders a finished run as markdown: a headline, then the
-// sections Added (every add the answer asked for — the ones that landed, and
+// sections Added (every add the answer asked for, and every supersede that was refused — the ones that landed, and
 // the ones suppressed or refused, each prefixed with why), Superseded,
 // Retired, Folded, Excluded, Flagged and Coverage in that order, each saying
 // None when it is empty. One line per entry, never hard-wrapped. The first
@@ -1256,7 +1280,12 @@ func MindRunReport(run store.MindRun, ans MindAnswer, apply MindApply, man MindM
 		case "suppressed":
 			added = append(added, fmt.Sprintf("suppressed (dropped before, #%d): %s — “%s”", r.ID, title, quote))
 		case "refused":
-			added = append(added, fmt.Sprintf("refused (%s): %s — “%s”", r.Reason, title, quote))
+			if op.Op == "supersede" {
+				// the target stayed live, so the reader needs to know which
+				added = append(added, fmt.Sprintf("refused (%s): #%d %s — “%s”", r.Reason, op.Target, title, quote))
+			} else {
+				added = append(added, fmt.Sprintf("refused (%s): %s — “%s”", r.Reason, title, quote))
+			}
 		case "superseded":
 			superseded = append(superseded, fmt.Sprintf("#%d → #%d %s — “%s”", op.Target, r.ID, title, quote))
 		case "retired":

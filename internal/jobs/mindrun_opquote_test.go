@@ -77,12 +77,18 @@ func TestOpQuoteAddWithNoQuoteAnywhereIsStillRefused(t *testing.T) {
 			edgeMRAdd("a valid add ahead of the " + name + " one"),
 			{Op: "add", Item: opQuoteItem("no quote at all, " + name), Quote: quote},
 		}}
-		_, err := ApplyMindOps(st, run, ans, nil, time.Now().UnixMilli())
-		if err == nil || !strings.Contains(err.Error(), "quote must be") {
-			t.Errorf("%s: ApplyMindOps = %v, want the empty-quote refusal", name, err)
+		res, err := ApplyMindOps(st, run, ans, nil, time.Now().UnixMilli())
+		if err != nil {
+			t.Fatalf("%s: ApplyMindOps = %v, want the quote-less op refused alone", name, err)
 		}
-		if after := len(edgeMRItems(t, st)); after != before {
-			t.Errorf("%s: a refused answer wrote %d rows", name, after-before)
+		if len(res.Results) != 2 || res.Results[1].Outcome != "refused" || !strings.Contains(res.Results[1].Reason, "quote must be") {
+			t.Errorf("%s: results = %+v, want op 1 refused for its empty quote", name, res.Results)
+		}
+		if res.Counts.Added != 1 || res.Counts.Refused != 1 {
+			t.Errorf("%s: counts = %+v, want 1 added, 1 refused", name, res.Counts)
+		}
+		if after := len(edgeMRItems(t, st)); after != before+1 {
+			t.Errorf("%s: %d rows written, want 1 (the valid add ahead of the refused one)", name, after-before)
 		}
 	}
 }
