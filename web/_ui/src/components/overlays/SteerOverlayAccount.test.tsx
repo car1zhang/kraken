@@ -13,6 +13,7 @@ vi.mock("../../api/client.ts", () => ({
   steerJob: vi.fn(() => Promise.resolve({ ok: true })),
   reactivateJob: vi.fn(() => Promise.resolve({ ok: true })),
   killJob: vi.fn(() => Promise.resolve({ ok: true })),
+  interruptJob: vi.fn(() => Promise.resolve({ ok: true })),
   doneJob: vi.fn(() => Promise.resolve({ ok: true })),
   saveDraft: vi.fn(() => Promise.resolve({ ok: true })),
   uploadImage: vi.fn(),

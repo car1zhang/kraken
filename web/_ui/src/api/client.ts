@@ -262,6 +262,8 @@ const slugAction = (path: string) => (slug: string) =>
 export const queueJob = slugAction("/api/queue");
 export const doneJob = slugAction("/api/done");
 export const stopJob = slugAction("/api/stop");
+/** zeus alone — the steer modal's ■ interrupt; stopJob reaches every pane. */
+export const interruptJob = slugAction("/api/interrupt");
 export const retryJob = slugAction("/api/retry");
 export const killJob = slugAction("/api/kill");
 export const archiveJob = slugAction("/api/archive");
