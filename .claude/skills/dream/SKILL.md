@@ -336,7 +336,16 @@ in-window records — about half a transcript's lines carry no timestamp, so `wc
 double, and more when the window starts inside the file", never "N lines": a label that drops
 TIMESTAMPED sends the verifying scout to a record
 count that is ~2N even when the window covers the whole file, which re-derives the exact false
-finding. And phrase
+finding. A figure you derive yourself is a hypothesis under the same rule. Take token figures from
+the digest's counters where they exist, since the counters already correct for two things a hand
+sum misses: a per-record sum of `usage` counts a message once per content block, and a forked side
+thread's file replays its parent's records. When you must sum raw records yourself, count each
+`message.id` once across every file, with `output_tokens` from its LAST record and the other three
+counters from its first, the rule `core.tokenGroup.commit` states, because a subagent sidecar
+writes partial output counts into a message's earlier records. A raw record's `timestamp` is UTC
+while the digest's summary prints local time with its offset, so name the zone on every time you
+quote into a brief, a row or the report; a UTC stamp called "local" sends its reader to the wrong
+hour. And phrase
 an anomaly as a question, not as a claim: "say what that shape means" got a scout to reject the
 implied reading and find the real cause, where "confirm that X" would have got X. The same sentence
 pasted into every brief is its own defect — when you suspect a cross-cutting cause, investigate it
