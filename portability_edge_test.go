@@ -260,7 +260,7 @@ func edgeEmbeddedSkills(t *testing.T) map[string]string {
 		t.Fatal(err)
 	}
 	for _, must := range []string{"aim/SKILL.md", "do/SKILL.md", "info/SKILL.md",
-		"dream/SKILL.md", "load/SKILL.md", "handoff/SKILL.md", "direct/SKILL.md", "aim/assets/hermes-contract.md"} {
+		"dream/SKILL.md", "handoff/SKILL.md", "direct/SKILL.md", "aim/assets/hermes-contract.md"} {
 		if _, ok := out[must]; !ok {
 			t.Fatalf("embedded bundle lacks %s (have %d .md files)", must, len(out))
 		}

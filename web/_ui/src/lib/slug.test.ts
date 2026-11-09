@@ -8,7 +8,7 @@ import { slugify } from "./slug.ts";
 //
 // The repo's rule for a value mirrored across sources is a pinning test rather
 // than a comment — TestJobPaletteMatchesCSS/…MatchesSwift for the sixteen
-// palette hexes, internal/jobs/loadscale_contract_test.go for the twenty load
+// palette hexes, internal/jobs/loadscale_test.go for the twenty load
 // anchors — and two hand ports of a rune loop are exactly that shape. The
 // stakes are lower than the palette's (a drifted slugifier costs a wrong
 // PREVIEW, never a wrong rename: the server slugifies the text it is sent and

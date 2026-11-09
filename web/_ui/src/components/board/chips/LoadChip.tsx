@@ -28,7 +28,8 @@ export function loadChipVisible(job: WebJob, col: Column): boolean {
 }
 
 /**
- * The board's triage badge: zeus' two 1..10 estimates for a blocked job,
+ * The board's triage badge: the daemon's two 1..10 estimates for a blocked
+ * job (a Jev judgment on zeus' final message, internal/jobs/loadjudge.go),
  * rendered as the RATIO between them and nothing else — `⚡ 4.0×` — so scanning
  * the blocked column down the page ranks the jobs by what an unblock buys.
  *

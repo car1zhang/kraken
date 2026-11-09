@@ -4,11 +4,12 @@ import XCTest
 // LoadScaleContractTests — the Swift end of the standardized load scale,
 // written blind from artifacts/50-contract.md.
 //
-// The twenty anchor labels are spelled out in THREE places: the repo-owned
-// skill file `.claude/skills/load/SKILL.md` (the standard zeus reads when it
-// sets an estimate), `web/_ui/src/lib/format.ts`, and this app's `LoadAnchors`.
-// `internal/jobs/loadscale_contract_test.go` parses all three off disk and pins
-// them against each other, the way `TestJobPaletteMatchesCSS` pins the palette.
+// The twenty anchor labels are spelled out in THREE places: the Go ladders
+// in `internal/jobs/loadscale.go` (the ruler the daemon's Jev judge climbs
+// when it prices a blocked cell's final message), `web/_ui/src/lib/format.ts`,
+// and this app's `LoadAnchors`. `internal/jobs/loadscale_test.go` parses the
+// other two off disk and pins them against the Go ladders, the way
+// `TestJobPaletteMatchesCSS` pins the palette.
 // This suite is the half that guard cannot reach: it asks whether the RUNTIME
 // tables and the lookup built on them are right, not whether the source text
 // agrees with two other files.

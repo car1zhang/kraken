@@ -41,7 +41,7 @@ import (
 
 // slackDispositionMax caps the ack's disposition line. It is a one-liner
 // recorded beside the row for later reading, so an over-long one is
-// TRUNCATED rather than refused — same call jobLoadNoteMax makes: the ack
+// TRUNCATED rather than refused — same call limitHitDetailsMax makes: the ack
 // itself is the payload, and losing it over a verbose sentence would be the
 // worse answer. An EMPTY disposition is a different thing and IS refused
 // (see slackAckHandler): "I handled this" with no statement of how is the

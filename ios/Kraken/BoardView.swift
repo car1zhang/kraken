@@ -2808,7 +2808,7 @@ private struct DocQuestionCountChip: View {
 /// whereas on a phone an age that lived only in the accessibility label would
 /// leave every sighted viewer unable to tell a three-day-old estimate from one
 /// written a minute ago. That is precisely the failure the age exists to close
-/// — zeus estimates, carl answers, the cell later dies, the daemon's `health`
+/// — the judge prices a turn, carl answers, the cell later dies, the daemon's `health`
 /// files the card back under BLOCKED, and with zeus gone nothing rewrites it.
 ///
 /// Renders nothing when the estimate has no usable ROI — `WebJobLoad.badgeText`

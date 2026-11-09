@@ -25,8 +25,8 @@ import (
 // store effects, and that is all this file touches.
 //
 // Every package-level identifier is `contract`-prefixed and slack/iris-
-// scoped: loadscale_contract_test.go already owns the bare `contract*` names
-// in this package, and athena-edge shares the test binary.
+// scoped: other contract suites in this package have owned the bare
+// `contract*` names, and athena-edge shares the test binary.
 
 // contractSlackMsg builds one core.SlackMessage with the fields the filters
 // read.

@@ -54,8 +54,8 @@ type limitHitReq struct {
 // author, shown as one line, so an over-long one is TRUNCATED rather than
 // refused: the error TYPE is the payload this whole feature routes on, and
 // losing a hit over a verbose message would mean a cell sitting exhausted
-// with nothing recorded — the same call jobLoadNoteMax makes for the same
-// reason.
+// with nothing recorded — the same call slackDispositionMax makes for the
+// same reason.
 const limitHitDetailsMax = 200
 
 func limitHitHandler(w http.ResponseWriter, r *http.Request) {

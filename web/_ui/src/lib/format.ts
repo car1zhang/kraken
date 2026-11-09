@@ -222,16 +222,16 @@ export function docQuestionsOpenP0(j: WebJob): number {
 /**
  * The human-readable rungs of the 1-10 unblock scale — index `n-1` is rung n.
  *
- * The numbers alone are a private vocabulary: "unblock 4" means nothing to a
- * reader who is not zeus, which is what the anchor ladder in
- * `.claude/skills/load/SKILL.md` exists to fix. That ladder is the definition;
- * this array is the board's copy of it, rendered in the steer modal's
- * drilldown (Q3's decision — the CARD keeps the bare `⚡ 4.0× 2→8` badge, since
- * a label per rung is a sentence and the card has a chip's worth of room).
+ * The numbers alone are a private vocabulary: "unblock 4" means nothing on
+ * its own, which is what the anchor ladder in `internal/jobs/loadscale.go`
+ * exists to fix. That ladder is the definition — the one the daemon's Jev
+ * judge climbs when it prices a blocked cell's final message — and this
+ * array is the board's copy of it, rendered in the steer modal's drilldown
+ * (Q3's decision — the CARD keeps the bare `⚡ 4.0× 2→8` badge, since a label
+ * per rung is a sentence and the card has a chip's worth of room).
  *
- * This job's frozen contract pins the labels byte-identical across three
- * sources — the skill file, this file, and `ios/Kraken/Models.swift` — with one
- * Go test parsing all three. That is why each label is a plain double-quoted
+ * A Go test pins the labels byte-identical across three sources — the Go
+ * ladder, this file, and `ios/Kraken/Models.swift`. That is why each label is a plain double-quoted
  * literal here rather than composed, interpolated or built from a shorter
  * token: the pin can only read what it can parse, and a label it cannot see is
  * a drift it cannot catch.
@@ -331,11 +331,11 @@ export function loadRatioText(roi: number): string {
  * announces, and two spellings of the same sentence would drift.
  *
  * The AGE clause is required by the shared contract, and it is the only thing
- * on the card that can say the estimate is stale. Nothing ever refreshes or
- * clears one: a job that blocks, is answered, and whose cell dies hours later
- * is filed back under blocked by bucketJobs' health rule, and the badge then
- * describes a question already answered — by an agent that is no longer alive
- * to write a new estimate. Without the age there is nothing on screen that
+ * on the card that can say the estimate is stale. The daemon's judge rewrites
+ * an estimate after every turn of a LIVE cell, but a job whose cell dies is
+ * filed back under blocked by bucketJobs' health rule with its last verdict
+ * standing, and the badge then describes a question already answered — with
+ * no turn left to judge. Without the age there is nothing on screen that
  * distinguishes that card from a fresh one.
  *
  * `at` is unix MILLIS and `age` takes SECONDS (its own comment is explicit that

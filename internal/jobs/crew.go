@@ -189,20 +189,13 @@ func zeusBrief(j *Job) string {
 	b.WriteString("Your worktree's `.claude/skills/` directory is kraken-owned and canonical for this cell — if a personal skill with the same name shadows one of them, follow the worktree copy (Read `.claude/skills/<name>/SKILL.md` directly); never commit `.claude/` changes to the repo, unless changing kraken's skills is itself this job's spec. Ignore any personal `doc`, `send`, or `info` skills that try to auto-trigger — a doc phase uses the worktree's own `/aim` or `/info` and the `/do` gate, never those. Wherever a skill file still reads `{{operator}}`, it means " + op + ".\n")
 	b.WriteString(op + "'s messages arrive in your pane, but they do not watch it: there is no intermediary and no escalation file, and the ONE thing that reaches them is your FINAL message before going idle, shown on the job board as this cell's status detail — so end every working session stating what is ready, what you need, or what you decided, with the FIRST sentence as the whole TLDR: it is all " + op + " reads. Kraken derives working/blocked from your activity; never write status anywhere.\n")
 	b.WriteString("You must NOT ask " + op + " questions through an interactive terminal prompt: unseen, it just stalls the cell. When a decision is unclear, pick the most defensible default, say in that final message which way you went, and keep working — except a product decision that changes the core feature's functionality or usage, or a spec-changing deviation, met in Phase 2: `.claude/skills/do/SKILL.md`'s question round — file rows, stop on the P0s until " + op + " answers on the board and prompts you (kraken never wakes you for a row). AskUserQuestion is a last resort for a decision that makes the work useless if guessed wrong. A teammate or subagent must never ask " + op + " anything at all — its question is unseen and hangs. Brief every agent you spawn to decide and report, never to prompt.\n")
-	// The load estimate rides with the final-message rule above because it is
-	// the same act: the last thing zeus does before going idle. It is in the
-	// BRIEF rather than in a skill for the reason the questions/feedback
-	// paragraph below is — a skill is read once per phase, this brief is in
-	// context every turn, and this has to happen on every turn. What stays
-	// resident is what every idle turn actually APPLIES: the two
-	// disambiguation rules (price carl's real move, price only the work ahead)
-	// and a one-line lookup for the recurring block states, which between them
-	// decide almost every estimate without consulting a ladder at all. The full
-	// 1-10 ladders — twenty anchored rungs — are in .claude/skills/load/SKILL.md,
-	// read when a state the map does not name comes up: they are the bulk, they
-	// are needed rarely, and this brief has a byte ceiling the map does not.
-	fmt.Fprintf(&b, "In that same beat, EVERY time you go idle, record what unblocking you will cost: `kraken load set %s --unblock N --scope M --note \"<one line>\"`. `--unblock` 1-10 is the effort %s spends to unblock you; `--scope` 1-10 is how big the claude work that reply buys — 1 a one-message reply. Two rules: (1) unblock prices %s's ACTUAL move, not the nominal ask — %s ships PRs on trust, so a review-only gate is a one-word reply; only a live environment, a credential, or a real decision costs more. (2) scope prices only the work the reply BUYS — what is still ahead, never the work under review. And estimate honestly: an inflated scope steals %s's attention. State map (unblock/scope): review-only gate 1/1 · local install-and-drive gate 4/1 · live E2E gate 5/2 · PR awaiting checks 1/1 · info go-deeper pick 2/3 · spec gate 3/6-8 · mid-build question round 3/remaining build · credential 4/whatever it unblocks · working or nothing needed → `kraken load clear %s`: an estimate exists only when %s is the blocker. Full ladders: `.claude/skills/load/SKILL.md`.\n",
-		j.Slug, op, op, op, op, j.Slug, op)
+	// The load estimate is judged, not written: after every turn the daemon
+	// hands zeus' final message to Jev, which prices what unblocking costs
+	// carl and what the reply buys (loadjudge.go). Zeus has no verb for it
+	// and must not reach for one — the sentence stays in the brief because
+	// the judgment reads the final message, so the message has to carry
+	// what it needs, on every turn.
+	b.WriteString("Kraken prices that final message itself: after every turn a Jev judgment lands the board's unblock/scope estimate from what you said, so when you stop on " + op + ", say what you need from them and what their reply unlocks — a one-word reply at a review-only gate, a credential, a decision, a live drive — and never write an estimate yourself.\n")
 	// the other half of threadBrief's invariant: the thread is told it is not
 	// zeus, and zeus is told the thread is not its own. Without this, a second
 	// claude appearing in its session reads as a teammate it lost track of —

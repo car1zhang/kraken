@@ -220,16 +220,11 @@ Commands:
                       nightly dream pass' cross-job read, every note in the
                       window (last 24h by default) with its job slug and a
                       snapshot_url for the artifact bytes you were looking at.
-  k load get|set|clear <slug> ...
-                      cell-side verb zeus uses to record what a BLOCKED job
-                      costs and buys, proxied the same way as 'k questions':
-                      set <slug> --unblock <1-10> --scope <1-10> [--note "..."]
-                      writes how much effort unblocking it takes you against
-                      how big the claude work that reply unblocks is, and the
-                      board ranks blocked cards by the ratio scope/unblock.
-                      Both numbers or neither — a half estimate has no ratio,
-                      and 'clear' is how an estimate is removed. get prints
-                      the pair as JSON ({"load": null} when unestimated).
+  k load get <slug>   print a BLOCKED job's load estimate as JSON, proxied
+                      the same way as 'k questions': the unblock/scope pair
+                      the daemon's Jev judge wrote from zeus' last message
+                      ({"load": null} when unestimated). Read-only — the
+                      estimate has no cell-side writer.
   k stack add|rm|get|clear <slug> ...
                       cell-side verb zeus uses to register the URLs of the
                       stack it spun up for manual testing, proxied the same

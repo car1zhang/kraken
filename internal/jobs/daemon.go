@@ -334,8 +334,13 @@ type daemonState struct {
 	// Created on first use. In-process only, like the maps above: losing
 	// it on a restart costs at most one more keypress or one duplicate log
 	// line per dialog on screen.
-	Jev   *jevState
-	tickN int
+	Jev *jevState
+	// LoadJudge is the load estimate's memory (loadjudge.go): which turn
+	// each job was last judged on and what it landed on, so a turn is
+	// priced once. Created on first use; losing it on a restart costs
+	// nothing, since the verdict is also in kv.
+	LoadJudge *loadJudgeState
+	tickN     int
 	// offline: in-memory only, like the dedup maps above — losing it on
 	// restart just costs one duplicate "offline" notification. Set while
 	// probeOnline fails so auto-retry pokes are suppressed instead of eaten
@@ -976,6 +981,17 @@ func (d *daemonState) tick(mirror bool) (int, error) {
 		} else {
 			delete(d.ThawPending, j.ID)
 		}
+		// load judge (loadjudge.go): a cell this tick confirms blocked has
+		// its lead's final message priced by Jev — unblock and scope, once
+		// per turn — and a cell confirmed working has its estimate cleared.
+		// It writes the job row and calls the API, so a mirror board never
+		// runs it.
+		if !mirror {
+			if d.LoadJudge == nil {
+				d.LoadJudge = newLoadJudgeState()
+			}
+			d.LoadJudge.loadJudgePass(j, st, isLive, all, now, d.tickN, func(l, e, m string) { dlogEvent(l, e, "%s", m) })
+		}
 	}
 
 	d.pruneArtifactSyncState(jobs)
@@ -1609,8 +1625,8 @@ func mergeBumpWanted(j *Job, live map[string]bool) bool {
 // closing clauses settle the gate question, because cells and PRs are
 // many-to-one: the operator often merges the PR a manual-test gate names
 // instead of replying to it, and a notice that only said "the gate still
-// holds" would leave the gate's test services, stack chips and load estimate
-// standing on a finished job, where a test stack's processes outlive the
+// holds" would leave the gate's test services and stack chips standing on a
+// finished job, where a test stack's processes outlive the
 // worktree they serve from. So a merge of the PR the gate names PASSES that
 // gate and the lead shuts its stack down and stops, even when the job has
 // more work (the operator's next prompt starts it); a gate for a LATER PR,
@@ -1618,7 +1634,7 @@ func mergeBumpWanted(j *Job, live map[string]bool) bool {
 // as that gate opening. The gate clause comes before the continue-or-stop
 // sentence so a lead at the gate reads one instruction, not two.
 func mergeBumpMessage(url string) string {
-	return prWatchPrefix() + " " + url + " has MERGED into its base branch. That branch is finished: do not push to it, re-run its checks, or report it as awaiting checks or review. Any further change starts on a fresh branch recycled off origin/main (the recycle step in do/SKILL.md's cell section). If your open manual-test gate names THIS PR, the merge PASSES that gate: shut down every test service you started for it, run `kraken stack clear <slug>` and `kraken load clear <slug>`, and stop even if the job has more work — the operator's next prompt starts it. Otherwise, if this PR completed the job's work, say so in your closing message and stop; if not, continue and open the follow-up from the recycled branch. A gate naming another PR, or a question round, still holds — this notice does not answer those."
+	return prWatchPrefix() + " " + url + " has MERGED into its base branch. That branch is finished: do not push to it, re-run its checks, or report it as awaiting checks or review. Any further change starts on a fresh branch recycled off origin/main (the recycle step in do/SKILL.md's cell section). If your open manual-test gate names THIS PR, the merge PASSES that gate: shut down every test service you started for it, run `kraken stack clear <slug>`, and stop even if the job has more work — the operator's next prompt starts it. Otherwise, if this PR completed the job's work, say so in your closing message and stop; if not, continue and open the follow-up from the recycled branch. A gate naming another PR, or a question round, still holds — this notice does not answer those."
 }
 
 // prWatchPrefix opens EVERY message the PR watcher types into a pane. It is

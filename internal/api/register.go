@@ -167,9 +167,9 @@ func registerRoutes(mux routeMux) {
 	// directly still hits the refusal.
 	mux.HandleFunc("/api/goals", goalsHandler)
 	// The job→goal link is a one-field route for the reason /api/job/color
-	// and /api/job/load are (jobcolor.go, jobload.go): the form save's
-	// editableJob gate would put labelling out of reach on exactly the live
-	// cells it is most useful on, and a full form save from a client that
+	// is (jobcolor.go): the form save's editableJob gate would put labelling
+	// out of reach on exactly the live cells it is most useful on, and a full
+	// form save from a client that
 	// predates the field would clear it.
 	mux.HandleFunc("/api/job/goal", jobGoalHandler)
 	// A cell's stack links (jobstack.go): one-field route like load and goal,
@@ -211,13 +211,14 @@ func registerRoutes(mux routeMux) {
 	// webJobColor). Its own mirror gate lives inside the handler, beside the
 	// PushJobColor call that is the only thing needing one.
 	mux.HandleFunc("/api/job/color", webJobColor)
-	// Load is a one-field route for the same reason colour is (see
-	// jobcolor.go): the form save's editableJob gate would put it out of
-	// reach on exactly the blocked, live-celled jobs it exists for. Its POST
-	// gates itself inline so the GET stays reachable under --mirror.
+	// Load is a read: the estimate is the daemon's Jev judgment on the lead's
+	// final message (internal/jobs/loadjudge.go), so the route serves GET and
+	// answers 405 to anything else. It stays its own one-field route rather
+	// than folding into the board payload because `kraken load get` reads it
+	// per job, and it needs no mirror gate since it writes nothing.
 	mux.HandleFunc("/api/job/load", jobLoadHandler)
 	// The hold mark on a blocked job, a one-field route for the same
-	// editableJob reason as the two above (jobfreeze.go). POST only, with its
+	// editableJob reason as /api/job/color (jobfreeze.go). POST only, with its
 	// mirror gate inline.
 	mux.HandleFunc("/api/job/freeze", webJobFreeze)
 	// Rename is a one-field route for the same editableJob reason as colour,

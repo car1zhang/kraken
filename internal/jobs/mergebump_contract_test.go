@@ -29,7 +29,6 @@ func TestContractMergeBumpMessageWording(t *testing.T) {
 		// finished job.
 		"PASSES that gate",
 		"kraken stack clear <slug>",
-		"kraken load clear <slug>",
 		// A gate for a different PR, or a question round, is not answered:
 		// the carve-outs are pinned by name, not by the phrase alone.
 		"another PR",

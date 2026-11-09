@@ -371,10 +371,11 @@ const zeusBriefCeiling = 13_500
 // load-estimate paragraph was rewritten to carry the two pricing rules (price
 // carl's ACTUAL move; price only the work the reply buys), a one-line
 // `unblock/scope` state map for the recurring block states, the anti-inflation
-// line, and a pointer to `.claude/skills/load/SKILL.md`; the twenty anchored
-// ladder rungs it would otherwise have had to spell out live in that skill
-// file, and three canary strings from them are BANNED here by the contract
-// tests, so this paragraph cannot grow back into a ladder. Measured on the same
+// line, and a pointer to the then load skill; the twenty anchored ladder rungs
+// it would otherwise have had to spell out lived in that skill file (since job
+// 814 they live in internal/jobs/loadscale.go, the paragraph is one sentence
+// naming the daemon's Jev judgment, and TestZeusBriefLoadEstimate bans the
+// rung labels from the brief). Measured on the same
 // basis as above — the paragraph rendered at a 48-character slug — it went from
 // **1,105** bytes to **1,157**, and the whole brief from 13,417 to **13,469**,
 // with 13,406 at the longest real slug (41) and 13,073 at "lean". That leaves
@@ -651,30 +652,17 @@ func TestZeusBriefImageHandling(t *testing.T) {
 // must spend to unblock the cell, which has nothing to do with whether the
 // cell delegates.
 //
-// The slug is checked INSIDE the command because the brief interpolates the
-// cell's real slug rather than leaving a `<slug>` placeholder — which is the
-// difference between the brief's spelling of a cell verb and the skills'. A
-// skill writes `kraken questions get <slug>` (aim/SKILL.md) and relies on the
-// brief's "the job slug every kraken CLI verb takes is: %s" line to resolve it;
-// the brief, already holding the value, substitutes it. Asserting the bare verb
-// would pass on either spelling.
-//
-// Two phrases from the ruler are asserted alongside the verbs, and that is the
-// load-bearing half: a verbs-only assertion stays green while the paragraph
-// says nothing about what the numbers MEAN, and numbers with no shared ruler
-// behind them are incomparable between cells, which is the whole feature.
-//
-// What the paragraph carries has changed, so what these two phrases stand for
-// has too (2026-07-31). It used to spell a 1-10 scale out inline, ~600 bytes of
-// anchor text; it now carries the verbs, the two pricing rules, the compact
-// `unblock/scope` state map, the anti-inflation line and a pointer to
-// `.claude/skills/load/SKILL.md`, and the twenty anchored rungs live in that
-// skill file instead. So these phrases no longer proxy for a ladder that is
-// present — they pin the two AXES still being named here, and the ladder's
-// absence is enforced from the other side by the contract tests
-// (TestEdgeBriefCarriesNoLadderRow, TestContractZeusBriefLoadScale), which fail
-// if a rung label reappears in the brief. Adding an anchor back here would be
-// caught there, not by this test.
+// Since job 814 the estimate is the daemon's Jev judgment on zeus' final
+// message (internal/jobs/loadjudge.go), not a pair zeus writes about itself,
+// so the rule the brief carries has inverted: it names the judgment, tells
+// zeus what a judgeable final message says (what it needs from carl, what the
+// reply unlocks), and forbids zeus from writing an estimate. The retired
+// `kraken load set|clear <slug>` verbs are asserted ABSENT — the brief's
+// spelling of a cell verb interpolates the real slug, so the slug rides inside
+// the banned command exactly as it did in the required one — and so are the
+// two flags and the rung labels that the old paragraph's state map and ruler
+// carried: a brief that priced itself again would be a cell grading its own
+// gate, which is what the judge replaced.
 func TestZeusBriefLoadEstimate(t *testing.T) {
 	t.Setenv("KRAKEN_OPERATOR", "Ada")
 	for _, j := range []*Job{
@@ -683,19 +671,28 @@ func TestZeusBriefLoadEstimate(t *testing.T) {
 	} {
 		brief := zeusBrief(j)
 		for _, want := range []string{
-			"kraken load set " + j.Slug,
-			"kraken load clear " + j.Slug,
-			"--unblock",
-			"--scope",
-			// one anchor per axis, so the 1-10 ruler cannot be dropped silently
-			"1-10 is the effort Ada spends",
-			"a one-message reply",
-			// the question round's state-map entry (job 629), matching the
-			// load skill's row label word for word
-			"mid-build question round 3/remaining build",
+			"a Jev judgment lands the board's unblock/scope estimate from what you said",
+			"say what you need from them and what their reply unlocks",
+			"never write an estimate yourself",
 		} {
 			if !strings.Contains(brief, want) {
 				t.Errorf("%s brief missing %q from the load-estimate rule", j.Slug, want)
+			}
+		}
+		for _, banned := range []string{
+			"kraken load set " + j.Slug,
+			"kraken load clear " + j.Slug,
+			"kraken load set",
+			"kraken load clear",
+			"--unblock",
+			"--scope",
+			"1-10 is the effort Ada spends",
+			"mid-build question round 3/remaining build",
+			UnblockLadder[4].Label,
+			ScopeLadder[5].Label,
+		} {
+			if strings.Contains(brief, banned) {
+				t.Errorf("%s brief still carries %q: zeus prices itself again", j.Slug, banned)
 			}
 		}
 	}

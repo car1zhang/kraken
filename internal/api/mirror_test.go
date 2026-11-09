@@ -38,11 +38,11 @@ var mirrorGatedRoutes = []string{
 	// (GET /api/watchlist, GET /api/feedback/sweep, GET /api/feedback/snapshot,
 	// GET /api/dream) stay open, like every other read on this surface.
 	"/api/watchlist", "/api/watchlist/item",
-	// job load: the same inline gate, for the same reason its GET must stay
-	// reachable. Its sibling /api/job/color is deliberately NOT here — that
-	// route's own gate wraps only the /color it types into a live pane, not
-	// its write.
-	"/api/job/load",
+	// job load is deliberately NOT here since job 814: the route is GET-only
+	// (its POST answers 405 everywhere, mirror or not — the estimate is the
+	// daemon's own judgment, with no client writer to gate). Its sibling
+	// /api/job/color is not here either — that route's own gate wraps only
+	// the /color it types into a live pane, not its write.
 	// job freeze: POST-only, gated inline (jobfreeze.go). A mirror board
 	// must not put the live deployment's jobs on hold. With mirror off the
 	// table's {"slug":"nonexistent"} body 400s on the missing `frozen`

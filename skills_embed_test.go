@@ -34,11 +34,7 @@ func TestSkillsFSContainsExpectedSkills(t *testing.T) {
 		// `mind` is embedded but governs no cell: it is the system prompt a
 		// headless mind run reads (internal/jobs/mindrun.go's MindPrompt).
 		"mind": "mind",
-		// `load` governs no phase — it is the ladders zeus looks a rung up in
-		// mid-phase — so TestSkillsOwnTheCellContract has nothing to say about
-		// it and this is the only test that would notice it failing to embed.
-		"load": "load",
-		// `handoff` governs no phase either: it is typed into a pane (by carl,
+		// `handoff` governs no phase: it is typed into a pane (by carl,
 		// or by the daemon's auto-handoff pass) and returns the agent to the
 		// phase it was in. nonStageSkills below is where that is pinned.
 		"handoff": "handoff",
@@ -81,7 +77,7 @@ func TestSkillsFSContainsExpectedSkills(t *testing.T) {
 // is the system prompt of a headless mind run, which has no cell to badge.
 // `humanizer` is the writing rule every artifact-writing skill applies in
 // every phase, so a read of it says nothing about which phase a cell is in.
-var nonStageSkills = map[string]bool{"load": true, "handoff": true, "direct": true, "mind": true, "humanizer": true}
+var nonStageSkills = map[string]bool{"handoff": true, "direct": true, "mind": true, "humanizer": true}
 
 // humanizerSkillPath is the worktree-relative path every mandate names; the
 // skill is materialized there in each cell, and the tests below check the
@@ -463,9 +459,8 @@ func TestSkillsOwnTheCellContract(t *testing.T) {
 			// the two queued commands, typed through kraken's own send verb
 			// so the question-prompt and nested-agent guards apply
 			"kraken s .", "/compact", "/handoff resume",
-			// self mode clears the estimate (working, not blocked) and ends
-			// the turn with the exact board line
-			"kraken load clear", "handoff written:",
+			// self mode ends the turn with the exact board line
+			"handoff written:",
 			// spawn mode spawns TEAMMATES and, per Q2 of job 548, never
 			// compacts the caller
 			"model: opus", "do NOT compact yourself",
@@ -707,7 +702,7 @@ func TestJobsSkillsFSWiredByInit(t *testing.T) {
 	for _, e := range entries {
 		names[e.Name()] = true
 	}
-	for _, want := range []string{"info", "aim", "do", "dream", "mind", "load", "handoff", "direct", "humanizer"} {
+	for _, want := range []string{"info", "aim", "do", "dream", "mind", "handoff", "direct", "humanizer"} {
 		if !names[want] {
 			t.Errorf("jobs.SkillsFS root missing skill dir %q, got %v", want, names)
 		}
