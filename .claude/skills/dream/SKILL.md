@@ -59,15 +59,22 @@ night and teaches them the loop does not listen.
    `00-dream-report.md`, no watch rows and no PR, and the window floor still moves past its day, so
    its night is otherwise gone. Before reading anything else, find the most recent earlier
    `dream-*` job in `kraken job list` (a quiet night creates none, so it is not always
-   yesterday's; none at all means nothing to recover) and check its state. A job still `working`,
-   or `blocked` mid-run (a usage limit, a dialog, a stall), is ALIVE: leave it alone, name it in
-   tonight's report, and let it finish its own night. A job that is `done`, or `blocked` at its
-   closing line, or whose cell is gone, has finished or died: run `kraken artifacts get <slug>`
-   (it falls back to the archive) and look for the report. When the report is missing the pass
-   died. Its scout reports may still exist under the `/tmp/<handle>` root it chose, and nothing
-   records that root for you: find it in the dead lead's own transcript (its brief and spawn
-   prompts name every path; `kraken mine reduce` over its session, or a grep of the raw for
-   `/tmp/`), never by a glob over `/tmp`, which picks up other nights. Read every report you find
+   yesterday's; none at all means nothing to recover). That list is active jobs only, so when the
+   newest one is older than the previous night, try `kraken artifacts get --archived dream-<date>`
+   for each night in between: a hit is an archived pass, judged the same way, and an error is a
+   night with no pass. Then run `kraken artifacts get <slug>` (it falls back to the archive) and
+   look for the report. A report present means the pass finished, whatever its state. A report
+   absent means it is alive or dead, and the state alone cannot say which, so alive takes
+   positive evidence: `working`, or `blocked` on something that will resume it — an open question
+   row (`kraken questions get <slug>`), a pane showing `question` in `kraken ls`, an unresolved
+   usage limit, a frozen hold. Alive means leave it alone, name it in tonight's report, and let it
+   finish its own night. A `blocked` pass with no report and none of those pending has died,
+   whatever its pane last said, and a pass whose cell is gone has too. Its scout reports may still
+   exist under the `/tmp/<handle>` root it chose, and nothing records that root for you: find it
+   in the dead lead's own transcript (`kraken job raw <slug>` gives its `session:`; that session's
+   `.jsonl` sits under the job's project dir; `kraken mine reduce <path>` over it, or a grep of
+   the raw for `/tmp/`, finds the brief and spawn prompts that name every path), never by a glob
+   over `/tmp`, which picks up other nights. Read every report you find
    in full. Their findings then pass through steps 1 and 2 like tonight's own evidence, and what
    survives goes into tonight's report and watch store as a labelled judgment call — evidence
    dated to THAT window, one source each, never re-mined — with tonight's report saying which pass
