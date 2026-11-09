@@ -1595,10 +1595,11 @@ func (d *daemonState) trackPRs(j *Job, all []*core.Peer, live map[string]bool) {
 // peer lookup and the send stay in trackPRs.
 //
 // A dream job is exempt whatever its state. Its zeus opens its PRs as the
-// LAST thing it does and then stops at a closing line that is not a gate:
-// nobody replies to it and nothing is pushed after it, so a merge notice
-// typed into that pane wakes a finished pass to read old news, and the turn
-// it starts can run on for hours with nothing left to do.
+// LAST thing it does and then stops at a closing line that is not a gate,
+// so a merge asks nothing of it: the notice only wakes a finished pass to
+// read old news, and the turn it starts can run on with nothing left to do.
+// A PR comment or a failing check still reaches that pane through watchPRs,
+// since those are real asks.
 func mergeBumpWanted(j *Job, live map[string]bool) bool {
 	if j.State != "working" && j.State != "blocked" {
 		return false

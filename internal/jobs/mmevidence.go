@@ -90,7 +90,7 @@ func CollectMMEvidence(st *store.Store, since, until int64) (MMEvidence, error) 
 		case "agent", "linear", "kraken":
 			continue
 		}
-		if strings.HasPrefix(j.Slug, "dream-") || strings.HasPrefix(j.Slug, "mind-") || linearJob[j.ID] {
+		if strings.HasPrefix(j.Slug, dreamSlugPrefix) || strings.HasPrefix(j.Slug, "mind-") || linearJob[j.ID] {
 			continue
 		}
 		body := JobSpecText(j.Body)

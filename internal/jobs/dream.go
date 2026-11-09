@@ -14,19 +14,6 @@ import (
 	"kraken/internal/util"
 )
 
-// dreamSlugPrefix is what every slug this file mints starts with, and the
-// only thing that marks a job as a dream pass: there is no job-level type.
-// internal/api/dream.go carries its own copy for the DREAM view, since api
-// sits above jobs and the two must agree byte for byte.
-const dreamSlugPrefix = "dream-"
-
-// isDreamJob reports whether j is a nightly dream pass, by slug prefix. A
-// hand-made job named dream-<anything> reads as one too, which is the same
-// call the DREAM view makes. Nil-safe.
-func isDreamJob(j *Job) bool {
-	return j != nil && strings.HasPrefix(j.Slug, dreamSlugPrefix)
-}
-
 // dream.go — the nightly corroboration pass' TRIGGER. It owns none of the
 // thinking: all it does is decide that a night is due, decide that the night
 // had any evidence worth reading, and create the `dream-<date>` job row whose
@@ -48,6 +35,19 @@ func isDreamJob(j *Job) bool {
 // which is alive exactly when it writes and already holds the store's single
 // writer handle.
 const dreamRunKVKey = "dream_last_run"
+
+// dreamSlugPrefix is what every slug this file mints starts with, and the
+// only thing that marks a job as a dream pass: there is no job-level type.
+// internal/api/dream.go carries its own copy for the DREAM view, since api
+// sits above jobs and the two must agree byte for byte.
+const dreamSlugPrefix = "dream-"
+
+// isDreamJob reports whether j is a nightly dream pass, by slug prefix. A
+// hand-made job named dream-<anything> reads as one too, which is the same
+// call the DREAM view makes. Nil-safe.
+func isDreamJob(j *Job) bool {
+	return j != nil && strings.HasPrefix(j.Slug, dreamSlugPrefix)
+}
 
 // dreamDateLayout is the LOCAL calendar date the cadence compares on, and
 // the suffix of the job slug. Local rather than UTC because "one pass per

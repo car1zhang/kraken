@@ -57,7 +57,7 @@ type RenameResult struct {
 // tonight's job already exists, so renaming INTO one would make a hand-named
 // job answer to that check, and renaming one AWAY would make the pass create
 // a second job for a night that already had one.
-var reservedRenamePrefixes = []string{"dream-", "graph-"}
+var reservedRenamePrefixes = []string{dreamSlugPrefix, "graph-"}
 
 // maxRenameSlugRunes bounds a renamed slug. Runes rather than bytes because
 // Slugify's output is what the bound is about, and the number is a headroom
