@@ -57,14 +57,23 @@ night and teaches them the loop does not listen.
 
 0. **Whether the previous pass finished.** A pass that dies after its scouts report leaves no
    `00-dream-report.md`, no watch rows and no PR, and the window floor still moves past its day, so
-   its night is otherwise gone. Check `kraken artifacts get dream-<previous date>` for the report
-   before reading anything else. When it is missing, look for that pass's scout reports in its
-   scratch dir (`/tmp/<its handle>/*/scout-*.md`; they age out with the machine's tmp sweep) and
-   read every one you find in full. Their findings go into tonight's report and watch store as a
-   labelled judgment call — evidence dated to THAT window, one source each, never re-mined — and
-   tonight's report says which pass they came from and what of it was lost. Do not widen your own
-   window to cover the dead night: the scouts already read it, and a second read of a day that
-   old costs more than the findings are worth.
+   its night is otherwise gone. Before reading anything else, find the most recent earlier
+   `dream-*` job in `kraken job list` (a quiet night creates none, so it is not always
+   yesterday's; none at all means nothing to recover) and check its state. A job still `working`,
+   or `blocked` mid-run (a usage limit, a dialog, a stall), is ALIVE: leave it alone, name it in
+   tonight's report, and let it finish its own night. A job that is `done`, or `blocked` at its
+   closing line, or whose cell is gone, has finished or died: run `kraken artifacts get <slug>`
+   (it falls back to the archive) and look for the report. When the report is missing the pass
+   died. Its scout reports may still exist under the `/tmp/<handle>` root it chose, and nothing
+   records that root for you: find it in the dead lead's own transcript (its brief and spawn
+   prompts name every path; `kraken mine reduce` over its session, or a grep of the raw for
+   `/tmp/`), never by a glob over `/tmp`, which picks up other nights. Read every report you find
+   in full. Their findings then pass through steps 1 and 2 like tonight's own evidence, and what
+   survives goes into tonight's report and watch store as a labelled judgment call — evidence
+   dated to THAT window, one source each, never re-mined — with tonight's report saying which pass
+   they came from and what of it was lost. Do not widen your own window to cover the dead night:
+   the scouts already read it, and a second read of a day that old costs more than the findings
+   are worth.
 1. **{{operator}}'s verdicts and comments** on watched observations, and **open dream PRs**. Both are suppression:
    a rule already in flight must not be re-proposed, and an observation they have ruled on is already decided.
 2. **The rest of the watch overlay** — what previous nights are still watching. A row whose state
