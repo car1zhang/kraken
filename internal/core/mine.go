@@ -362,6 +362,12 @@ func digestTranscript(path, project string, since int64) (SessionDigest, bool) {
 	// SumTokensDelta uses, so the two readers cannot disagree about which
 	// records are replayed.
 	own := fileSessionID(path, filepath.Base(path))
+	// A `/clear`-born file owns every record it holds, whatever session they
+	// are stamped with — the same probe sumTokensFrom runs, so the two readers
+	// cannot disagree about which files are replays. See ownAnySession.
+	if clearBorn(f, own) {
+		own = ownAnySession
+	}
 
 	// lastMaxTokID dedupes MaxTokensStops to one count per message: every
 	// record of a ceiling-stopped group carries the same stop_reason, and
