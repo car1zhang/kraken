@@ -106,8 +106,8 @@ func TestKronosRemovalContractIsStandingAgentID(t *testing.T) {
 // proven by compilation, not here.)
 func TestKronosRemovalContractModelConstantsUnchanged(t *testing.T) {
 	for _, c := range []struct{ name, got, want string }{
-		{"IrisModel", core.IrisModel, "claude-fable-5-1"},
-		{"ZeusModel", core.ZeusModel, "claude-fable-5-1"},
+		{"IrisModel", core.IrisModel, "claude-fable-5-2"},
+		{"ZeusModel", core.ZeusModel, "claude-fable-5-2"},
 		{"DefaultModel", core.DefaultModel, "claude-opus-5"},
 		{"FableFallbackModel", core.FableFallbackModel, "claude-opus-5-5"},
 	} {

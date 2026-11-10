@@ -841,12 +841,12 @@ function EditorBody({
               <input
                 id="f-model"
                 list="model-list"
-                placeholder={agent === "codex" ? "gpt-6-astra" : "claude-fable-5-1"}
+                placeholder={agent === "codex" ? "gpt-6-astra" : "claude-fable-5-2"}
                 spellCheck={false}
                 title={
                   agent === "codex"
                     ? "codex model for zeus (-m value) — applied once at cell start; empty = kraken's default for a codex zeus, gpt-6-astra"
-                    : "claude model for zeus (--model value) — applied once at cell start; empty = kraken's default for zeus, claude-fable-5-1 (the crew it spawns is opus regardless)"
+                    : "claude model for zeus (--model value) — applied once at cell start; empty = kraken's default for zeus, claude-fable-5-2 (the crew it spawns is opus regardless)"
                 }
                 disabled={readOnly}
                 value={model}
@@ -1033,7 +1033,7 @@ function EditorBody({
           </>
         ) : (
           <>
-            <option value="claude-fable-5-1" />
+            <option value="claude-fable-5-2" />
             <option value="claude-opus-5" />
             <option value="fable" />
             <option value="opus" />

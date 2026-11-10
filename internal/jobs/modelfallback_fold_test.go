@@ -31,7 +31,7 @@ func TestFableBannerFoldsOverRawHookBody(t *testing.T) {
 	}
 	// No usable snapshot row (errored rows are skipped → nil): the banner
 	// alone must now produce the switch.
-	if v := fableFallbackDecide(got, "claude-fable-5-1", nil, fallbackRecord{}, 4242, "sess-zeus", now.Add(10*time.Second)); v != fallbackSwitch {
+	if v := fableFallbackDecide(got, "claude-fable-5-2", nil, fallbackRecord{}, 4242, "sess-zeus", now.Add(10*time.Second)); v != fallbackSwitch {
 		t.Fatalf("verdict = %q, want %q", v, fallbackSwitch)
 	}
 
@@ -58,7 +58,7 @@ func TestFableBannerFoldAdoptsLeadSession(t *testing.T) {
 	if got.SessionID != "sess-zeus" || got.AgentID != "" {
 		t.Fatalf("session = %q agent = %q, want the banner delivery's", got.SessionID, got.AgentID)
 	}
-	if v := fableFallbackDecide(got, "claude-fable-5-1", nil, fallbackRecord{}, 4242, "sess-zeus", now.Add(10*time.Second)); v != fallbackSwitch {
+	if v := fableFallbackDecide(got, "claude-fable-5-2", nil, fallbackRecord{}, 4242, "sess-zeus", now.Add(10*time.Second)); v != fallbackSwitch {
 		t.Fatalf("verdict = %q, want %q", v, fallbackSwitch)
 	}
 	// A raw 429 from another session never moves the session.
@@ -89,6 +89,7 @@ func TestNamesLimitWindow(t *testing.T) {
 		{"You've reached your Fable limit. Run /usage-credits to continue", true},
 		{"You've reached your Fable 5 limit.", true},
 		{"You've reached your Fable 5.1 limit.", true},
+		{"You've reached your Fable 5.2 limit.", true},
 		{"You've hit your session limit · resets 4:30pm (America/New_York)", true},
 		{"You've hit your weekly limit", true},
 		{"You've reached your Fable", false},
