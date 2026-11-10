@@ -207,7 +207,7 @@ payload, so a client sees exactly what it has always seen.
 | `author` | string | omitempty | who wrote the job (schema v37's `jobs.author`): `operator` (the board's create) \| `agent` (`kraken job draft`) \| `linear` (the Linear intake) \| `kraken` (the dream and mind creators) \| `unknown` (every row that predates the column), served verbatim; set once at creation and never changed by a save. Additive, no contract bump |
 | `threads` | array (`webThread`) | omitempty | this job's side threads — every fork of zeus' session, live or closed, served straight from `threads` rows in `kraken.db`; a closed thread outlives its cell (its transcript is still readable), so the array survives teardown. Additive, no contract bump |
 | `tokens` | object (`webTokens`) | omitempty | this job's summed token spend, straight from its `job_tokens` row. **Absent means NEVER MEASURED, which is not the same as zero** — a job that was measured and cost nothing serves the object with all-zero counters. Present for done and archived jobs too (the row outlives the cell). Additive, no contract bump |
-| `load` | object (`webJobLoad`) | omitempty | zeus' two 1–10 triage estimates for this job — how expensive the operator's unblock is, and how big the claude work it buys. **Absent means "no estimate to act on", which is not the same as an estimate of zero**, and unlike `tokens` it covers THREE cases: never estimated, cleared (a clear zeroes `at`, and a zero `at` serves no object), and archived. **Withheld on archived jobs regardless of whether one exists** — the four columns survive archival and the key returns on unarchive; the archived loop drops it because a card that cannot be blocked cannot pose the question the badge answers. Served on every active job whatever its display state, so the key never flickers as a card moves column — the blocked-only rule is a RENDERING rule the clients apply, not a payload rule. The ROI the badge renders is DERIVED by the client (`scope / unblock`) and deliberately never on the wire. Additive, no contract bump |
+| `load` | object (`webJobLoad`) | omitempty | the daemon's two 1–10 triage estimates for this job — how expensive the operator's unblock is, and how big the claude work it buys — judged by Jev from zeus' final message after every turn (internal/jobs/loadjudge.go), never written by the cell. **Absent means "no estimate to act on", which is not the same as an estimate of zero**, and unlike `tokens` it covers THREE cases: never estimated, cleared (a clear zeroes `at`, and a zero `at` serves no object), and archived. **Withheld on archived jobs regardless of whether one exists** — the four columns survive archival and the key returns on unarchive; the archived loop drops it because a card that cannot be blocked cannot pose the question the badge answers. Served on every active job whatever its display state, so the key never flickers as a card moves column — the blocked-only rule is a RENDERING rule the clients apply, not a payload rule. The ROI the badge renders is DERIVED by the client (`scope / unblock`) and deliberately never on the wire. Additive, no contract bump |
 | `frozen_at` | number (unix millis) | omitempty | when the operator put this BLOCKED job on hold (`POST /api/job/freeze`); absent for a job that is not frozen. `state` stays `blocked` beside it, so a client that ignores the key renders an ordinary blocked card. Only ever present on a card whose state is `blocked`, and never on an archived one. Cleared by the same write that moves the job off blocked, so it disappears by itself when the cell starts working again. The web board files a card carrying it under the BLOCKED column's FROZEN drawer and leaves it out of the header flag count; iOS decodes it without rendering yet. Additive, no contract bump |
 | `goal` | object (`{"id": number, "text": string, "done": bool}`) | omitempty | the job's PRIMARY goal — durably `goals[0]`, the head of the array below, present under exactly the same condition and never on its own. Retained beside `goals` so a client that predates multi-goal links keeps rendering one goal rather than none. Additive, no contract bump. Modeled in the iOS app as `WebJobGoal` on `WebJob` |
 | `goals` | array (`[{"id": number, "text": string, "done": bool}]`) | omitempty | EVERY goal this job links (`job_goals`), in link-position order, present exactly when it links at least one — each from ANY period and done or not, so a job carried over from last week still names the goals it belongs to. Written only by `POST /api/job/goal` (below), never by `saveform`: the link is deliberately absent from the job form's field set, so a full form save cannot touch it. Additive, no contract bump. Modeled in the iOS app as `WebJobGoalList` on `WebJob` (a wrapper struct, because its decode is hand-written) and rendered as ONE card chip per goal (`GoalChip`, GoalsDrawer.swift) — `◎` plus the goal text truncated by the same 24-character rule web's `goalChipText` uses, muted when `done`, full text in the accessibility label since a phone has no tooltip; no `+N` badge for the rest, the chips wrap. That decode is tolerant in two places, since chips are cosmetic and the board is not: a `goals` that is not an array degrades to an empty list, and a malformed ELEMENT is dropped while the rest survive |
@@ -384,16 +384,17 @@ Four rules for any client rendering this:
   the wrong half. Either way the split can only ever move spend between the two
   halves — the four totals are unaffected.
 
-`webJobLoad` (the job's `load_*` columns — zeus' two triage estimates for a
-BLOCKED job: how much effort the operator must spend to unblock it, and how big the
-claude work that reply buys):
+`webJobLoad` (the job's `load_*` columns — the daemon's two triage estimates
+for a BLOCKED job, a Jev judgment on zeus' final message: how much effort the
+operator must spend to unblock it, and how big the claude work that reply
+buys):
 
 | key | type | optionality | notes |
 |---|---|---|---|
 | `unblock` | number | always | 1..10 — the operator's cost to unblock. 1 = a mechanical action; 5 = moderate thought; 10 = deep thought, many decisions, lots of context |
 | `scope` | number | always | 1..10 — the size of the claude work that unblock releases. 1 = a one-message reply; 5 = a moderate implementation slice; 10 = many subagents and a massive scoped implementation |
-| `note` | string | always | zeus' one-line rationale; may be `""`. One-lined and capped at 200 **runes** (not bytes) server-side, so it is safe to render on one line without re-truncating |
-| `at` | number | always | unix millis the estimate was written; always > 0 while the object is present. Stamped SERVER-SIDE — a client never sends it |
+| `note` | string | always | the judge's one-line rationale — `jev: <unblock rung label> · <scope rung label>`; may be `""` on a row an older writer left. One-lined and capped at 200 **runes** (not bytes), so it is safe to render on one line without re-truncating |
+| `at` | number | always | unix millis the estimate was written; always > 0 while the object is present. Stamped by the daemon — no client ever sends it |
 
 Three rules for any client rendering this:
 
@@ -429,7 +430,7 @@ with ` — <note>` appended when the note is non-empty.
 
 The **age clause is required**, and it is the only thing either client renders
 `at` for. Without it a stale estimate is indistinguishable from a fresh one on
-exactly the card the feature exists for: zeus estimates, the operator answers, the cell
+exactly the card the feature exists for: the judge prices a turn, the operator answers, the cell
 later dies, the daemon's `health` files the card back under BLOCKED — and with
 zeus gone nothing rewrites the estimate, so the badge keeps describing a
 question answered hours ago. Each client formats the age with its own existing
@@ -1709,7 +1710,7 @@ editor shows the new one is the same divergence in the other direction.
 ### `POST /api/job/rename` → map literal (api/jobrename.go `webJobRename`)
 
 Renames one active job. Its own route for the two reasons `/api/job/color` and
-`/api/job/load` have one — no `editableJob` gate, so a LIVE cell can be renamed,
+`/api/job/stack` have one — no `editableJob` gate, so a LIVE cell can be renamed,
 and no full-replace body to wipe a field a client predates — plus one of its
 own: a slug is identity rather than a field, so a rename must never ride in as a
 side effect of an unrelated edit.
@@ -1852,66 +1853,25 @@ Response: `{"ok": true, "frozen_at": number}` — the unix-millis stamp now on t
 
 Errors: 405 non-POST, 403 in mirror mode, 413 body over 1 MiB, 400 (`bad json`, an unknown key, or a missing `slug`/`frozen`), 404 `no such job`, 409 when asked to freeze a job that is not blocked (its display state is named in the error; a cell that started working between the board's read and this write is refused with a 409 too, whose error says the job is no longer blocked), 500 write failed. Thawing a job that is not frozen is a 200 no-op.
 
-**Thaw is automatic.** The write that moves a job off `blocked` clears `frozen_at` in the same UPDATE, whoever makes it: the daemon seeing the cell working again, a steer or an answered question, done, a cancel back to draft. So a frozen cell that wakes up (a watch firing, a PR comment bump) reads as working, and as an ordinary blocked job, with the ordinary blocked notification, the next time it stops. A turn too short for any daemon tick to see as working thaws the job too: each tick asks the lead's transcript whether it produced output since `frozen_at`, clears the hold when it did, and sends the blocked notification one tick later if the job is still stopped. Like `/api/job/load`, the write bumps NEITHER the job's `rev` NOR `updated_at`, so a hold never resets a card's age. **Additive, no contract bump.**
-
-### `POST /api/job/load`
-
-Writes one job's triage estimate — the pair the board's ROI badge renders.
-Its own route rather than a `saveform` field for the same two reasons
-`/api/job/color` has one, and one more: it is written on a LIVE cell (zeus
-writes it at the end of every turn, and a blocked job is exactly when it
-matters), `saveform` is a full replace that a client predating the field would
-silently clear, and its writer is zeus via a cell verb rather than a human at
-a form.
-
-Request: `{"slug": string, "unblock": number, "scope": number, "note": string}`.
-
-- `unblock` and `scope` are integers in **1..10 inclusive**, or **both 0** —
-  the clear state, which returns the job to having no estimate at all (the
-  `load` key then disappears from the job on `/api/board`). Zero for only one
-  of the two is a 400: a half-estimate has no ROI. Both keys are **required**,
-  and omitting them is not a clear — a body carrying neither number is 400,
-  not a silent wipe of the estimate it failed to describe.
-- `note` is optional, a one-line rationale, capped at 200 **runes** (not
-  bytes). The server one-lines it — control characters become spaces and runs
-  of whitespace collapse — and truncates rather than refusing an over-long one,
-  landing on 199 runes plus `…`. The numbers are the payload; losing the write
-  over a verbose sentence would be the worse answer.
-- `at` is NOT part of this request — the server stamps it in unix millis at
-  write time, so an estimate can never claim to be fresher than the write that
-  made it. Sending it is a 400, not a silently-ignored key.
-- The body is decoded with **unknown fields rejected**: `slug`, `unblock`,
-  `scope`, `note` and nothing else. A misspelled or nested key is a 400 rather
-  than a request that decodes to "clear everything". This route is stricter
-  than its siblings because it has one writer (`k load`) and neither client
-  posts to it at all.
-
-Response: `{"ok": true}`. The new estimate rides back on the next `/api/board`
-poll (`webJob.load`) — the board stays the single source of truth for job
-state, so there is nothing to echo here. Same convention as `/api/job/color`.
-
-Errors: 400 (bad json; an unrecognized field; either number out of `1..10`; a
-half-estimate; or a body carrying neither number — `unblock`/`scope` absent is
-refused rather than read as a clear, since a clear must be written as an
-explicit `0`/`0`), 404 (no such job, including an empty `slug`), 413 (body over
-1 MiB), 500 (write failed).
-Gated under `--mirror` with the standard plain-text 403. **405 is served by the
-route, not this verb** — `/api/job/load` answers GET and POST, so 405 means a
-method that is neither.
-
-The write deliberately does NOT bump the job's `rev` or `updated_at`: zeus
-writes this at the end of every turn, `updated_at` is what both boards render
-as a card's age, and `rev` is what stales out a concurrent editor save. Bumping
-either for a number that is not part of the job's own contract would reset
-every blocked card's age on every zeus turn. Same treatment as the PR
-watermarks. **Additive, no contract bump.**
+**Thaw is automatic.** The write that moves a job off `blocked` clears `frozen_at` in the same UPDATE, whoever makes it: the daemon seeing the cell working again, a steer or an answered question, done, a cancel back to draft. So a frozen cell that wakes up (a watch firing, a PR comment bump) reads as working, and as an ordinary blocked job, with the ordinary blocked notification, the next time it stops. A turn too short for any daemon tick to see as working thaws the job too: each tick asks the lead's transcript whether it produced output since `frozen_at`, clears the hold when it did, and sends the blocked notification one tick later if the job is still stopped. Like the load estimate (`store.SetJobLoad`), the write bumps NEITHER the job's `rev` NOR `updated_at`, so a hold never resets a card's age. **Additive, no contract bump.**
 
 ### `GET /api/job/load?slug=`
 
-zeus-side read: this job's current estimate, re-read on resume through the
-`kraken load get` cell verb. Not consumed by the iOS app, which reads the
-estimate from `webJob.load` on `/api/board` instead — same arrangement as
+This job's current estimate, reachable from a cell through the `kraken load
+get` verb. Not consumed by the iOS app, which reads the estimate from
+`webJob.load` on `/api/board` instead — same arrangement as
 `GET /api/feedback?slug=`.
+
+Read-only since job 814: the estimate is the daemon's Jev judgment on the
+lead's final message (internal/jobs/loadjudge.go), written straight to the
+store after every turn of a live blocked cell and cleared when the cell is
+working again, so there is no client writer and nothing for `--mirror` to
+gate. Any method but GET answers 405 (`GET only — the load estimate is
+written by the daemon's judge, not by clients`). The `POST` this route used
+to take (zeus' `kraken load set|clear`) is gone; no shipped client ever sent
+it, so its removal is **no contract bump**. The judge's write still bumps
+NEITHER the job's `rev` NOR `updated_at` (`store.SetJobLoad`), so re-pricing
+a card every turn never resets its age.
 
 Response: `{"load": {webJobLoad}}`, or `{"load": null}` when the job has no
 estimate. The key is always present; `null` is the no-estimate answer here,
@@ -1925,7 +1885,7 @@ unknown slug. A GET is a read, so it stays reachable under `--mirror`.
 
 ### `POST /api/job/stack`
 
-The cell's write of its STACK LINKS — the URLs of whatever it spun up for manual testing — reached only through the `kraken stack add|rm|clear` cell verb (cmd/kraken/cmd_stack.go). Its own one-field route for `/api/job/load`'s reasons (written on a LIVE cell, never through the full-replace form save), and PER-OP for `/api/job/goal`'s: a client sends what it wants changed, never the list it believes is current.
+The cell's write of its STACK LINKS — the URLs of whatever it spun up for manual testing — reached only through the `kraken stack add|rm|clear` cell verb (cmd/kraken/cmd_stack.go). Its own one-field route for `/api/job/color`'s reasons (written on a LIVE cell, never through the full-replace form save), and PER-OP for `/api/job/goal`'s: a client sends what it wants changed, never the list it believes is current.
 
 Request: `{"slug": string, "op": "add" | "remove" | "clear", "url": string, "label": string}`.
 
@@ -1938,7 +1898,7 @@ Response: `{"ok": true}`. The list rides back on the next `/api/board` poll (`we
 
 Errors: 400 (bad json; an unrecognized field; a missing or unknown `op`; `add` without `url` or with a refused url; `remove` without a token; the per-job cap), 404 (no such job, or `remove` of a token no link matches), 409 (`add` on a draft or done job), 413 (body over 1 MiB), 500 (write failed). Gated under `--mirror` with the standard plain-text 403; 405 is served by the route for any method but GET and POST.
 
-Like `/api/job/load`, the write bumps NEITHER the job's `rev` NOR `updated_at`. Rows are deleted at cell teardown (`teardownCell`), so a done or reactivated job carries none. **Additive, no contract bump.**
+Like the load estimate (`store.SetJobLoad`), the write bumps NEITHER the job's `rev` NOR `updated_at`. Rows are deleted at cell teardown (`teardownCell`), so a done or reactivated job carries none. **Additive, no contract bump.**
 
 ### `GET /api/job/stack?slug=`
 
@@ -2187,7 +2147,7 @@ Iris retiring a batch of messages, with one line saying what it did with them. T
 Request: `{"ids": [number], "disposition": string}`.
 
 - `ids` are inbox row ids. The store call is **all-or-nothing**: an unknown id, or one already acked, fails the whole batch and applies nothing.
-- `disposition` is a free string carrying what happened (`drafted:<slug>`, `edited:<slug>`, `ignored:<reason>`) — a plain string rather than an enum because it names the job it produced. It is one-lined and truncated to **200 runes** server-side rather than refused, the same treatment `/api/job/load`'s `note` gets. An EMPTY one (after trim) IS refused: "acked, reason unknown" is indistinguishable from a bug that acks everything.
+- `disposition` is a free string carrying what happened (`drafted:<slug>`, `edited:<slug>`, `ignored:<reason>`) — a plain string rather than an enum because it names the job it produced. It is one-lined and truncated to **200 runes** server-side rather than refused, the same treatment `/api/limit-hit`'s `details` gets. An EMPTY one (after trim) IS refused: "acked, reason unknown" is indistinguishable from a bug that acks everything.
 - The body is decoded with **unknown fields rejected**: `ids`, `disposition`, and nothing else.
 
 Response: `{"ok": true}`.

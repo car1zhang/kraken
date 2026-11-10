@@ -527,27 +527,9 @@ var jobLoadGetSpec = map[string]fieldSpec{
 	"load": {kind: wireObject, required: true, nullable: true},
 }
 
-// jobLoadPostReqSpec / jobLoadPostRespSpec cover POST /api/job/load's request
-// and its ack. The request carries no "at": the write time is stamped
-// server-side, and the handler REFUSES a body carrying one rather than
-// ignoring it (DisallowUnknownFields), so a spec entry would document a field
-// that is a 400. Every other key is required, which here means literally
-// required rather than merely non-omitempty: unblock and scope are pointers
-// on the Go side precisely so an absent one is a refusal instead of a silent
-// clear, and note carries no omitempty so an empty rationale still rides.
-// The response is the shared bare ack — the estimate itself rides back on the
-// next /api/board poll, already the board's single source of truth for job
-// state, exactly as /api/job/color's does.
-var jobLoadPostReqSpec = map[string]fieldSpec{
-	"slug":    {kind: wireString, required: true},
-	"unblock": {kind: wireNumber, required: true},
-	"scope":   {kind: wireNumber, required: true},
-	"note":    {kind: wireString, required: true},
-}
-
-var jobLoadPostRespSpec = map[string]fieldSpec{
-	"ok": {kind: wireBool, required: true},
-}
+// There is no POST spec: the route is read-only since the estimate became
+// the daemon's Jev judgment (internal/jobs/loadjudge.go), written straight
+// to the store rather than through an HTTP body.
 
 func TestWebJobLoadWireShape(t *testing.T) {
 	// a cleared-note estimate: every key must still be present, which is the
@@ -565,20 +547,15 @@ func TestWebJobLoadWireShape(t *testing.T) {
 		t.Fatal(err)
 	}
 	assertShape(t, "webJobLoad (populated)", data, webJobLoadSpec)
-
-	unblock, scope := 2, 8
-	reqData, err := json.Marshal(webJobLoadReq{Slug: "demo", Unblock: &unblock, Scope: &scope, Note: "why"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	assertShape(t, "webJobLoadReq", reqData, jobLoadPostReqSpec)
 }
 
-// TestJobLoadEndpointWireShape drives the real handler for both verbs, so the
-// envelopes above are pinned as SERVED rather than as marshaled structs.
+// TestJobLoadEndpointWireShape drives the real handler, so the envelope
+// above is pinned as SERVED rather than as a marshaled struct. The estimate
+// is written the way the daemon's judge writes it, through the store.
 func TestJobLoadEndpointWireShape(t *testing.T) {
 	st := useTestStore(t)
-	if _, err := st.CreateJob(&store.Job{Slug: "contract-load"}); err != nil {
+	id, err := st.CreateJob(&store.Job{Slug: "contract-load"})
+	if err != nil {
 		t.Fatalf("CreateJob: %v", err)
 	}
 
@@ -591,14 +568,9 @@ func TestJobLoadEndpointWireShape(t *testing.T) {
 	}
 	assertShape(t, "GET /api/job/load (unestimated)", rec.Body.Bytes(), jobLoadGetSpec)
 
-	body := mustJSON(t, map[string]any{"slug": "contract-load", "unblock": 2, "scope": 8, "note": "why"})
-	req = httptest.NewRequest(http.MethodPost, "/api/job/load", bytes.NewReader(body))
-	rec = httptest.NewRecorder()
-	jobLoadHandler(rec, req)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("POST: status %d, body %s", rec.Code, rec.Body.String())
+	if err := st.SetJobLoad(id, store.JobLoad{Unblock: 2, Scope: 8, Note: "why", At: 1769040000000}); err != nil {
+		t.Fatalf("SetJobLoad: %v", err)
 	}
-	assertShape(t, "POST /api/job/load", rec.Body.Bytes(), jobLoadPostRespSpec)
 
 	req = httptest.NewRequest(http.MethodGet, "/api/job/load?slug=contract-load", nil)
 	rec = httptest.NewRecorder()
@@ -1685,12 +1657,17 @@ var jobStackGetSpec = map[string]fieldSpec{
 
 // jobStackPostReqSpec covers POST /api/job/stack's per-op body. url and label
 // are optional at the shape level (clear sends neither); the handler decides
-// per op what is required. The response is the shared bare ack.
+// per op what is required. The response is the shared bare ack
+// (jobStackPostRespSpec — the same `{ok}` every one-field route answers).
 var jobStackPostReqSpec = map[string]fieldSpec{
 	"slug":  {kind: wireString, required: true},
 	"op":    {kind: wireString, required: true},
 	"url":   {kind: wireString, required: false},
 	"label": {kind: wireString, required: false},
+}
+
+var jobStackPostRespSpec = map[string]fieldSpec{
+	"ok": {kind: wireBool, required: true},
 }
 
 func TestWebStackLinkWireShape(t *testing.T) {
@@ -1745,7 +1722,7 @@ func TestJobStackRoundTripShapes(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("POST add: %d %s", rec.Code, rec.Body.String())
 	}
-	assertShape(t, "POST /api/job/stack", rec.Body.Bytes(), jobLoadPostRespSpec)
+	assertShape(t, "POST /api/job/stack", rec.Body.Bytes(), jobStackPostRespSpec)
 	items := get("GET /api/job/stack (one link)")
 	if len(items) != 1 {
 		t.Fatalf("after add: %d links", len(items))

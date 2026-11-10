@@ -1394,21 +1394,22 @@ function SteerBody({
  * beside "Full phase-2 of a substantial spec" — then the note.
  *
  * The labels come from the two anchor ladders in lib/format.ts, which are the
- * board's copy of `.claude/skills/load/SKILL.md` and are pinned byte-identical
- * against it and against the iOS app by a Go test. Rendering the label rather
- * than restating the ladder here is what keeps that pin meaningful: a fourth
- * spelling of "what does 4 mean" is a fourth thing to drift.
+ * board's copy of the Go ladders the daemon's Jev judge climbs
+ * (internal/jobs/loadscale.go) and are pinned byte-identical against them and
+ * against the iOS app by a Go test. Rendering the label rather than restating
+ * the ladder here is what keeps that pin meaningful: a fourth spelling of
+ * "what does 4 mean" is a fourth thing to drift.
  *
  * Both raw numbers stay on screen beside their labels. The label alone would be
- * the friendlier read, but the number is what zeus wrote, what `kraken load
- * set` takes and what the card's badge shows — dropping it would leave no
- * surface where the two representations can be checked against each other.
+ * the friendlier read, but the number is what the judge landed on and what the
+ * card's badge shows — dropping it would leave no surface where the two
+ * representations can be checked against each other.
  *
  * The AGE line is the same clause loadBadgeTitle carries and for the same
- * reason: nothing ever refreshes or clears an estimate, so a job that blocked,
- * was answered, and was filed back under blocked hours later still shows the
- * estimate written for the FIRST block. Without the age there is nothing here
- * that separates that from a fresh one. It is dropped rather than rendered as
+ * reason: the judge rewrites an estimate only while the cell is live and
+ * turning, so a job whose cell died and was filed back under blocked hours
+ * later still shows the verdict on its LAST turn. Without the age there is
+ * nothing here that separates that from a fresh one. It is dropped rather than rendered as
  * "estimated  ago" when the stamp is absent, which a present `load` never is
  * (WebJobLoad) — the same defensive-only category as loadROI's zero arms.
  */

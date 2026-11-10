@@ -102,7 +102,7 @@ func TestScanStageSignalShapes(t *testing.T) {
 		{"retired pr read does not clear do", []string{commandLine(t, "/do"), readToolLine(t, "/wt/.claude/skills/pr/SKILL.md")}, "do"},
 		{"typed /pr is not a stage", []string{commandLine(t, "/do"), commandLine(t, "/pr")}, "do"},
 		{"non-pipeline skill ignored", []string{skillToolLine(t, "claude-api")}, ""},
-		{"load is not a stage", []string{skillToolLine(t, "aim"), readToolLine(t, "/wt/.claude/skills/load/SKILL.md")}, "aim"},
+		{"a non-stage skill read is not a stage", []string{skillToolLine(t, "aim"), readToolLine(t, "/wt/.claude/skills/handoff/SKILL.md")}, "aim"},
 		// A typed /handoff (carl's, or the daemon's auto-handoff) arrives on
 		// the command shape; it compacts the agent and returns it to the phase
 		// it was in, so the badge must stay on that phase.

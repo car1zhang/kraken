@@ -260,7 +260,7 @@ func TestContractRenameJobProjectDirsNeverShrinks(t *testing.T) {
 
 // TestContractRenameLoadJobBySlugFallsBackToFormerSlug: the store path falls
 // back to GetJobByFormerSlug on a miss, which is what keeps zeus' frozen brief
-// verbs (`kraken load set <old>`) and the baked pr-hook/limit-hook commands
+// verbs (`kraken questions get <old>`) and the baked pr-hook/limit-hook commands
 // resolving after a rename.
 func TestContractRenameLoadJobBySlugFallsBackToFormerSlug(t *testing.T) {
 	st := useTestStore(t)

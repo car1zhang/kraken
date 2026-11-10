@@ -38,7 +38,7 @@ Path: `<set root>/80-handoff.md` when you are zeus; `<set root>/80-handoff-<your
 
 ## 2a. Self mode: compact and resume
 
-Run `kraken load clear <slug>` (you are working, not blocked), then type two commands into your own pane with kraken's own send verb, one call each, in this order:
+Type two commands into your own pane with kraken's own send verb, one call each, in this order:
 
 - `kraken s . "/compact Keep one sentence: the handoff doc is <absolute path to 80-handoff.md>; read it before anything else."`
 - `kraken s . "/handoff resume"`
@@ -60,7 +60,7 @@ Read {{operator}}'s `$ARGUMENTS` as the plan: how many agents, their names if gi
 
 ## 3. Resume mode
 
-You have just been compacted. Read your handoff doc (zeus: `<set root>/80-handoff.md`; a teammate: the one carrying your name) — a SessionStart hook will also have named every handoff doc in the set root with its age; the doc wins over the compaction summary wherever they differ. Then re-read `kraken questions get <slug>` and `kraken feedback get <slug>`, re-check that every teammate named under **In flight** is still alive (a `SendMessage` to a dead name bounces) and that every armed watch still exists, and continue from **Next steps**. If the doc says you were parked at a gate (the manual-test gate, the `/do` gate, a PR awaiting checks), restate that gate's exact line, re-set the load estimate the state map in your brief gives for that gate (self mode cleared it), and stop again — the handoff changed your context, not the job's state. If no doc exists, say so in one line and continue from the summary.
+You have just been compacted. Read your handoff doc (zeus: `<set root>/80-handoff.md`; a teammate: the one carrying your name) — a SessionStart hook will also have named every handoff doc in the set root with its age; the doc wins over the compaction summary wherever they differ. Then re-read `kraken questions get <slug>` and `kraken feedback get <slug>`, re-check that every teammate named under **In flight** is still alive (a `SendMessage` to a dead name bounces) and that every armed watch still exists, and continue from **Next steps**. If the doc says you were parked at a gate (the manual-test gate, the `/do` gate, a PR awaiting checks), restate that gate's exact line as your final message (kraken's load judge prices that message, so it must name what you need from {{operator}} and what the reply unlocks), and stop again — the handoff changed your context, not the job's state. If no doc exists, say so in one line and continue from the summary.
 
 ## 4. Closing line
 

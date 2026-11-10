@@ -15,8 +15,8 @@ import { SCOPE_ANCHORS, UNBLOCK_ANCHORS } from "./format.ts";
 // Two obligations:
 //
 //   the anchor TABLES are the canonical twenty labels, in rung order. The Go
-//   cross-source pin (internal/jobs/loadscale_contract_test.go) parses this
-//   file's source and holds it against the skill file and Swift; this suite
+//   cross-source pin (internal/jobs/loadscale_test.go) parses this file's
+//   source and holds it against the Go ladders and Swift; this suite
 //   holds the same list against the module's RUNTIME export, which is what the
 //   board actually renders. Source and runtime agreeing is not free — a label
 //   built by concatenation or reordered at export would pass the parse.

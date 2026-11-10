@@ -384,10 +384,11 @@ export interface WebJobHandoff {
 }
 
 /**
- * Zeus' two 1..10 estimates for a BLOCKED job, and the board's whole triage
- * input: `unblock` is how much of carl's own effort the unblock costs
- * (reading, deciding, explaining), `scope` is how much claude work that reply
- * buys. The ratio the badge renders is `scope / unblock`.
+ * The daemon's two 1..10 estimates for a BLOCKED job — a Jev judgment on
+ * zeus' final message after every turn (internal/jobs/loadjudge.go) — and the
+ * board's whole triage input: `unblock` is how much of carl's own effort the
+ * unblock costs (reading, deciding, explaining), `scope` is how much claude
+ * work that reply buys. The ratio the badge renders is `scope / unblock`.
  *
  * roi is NOT on the wire and never will be — it is derived at render
  * (`loadROI`, lib/format.ts). Two stored halves can drift out of agreement
@@ -395,12 +396,11 @@ export interface WebJobHandoff {
  * WebTokens' zeus/subagent split directly above.
  *
  * Whenever this object is present both numbers are integers in 1..10 — there is
- * no zero on the wire in either direction. A CLEAR is a write of `unblock 0,
- * scope 0`, but it does not arrive as a zeroed object: `jobLoadPost`
- * (internal/api/jobload.go) stores `store.JobLoad{}` so `at` is 0,
+ * no zero on the wire in either direction. A CLEAR (the judge's write when the
+ * cell is working again) is the zero row `store.JobLoad{}`, so `at` is 0,
  * `webJobLoadFrom` returns nil for `at == 0`, and the Go field is a pointer
- * with omitempty — so the KEY IS DROPPED. A half-estimate (one of the two at 0)
- * is rejected 400 for the same reason a clear has no ratio.
+ * with omitempty — so the KEY IS DROPPED. The judge never lands a
+ * half-estimate: each ladder lands on rung 1 at the lowest.
  *
  * `loadROI` still refuses both shapes rather than dividing by them. That is
  * defensive only — neither can be produced by the current server — and it is

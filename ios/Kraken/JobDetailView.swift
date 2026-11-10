@@ -1591,14 +1591,14 @@ struct JobTriageSection: View {
         }
     }
 
-    /// zeus' two 1–10 estimates with their anchor labels, the ratio between
-    /// them, and zeus' one-line rationale.
+    /// The judge's two 1–10 estimates with their anchor labels, the ratio
+    /// between them, and its one-line rationale.
     ///
     /// The ladders come from `LoadAnchors`, which carries the same twenty
-    /// strings the skill zeus estimates from and the web board's drilldown
-    /// render (ten rungs per ladder, two ladders) — a
-    /// Go test pins all three byte-identical, so the words here are the words
-    /// zeus was reading when it picked the number. A rung off the ladder (a
+    /// strings the daemon's Jev judge climbs (internal/jobs/loadscale.go) and
+    /// the web board's drilldown renders (ten rungs per ladder, two ladders) —
+    /// a Go test pins all three byte-identical, so the words here are the
+    /// words the rubric asked about. A rung off the ladder (a
     /// hand-edited row; the API refuses one) simply loses its label rather
     /// than printing a placeholder beside a real-looking digit.
     ///
@@ -1618,11 +1618,11 @@ struct JobTriageSection: View {
     /// is the defence the card's badge keeps, not a case to expect here.
     ///
     /// The AGE is required rather than decoration, for the reason the card and
-    /// web's drilldown both carry one: nothing ever refreshes an estimate.
-    /// zeus writes it, carl answers, the cell later dies, the daemon's
-    /// `health` files the card back under BLOCKED — and with zeus gone a
-    /// three-day-old estimate of a situation that has moved on reads exactly
-    /// like a current fact. `WebJobLoad.age(nowMillis:)` is the one formatter;
+    /// web's drilldown both carry one: the judge rewrites an estimate only
+    /// while the cell is live and turning. carl answers, the cell later dies,
+    /// the daemon's `health` files the card back under BLOCKED — and with no
+    /// turn left to judge a three-day-old estimate of a situation that has
+    /// moved on reads exactly like a current fact. `WebJobLoad.age(nowMillis:)` is the one formatter;
     /// the clock is read at this call site so the model stays pure.
     @ViewBuilder
     private func loadRows(_ load: WebJobLoad) -> some View {

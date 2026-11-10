@@ -1284,12 +1284,13 @@ enum LoadBand: String {
 
 /// The anchor ladders — what each rung of `unblock` and `scope` MEANS, in
 /// words. The two numbers a `WebJobLoad` carries are 1..10 with nothing on the
-/// wire to say what a 4 is, so every reader (zeus writing one, carl reading
-/// one) has to share a vocabulary or the ratio is two people's private scales
-/// divided by each other. These ten-entry ladders are that vocabulary.
+/// wire to say what a 4 is, so every reader (the daemon's Jev judge landing
+/// one, carl reading one) has to share a vocabulary or the ratio is two
+/// private scales divided by each other. These ten-entry ladders are that
+/// vocabulary.
 ///
-/// The SAME twenty strings are carried in three places — `.claude/skills/load/SKILL.md`
-/// (what zeus reads when it estimates), `web/_ui/src/lib/format.ts` (the web
+/// The SAME twenty strings are carried in three places — `internal/jobs/loadscale.go`
+/// (the ladders the judge climbs), `web/_ui/src/lib/format.ts` (the web
 /// board's drilldown) and here — and a Go test parses all three and asserts
 /// they are byte-identical, which is why the entries below are written as
 /// plain string literals in a bracketed array literal rather than assembled,
@@ -1448,7 +1449,7 @@ struct WebJobLoad: Decodable {
     /// are not redundant — iOS has no hover, so an age that lived only in the
     /// accessibility label would leave every sighted phone user unable to tell
     /// a three-day-old estimate from one written a minute ago, which is exactly
-    /// the failure the age exists to close: zeus estimates, carl answers, the
+    /// the failure the age exists to close: the judge prices a turn, carl answers, the
     /// cell later dies, the daemon's `health` files the card back under
     /// BLOCKED, and with zeus gone nothing ever rewrites the estimate.
     ///

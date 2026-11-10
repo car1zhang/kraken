@@ -30,13 +30,14 @@ var contractPortCarlWord = regexp.MustCompile(`(?i)\bcarl\b`)
 // contractPortSkillFiles are the files Slice S's skills row names, plus
 // direct/SKILL.md and mind/SKILL.md, which joined the bundle after that slice
 // and name the operator the same way, minus pr/SKILL.md, which folded into do/SKILL.md
-// in job 624 (its operator mentions travelled with it).
+// in job 624 (its operator mentions travelled with it), and minus load/SKILL.md,
+// retired in job 814 when the load ladders moved into internal/jobs/loadscale.go
+// and the estimate became the daemon's Jev judgment.
 var contractPortSkillFiles = []string{
 	".claude/skills/aim/SKILL.md",
 	".claude/skills/do/SKILL.md",
 	".claude/skills/info/SKILL.md",
 	".claude/skills/dream/SKILL.md",
-	".claude/skills/load/SKILL.md",
 	".claude/skills/handoff/SKILL.md",
 	".claude/skills/direct/SKILL.md",
 	".claude/skills/mind/SKILL.md",

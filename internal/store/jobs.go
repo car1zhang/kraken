@@ -929,8 +929,8 @@ func (s *Store) UnarchiveJob(id int64) error {
 	// rows), rename A to "bar" so "foo" becomes A's former slug, unarchive B.
 	// Nothing above notices, because no ACTIVE job holds "foo" — and from then
 	// on A's live cell's baked hook commands (kraken pr-hook foo, kraken
-	// limit-hook foo, k load set foo) resolve to B, cross-attributing A's PR,
-	// limit-hit and load records to a stranger, silently.
+	// limit-hook foo) resolve to B, cross-attributing A's PR and limit-hit
+	// records to a stranger, silently.
 	formerOwner, err := formerSlugTakenBy(tx, slug, id)
 	if err != nil {
 		return fmt.Errorf("unarchive job %d: %w", id, err)

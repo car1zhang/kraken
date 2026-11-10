@@ -73,9 +73,9 @@ describe("LoadChip", () => {
   });
 
   it("ages the tooltip, so a re-blocked card's stale estimate says so", () => {
-    // The hazard the age clause exists for: zeus estimates, carl answers, the
-    // cell dies hours later, the daemon's `health` files the card back under
-    // blocked (bucketJobs) — and zeus is not alive to write a new estimate. The
+    // The hazard the age clause exists for: the judge prices a turn, carl
+    // answers, the cell dies hours later, the daemon's `health` files the card
+    // back under blocked (bucketJobs) — and no turn is left to judge. The
     // badge text is unchanged in all of that; only the age moves.
     vi.spyOn(Date, "now").mockReturnValue(NOW);
     const fresh = renderChip(blocked({ load: { ...load(2, 8), at: NOW - 30_000 } }))!;

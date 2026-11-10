@@ -17,7 +17,7 @@ _k() {
         'goals:cell-side verb — re-read carl'"'"'s current week/day goals via kraken serve (read-only)'
         'feedback:cell-side verb — read/mark-addressed a job'"'"'s artifact feedback via kraken serve'
         'watchlist:cell-side verb — read/write the dream loop'"'"'s watch items, via kraken serve'
-        'load:cell-side verb — record what a blocked job costs carl and buys, via kraken serve'
+        'load:read a blocked job'"'"'s unblock/scope estimate (the daemon'"'"'s Jev judgment), via kraken serve'
         'stack:cell-side verb — register the manual-test URLs a cell spun up, via kraken serve'
         'mm:the mental model — carl'"'"'s mark/drop/note, the drill-down reads, mind runs and read marks, contradiction flags'
         'slack:iris-side verb — read/ack the Slack intake inbox via kraken serve'
@@ -167,22 +167,9 @@ _k() {
             if (( CURRENT == 3 )); then
                 local -a ops
                 ops=(
-                    'get:print the job'"'"'s unblock/scope estimate as JSON'
-                    'set:write the estimate (--unblock and --scope, both 1-10)'
-                    'clear:remove the estimate'
+                    'get:print the job'"'"'s unblock/scope estimate as JSON (written by the daemon'"'"'s Jev judge)'
                 )
                 _describe -t ops 'op' ops
-            elif [[ $words[3] == set ]] && (( CURRENT > 4 )); then
-                # CURRENT > 4, not just the `set` test: word 4 is the <slug>
-                # positional, and offering flags there would suggest a slug is
-                # optional when every op requires one.
-                local -a loadflags
-                loadflags=(
-                    '--unblock:1-10 — effort carl spends to unblock this job'
-                    '--scope:1-10 — size of the claude work that reply unblocks'
-                    '--note:one-line rationale (capped at 200 runes server-side)'
-                )
-                _describe -t flags 'flag' loadflags
             fi
             # <slug> completion is intentionally not offered, for the reason
             # spelled out under questions) above: job identity lives only in
@@ -200,8 +187,8 @@ _k() {
                 _describe -t ops 'op' ops
             elif [[ $words[3] == add ]] && (( CURRENT > 5 )); then
                 # words 4 and 5 are the <slug> and <url> positionals; the one
-                # flag is offered only past them, the same rule `load set`
-                # follows for its positional.
+                # flag is offered only past them, so a flag never suggests a
+                # positional is optional.
                 local -a stackflags
                 stackflags=(
                     '--label:short name shown on the chip beside the port (capped at 24 runes server-side)'
@@ -276,8 +263,8 @@ _k() {
                 [[ $words[CURRENT-1] == --file ]] && _files
             elif (( CURRENT >= 4 )) && [[ $words[3] == note ]]; then
                 # word 4 is the note TEXT positional, so --context is only
-                # offered past it — the same rule `load set` follows for its
-                # <slug>.
+                # offered past it — the same rule `stack add` follows for its
+                # positionals.
                 if (( CURRENT > 4 )); then
                     local -a mmflags
                     mmflags=(
@@ -309,7 +296,7 @@ _k() {
                 _describe -t ops 'op' ops
             elif [[ $words[3] == ack ]]; then
                 # both flags are REQUIRED, so both are offered from word 4 on
-                # — unlike `load set`, this op takes no positional at all, and
+                # — unlike `stack add`, this op takes no positional at all, and
                 # withholding them until word 5 would suggest one exists.
                 local -a ackflags
                 ackflags=(
