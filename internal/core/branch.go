@@ -48,14 +48,14 @@ const codexProbeTimeout = 5 * time.Second
 // `kraken serve` runs under launchd with a PATH that carries no nvm dir, so
 // job 428 (2026-09-16) resolved it to homebrew 0.39.0, which exits at startup
 // on the modern config.toml, and the cell died four seconds in. It is the
-// same launchd-PATH problem jobs.lookToolchain solves for `go`, so this is
-// the same shape of answer — a ladder of known install locations — plus the
-// version gate.
+// same launchd-PATH problem jobs.lookToolchain solves for `go` and `npm`, so
+// this is the same shape of answer — a ladder of known install locations —
+// plus the version gate.
 //
 // The ladder: $KRAKEN_CODEX when set is the ONLY candidate (an explicit
 // override that fails is a refusal naming it, never a silent fallthrough —
 // a bare name is PATH-looked-up, anything else used as given); then PATH;
-// then every ~/.nvm/versions/node/<v>/bin, newest node first; then
+// then every ~/.nvm/versions/node/<v>/bin, newest node first (NvmBinDirs); then
 // ~/.local/bin; then codexSystemDirs. A rung that does not stat as an
 // executable file is skipped silently; candidates dedupe on their
 // symlink-resolved path so a PATH hit is probed once; the path returned is the
@@ -94,11 +94,10 @@ func ResolveCodex() (string, error) {
 		candidates = append(candidates, p)
 	}
 	searched = append(searched, "PATH")
-	nvm := filepath.Join(util.Home(), ".nvm", "versions", "node")
-	for _, d := range nvmNodeDirs(nvm) {
-		candidates = append(candidates, filepath.Join(nvm, d, "bin", "codex"))
+	for _, d := range NvmBinDirs() {
+		candidates = append(candidates, filepath.Join(d, "codex"))
 	}
-	searched = append(searched, "~/.nvm/versions/node/*/bin")
+	searched = append(searched, NvmBinPattern)
 	candidates = append(candidates, filepath.Join(util.Home(), ".local", "bin", "codex"))
 	searched = append(searched, "~/.local/bin")
 	for _, d := range codexSystemDirs {
@@ -165,10 +164,29 @@ func codexProbe(path string) (string, bool) {
 	return triple, codexVersionAtLeast(string(out), codexMinVersion)
 }
 
+// NvmBinPattern is how an error message names the nvm rung: the shape of
+// every directory NvmBinDirs can return, since listing them one by one would
+// say nothing on a machine with no nvm at all.
+const NvmBinPattern = "~/.nvm/versions/node/*/bin"
+
+// NvmBinDirs lists every ~/.nvm/versions/node/<v>/bin, newest node first
+// (nvmNodeDirs' order), absolute. It is the one spelling of the nvm rung,
+// shared by ResolveCodex and jobs.lookToolchain because `kraken serve` runs
+// under launchd with a PATH that reaches no nvm dir (the npm story is on
+// jobs.PreflightUpdate). No nvm dir is an empty list, never an error.
+func NvmBinDirs() []string {
+	nvm := filepath.Join(util.Home(), ".nvm", "versions", "node")
+	var out []string
+	for _, d := range nvmNodeDirs(nvm) {
+		out = append(out, filepath.Join(nvm, d, "bin"))
+	}
+	return out
+}
+
 // nvmNodeDirs lists an nvm versions dir's entries newest node first: names
 // of the form v<X>.<Y>.<Z> sort by numeric X, Y, Z descending, and anything
-// else sorts after all of those, lexically — so the codex installed under the
-// node carl uses day to day is the first one tried.
+// else sorts after all of those, lexically — so the tool installed under the
+// node the operator uses day to day is the first one tried.
 func nvmNodeDirs(nvm string) []string {
 	entries, err := os.ReadDir(nvm)
 	if err != nil {

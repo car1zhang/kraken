@@ -280,9 +280,15 @@ func runUpdate(opts updateOpts, out io.Writer) error {
 	// or already leads PATH — so tools sharing one homebrew prefix prepend it
 	// once, not once each, and an unresolved xcodegen's empty path is inert
 	// (the mac-app phase is what fails then, not the env plumbing).
+	//
+	// npm goes LAST so its dir leads PATH: nvm's npm is a script whose
+	// `#!/usr/bin/env node` shebang resolves node from PATH, and the node
+	// that matches it is the one beside it in that same dir. Prepended
+	// earlier, a stray `node` in a later-prepended dir (a homebrew node with
+	// no homebrew npm) would win `env node` and run nvm's npm on it.
 	env := util.ToolchainEnv(os.Environ(), pf.GoPath)
-	env = util.ToolchainEnv(env, pf.NpmPath)
 	env = util.ToolchainEnv(env, pf.XcodegenPath)
+	env = util.ToolchainEnv(env, pf.NpmPath)
 
 	// installMacApp is the `mac app` phase: `make install-mac` — rebuild
 	// Kraken.app, swap it into /Applications. It runs LAST wherever it runs —
