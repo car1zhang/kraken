@@ -301,6 +301,7 @@ func TestContractFleetClassifyTiers(t *testing.T) {
 	deps := func(local, tokenOK, tailnet bool) gateDeps {
 		return gateDeps{
 			localOrigin: func(string) bool { return local },
+			ownerKey:    func() string { return testOwnerKey },
 			lookupToken: func(hash string) (*store.PairDevice, bool) {
 				lookedUp = append(lookedUp, hash)
 				if !tokenOK {
@@ -320,6 +321,7 @@ func TestContractFleetClassifyTiers(t *testing.T) {
 	req := func(withToken bool) *http.Request {
 		r := httptest.NewRequest(http.MethodGet, "/api/board", nil)
 		r.RemoteAddr = contractFleetPhoneIP + ":51234"
+		r.Header.Set(jobs.OwnerKeyHeader, testOwnerKey)
 		if withToken {
 			r.Header.Set("Authorization", "Bearer "+token)
 		}
@@ -536,12 +538,13 @@ func TestContractFleetGateServesAtOrAboveFloor(t *testing.T) {
 	// owner: a local origin reaches the owner-only route
 	contractFleetSwapGate(t, gateDeps{
 		localOrigin:   func(string) bool { return true },
+		ownerKey:      func() string { return testOwnerKey },
 		lookupToken:   func(string) (*store.PairDevice, bool) { return nil, false },
 		tailnetDevice: func(string) (core.TailnetIdentity, bool) { return core.TailnetIdentity{}, false },
 	})
 	gate = Gate(inner)
 	got = nil
-	rec := contractFleetDo(gate, http.MethodGet, "/api/pair/devices", "", "127.0.0.1:5000", nil)
+	rec := contractFleetDo(gate, http.MethodGet, "/api/pair/devices", "", "127.0.0.1:5000", ownerKeyHdr)
 	if rec.Code != http.StatusTeapot || len(got) != 1 || got[0].tier != TierOwner {
 		t.Errorf("owner on /api/pair/devices: status %d, seen %+v; want served at owner", rec.Code, got)
 	}
@@ -679,6 +682,7 @@ func TestContractFleetPairPasswordSetsVerifierAndRevokes(t *testing.T) {
 	st := contractFleetEnv(t)
 	owner := gateDeps{
 		localOrigin:   func(string) bool { return true },
+		ownerKey:      func() string { return testOwnerKey },
 		lookupToken:   func(string) (*store.PairDevice, bool) { return nil, false },
 		tailnetDevice: func(string) (core.TailnetIdentity, bool) { return core.TailnetIdentity{}, false },
 	}
@@ -690,7 +694,7 @@ func TestContractFleetPairPasswordSetsVerifierAndRevokes(t *testing.T) {
 		}
 	}
 	const pw = "correct-horse-battery"
-	rec := contractFleetDo(h, http.MethodPost, "/api/pair/password", `{"password":"`+pw+`"}`, "127.0.0.1:5000", nil)
+	rec := contractFleetDo(h, http.MethodPost, "/api/pair/password", `{"password":"`+pw+`"}`, "127.0.0.1:5000", ownerKeyHdr)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("set password: status %d body %s", rec.Code, rec.Body)
 	}
@@ -720,7 +724,7 @@ func TestContractFleetPairPasswordSetsVerifierAndRevokes(t *testing.T) {
 	}
 
 	// a second set mints a FRESH salt
-	rec = contractFleetDo(h, http.MethodPost, "/api/pair/password", `{"password":"`+pw+`"}`, "127.0.0.1:5000", nil)
+	rec = contractFleetDo(h, http.MethodPost, "/api/pair/password", `{"password":"`+pw+`"}`, "127.0.0.1:5000", ownerKeyHdr)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("re-set: status %d", rec.Code)
 	}
@@ -732,7 +736,7 @@ func TestContractFleetPairPasswordSetsVerifierAndRevokes(t *testing.T) {
 	if _, err := st.AddPairDevice(&store.PairDevice{Label: "late", TokenHash: "h-late", CreatedAt: 9}); err != nil {
 		t.Fatal(err)
 	}
-	rec = contractFleetDo(h, http.MethodPost, "/api/pair/password", `{"password":""}`, "127.0.0.1:5000", nil)
+	rec = contractFleetDo(h, http.MethodPost, "/api/pair/password", `{"password":""}`, "127.0.0.1:5000", ownerKeyHdr)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("clear: status %d body %s", rec.Code, rec.Body)
 	}
@@ -761,11 +765,12 @@ func TestContractFleetPairRoundTrip(t *testing.T) {
 	// owner sets the password
 	contractFleetSwapGate(t, gateDeps{
 		localOrigin:   func(string) bool { return true },
+		ownerKey:      func() string { return testOwnerKey },
 		lookupToken:   func(string) (*store.PairDevice, bool) { return nil, false },
 		tailnetDevice: func(string) (core.TailnetIdentity, bool) { return core.TailnetIdentity{}, false },
 	})
 	h := Gate(contractFleetMux(t))
-	if rec := contractFleetDo(h, http.MethodPost, "/api/pair/password", `{"password":"`+pw+`"}`, "127.0.0.1:5000", nil); rec.Code != http.StatusOK {
+	if rec := contractFleetDo(h, http.MethodPost, "/api/pair/password", `{"password":"`+pw+`"}`, "127.0.0.1:5000", ownerKeyHdr); rec.Code != http.StatusOK {
 		t.Fatalf("set password: %d %s", rec.Code, rec.Body)
 	}
 	v := contractFleetReadVerifier(t, st)
@@ -877,13 +882,14 @@ func TestContractFleetOwnerListsAndRevokesDevices(t *testing.T) {
 	st := contractFleetEnv(t)
 	contractFleetSwapGate(t, gateDeps{
 		localOrigin:   func(string) bool { return true },
+		ownerKey:      func() string { return testOwnerKey },
 		lookupToken:   func(string) (*store.PairDevice, bool) { return nil, false },
 		tailnetDevice: func(string) (core.TailnetIdentity, bool) { return core.TailnetIdentity{}, false },
 	})
 	h := Gate(contractFleetMux(t))
 	local := "127.0.0.1:5000"
 
-	rec := contractFleetDo(h, http.MethodGet, "/api/pair/devices", "", local, nil)
+	rec := contractFleetDo(h, http.MethodGet, "/api/pair/devices", "", local, ownerKeyHdr)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("devices: %d %s", rec.Code, rec.Body)
 	}
@@ -897,7 +903,7 @@ func TestContractFleetOwnerListsAndRevokesDevices(t *testing.T) {
 	if err := st.TouchPairDevice(drop, 300, "100.101.102.103"); err != nil {
 		t.Fatal(err)
 	}
-	rec = contractFleetDo(h, http.MethodGet, "/api/pair/devices", "", local, nil)
+	rec = contractFleetDo(h, http.MethodGet, "/api/pair/devices", "", local, ownerKeyHdr)
 	var page struct {
 		Devices []json.RawMessage `json:"devices"`
 	}
@@ -917,7 +923,7 @@ func TestContractFleetOwnerListsAndRevokesDevices(t *testing.T) {
 		t.Errorf("second device = %v, want %v (CreatedAt ascending)", second, want)
 	}
 
-	rec = contractFleetDo(h, http.MethodPost, "/api/pair/revoke", `{"id":`+strconv.FormatInt(drop, 10)+`}`, local, nil)
+	rec = contractFleetDo(h, http.MethodPost, "/api/pair/revoke", `{"id":`+strconv.FormatInt(drop, 10)+`}`, local, ownerKeyHdr)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("owner revoke: %d %s", rec.Code, rec.Body)
 	}

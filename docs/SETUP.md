@@ -97,8 +97,8 @@ There is no Documents-folder prompt: kraken keeps its state under `~/.kraken`.
 ```sh
 kraken help | head -3
 launchctl print gui/$(id -u)/dev.carl.kraken | grep -E 'state|pid'   # "running", a pid
-curl -s http://127.0.0.1:7777/api/board | head -c 200
-open http://127.0.0.1:7777
+curl -s -H "X-Kraken-Owner-Key: $(cat ~/.kraken/owner-key)" http://127.0.0.1:7777/api/board | head -c 200
+kraken board open      # opens the board as its owner (the link carries ~/.kraken/owner-key)
 ```
 
 An empty board with the top bar rendered is success. `kraken ls` in a tmux pane with a running `claude` lists it.

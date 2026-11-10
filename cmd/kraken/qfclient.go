@@ -135,7 +135,7 @@ func qfIsTimeout(err error) bool {
 // response, qfTimeoutError for a client-side deadline expiry, or
 // qfUnreachableError for any other transport-level failure.
 func qfGet(path string) ([]byte, error) {
-	client := http.Client{Timeout: qfHTTPTimeout}
+	client := jobs.ServeClient(qfHTTPTimeout)
 	resp, err := client.Get(jobs.ServeBaseURL() + path)
 	if err != nil {
 		if qfIsTimeout(err) {
@@ -189,7 +189,7 @@ func qfPostLimit(path string, reqBody any, headers map[string]string, timeout ti
 	for k, v := range headers {
 		req.Header.Set(k, v)
 	}
-	client := http.Client{Timeout: timeout}
+	client := jobs.ServeClient(timeout)
 	resp, err := client.Do(req)
 	if err != nil {
 		if qfIsTimeout(err) {

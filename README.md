@@ -100,7 +100,7 @@ Then serve the mirror on a different port:
 kraken serve --mirror -p 7778
 ```
 
-Open `http://127.0.0.1:7778` — same board, same UI, backed by the sandbox DB. `-p` (or `-addr`) must differ from the real deployment's default port 7777; `--mirror` refuses to start otherwise, so it can never squat where the real `kraken serve` listens.
+Open it with `KRAKEN_SERVE_ADDR=127.0.0.1:7778 k board open` — same board, same UI, backed by the sandbox DB (the link carries the owner key, which the board needs before it treats your browser as its owner). `-p` (or `-addr`) must differ from the real deployment's default port 7777; `--mirror` refuses to start otherwise, so it can never squat where the real `kraken serve` listens.
 
 **Two caveats, always:**
 

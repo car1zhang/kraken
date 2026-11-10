@@ -107,6 +107,16 @@ export function isUnauthorized(err: unknown): boolean {
   return err instanceof ApiError && err.status === 401;
 }
 
+/**
+ * True iff the gate refused a caller on this Mac for lacking the owner key
+ * (`401 {"error":"owner key required"}`, internal/api/gate.go): the owner's
+ * own board opened without the kraken_owner cookie, which `k board open`
+ * sets. Every other 401 says "unauthorized".
+ */
+export function isOwnerKeyMissing(err: unknown): boolean {
+  return isUnauthorized(err) && (err as ApiError).message === "owner key required";
+}
+
 // The card identity lives in lib/jobKey.ts (it predates the fleet); re-exported
 // here so a fleet consumer has one import for every fleet rule.
 export { jobKey } from "./jobKey.ts";

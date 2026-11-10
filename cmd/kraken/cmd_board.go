@@ -3,8 +3,10 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"os/exec"
 	"strings"
 
+	"kraken/internal/jobs"
 	"kraken/internal/util"
 )
 
@@ -23,7 +25,7 @@ import (
 // serve names the address it tried. It NEVER opens kraken.db.
 func cmdBoard(args []string) {
 	if len(args) == 0 {
-		util.Die("usage: k board get [slug]")
+		util.Die("usage: k board get [slug] | k board open [--print]")
 	}
 	op, rest := args[0], args[1:]
 	switch op {
@@ -33,12 +35,48 @@ func cmdBoard(args []string) {
 			util.Die("%v", err)
 		}
 		writeStdout(out)
+	case "open":
+		out, err := runBoardOpen(rest)
+		if err != nil {
+			util.Die("%v", err)
+		}
+		fmt.Print(out)
 	default:
-		util.Die("usage: k board get [slug] (unknown op %q)", op)
+		util.Die("usage: k board get [slug] | k board open [--print] (unknown op %q)", op)
 	}
 }
 
 const boardGetUsage = "usage: k board get [slug]"
+
+// boardOpenURL hands a URL to the default browser; a seam so tests never
+// launch one.
+var boardOpenURL = func(u string) error { return exec.Command("open", u).Run() }
+
+// runBoardOpen is `k board open [--print]`: the way a browser on this Mac
+// becomes the board's owner. It opens jobs.OwnerLink — serve's /api/owner
+// with the owner key — which sets the kraken_owner cookie and lands on the
+// board. --print prints the link instead (for another browser), and so does
+// a failed open. The key is printed only then, never on a plain open.
+func runBoardOpen(args []string) (string, error) {
+	printOnly := false
+	for _, a := range args {
+		if a != "--print" {
+			return "", fmt.Errorf("usage: k board open [--print] (unknown argument %q)", a)
+		}
+		printOnly = true
+	}
+	link, err := jobs.OwnerLink()
+	if err != nil {
+		return "", err
+	}
+	if printOnly {
+		return link + "\n", nil
+	}
+	if err := boardOpenURL(link); err != nil {
+		return "could not open a browser (" + err.Error() + "); open this link on this Mac:\n" + link + "\n", nil
+	}
+	return "opened the board at " + jobs.ServeBaseURL() + "\n", nil
+}
 
 // runBoardGet is `k board get [slug]`: GET /api/board, printed straight
 // through with no slug, or narrowed to one job's object with one.

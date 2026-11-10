@@ -59,10 +59,10 @@ func protocolParitySection(t *testing.T) string {
 
 // isProtocolRoute says whether a registered pattern belongs to the
 // multiplayer or update protocol: the node routes a sibling calls, the
-// `/api/nodes/*` proxies a board calls, pairing, update, and the health probe
-// every tier may reach.
+// `/api/nodes/*` proxies a board calls, pairing, update, the health probe
+// every tier may reach, and /api/owner, the gate's owner-key cookie route.
 func isProtocolRoute(p string) bool {
-	for _, pre := range []string{"/api/health", "/api/node", "/api/nodes", "/api/pair", "/api/update"} {
+	for _, pre := range []string{"/api/health", "/api/node", "/api/nodes", "/api/owner", "/api/pair", "/api/update"} {
 		if p == pre || strings.HasPrefix(p, pre+"/") {
 			return true
 		}

@@ -31,3 +31,35 @@ enum ServerConfig {
         return url
     }
 }
+
+/// The owner key `kraken serve` writes to `~/.kraken/owner-key`
+/// (internal/jobs/ownerkey.go). The server's request gate treats a local
+/// caller as the owner only when it carries this key, so the board's web view
+/// gets it as the `kraken_owner` cookie before its first load. This app is not
+/// sandboxed, so the home directory is the user's real one.
+enum OwnerKey {
+    static let cookieName = "kraken_owner"
+
+    /// The key, or nil when the file is missing or empty (serve not started
+    /// yet): the board then shows its own "no owner key" line.
+    static func read(home: URL = FileManager.default.homeDirectoryForCurrentUser) -> String? {
+        let file = home.appendingPathComponent(".kraken/owner-key")
+        guard let raw = try? String(contentsOf: file, encoding: .utf8) else { return nil }
+        let key = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        return key.isEmpty ? nil : key
+    }
+
+    /// The cookie for the server at `url`: its host, path `/`, HttpOnly and
+    /// SameSite=Strict, the same attributes `/api/owner` sets in a browser.
+    static func cookie(key: String, for url: URL) -> HTTPCookie? {
+        guard let host = url.host(), !host.isEmpty else { return nil }
+        return HTTPCookie(properties: [
+            .name: cookieName,
+            .value: key,
+            .domain: host,
+            .path: "/",
+            .sameSitePolicy: HTTPCookieStringPolicy.sameSiteStrict,
+            HTTPCookiePropertyKey("HttpOnly"): "TRUE",
+        ])
+    }
+}

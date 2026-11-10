@@ -319,6 +319,11 @@ Commands:
                       only that job's object (a client-side filter — there is
                       no per-job board route to drift from this one). An
                       unknown slug is an error naming it, never empty output.
+  k board open [--print]
+                      open the board in this Mac's browser as its owner: the
+                      link carries the owner key (~/.kraken/owner-key), which
+                      the board keeps as a cookie. --print prints the link
+                      instead of opening it.
   k cell steer|submit|answer <slug> ...
                       agent-side control of one job's cell, proxied to the
                       BOARD's own routes so every guard your clicks go

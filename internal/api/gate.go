@@ -9,6 +9,7 @@ package api
 import (
 	"context"
 	"crypto/sha256"
+	"crypto/subtle"
 	"encoding/hex"
 	"mime"
 	"net"
@@ -27,10 +28,17 @@ import (
 // through Gate, which decides WHO is asking and refuses a route whose floor
 // is above that. Four tiers, ordered:
 //
-//   - owner: the Mac itself (isLocalOrigin — loopback or one of its own
-//     interface addresses). Everything, exactly as before the gate existed,
-//     which is why every cell hook, CLI verb, the mac app and the board
-//     opened on this Mac are unaffected.
+//   - owner: this Mac's own user. A local address (isLocalOrigin — loopback
+//     or one of the Mac's own interface addresses) AND the owner key
+//     (jobs/ownerkey.go, ~/.kraken/owner-key) in the X-Kraken-Owner-Key
+//     header or the kraken_owner cookie. Everything. The address alone is
+//     not enough: every Docker container on this Mac reaches its loopback
+//     ports, and so does a web page rebound by DNS to 127.0.0.1. The CLI and
+//     cell hooks send the header (jobs.ServeClient), the mac app puts the
+//     cookie in its web view, and a browser gets the cookie from
+//     /api/owner (`k board open`). A local caller without the key goes down
+//     the rest of the ladder as if it were not local, except that Gate still
+//     lets it load the page shell, so the board can say how to get the key.
 //   - paired: a bearer token (header, or the kraken_pair cookie for the
 //     <img>/<iframe>/WKWebView loads that cannot carry a header) whose
 //     SHA-256 matches a pair_devices row. Full control of this node.
@@ -53,15 +61,18 @@ const (
 	TierOwner
 )
 
-// gateDeps are the gate's three lookups; tests swap defaultGateDeps.
+// gateDeps are the gate's lookups; tests swap defaultGateDeps. ownerKey is
+// the key on disk, "" when there is none (and then nobody is owner).
 type gateDeps struct {
 	localOrigin   func(remoteAddr string) bool
+	ownerKey      func() string
 	lookupToken   func(hash string) (*store.PairDevice, bool)
 	tailnetDevice func(ip string) (core.TailnetIdentity, bool)
 }
 
 var defaultGateDeps = gateDeps{
 	localOrigin:   isLocalOrigin,
+	ownerKey:      jobs.OwnerKey,
 	lookupToken:   lookupPairToken,
 	tailnetDevice: tailnetDeviceFor,
 }
@@ -169,10 +180,11 @@ var multipartPosts = map[string]bool{"/api/upload": true, "/api/background": tru
 // route (and no route added later) can miss it. A JSON POST is never a CORS
 // simple request, so a page on another origin — or a sandboxed, opaque-origin
 // frame on this one — has to preflight it, and this server answers no
-// preflight with CORS headers. That matters most for the owner tier, which
-// is classified by address alone: without the rule, a script in any page the
-// owner's browser loads could fire a text/plain POST at loopback and have it
-// run as owner. Every shipped caller already sends the header (the SPA's
+// preflight with CORS headers. That matters most for the owner tier: the
+// owner's browser carries the kraken_owner cookie, so without the rule a
+// script in any page it loads could fire a text/plain POST at loopback and
+// have it run as owner (SameSite=Strict keeps the cookie off such a request
+// in current browsers; this rule does not depend on that). Every shipped caller already sends the header (the SPA's
 // postJSON, iOS's post and pairing requests, the CLI's qfPost and hookPost,
 // and the cell hooks' client.Post calls).
 func postContentTypeOK(r *http.Request) bool {
@@ -182,6 +194,11 @@ func postContentTypeOK(r *http.Request) bool {
 	mediaType, _, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
 	return err == nil && mediaType == "application/json"
 }
+
+// ownerKeyRequired is the refusal a local caller without the owner key gets,
+// so the board page on this Mac can say how to fix it rather than reading
+// as another machine's board. Every other refusal stays "unauthorized".
+const ownerKeyRequired = "owner key required"
 
 // gateRefuse writes one of the gate's own refusals: a JSON error body, with
 // nosniff like every other reply the node routes write by hand.
@@ -202,8 +219,10 @@ func gateRefuse(w http.ResponseWriter, status int, msg string) {
 //
 // What it does NOT cover: a DNS-rebinding page. Its origin is a hostname
 // that the attacker re-points at 127.0.0.1, so its Origin equals the Host it
-// sends, the request arrives from loopback, and the gate classifies it
-// owner. Closing that needs a Host allowlist, which is a separate change.
+// sends and the request arrives from loopback. The owner key is what keeps
+// it out of the owner tier: the kraken_owner cookie belongs to 127.0.0.1 (or
+// whatever host /api/owner set it on), never to the attacker's hostname, and
+// the page cannot read ~/.kraken/owner-key.
 //
 // The comparison relies on r.Host carrying the port exactly as the page's
 // own origin does. Checked for this server: Go's server takes r.Host from
@@ -246,6 +265,55 @@ func pairTokenFromRequest(r *http.Request) string {
 	return ""
 }
 
+// keyMatches compares a presented key with the one on disk in constant time.
+// No key on disk matches nothing, the empty string included.
+func keyMatches(got, want string) bool {
+	return want != "" && subtle.ConstantTimeCompare([]byte(got), []byte(want)) == 1
+}
+
+// hasOwnerKey reports whether a request carries the owner key, in the
+// header or the cookie.
+func hasOwnerKey(r *http.Request, deps gateDeps) bool {
+	if deps.ownerKey == nil {
+		return false
+	}
+	want := deps.ownerKey()
+	if keyMatches(r.Header.Get(jobs.OwnerKeyHeader), want) {
+		return true
+	}
+	c, err := r.Cookie(jobs.OwnerCookieName)
+	return err == nil && keyMatches(c.Value, want)
+}
+
+// ownerCookieMaxAge keeps the browser's kraken_owner cookie across restarts
+// (400 days is the longest Chrome keeps one).
+const ownerCookieMaxAge = 400 * 24 * 60 * 60
+
+// ownerHandler is GET /api/owner?key=<key>: on a local address with the
+// right key it sets the kraken_owner cookie (HttpOnly, SameSite=Strict) and
+// redirects to the board, so the key leaves the address bar. Its floor is
+// anon because a browser on this Mac arrives without the key; the address
+// and key checks here are the whole guard. `k board open` opens this link.
+func ownerHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		gateRefuse(w, http.StatusMethodNotAllowed, "GET only")
+		return
+	}
+	deps := defaultGateDeps
+	key := r.URL.Query().Get("key")
+	if deps.localOrigin == nil || deps.ownerKey == nil || !deps.localOrigin(r.RemoteAddr) || !keyMatches(key, deps.ownerKey()) {
+		gateRefuse(w, http.StatusUnauthorized, "unauthorized")
+		return
+	}
+	http.SetCookie(w, &http.Cookie{
+		Name: jobs.OwnerCookieName, Value: key, Path: "/", MaxAge: ownerCookieMaxAge,
+		HttpOnly: true, SameSite: http.SameSiteStrictMode,
+	})
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("Referrer-Policy", "no-referrer")
+	http.Redirect(w, r, "/", http.StatusSeeOther)
+}
+
 // tokenHash is the lowercase hex SHA-256 of a token — the only form a token
 // is ever stored or compared in.
 func tokenHash(token string) string {
@@ -277,7 +345,7 @@ func classifyDevice(r *http.Request, deps gateDeps) (Tier, core.TailnetIdentity,
 	if ip == nil {
 		return TierAnon, core.TailnetIdentity{}, nil // fail closed, token or not
 	}
-	if deps.localOrigin != nil && deps.localOrigin(r.RemoteAddr) {
+	if deps.localOrigin != nil && deps.localOrigin(r.RemoteAddr) && hasOwnerKey(r, deps) {
 		return TierOwner, core.TailnetIdentity{}, nil
 	}
 	if t := pairTokenFromRequest(r); t != "" && deps.lookupToken != nil {
@@ -299,6 +367,8 @@ func classifyDevice(r *http.Request, deps gateDeps) (Tier, core.TailnetIdentity,
 var routePolicy = func() map[string]Tier {
 	m := map[string]Tier{
 		"/api/health": TierAnon,
+		// the address and key checks are inside ownerHandler
+		"/api/owner": TierAnon,
 
 		"/api/node":             TierNode,
 		"/api/node/jobs":        TierNode,
@@ -477,9 +547,19 @@ func Gate(h http.Handler) http.Handler {
 		if ip := requestIP(r.RemoteAddr); ip != nil {
 			ipText = ip.String()
 		}
-		if tier < floor {
+		local := defaultGateDeps.localOrigin != nil && defaultGateDeps.localOrigin(r.RemoteAddr)
+		// A local caller without the owner key still gets the page shell —
+		// the static files outside /api/, node tier, no data in them — so a
+		// browser on this Mac loads the board and shows how to get the key
+		// rather than a raw refusal. Every /api/ call still needs the key.
+		shell := local && floor <= TierNode && !strings.HasPrefix(r.URL.Path, "/api/")
+		if tier < floor && !shell {
 			logRefusal(ipText, r.URL.Path, tier, floor)
-			gateRefuse(w, http.StatusUnauthorized, "unauthorized")
+			msg := "unauthorized"
+			if local {
+				msg = ownerKeyRequired
+			}
+			gateRefuse(w, http.StatusUnauthorized, msg)
 			return
 		}
 		if !postOriginOK(r) {

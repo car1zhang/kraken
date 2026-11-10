@@ -331,6 +331,7 @@ func edgeFleetSwapGate(t *testing.T, d gateDeps) {
 func edgeFleetGateDeps(st *store.Store, local bool) gateDeps {
 	return gateDeps{
 		localOrigin: func(string) bool { return local },
+		ownerKey:    func() string { return testOwnerKey },
 		lookupToken: func(h string) (*store.PairDevice, bool) {
 			d, err := st.GetPairDeviceByHash(h)
 			if err != nil {
@@ -938,7 +939,9 @@ func TestEdgeFleetPairRevokeOwnerUnknownID(t *testing.T) {
 	}
 	edgeFleetSwapGate(t, edgeFleetGateDeps(st, true))
 	rec := httptest.NewRecorder()
-	Gate(http.HandlerFunc(pairRevokeHandler)).ServeHTTP(rec, edgeFleetReq(http.MethodPost, "/api/pair/revoke", map[string]any{"id": 987654}, "127.0.0.1:1"))
+	req := edgeFleetReq(http.MethodPost, "/api/pair/revoke", map[string]any{"id": 987654}, "127.0.0.1:1")
+	req.Header.Set(jobs.OwnerKeyHeader, testOwnerKey)
+	Gate(http.HandlerFunc(pairRevokeHandler)).ServeHTTP(rec, req)
 	if rec.Code != http.StatusNotFound {
 		t.Errorf("owner revoking an unknown id: status %d, want 404", rec.Code)
 	}

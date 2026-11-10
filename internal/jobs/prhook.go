@@ -388,7 +388,7 @@ func postPRAttachStatus(slug, url string) (status int, body string) {
 	if err != nil {
 		return 0, ""
 	}
-	client := http.Client{Timeout: prAttachHTTPTimeout}
+	client := ServeClient(prAttachHTTPTimeout)
 	resp, err := client.Post(ServeBaseURL()+"/api/pr-attach", "application/json", bytes.NewReader(payload))
 	if err != nil {
 		return 0, ""

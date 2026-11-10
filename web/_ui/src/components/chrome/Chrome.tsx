@@ -4,7 +4,7 @@ import { fetchNodeSelf } from "../../api/client.ts";
 import type { NodeEnvelope, WebUsage } from "../../api/types.ts";
 import type { BoardModel } from "../../hooks/useBoard.ts";
 import { usePoll } from "../../hooks/usePoll.ts";
-import { isUnauthorized, nodesStat } from "../../lib/fleet.ts";
+import { isOwnerKeyMissing, isUnauthorized, nodesStat } from "../../lib/fleet.ts";
 import { VIEWS, type View } from "../../hooks/useHashRoute.ts";
 import { age, flagCount } from "../../lib/format.ts";
 import { BackgroundControl } from "./BackgroundControl.tsx";
@@ -116,7 +116,10 @@ export function Chrome({
   // The gate's refusal is not an outage: a browser on ANOTHER Mac reaching this
   // board over the tailnet is node tier, and node tier may not read the board.
   // Saying "unreachable" there was the misleading text this branch replaces.
-  const unpaired = isUnauthorized(board.error);
+  // …except on this Mac itself, where a refusal means the page lacks the
+  // owner key (gate.go): the fix is a command, not another machine's board.
+  const ownerKeyMissing = isOwnerKeyMissing(board.error);
+  const unpaired = isUnauthorized(board.error) && !ownerKeyMissing;
   // …and who this board belongs to, which GET /api/node answers at node tier.
   // Polled only while refused, so a paired or local board never asks.
   const owner = usePoll<NodeEnvelope>((signal) => fetchNodeSelf(signal), OWNER_POLL_MS, {
@@ -126,7 +129,9 @@ export function Chrome({
 
   // A board fetch that failed says so; mid-update the server is gone ON
   // PURPOSE, and "unreachable" would read as a crash.
-  const daemonText = unpaired
+  const daemonText = ownerKeyMissing
+    ? "owner key needed"
+    : unpaired
     ? "not paired — node tier"
     : board.error
     ? update.restarting
@@ -165,7 +170,7 @@ export function Chrome({
           KRAKEN<b>▞</b>
         </span>
         <span
-          className={"led" + (ledOK ? " ok" : unpaired ? " warn" : "")}
+          className={"led" + (ledOK ? " ok" : unpaired || ownerKeyMissing ? " warn" : "")}
           id="daemon-led"
         />
         <span className="stat" id="daemon-stat">
@@ -241,6 +246,13 @@ export function Chrome({
           {showErr ? null : <i>▊</i>}
         </span>
       </header>
+      {ownerKeyMissing ? (
+        <div className="stale-banner unpaired-banner" id="owner-key-banner">
+          {"This page has no owner key. Run "}
+          <code>k board open</code>
+          {" in a terminal on this Mac to open the board."}
+        </div>
+      ) : null}
       {unpaired ? (
         <div className="stale-banner unpaired-banner" id="unpaired-banner">
           {"This board belongs to "}
