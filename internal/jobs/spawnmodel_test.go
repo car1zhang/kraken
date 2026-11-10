@@ -48,7 +48,7 @@ func TestSpawnModel(t *testing.T) {
 		{"opus spent too → configured", fable, spawnModelRow(100, 100, 30, 50, 0), fable},
 		{"session spent too → configured", fable, spawnModelRow(100, 40, 100, 50, 0), fable},
 		{"weekly spent too → configured", fable, spawnModelRow(100, 40, 30, 100, 0), fable},
-		{"hand-authored fable model: also falls", "claude-fable-5-1", spawnModelRow(100, 40, 30, 50, 0), fableFallbackModel},
+		{"hand-authored fable model: also falls", "claude-fable-5-2", spawnModelRow(100, 40, 30, 50, 0), fableFallbackModel},
 		{"non-fable model: never touched", "sonnet", spawnModelRow(100, 40, 30, 50, 0), "sonnet"},
 		{"opus configured, fable spent → untouched", core.DefaultModel, spawnModelRow(100, 0, 0, 0, 0), core.DefaultModel},
 		{"empty configured → empty", "", spawnModelRow(100, 40, 30, 50, 0), ""},

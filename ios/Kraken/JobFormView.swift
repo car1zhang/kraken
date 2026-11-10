@@ -259,7 +259,7 @@ struct JobFormView: View {
                 TextField(
                     agent == "codex"
                         ? "model for zeus (optional, default = gpt-6-astra)"
-                        : "model for zeus (optional, default = claude-fable-5-1)",
+                        : "model for zeus (optional, default = claude-fable-5-2)",
                     text: $model
                 )
                     .autocorrectionDisabled()

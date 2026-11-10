@@ -63,7 +63,7 @@ const (
 )
 
 // fableBannerRe matches the per-model-tier banner for the Fable tier, with or
-// without a version ("Fable limit", "Fable 5 limit", "Fable 5.1 limit"). The
+// without a version ("Fable limit", "Fable 5 limit", "Fable 5.1 limit", "Fable 5.2 limit"). The
 // gap is bounded and line-local rather than "no period", since a dotted
 // version would otherwise end the match.
 var fableBannerRe = regexp.MustCompile(`(?i)reached your fable\b[^\n]{0,12}?\blimit`)

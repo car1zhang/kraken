@@ -662,7 +662,7 @@ describe("miniToWorld — edges (W7)", () => {
 describe("modelCoat — edges (W9)", () => {
   const cases: Array<[string | undefined, string]> = [
     // exact ids kraken spawns
-    ["claude-fable-5-1", "fable"],
+    ["claude-fable-5-2", "fable"],
     ["claude-opus-5", "opus"],
     ["claude-opus-5-5", "opus"],
     ["gpt-6-astra", "codex"],

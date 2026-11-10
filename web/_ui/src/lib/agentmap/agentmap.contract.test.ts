@@ -457,7 +457,7 @@ describe("miniToWorld (W7)", () => {
 
 describe("modelCoat (W9)", () => {
   it("matches fable, opus, sonnet, haiku, then gpt/codex/astra, case-insensitively", () => {
-    expect(modelCoat("claude-fable-5-1")).toBe("fable");
+    expect(modelCoat("claude-fable-5-2")).toBe("fable");
     expect(modelCoat("claude-opus-5")).toBe("opus");
     expect(modelCoat("claude-opus-5-5")).toBe("opus");
     expect(modelCoat("opus")).toBe("opus");

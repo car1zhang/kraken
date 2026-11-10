@@ -292,7 +292,7 @@ const DefaultModel = "claude-opus-5"
 // reader that puts it on a command line (`jobs.JobTemplate` also reads it, but
 // only to print a new job file's documented default), so `k c` and the board's
 // spawn action never see it.
-const ZeusModel = "claude-fable-5-1"
+const ZeusModel = "claude-fable-5-2"
 
 // FableFallbackModel is the tier the limit rescue's Fable fallback types
 // into a Fable-exhausted pane with /model (jobs/modelfallback.go). It is its
@@ -318,7 +318,7 @@ const CodexZeusModel = "gpt-6-astra"
 // because the two answer different questions, and pinning them separately is
 // what lets either move without dragging the other. Like both of its
 // neighbours it is an exact model id, never the `fable` alias.
-const IrisModel = "claude-fable-5-1"
+const IrisModel = "claude-fable-5-2"
 
 // ThreadModels is the menu a SIDE THREAD may be branched on, alias → exact
 // model id. It is the one place in the binary where a tier alias is RESOLVED
@@ -344,7 +344,7 @@ var ThreadModels = map[string]string{
 	"haiku":  "claude-haiku-4-5-20251001",
 	"sonnet": "claude-sonnet-5",
 	"opus":   "claude-opus-5",
-	"fable":  "claude-fable-5-1",
+	"fable":  "claude-fable-5-2",
 }
 
 // ModelArgs is the `--model` flag pair for a spawn: the caller's explicit model

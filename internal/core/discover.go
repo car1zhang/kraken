@@ -1039,7 +1039,7 @@ func readModel(path string) string {
 	return shortModel(model)
 }
 
-// shortModel compacts a model id for display: claude-fable-5-1 → fable-5-1.
+// shortModel compacts a model id for display: claude-fable-5-2 → fable-5-2.
 func shortModel(id string) string {
 	return strings.TrimPrefix(id, "claude-")
 }
