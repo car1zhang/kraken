@@ -22,7 +22,10 @@ import (
 
 // dreamSlugPrefix identifies a dream job. jobs.CreateDreamJob mints exactly
 // one per local calendar day as `dream-<YYYY-MM-DD>`, so the prefix is both
-// the filter and (with it stripped) the report's date.
+// the filter and (with it stripped) the report's date. internal/jobs keeps
+// its own unexported copy (dreamSlugPrefix in dream.go, behind isDreamJob);
+// the two must agree byte for byte, and api sits above jobs so neither can
+// borrow the other's.
 const dreamSlugPrefix = "dream-"
 
 // dreamReportName is the artifact every dream cell writes its night report

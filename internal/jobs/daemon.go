@@ -1609,8 +1609,18 @@ func (d *daemonState) trackPRs(j *Job, all []*core.Peer, live map[string]bool) {
 // and would only be woken to read old news) and its cell session is live
 // this tick. Pure, so the gate is table-testable without a tick loop; the
 // peer lookup and the send stay in trackPRs.
+//
+// A dream job is exempt whatever its state. Its zeus opens its PRs as the
+// LAST thing it does and then stops at a closing line that is not a gate,
+// so a merge asks nothing of it: the notice only wakes a finished pass to
+// read old news, and the turn it starts can run on with nothing left to do.
+// A PR comment or a failing check still reaches that pane through watchPRs,
+// since those are real asks.
 func mergeBumpWanted(j *Job, live map[string]bool) bool {
 	if j.State != "working" && j.State != "blocked" {
+		return false
+	}
+	if isDreamJob(j) {
 		return false
 	}
 	return live[CellSession(j)]

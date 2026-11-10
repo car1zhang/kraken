@@ -113,6 +113,33 @@ func TestContractMergeBumpWanted(t *testing.T) {
 	}
 }
 
+// A dream pass is never bumped: its zeus opens its PRs last and stops at a
+// closing line nobody replies to, so a merge notice only wakes a finished
+// pass. The gate keys on the slug prefix dream.go mints, so a job whose slug
+// merely CONTAINS "dream" is still bumped like any other.
+func TestContractMergeBumpWantedSkipsDreamJobs(t *testing.T) {
+	live := func(j *Job) map[string]bool { return map[string]bool{CellSession(j): true} }
+	for _, state := range []string{"working", "blocked"} {
+		dream := &Job{Slug: dreamSlugPrefix + "2031-04-17", ID: 9001, State: state}
+		if mergeBumpWanted(dream, live(dream)) {
+			t.Errorf("state=%q: mergeBumpWanted true on dream job %q", state, dream.Slug)
+		}
+		if !isDreamJob(dream) {
+			t.Errorf("isDreamJob false on %q", dream.Slug)
+		}
+		control := &Job{Slug: "daydream-cache-demo", ID: 9002, State: state}
+		if !mergeBumpWanted(control, live(control)) {
+			t.Errorf("state=%q: mergeBumpWanted false on non-dream job %q", state, control.Slug)
+		}
+		if isDreamJob(control) {
+			t.Errorf("isDreamJob true on %q", control.Slug)
+		}
+	}
+	if isDreamJob(nil) {
+		t.Error("isDreamJob(nil) = true")
+	}
+}
+
 // The liveness key is the job's OWN cell session: a live session belonging to
 // a different generation of the same slug (different id) must not count.
 func TestContractMergeBumpWantedKeysOnOwnCellSession(t *testing.T) {
