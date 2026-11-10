@@ -526,12 +526,16 @@ specific, and it is the only place the cell's real paths appear:
   the brief govern any agent that changes the repo.
 - **The review round finishes before the first watch-store write, and every reviewer finding you
   decline gets a home.** The order on a night that ships is: the diffs, the review rounds through
-  their last verdict, then the watchlist writes, the count, the report. A lead that writes its rows
-  first has no slot left for what the round turns up, and a finding the reviewers raised and you
-  declined then reaches neither a row nor the report. Each declined finding is named in one of two
-  places: a watch row (its own, or the evidence text of the row for the change it was raised on), or
-  the report's Seen section with the reviewer and round that raised it. When a round does land after
-  your writes, run a second write pass for its declined findings and take the count again.
+  their last verdict, the PRs, then the watchlist writes, the count, the report (a night with no
+  review round, `solo: true` or `/direct` without `review`, runs the same order without that step).
+  If you write your rows first you tend to count and report before the round is in, and a finding
+  the reviewers raised and you declined then reaches neither a row nor the report. Each declined
+  finding is named in one of two places: a watch row (its own, or the evidence text of the row for
+  the change it was raised on, sent with that row's whole evidence since a fold replaces evidence),
+  or the report's Judgment calls section with the reviewer and round that raised it. When a round
+  does land after your writes, run a second write pass for its declined findings, take the count
+  again, and rewrite the report's Watching and Judgment calls sections and the closing line's M if
+  they were already written.
 - **Never `open`** (there is no browser in a cell).
 - **The phase ends with one line, then you stop.** Say exactly:
 
