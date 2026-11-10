@@ -1002,6 +1002,53 @@ func TestReduceTranscriptSeparatesTeammateFromUser(t *testing.T) {
 	}
 }
 
+// TestReduceTranscriptLabelsCompactionSummary: the summary Claude Code writes
+// after a compaction is a user record in the MODEL's words. Emitted as [user]
+// it reads as a long operator message that says the session ran out of
+// context, so it carries its own label, in both content shapes, and the text
+// is kept rather than dropped.
+func TestReduceTranscriptLabelsCompactionSummary(t *testing.T) {
+	projects := mineHome(t)
+	now := time.Now().UnixMilli()
+	since := now - int64(time.Hour/time.Millisecond)
+
+	summary := "This session is being continued from a previous conversation that ran out of context. SUMMARY-OF-THE-DROPPED-TURNS"
+	compact := func(ts int64, content any) string {
+		return mineJSON(t, map[string]any{
+			"type": "user", "timestamp": mineISO(ts), "isCompactSummary": true,
+			"message": map[string]any{"role": "user", "content": content},
+		})
+	}
+	path := mineWrite(t, projects, "-Users-carl-Developer-monolith", "sess.jsonl",
+		mineUser(t, now-5000, "CARL-SAID-THIS"),
+		compact(now-4000, summary),
+		compact(now-3000, []any{mineText("SECOND-SUMMARY-AS-A-TEXT-PART")}),
+	)
+
+	out, err := ReduceTranscript(path, since)
+	if err != nil {
+		t.Fatalf("ReduceTranscript: %v", err)
+	}
+	got := string(out)
+
+	if !strings.Contains(got, "[user]\nCARL-SAID-THIS") {
+		t.Errorf("carl's own turn lost or mislabelled:\n%s", got)
+	}
+	if !strings.Contains(got, "[compaction summary]\n"+summary) {
+		t.Errorf("string-content summary not labelled as a compaction summary:\n%s", got)
+	}
+	if !strings.Contains(got, "[compaction summary]\nSECOND-SUMMARY-AS-A-TEXT-PART") {
+		t.Errorf("text-part summary not labelled as a compaction summary:\n%s", got)
+	}
+	// the actual regression: the model's summary attributed to carl
+	if strings.Contains(got, "[user]\nThis session is being continued") {
+		t.Errorf("compaction summary attributed to carl:\n%s", got)
+	}
+	if n := strings.Count(got, "[user]"); n != 1 {
+		t.Errorf("[user] appears %d times, want 1 (carl's turn only):\n%s", n, got)
+	}
+}
+
 // TestReduceTranscriptCapsHugeText: a text block is bounded by construction,
 // not by luck. Nothing today is near the cap, but one oversized block must
 // not be able to dominate a scout's payload — and when it is cut, the cut is
