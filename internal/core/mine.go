@@ -256,6 +256,11 @@ type mineRecord struct {
 	// the API call. Not `sessionId`, which a fork rewrites on every replayed
 	// record. See tokenRecordOwned (tokens.go).
 	SessionID string `json:"session_id"`
+	// IsCompactSummary marks the user record Claude Code writes after a
+	// compaction: the model's own summary of the dropped conversation, stored
+	// where a prompt would be. operator.go excludes it from operator prose
+	// for the same reason reducer.line labels it apart.
+	IsCompactSummary bool `json:"isCompactSummary"`
 	// Operation/Content are the `queue-operation` record's fields, and
 	// Attachment is the `attachment` record's payload: the two of the three
 	// shapes a message typed MID-TURN is stored as that these fields cover —
@@ -859,6 +864,25 @@ func (r *reducer) line(out reduceSink, line []byte, since int64) {
 	default:
 		return // mode, file-history, system bookkeeping
 	}
+	if rec.Type == "user" && rec.IsCompactSummary {
+		// The post-compaction summary is a user record whose text is the
+		// MODEL's, usually opening "This session is being continued from a
+		// previous conversation that ran out of context" whether the
+		// compaction was automatic or a typed /compact. Under [user] a reader
+		// takes it for a long operator message and for a context overflow that
+		// may never have happened, so it gets its own label; the summary stays
+		// in the view because it records what the agent believed it still owed.
+		if text, ok := mineUserString(rec.Message.Content); ok {
+			writeReduced(out, "[compaction summary]", text)
+			return
+		}
+		for _, b := range mineBlocks(rec.Message.Content) {
+			if b.Type == "text" {
+				writeReduced(out, "[compaction summary]", b.Text)
+			}
+		}
+		return
+	}
 	if rec.Type == "user" {
 		// A queued message the harness later DELIVERS becomes a real user
 		// record with the same text — the enqueue and the delivered turn are
@@ -999,6 +1023,9 @@ func ReduceJSONLBytes(data []byte) []byte {
 //
 //	[teammate zeus-demo]
 //	implement the slice described in …
+//
+//	[compaction summary]
+//	This session is being continued from a previous conversation that …
 //
 // The [user] label means CARL, and only carl. A message another agent sent
 // into this session — every brief zeus hands hephaestus/athena/hermes, every
