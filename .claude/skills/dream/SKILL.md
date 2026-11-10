@@ -524,6 +524,14 @@ specific, and it is the only place the cell's real paths appear:
 - **Scouts are unnamed subagents**, never teammates: they read and report, and change nothing in the
   repo — they still write their own findings to the scratch path you give them. The crew rules in
   the brief govern any agent that changes the repo.
+- **The review round finishes before the first watch-store write, and every reviewer finding you
+  decline gets a home.** The order on a night that ships is: the diffs, the review rounds through
+  their last verdict, then the watchlist writes, the count, the report. A lead that writes its rows
+  first has no slot left for what the round turns up, and a finding the reviewers raised and you
+  declined then reaches neither a row nor the report. Each declined finding is named in one of two
+  places: a watch row (its own, or the evidence text of the row for the change it was raised on), or
+  the report's Seen section with the reviewer and round that raised it. When a round does land after
+  your writes, run a second write pass for its declined findings and take the count again.
 - **Never `open`** (there is no browser in a cell).
 - **The phase ends with one line, then you stop.** Say exactly:
 
