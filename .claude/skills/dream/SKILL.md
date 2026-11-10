@@ -495,7 +495,7 @@ Write `00-dream-report.md` into the artifacts dir. Like every md artifact, it op
 | Section | Content |
 |---|---|
 | Shipped | Each change, the evidence behind it, and its PR. |
-| Judgment calls | Everything shipped below the two-sighting default, and why. An empty section on a night that shipped several changes means you are not naming your own judgment. |
+| Judgment calls | Everything shipped below the two-sighting default, and every reviewer finding you declined (with the reviewer and round), and why. An empty section on a night that shipped several changes means you are not naming your own judgment. |
 | Watching | Newly watched facts, and what changed on existing ones — the watch overlay is not committed, so this is the only place its movement is visible. |
 | Owed human actions | Every action only {{operator}} can take — a credential rotation, an external revoke — still outstanding, each with its watch row id, re-raised EVERY night until it is done. Done means {{operator}}'s `fine` verdict on that row, or the row's evidence recording who performed the action — then unwatch it; never unwatch a row while its action is still owed, and never write the verdict yourself. The watch row is what makes an owed action durable; this report and the closing line are the only channel that re-SURFACES it, and one live credential's rotation, named in a closing line but not re-raised by the next pass, ceased to exist for two nights while the value stayed live. |
 | Your prompting | The prompting feedback, quoted. |
@@ -524,6 +524,18 @@ specific, and it is the only place the cell's real paths appear:
 - **Scouts are unnamed subagents**, never teammates: they read and report, and change nothing in the
   repo — they still write their own findings to the scratch path you give them. The crew rules in
   the brief govern any agent that changes the repo.
+- **The review round finishes before the first watch-store write, and every reviewer finding you
+  decline gets a home.** The order on a night that ships is: the diffs, the review rounds through
+  their last verdict, the PRs, then the watchlist writes, the count, the report (a night with no
+  review round, `solo: true` or `/direct` without `review`, runs the same order without that step).
+  If you write your rows first you tend to count and report before the round is in, and a finding
+  the reviewers raised and you declined then reaches neither a row nor the report. Each declined
+  finding is named in one of two places: a watch row (its own, or the evidence text of the row for
+  the change it was raised on, sent with that row's whole evidence since a fold replaces evidence),
+  or the report's Judgment calls section with the reviewer and round that raised it. When a round
+  does land after your writes, run a second write pass for its declined findings, take the count
+  again, and rewrite the report's Watching and Judgment calls sections and the closing line's M if
+  they were already written.
 - **Never `open`** (there is no browser in a cell).
 - **The phase ends with one line, then you stop.** Say exactly:
 
