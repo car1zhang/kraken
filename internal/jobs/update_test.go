@@ -11,6 +11,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"kraken/internal/core"
 )
 
 // gitStub scripts updateRunGit off the joined args ("status --porcelain"),
@@ -533,10 +535,121 @@ func TestLookToolchainAbsentNamesEveryCandidate(t *testing.T) {
 	if err == nil {
 		t.Fatal("lookToolchain for a nonexistent tool succeeded")
 	}
-	for _, dir := range append(append([]string{}, toolDirs...), filepath.Join(home, "go", "bin")) {
+	for _, dir := range append(append([]string{}, toolDirs...), filepath.Join(home, "go", "bin"), core.NvmBinPattern) {
 		if !strings.Contains(err.Error(), dir) {
 			t.Errorf("error %q does not name candidate dir %s", err.Error(), dir)
 		}
+	}
+}
+
+// nvmTool plants an executable `name` under $HOME/.nvm/versions/node/<node>/bin
+// and returns its path — the only place npm lives on a machine whose node is
+// nvm's (the case the board's update button failed on, 2026-11-09).
+func nvmTool(t *testing.T, home, node, name string) string {
+	t.Helper()
+	dir := filepath.Join(home, ".nvm", "versions", "node", node, "bin")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	tool := filepath.Join(dir, name)
+	if err := os.WriteFile(tool, []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return tool
+}
+
+func TestLookToolchainFoundUnderNvm(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	stubLookPath(t, func(string) (string, error) { return "", exec.ErrNotFound })
+	stubToolDirs(t, filepath.Join(t.TempDir(), "empty"))
+	want := nvmTool(t, home, "v24.6.0", "npm")
+
+	got, err := lookToolchain("npm")
+	if err != nil || got != want {
+		t.Fatalf("lookToolchain(npm) = %q, %v; want the nvm npm %s, nil", got, err, want)
+	}
+}
+
+func TestLookToolchainNvmPrefersNewestNode(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	stubLookPath(t, func(string) (string, error) { return "", exec.ErrNotFound })
+	stubToolDirs(t, filepath.Join(t.TempDir(), "empty"))
+	nvmTool(t, home, "v9.11.2", "npm") // lexically after v24 — numeric order must win
+	nvmTool(t, home, "v20.1.0", "npm")
+	want := nvmTool(t, home, "v24.6.0", "npm")
+
+	got, err := lookToolchain("npm")
+	if err != nil || got != want {
+		t.Fatalf("lookToolchain(npm) = %q, %v; want the newest node's %s, nil", got, err, want)
+	}
+}
+
+func TestLookToolchainFixedDirsBeatNvm(t *testing.T) {
+	// The nvm rung is the LAST fallback: a tool in a known install dir (or
+	// ~/go/bin) still wins, so adding the rung changes nothing for a machine
+	// that never needed it.
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	stubLookPath(t, func(string) (string, error) { return "", exec.ErrNotFound })
+	dir := t.TempDir()
+	want := filepath.Join(dir, "npm")
+	if err := os.WriteFile(want, []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	stubToolDirs(t, dir)
+	nvmTool(t, home, "v24.6.0", "npm")
+
+	got, err := lookToolchain("npm")
+	if err != nil || got != want {
+		t.Fatalf("lookToolchain(npm) = %q, %v; want the fixed dir's %s, nil", got, err, want)
+	}
+}
+
+func TestLookToolchainNvmSkipsNonExecutable(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	stubLookPath(t, func(string) (string, error) { return "", exec.ErrNotFound })
+	stubToolDirs(t, filepath.Join(t.TempDir(), "empty"))
+	tool := nvmTool(t, home, "v24.6.0", "npm")
+	if err := os.Chmod(tool, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if got, err := lookToolchain("npm"); err == nil {
+		t.Fatalf("lookToolchain(npm) = %q, want a refusal for a non-executable candidate", got)
+	}
+}
+
+// The board-click path itself, not only the helper: a preflight whose PATH
+// and fixed dirs hold go and make but no npm resolves npm from nvm into
+// NpmPath, which cmd_update.go prepends for `make build`. This is the exact
+// state the UPDATE button refused in (2026-11-09).
+func TestPreflightUpdateResolvesNpmFromNvm(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	fakeKrakenRepo(t)
+	stubGit(t, gitStub{
+		"rev-parse --abbrev-ref HEAD": "main",
+		"status --porcelain":          "",
+		"rev-parse --short HEAD":      "abc1234",
+	}.run)
+	stubLookPath(t, func(name string) (string, error) {
+		if name == "go" || name == "make" {
+			return "/stub/" + name, nil
+		}
+		return "", exec.ErrNotFound
+	})
+	stubToolDirs(t, filepath.Join(t.TempDir(), "empty"))
+	want := nvmTool(t, home, "v24.6.0", "npm")
+
+	pf, err := PreflightUpdate()
+	if err != nil {
+		t.Fatalf("preflight: %v, want npm resolved from nvm", err)
+	}
+	if pf.NpmPath != want {
+		t.Fatalf("NpmPath = %q, want the nvm npm %s", pf.NpmPath, want)
 	}
 }
 

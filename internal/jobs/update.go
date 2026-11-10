@@ -18,6 +18,7 @@ import (
 	"syscall"
 	"time"
 
+	"kraken/internal/core"
 	"kraken/internal/util"
 )
 
@@ -424,9 +425,12 @@ func PreflightUpdate() (UpdatePreflightInfo, error) {
 	}
 	// npm joined this list when the board became a React app built by vite:
 	// `make build` runs `npm ci && npm run build` before `go build`, so npm is
-	// now as load-bearing as go is. toolDirs already lists /opt/homebrew/bin,
-	// where node installs on this machine, so the fallback resolves it even
-	// when launchd hands the daemon a PATH that does not.
+	// now as load-bearing as go is. On this machine node lives under nvm and
+	// nowhere else (the homebrew node toolDirs once relied on is gone), which
+	// is why lookToolchain walks core.NvmBinDirs after the fixed dirs: without
+	// that rung every board click refused with `npm not found` (2026-11-09).
+	// The dir it resolves to also holds `node`, which npm's shebang needs, so
+	// prepending it (cmd_update.go) makes both findable at once.
 	if pf.NpmPath, err = lookToolchain("npm"); err != nil {
 		return pf, err
 	}
@@ -435,7 +439,8 @@ func PreflightUpdate() (UpdatePreflightInfo, error) {
 	return pf, nil
 }
 
-// toolDirs are the fallbacks lookToolchain searches after PATH, in order. The
+// toolDirs are the fixed fallbacks lookToolchain searches after PATH, in
+// order (~/go/bin and the nvm rung follow them; see lookToolchain). The
 // first entry is the whole reason this function exists: go lives in
 // /usr/local/go/bin on this machine and the launchd plist's PATH does not
 // include it, so a build kicked off by the daemon failed with "go: command
@@ -453,23 +458,30 @@ var toolDirs = []string{
 }
 
 // lookToolchain resolves a build tool to an absolute path: PATH first, then
-// the known install locations above plus ~/go/bin. The error names every
-// place it looked, since "make not found" with no list is unactionable.
-// Shared by both preflights and by ghauth.go — go/make for the updater,
-// xcodegen for the shipper, gh for the account switch — which is why it and
-// its two seams are named for the job rather than for update.go.
+// the known install locations above plus ~/go/bin, then every nvm node's
+// bin dir newest first (core.NvmBinDirs — the rung npm needs, see
+// PreflightUpdate). The error names every place it looked, since "make not
+// found" with no list is unactionable; the nvm rung is named by its pattern,
+// since on a machine without nvm there is no dir to name. Shared by both
+// preflights and by ghauth.go — go/make/npm for the updater, xcodegen for
+// the shipper, gh for the account switch — which is why it and its two seams
+// are named for the job rather than for update.go.
 func lookToolchain(name string) (string, error) {
 	if p, err := toolLookPath(name); err == nil {
 		return p, nil
 	}
-	dirs := append(append([]string{}, toolDirs...), filepath.Join(util.Home(), "go", "bin"))
+	// One fixed list feeds both the walk and the error, so a rung added to
+	// one cannot go missing from the other.
+	fixed := append(append([]string{}, toolDirs...), filepath.Join(util.Home(), "go", "bin"))
+	dirs := append(append([]string{}, fixed...), core.NvmBinDirs()...)
 	for _, dir := range dirs {
 		cand := filepath.Join(dir, name)
 		if fi, err := os.Stat(cand); err == nil && !fi.IsDir() && fi.Mode()&0o111 != 0 {
 			return cand, nil
 		}
 	}
-	return "", fmt.Errorf("%s not found — checked %s", name, strings.Join(dirs, ", "))
+	searched := append(fixed, core.NvmBinPattern)
+	return "", fmt.Errorf("%s not found — checked %s", name, strings.Join(searched, ", "))
 }
 
 // updateAvailKVKey is the kv row the background availability check lands in.
