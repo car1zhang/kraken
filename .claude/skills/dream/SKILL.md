@@ -229,8 +229,23 @@ had propagated typed both fragments into four of its own commands, under a brief
 exactly that, because nothing in it said how else to count them. A scout that built a python dict
 of the identifiers and the credential it was tracing copied all of them into a new transcript, from where
 the next night's `reduce` carried them into that pass's staged views: the dream pass had become the
-propagator its own evidence rule warns about, and nothing in the brief had said otherwise. And
-the brief carries a short **already-established list** — the known cross-cutting costs and facts
+propagator its own evidence rule warns about, and nothing in the brief had said otherwise.
+The brief also names the tool behind that grep: the tool shell's `grep` is Claude Code's bundled
+ugrep behind a shell function, not the system grep. A `-E` pattern with sizeable bounded repeats on
+both sides of the match (`.{0,80}word.{0,200}`, grouped or not; a one-sided `.{0,N}` passes at any
+size) is refused outright with `ugrep: error: … exceeds complexity limits` and exit 2, under `-c` as
+under `-o`, and `-U` does not help, so that shape takes `-P`. Any file it judges binary (a NUL byte,
+or invalid UTF-8) is skipped silently even when named on the command line, `-c` printing no line for
+it rather than `:0` (`-a` searches it as text), and under `-r` it also honours `.gitignore`. An
+empty result may therefore be the tool rather than the evidence. A refusal exits 2 and prints its
+error (read the error, since a closing `; true` hides the status); a skipped binary file exits 1
+exactly as a true no-match does, so under `-c` the tell is a missing line where `0` would be, and
+`-a` re-runs it as text; a `no needles` after an extraction that printed an error is the tool; and
+an unexpected empty result is a question about the command before it becomes a claim about the
+transcript (a scout lost the excerpt it had asked for this way and wrote its notes without it). For
+a prose excerpt, which a shape scan never prints, `grep -n … | cut -d: -f1` gives the line number,
+and `sed -n '<N>p' <file> | grep -o -P '.{0,80}\Q<word>\E.{0,200}'` a bounded slice around the hit
+(`cut -c1-<width>` shows only the line's start). And the brief carries a short **already-established list** — the known cross-cutting costs and facts
 from the watch store and {{operator}}'s mental model (`kraken mm get --q "<subject>"`, then `kraken mm show <id>`) that touch this scout's assignment — marked "measure, don't
 re-derive": six scouts in one night each independently re-derived from raw a cost kraken's memory
 already held, because nothing in any brief said what was already known.
