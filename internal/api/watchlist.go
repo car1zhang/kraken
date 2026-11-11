@@ -117,7 +117,7 @@ type webWatchItem struct {
 	Sightings   int64  `json:"sightings"`
 	FirstSeen   int64  `json:"first_seen"` // unix millis
 	LastSeen    int64  `json:"last_seen"`  // unix millis
-	// Evidence is a local-only JSON sample of the most recent occurrence — it
+	// Evidence is local-only text about the sightings, newest first — it
 	// never enters git (the dream loop's load-bearing destination rule), but it
 	// does ride this route, which is localhost/tailnet only, same as every
 	// other read here.

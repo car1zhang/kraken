@@ -663,7 +663,7 @@ property is `watchClass` behind an explicit CodingKey.
 | `sightings` | number | always | a repeat folds into the existing item and increments this, rather than adding a second one |
 | `first_seen` | number | always | unix millis |
 | `last_seen` | number | always | unix millis |
-| `evidence` | string | omitempty | JSON sample of the most recent occurrence, replaced wholesale on each sighting. Local-only — it never enters git |
+| `evidence` | string | omitempty | free text about the sightings, newest first: each fold puts the sent text in front of what the row held, separated by ` \|\| PRIOR: `. Local-only — it never enters git |
 | `suggested_fix` | string | omitempty | the agent's proposed correction |
 | `pr_url` | string | omitempty | |
 | `updated_at` | number | always | unix millis — the AGENT's last write; a verdict deliberately does not bump it |
@@ -737,14 +737,17 @@ that echoed a whole row back from the GET needs to be told.
 | `state` | string | one of the three states; blank defaults to `watching` on add, and leaves the current state alone on update |
 | `sightings` | number | blank/zero on update leaves the current count alone |
 | `first_seen` / `last_seen` | number | unix millis; blank/zero leaves the current values alone — the store's update is partial per column, so a restatement of one field never zeroes the rest |
-| `evidence` | string | JSON sample, replaced wholesale |
+| `evidence` | string | free text; `update` replaces the stored evidence, an `add` that folds puts it in front (see below) |
 | `suggested_fix` | string | |
 | `pr_url` | string | |
 
 **`add` is fold-or-create.** If a LIVE row already states this observation —
 matched on the whitespace-collapsed sentence — the add FOLDS: `sightings`
-increments, `last_seen` moves, `evidence` is replaced, and
-`class`/`state`/`suggested_fix`/`pr_url` are applied when sent. `src`/`dst`/
+increments, `last_seen` moves, a sent `evidence` goes in front of the stored
+one (`<sent> || PRIOR: <stored>`; stored as sent when it already contains the
+stored text, and left alone when none is sent), and
+`class`/`state`/`suggested_fix`/`pr_url` are applied when sent. `update` is the
+op that replaces `evidence` outright. `src`/`dst`/
 `predicate` are ignored: the observation already has them, and letting a re-add
 move them would rewrite history on the strength of one night's phrasing.
 Otherwise a new row is inserted, with `state` defaulting to `watching` and

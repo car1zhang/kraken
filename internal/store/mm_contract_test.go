@@ -1017,7 +1017,9 @@ func TestContractMMWatchAddFoldsOnAByteIdenticalObservation(t *testing.T) {
 	if got.Class != "correction" || got.State != "shipped" {
 		t.Errorf("class/state = %q/%q, want correction/shipped", got.Class, got.State)
 	}
-	if got.Evidence != "second sighting" || got.SuggestedFix != "cite the obligation, harder" {
+	// Evidence is the exception: the sent text goes in front of the stored.
+	foldedEvidence := "second sighting" + watchEvidencePriorSep + "first sighting"
+	if got.Evidence != foldedEvidence || got.SuggestedFix != "cite the obligation, harder" {
 		t.Errorf("evidence/suggested_fix = %q/%q", got.Evidence, got.SuggestedFix)
 	}
 	if got.PRURL != "https://example.invalid/pr/1" {
@@ -1038,7 +1040,7 @@ func TestContractMMWatchAddFoldsOnAByteIdenticalObservation(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetWatchItem after the empty fold: %v", err)
 	}
-	if got.Class != "correction" || got.Evidence != "second sighting" {
+	if got.Class != "correction" || got.Evidence != foldedEvidence {
 		t.Errorf("an empty fold blanked the agent fields: class=%q evidence=%q", got.Class, got.Evidence)
 	}
 	if got.Sightings != 3 {

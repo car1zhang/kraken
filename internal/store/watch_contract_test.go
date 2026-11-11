@@ -332,8 +332,8 @@ func TestContractAddWatchItemCreatesThenFolds(t *testing.T) {
 	if second.LastSeen < first.LastSeen {
 		t.Errorf("last_seen went backwards on a fold: %d -> %d", first.LastSeen, second.LastSeen)
 	}
-	if second.Evidence != `{"second":true}` {
-		t.Errorf("evidence = %q, want the fresh sample", second.Evidence)
+	if want := `{"second":true}` + watchEvidencePriorSep + `{"first":true}`; second.Evidence != want {
+		t.Errorf("evidence = %q, want the fresh sample in front of the stored one (%q)", second.Evidence, want)
 	}
 	if second.SuggestedFix != "cite the obligation" {
 		t.Errorf("suggested_fix = %q, want the newly supplied one", second.SuggestedFix)
