@@ -86,6 +86,11 @@ func cmdServe(args []string) {
 	// every cell hook installed from here on routes its pr-hook POST at
 	// the right place instead of assuming defaultServeAddr.
 	jobs.SetHookServeAddr(addr)
+	// The owner key (jobs/ownerkey.go) must exist before the first request:
+	// without it the gate treats nobody as the owner, this Mac included.
+	if _, err := jobs.EnsureOwnerKey(); err != nil {
+		util.Die("owner key %s: %v", jobs.OwnerKeyPath(), err)
+	}
 
 	go jobs.RunServeTicks(jobs.ServeOpts{Mirror: mirror})
 	if !mirror {

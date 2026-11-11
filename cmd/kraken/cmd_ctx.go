@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -105,6 +104,12 @@ func ctxHookFlags(args []string) string {
 				return slug
 			}
 			os.Setenv("KRAKEN_DB_PATH", args[i])
+		case "--owner-key-file":
+			i++
+			if i >= len(args) {
+				return slug
+			}
+			os.Setenv("KRAKEN_OWNER_KEY_FILE", args[i])
 		case "--slug":
 			i++
 			if i >= len(args) {
@@ -265,7 +270,7 @@ func hookPost(path string, body any) error {
 	if err != nil {
 		return err
 	}
-	client := http.Client{Timeout: ctxHookTimeout}
+	client := jobs.ServeClient(ctxHookTimeout)
 	resp, err := client.Post(jobs.ServeBaseURL()+path, "application/json", bytes.NewReader(buf))
 	if err != nil {
 		return err

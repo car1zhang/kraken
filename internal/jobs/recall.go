@@ -441,7 +441,7 @@ func RunRecallHook(in io.Reader, out io.Writer, slug ...string) {
 		fmt.Fprintf(os.Stderr, "recall-hook: encode request: %v\n", err)
 		return
 	}
-	client := http.Client{Timeout: recallHookTimeout}
+	client := ServeClient(recallHookTimeout)
 	resp, err := client.Post(ServeBaseURL()+"/api/recall", "application/json", bytes.NewReader(body))
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "recall-hook: post: %v\n", err)

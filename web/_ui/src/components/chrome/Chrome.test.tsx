@@ -2,6 +2,7 @@ import { render, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { ApiError } from "../../api/client.ts";
 import type { WebBoard, WebJob } from "../../api/types.ts";
 import type { BoardModel } from "../../hooks/useBoard.ts";
 import { Chrome } from "./Chrome.tsx";
@@ -95,6 +96,27 @@ describe("the status line", () => {
       "kraken web server unreachable",
     );
     expect(document.getElementById("daemon-led")!.className).toBe("led");
+  });
+
+  it("tells this Mac's owner how to get the owner key when the gate asks for it", () => {
+    // A board opened on this Mac without the kraken_owner cookie: the gate
+    // answers 401 "owner key required". That is not another machine's board,
+    // so it gets one line saying how to fix it, not the node-tier banner.
+    const fetchSpy = vi.fn(() => new Promise(() => {}));
+    vi.stubGlobal("fetch", fetchSpy);
+    renderChrome(model({}, { error: new ApiError(401, "owner key required") }));
+    expect(document.getElementById("daemon-stat")).toHaveTextContent("owner key needed");
+    expect(document.getElementById("owner-key-banner")).toHaveTextContent("k board open");
+    expect(document.getElementById("unpaired-banner")).toBeNull();
+    // and it never asks which machine the board belongs to
+    expect(fetchSpy.mock.calls.map((c) => String((c as unknown[])[0]))).not.toContain("/api/node");
+  });
+
+  it("keeps the node-tier banner for a plain 401 from another machine's board", () => {
+    vi.stubGlobal("fetch", vi.fn(() => new Promise(() => {})));
+    renderChrome(model({}, { error: new ApiError(401, "unauthorized") }));
+    expect(document.getElementById("unpaired-banner")).not.toBeNull();
+    expect(document.getElementById("owner-key-banner")).toBeNull();
   });
 
   it("says 'daemon — restarting' instead, while an update run owns the outage", () => {

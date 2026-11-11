@@ -501,7 +501,16 @@ struct BoardWebView: NSViewRepresentable {
         context.coordinator.serverHost = url.host()
         context.coordinator.zoom = zoom
         view.pageZoom = zoom
-        view.load(URLRequest(url: url))
+        // The owner key cookie goes into the store BEFORE the load: the
+        // board's first poll would otherwise go out without it and be
+        // refused (gate.go). setCookie is asynchronous, so the load waits for
+        // it. No key file: load anyway, and the board says how to fix it.
+        let request = URLRequest(url: url)
+        if let key = OwnerKey.read(), let cookie = OwnerKey.cookie(key: key, for: url) {
+            view.configuration.websiteDataStore.httpCookieStore.setCookie(cookie) { view.load(request) }
+        } else {
+            view.load(request)
+        }
         return view
     }
 

@@ -892,6 +892,13 @@ func mergeServeAddrSettings(parsed map[string]any) {
 	} else {
 		delete(env, serveAddrEnvVar)
 	}
+	// the owner key file rides along the same way (ownerKeyFileForCells):
+	// without it the agent-side verbs reach a parallel serve keyless
+	if keyFile := ownerKeyFileForCells(); keyFile != "" {
+		env[ownerKeyFileEnvVar] = keyFile
+	} else {
+		delete(env, ownerKeyFileEnvVar)
+	}
 	parsed["env"] = env
 }
 
@@ -1254,6 +1261,9 @@ func hookCommandFlags() string {
 	}
 	if dbPath := os.Getenv("KRAKEN_DB_PATH"); dbPath != "" {
 		flags += " --db-path " + dbPath
+	}
+	if keyFile := ownerKeyFileForCells(); keyFile != "" {
+		flags += " --owner-key-file " + keyFile
 	}
 	return flags
 }

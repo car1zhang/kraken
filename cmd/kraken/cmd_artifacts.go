@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"net/http"
 	"net/url"
 	"os"
 	"strings"
@@ -153,7 +152,7 @@ func runArtifactsGet(rest []string) ([]byte, error) {
 // success/failure contract. It is not qfGet itself because the board's URL
 // is resolved against the base rather than appended to it.
 func artifactsFetch(full string) ([]byte, error) {
-	client := http.Client{Timeout: qfHTTPTimeout}
+	client := jobs.ServeClient(qfHTTPTimeout)
 	resp, err := client.Get(full)
 	if err != nil {
 		if qfIsTimeout(err) {

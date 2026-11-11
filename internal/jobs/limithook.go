@@ -404,7 +404,7 @@ func postLimitHit(idField, label string) {
 		fmt.Fprintf(os.Stderr, "limit-hook %s: encode %s: %v\n", label, errorType, err)
 		return
 	}
-	client := http.Client{Timeout: limitHookHTTPTimeout}
+	client := ServeClient(limitHookHTTPTimeout)
 	resp, err := client.Post(ServeBaseURL()+"/api/limit-hit", "application/json", bytes.NewReader(body))
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "limit-hook %s: %s NOT RECORDED (serve unreachable): %v\n", label, errorType, err)

@@ -95,6 +95,12 @@ func limitHookArgs(args []string) (slug, agent string, ok bool) {
 				return "", "", false
 			}
 			os.Setenv("KRAKEN_DB_PATH", args[i])
+		case "--owner-key-file":
+			i++
+			if i >= len(args) {
+				return "", "", false
+			}
+			os.Setenv("KRAKEN_OWNER_KEY_FILE", args[i])
 		case "--agent":
 			i++
 			if i >= len(args) || agent != "" {
@@ -152,6 +158,12 @@ func hookArgs(args []string) (string, bool) {
 				return "", false
 			}
 			os.Setenv("KRAKEN_DB_PATH", args[i])
+		case "--owner-key-file":
+			i++
+			if i >= len(args) {
+				return "", false
+			}
+			os.Setenv("KRAKEN_OWNER_KEY_FILE", args[i])
 		default:
 			if slug != "" {
 				return "", false // more than one bare arg: malformed
@@ -198,6 +210,12 @@ func cmdRecallHook(args []string) {
 				return
 			}
 			os.Setenv("KRAKEN_DB_PATH", args[i])
+		case "--owner-key-file":
+			i++
+			if i >= len(args) {
+				return
+			}
+			os.Setenv("KRAKEN_OWNER_KEY_FILE", args[i])
 		default:
 			// exactly one bare arg is legal and it is the cell's slug; an
 			// unknown FLAG or a second bare arg is malformed, run nothing
@@ -247,7 +265,7 @@ func cmdLogEvent(args []string) {
 
 	posted := false
 	if body, err := json.Marshal(map[string]string{"src": src, "level": "info", "event": event, "msg": msg}); err == nil {
-		client := http.Client{Timeout: 3 * time.Second}
+		client := jobs.ServeClient(3 * time.Second)
 		if resp, err := client.Post(jobs.ServeBaseURL()+"/api/logevent", "application/json", bytes.NewReader(body)); err == nil {
 			resp.Body.Close()
 			posted = resp.StatusCode == http.StatusOK

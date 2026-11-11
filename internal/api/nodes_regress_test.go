@@ -301,6 +301,7 @@ func TestNodesRegressGateRefusesNonJSONPosts(t *testing.T) {
 	t.Cleanup(func() { defaultGateDeps = orig })
 	defaultGateDeps = gateDeps{
 		localOrigin:   func(string) bool { return true },
+		ownerKey:      func() string { return testOwnerKey },
 		lookupToken:   func(string) (*store.PairDevice, bool) { return nil, false },
 		tailnetDevice: func(string) (core.TailnetIdentity, bool) { return core.TailnetIdentity{}, false },
 	}
@@ -316,6 +317,7 @@ func TestNodesRegressGateRefusesNonJSONPosts(t *testing.T) {
 	send := func(method, path, ct string) int {
 		r := httptest.NewRequest(method, path, strings.NewReader(`{"slug":"x"}`))
 		r.RemoteAddr = "127.0.0.1:4242"
+		r.AddCookie(&http.Cookie{Name: jobs.OwnerCookieName, Value: testOwnerKey})
 		if ct != "" {
 			r.Header.Set("Content-Type", ct)
 		}
@@ -395,6 +397,7 @@ func TestNodesRegressGateRefusesForeignOriginPosts(t *testing.T) {
 	t.Cleanup(func() { defaultGateDeps = orig })
 	defaultGateDeps = gateDeps{
 		localOrigin:   func(string) bool { return true },
+		ownerKey:      func() string { return testOwnerKey },
 		lookupToken:   func(string) (*store.PairDevice, bool) { return nil, false },
 		tailnetDevice: func(string) (core.TailnetIdentity, bool) { return core.TailnetIdentity{}, false },
 	}
@@ -408,6 +411,7 @@ func TestNodesRegressGateRefusesForeignOriginPosts(t *testing.T) {
 	send := func(method, origin string) *httptest.ResponseRecorder {
 		r := httptest.NewRequest(method, "http://127.0.0.1:7878/api/upload", strings.NewReader("--x--"))
 		r.RemoteAddr = "127.0.0.1:4242"
+		r.AddCookie(&http.Cookie{Name: jobs.OwnerCookieName, Value: testOwnerKey})
 		r.Header.Set("Content-Type", "multipart/form-data; boundary=x")
 		if origin != "" {
 			r.Header.Set("Origin", origin)
@@ -443,6 +447,7 @@ func TestNodesRegressGateRefusesForeignOriginPosts(t *testing.T) {
 	// the gate's other refusals carry nosniff too
 	jr := httptest.NewRequest(http.MethodPost, "/api/kill", strings.NewReader(`{}`))
 	jr.RemoteAddr = "127.0.0.1:4242"
+	jr.AddCookie(&http.Cookie{Name: jobs.OwnerCookieName, Value: testOwnerKey})
 	jr.Header.Set("Content-Type", "text/plain")
 	jrec := httptest.NewRecorder()
 	h.ServeHTTP(jrec, jr)

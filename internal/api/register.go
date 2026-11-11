@@ -49,6 +49,8 @@ func Register(mux *http.ServeMux) {
 
 func registerRoutes(mux routeMux) {
 	mux.HandleFunc("/api/health", healthHandler)
+	// hands a browser on this Mac the owner key as a cookie (gate.go)
+	mux.HandleFunc("/api/owner", ownerHandler)
 	mux.HandleFunc("/api/peers", peersHandler(defaultPeerSource))
 	mux.HandleFunc("/api/peers/read", peersReadHandler(defaultPeerSource))
 	mux.HandleFunc("/api/peers/capture", peersCaptureHandler(defaultPeerSource))
