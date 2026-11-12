@@ -272,7 +272,17 @@ of the fan-out, not mid-crisis, because a lead that has not loaded `SendMessage`
 two just-started scouts at full brief re-payment (~123K cache-write) before its first
 `ToolSearch`, then resumed every one of six later deaths at no loss. Any OTHER death — an output
 ceiling, a resume that does not take — is a respawn under the rule that follows (a hook-blocked
-report write is not a death: that case is specified below — report the refusal and stop). **A
+report write is not a death: that case is specified below — report the refusal and stop). **A scout
+still out well past the slowest finished one is CHECKED, not waited on**: read the last record of its
+sidecar (`agent-<id>.jsonl` under the lead session's `subagents/` dir in the cell's project folder).
+A `tool_use` with no `tool_result` older than the Bash tool's ten-minute ceiling (no foreground call
+can still be running past it) is a permission prompt — Claude Code's
+command-safety check opens one on a zsh-only expansion it cannot parse, `rm` or no `rm` — and nobody
+in a cell answers it, while every signal the lead gets (the task status, the notification queue)
+keeps saying `running`. `TaskStop` it, name the command shape in Coverage, and respawn it on a fresh
+report path or proceed without it and say which. A pass that held every edit for one such scout
+turned about 977,000 output tokens of finished scouting into nothing durable: sixteen reports read,
+no report, no watch row, no PR. **A
 respawn — however the scout died — gets a FRESH report path** (`<name>-B.md`, then `-C` and so
 on), and you check
 the original path first — a killed scout may have finished its report before dying, and a respawn's
