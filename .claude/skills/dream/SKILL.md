@@ -286,7 +286,13 @@ and the sub-bullets under it; it is the one specification of the protocol and it
 unchanged. (Outside a cell that file may not exist. The protocol in one line: fetch `Monitor` and
 `SendMessage` in one `ToolSearch`, arm ONE background until-loop over every report path using `-s`
 not `-f`, end the turn, and treat an expiry as "one of them is missing" rather than as a reason to
-re-arm.)
+re-arm.) **The loop bounds itself**: a `timeout` on a `Bash` call run in the background is NOT
+enforced — two such loops armed with a ten-minute timeout were still running twenty-three hours
+later, each waiting on a scout that had stopped on a permission prompt — so an until-loop with no
+exit of its own never expires, and the "one of them is missing" branch, the only path to
+proceeding without a dead scout, is unreachable. Count the sleeps and `exit` after a ceiling you
+choose (forty minutes is generous for a scout wave), printing that a report is missing; with
+`Monitor`, pass `timeout_ms`.
 
 **A scout needs an agent type that can write, and it must not be able to write the repo.** Spawn it
 `general-purpose` — or any type whose roster includes `Write`; never `Explore`, which has no `Write`
