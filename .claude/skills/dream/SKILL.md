@@ -401,7 +401,8 @@ at `limit=60` on a 202-line file and a `head -20` are SAMPLED whatever the row s
 that banned "a capped grep" while blessing "paged reads" was violated twice in one night by
 capped Reads and a `head`, forms that sentence literally permits, one row even stating the true
 line count its reads never reached. Write that rule into scout briefs as coverage ("a row claiming
-full means your pages reached the last line"), never as a list of banned tools. And give the
+full means your pages reached the last line AND you declared no skip; any declared skip, however
+justified, makes the row SAMPLED"), never as a list of banned tools. And give the
 Coverage format a THIRD label, because the binary one manufactures false rows: a scout that did its
 real work in the raw JSONL — exactly what the brief encourages — has nothing honest to write in a
 format that only certifies the reduced view, and two such scouts (three nights running) resolved
@@ -409,7 +410,14 @@ the tension by writing "READ in full" about reduced files they never opened, one
 own 82-line hole inside the sentence claiming completeness. The labels are: READ (reduced pages
 reached the last line), SAMPLED (say what was skipped), and RAW (targeted) — covered primarily by
 raw-JSONL queries, saying which queries; a RAW row is honest coverage, not a downgrade, but like
-SAMPLED it cannot carry a "clean, nothing found" verdict on its own. DELIVERY MECHANISM is the
+SAMPLED it cannot carry a "clean, nothing found" verdict on its own. **A declared skip makes the row
+SAMPLED even when the pages reach the last line**: a skill body skipped because a `diff` proved it
+identical to one paged elsewhere, a line skipped because it carries an identifier, a block of
+byte-identical cron prompts filtered out — each is honest work and each is a skip, and the label
+says so, which also means such a row cannot carry a "clean, nothing found" verdict on its own; that
+is intended, since the skipped lines are exactly where that verdict was not checked. "Reached the last line" alone was read two ways on one night: two scouts wrote READ over
+views with hundreds of declared unread lines while four wrote SAMPLED for the same practice, and
+the aggregate the lead prints cannot tell those rows apart. DELIVERY MECHANISM is the
 second axis, and it separates READ from RAW: a READ row's pages entered your context through
 `Read` or a plain `cat` of the staged view itself — content you met only as extraction-script
 output or filtered greps is RAW whatever file the script opened, however completely it covered
