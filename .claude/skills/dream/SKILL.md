@@ -239,7 +239,11 @@ already held, because nothing in any brief said what was already known.
 digest. They are read-only exploration — they change nothing in the repo and judge nothing — so they are
 unnamed subagents, not teammates. Give each one a scratch path **outside the repo** (`/tmp/…`, never
 a worktree-relative path) and require its findings there: a scout's report is long, and the reply
-channel truncates. Each brief also names that scout's OWN scratch subdirectory for working files
+channel truncates. **Name the report file so its basename does not start with `report`**: the
+harness refuses an unnamed subagent's `Write` of such a file ("Subagents should return findings as
+text, not write report files") while `<handle>.md` under a `reports/` directory and `probe-report.md`
+are accepted — measured on consecutive nights, the first of which handed ten scouts a `report.md`
+path and paid for each report twice, once refused and once as a heredoc. Each brief also names that scout's OWN scratch subdirectory for working files
 (staged reduced views, notes) — two scouts staging into one shared directory have collided mid-run,
 and the collision recovery costs more than the namespace would have. Name those directories with
 SHORT slice handles under one root you create first — a short `/tmp/<handle>` root, never under
