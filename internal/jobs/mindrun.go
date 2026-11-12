@@ -1401,6 +1401,15 @@ func RunMindRun(st *store.Store, run store.MindRun) error {
 	if mindBundleEmpty(bundle) {
 		return finishEmptyMindRun(st, run, man, fail)
 	}
+	// Stamp the sha, model and size BEFORE the launch: a run that times out
+	// or answers garbage keeps them, where FinishMindRun alone left every
+	// failed row blank on all three. An unreadable skill is a launch error,
+	// so it fails here with the same text mindLaunch would have given.
+	if _, sha, err := MindPrompt(); err != nil {
+		return fail(err)
+	} else if err := st.StampMindRunLaunch(run.ID, sha, mindModel(), int64(man.Bytes)); err != nil {
+		return fail(err)
+	}
 	return runMindOn(st, run, string(data), man, fail)
 }
 
@@ -2001,6 +2010,15 @@ func ReplayMindRun(st *store.Store, id int64, write bool, now time.Time) (MindRe
 		return rep, nil
 	}
 
+	if write {
+		// The same pre-launch stamp RunMindRun makes, so a replay row that
+		// times out or answers garbage keeps its sha, model and size too.
+		if _, sha, err := MindPrompt(); err != nil {
+			return rep, fail(err)
+		} else if err := st.StampMindRunLaunch(newRun.ID, sha, mindModel(), int64(man.Bytes)); err != nil {
+			return rep, fail(err)
+		}
+	}
 	out, model, sha, lerr := mindLaunch(mindRunJob(st, run), string(data))
 	rep.NewPromptSHA = sha
 	if lerr != nil {

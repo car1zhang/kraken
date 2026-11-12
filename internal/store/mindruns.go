@@ -189,6 +189,37 @@ func (s *Store) FinishMindRun(id int64, f MindRunFinish) error {
 	return fmt.Errorf("finish mind run %d: it is %s, not running", id, state)
 }
 
+// StampMindRunLaunch records, on a RUNNING row and before its child is
+// launched, the three facts a run owns the moment its bundle exists: the
+// skill text it judges under, the model it launches on and the bundle's
+// size. FinishMindRun writes the same three again on success; this write is
+// what keeps them on a row that FAILS — a timeout, a launch error, an
+// unparseable answer — which until this verb existed recorded none of them,
+// so a table of ten failed runs could not say how large their bundles had
+// grown or which skill text they ran under. Any other state is refused with
+// its state named, as FinishMindRun refuses, and no other column moves.
+func (s *Store) StampMindRunLaunch(id int64, promptSHA, model string, bundleBytes int64) error {
+	res, err := s.db.Exec(
+		`UPDATE mind_runs SET prompt_sha = ?, model = ?, bundle_bytes = ? WHERE id = ? AND state = 'running'`,
+		promptSHA, model, bundleBytes, id,
+	)
+	if err != nil {
+		return fmt.Errorf("stamp mind run %d: %w", id, err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("stamp mind run %d: %w", id, err)
+	}
+	if n > 0 {
+		return nil
+	}
+	state, err := s.mindRunState(id)
+	if err != nil {
+		return fmt.Errorf("stamp: %w", err)
+	}
+	return fmt.Errorf("stamp mind run %d: it is %s, not running", id, state)
+}
+
 // FailMindRun closes a queued or running run as failed with a one-line note.
 // A run already done or failed is refused with its state named.
 func (s *Store) FailMindRun(id, at int64, note string) error {
