@@ -101,6 +101,11 @@ func TestLintBashCommandAllows(t *testing.T) {
 		{"git stash in comment", "# git stash was the mistake\ngit status"},
 		{"stash as a positional ref", `git log --oneline stash`},
 		{"git diff against stash ref", `git diff --stat stash`},
+		// An odd `"` in a comment is stepped over to the end of input by the
+		// expansion check's quote pass, so a later zsh-only expansion is
+		// hidden: a missed block by design, the over-blanking direction, in
+		// place of the false refusal the step-over used to produce.
+		{"odd quote in a comment hides later expansion text", "ls # say \"hi\nn=${zorb:t}"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

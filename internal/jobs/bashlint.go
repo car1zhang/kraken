@@ -13,7 +13,8 @@ import (
 // the pr-hook PostToolUse entry). It screens every Bash tool call for a
 // short list of shapes measured to fail SILENTLY — zsh-on-macOS quirks
 // where the command aborts or lies while `is_error` stays false, plus one
-// destructive git shape whose damage lands on OTHER agents — and blocks
+// destructive git shape whose damage lands on OTHER agents and one zsh-only
+// expansion shape that opens a permission prompt nobody answers — and blocks
 // the call with the exact fix named, so the agent repairs it in one turn
 // instead of shipping a conclusion built on output that never ran.
 //
@@ -50,6 +51,20 @@ import (
 //     worktree or the ref namespace, and `--help` rides the flag arm — both
 //     get a message naming a better route, acceptable for forms this
 //     obscure.
+//   - a zsh-only parameter expansion — a history-style modifier after the
+//     colon (`${f:t}`, `${f:h}`, `${f:r}`, `${f:t:0:8}`), a flag group
+//     (`${(L)x}`), the split/glob/tilde prefixes (`${=x}`, `${^x}`, `${~x}`)
+//     or a nested substitution as the parameter (`${$(…)…}`): Claude Code's
+//     command-safety check cannot parse these, answers "Dangerous rm
+//     operation not ruled out" whether or not the command holds an `rm`,
+//     and opens a permission prompt. A hand-run session's operator answers
+//     it; in a cell nobody does, and one such prompt from a read-only grep
+//     loop held a whole nightly pass for twenty-three hours. This is the one
+//     shape that is NOT silent — it is the opposite, a dialog that blocks
+//     forever — and the one that runs over text with DOUBLE quotes kept,
+//     since double quotes do not stop expansion (`echo "== ${f:t}"` is the
+//     measured form). Bash-compatible forms (`${f:0:8}`, `${f:-x}`,
+//     `${f%% *}`, `${f##*/}`, `${f/a/b}`, `${#f}`, `${arr[@]}`) pass.
 //
 // False-positive control is structural, not hopeful: every region of a
 // command that is not shell-in-command-position is blanked before any check
@@ -122,6 +137,16 @@ var bashLintChecks = []struct {
 		"a mutating `git stash` in a cell sweeps every agent's uncommitted work out of the shared worktree (a twice-recorded destructive incident) — verify against an isolated copy instead: `git show HEAD:<path>` into scratch, or a throwaway `git worktree add`; read-only `git stash list`/`show` are allowed, and if you were only PRINTING the words, quote them",
 	},
 }
+
+// zshExpansionRE is the zsh-only parameter-expansion check, run over text
+// that keeps its double-quoted spans (see lintBashCommand). The modifier
+// letters are zsh's own set (`a A c e h l P q Q r s t u x`); a digit, a
+// space or one of `- + = ?` after the colon is the bash offset/default
+// syntax and never matches, and the flag, split, glob, tilde and nested
+// substitution arms match on their opening bytes alone.
+var zshExpansionRE = regexp.MustCompile(`\$\{(?:[A-Za-z_][A-Za-z0-9_]*:[aAcehlPqQrstux]|\(|=|~|\^|\$\()`)
+
+const zshExpansionMsg = "kraken bash-lint: a zsh-only expansion (`${f:t}`, `${f:h}`, `${(L)x}`, `${=x}`, `${$(…)}`) makes Claude Code's command-safety check open a 'Dangerous rm operation not ruled out' permission prompt that nobody in a cell answers — use the bash forms instead: basename/dirname, cut -c1-8, tr, or a python one-liner (offsets `${f:0:8}`, defaults `${f:-x}` and trims `${f##*/}` are fine; a variable offset is `${f:$start:$len}`, since a bare letter after the colon is a zsh modifier)"
 
 // heredocIntroRE matches a heredoc redirection and captures the `-`
 // variant marker and the delimiter: <<EOF, << 'EOF', <<-"PY", etc. The
@@ -277,14 +302,47 @@ func quotedMask(b []byte) []bool {
 // [[ … ]] conditional spans, replacing their contents with spaces so
 // token positions elsewhere survive. Backslash escapes a following quote
 // outside single quotes.
-func stripQuotedAndCond(s string) string {
+func stripQuotedAndCond(s string) string { return stripQuoteSpans(s, true) }
+
+// stripSingleQuotedAndCond is stripQuotedAndCond with double-quoted spans
+// KEPT: the text the zsh-expansion check reads, since `"${f:t}"` expands
+// exactly as `${f:t}` does while `'${f:t}'` is literal.
+func stripSingleQuotedAndCond(s string) string { return stripQuoteSpans(s, false) }
+
+// stripQuoteSpans is the one implementation behind both strippers: double
+// says whether `"…"` spans are blanked too. With double false a `"` is an
+// ordinary byte, and a backslash still escapes the byte after it.
+func stripQuoteSpans(s string, double bool) string {
 	b := []byte(s)
 	n := len(b)
 	for i := 0; i < n; i++ {
 		switch {
 		case b[i] == '\\' && i+1 < n:
 			i++ // escaped char: leave both, skip the next
-		case b[i] == '\'' || b[i] == '"':
+		case !double && b[i] == '"':
+			// Kept, not blanked — but stepped over as one span, so a `'`
+			// inside it (`"it's ${f:t}"`) is read as the literal it is and
+			// never opens a single-quoted span that would hide the rest.
+			j := i + 1
+			for ; j < n; j++ {
+				if b[j] == '\\' {
+					j++
+					continue
+				}
+				if b[j] == '"' {
+					break
+				}
+			}
+			if j >= n {
+				// Never closed: blank to the end, the same fail-toward-more-
+				// blanking choice the blanking arm makes, so an odd `"` in a
+				// comment cannot expose a later line's `'${f:t}'` as live.
+				blank(b, i, n-1)
+				i = n - 1
+				break
+			}
+			i = j
+		case b[i] == '\'' || (double && b[i] == '"'):
 			// The end of the span, or the end of input when it is never
 			// closed — the run-to-end case is deliberate, and it is stated
 			// once here rather than as a `j == n-1` arm inside the loop:
@@ -338,14 +396,25 @@ func blank(b []byte, from, to int) {
 // heredocs), then heredoc bodies, then quotes/conditionals — see each
 // stripper's comment. Comments are dropped LAST, which is what makes
 // stripComments' `#` test exact: by then every `#` still standing is
-// outside a quoted span and outside a heredoc body by construction.
+// outside a quoted span and outside a heredoc body by construction. The
+// expansion check's text is the one exception: it keeps double-quoted
+// spans, so a ` #` inside one (`echo "## ${f:t}"`) truncates that line
+// before the check reads it — a missed block, the fail-open direction,
+// accepted rather than teaching stripComments about quotes.
 func lintBashCommand(cmd string) string {
-	text := stripComments(stripQuotedAndCond(stripHeredocBodies(stripArith(cmd))))
+	pre := stripHeredocBodies(stripArith(cmd))
+	text := stripComments(stripQuotedAndCond(pre))
 	var msgs []string
 	for _, c := range bashLintChecks {
 		if c.re.MatchString(text) {
 			msgs = append(msgs, "kraken bash-lint: "+c.msg)
 		}
+	}
+	// The expansion check alone reads text with its double-quoted spans
+	// kept (same heredoc, arithmetic, single-quote and comment strips),
+	// because a double-quoted expansion still expands.
+	if zshExpansionRE.MatchString(stripComments(stripSingleQuotedAndCond(pre))) {
+		msgs = append(msgs, zshExpansionMsg)
 	}
 	return strings.Join(msgs, "\n")
 }
