@@ -181,7 +181,14 @@ through the same channel and read the same way, so judge by the text.
 ranking selects agent SHAPE rather than anomaly: a diagram renderer whose brief forbids emitting
 SVG into its reply structurally tops output-per-line, and a subagent sidecar structurally bottoms
 it, so session-ranked scout slots go to agent kinds, not problems. Group each cell's sessions into
-one scout assignment and rank the cells. The token roll-up is the cheapest correct answer to
+one scout assignment and rank the cells — and a CELL is a lead plus the agents it spawned, never
+a project folder: the operator's hand-run sessions share one checkout, so `ProjectDir` puts a
+ticket-process coordinator, a performance-review lead and a signals lead in one "cell", and a
+brief written from that grouping tells its scout the coordinator is "a side session of the same
+project" (three nights running, each caught by the scout). Group by `AgentName` first (a
+teammate's name prefix names its crew), then by the parent whose `Agent`/`SendMessage` calls
+spawned a root session, and read a nameless root session's first prompt before placing it; the
+folder is the last resort, for one-session folders. The token roll-up is the cheapest correct answer to
 "where did last night actually go", and it does not agree with the tool-call counts: a session that
 polls a pane four hundred times looks busy and costs little, while one that re-renders the same
 figure three times looks quiet and costs a lot. Sort the digests by cost, and read the top of that
