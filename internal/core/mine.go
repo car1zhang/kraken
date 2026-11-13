@@ -262,8 +262,15 @@ type mineRecord struct {
 	// the third is a `user` record written when the harness later delivers
 	// it, deduped by reducer.queuedAlready.
 	// reducer.line reads them; everything else ignores them.
-	Operation  string `json:"operation"`
-	Content    string `json:"content"`
+	Operation string `json:"operation"`
+	Content   string `json:"content"`
+	// TaskID/Prompt are the `system` record's `scheduled_task_fire` fields:
+	// the cron's id and a PREVIEW of its prompt (the first 200 runes or so — the
+	// full text arrives in the user record the harness writes next).
+	// reducer.line arms a cron on the fire and collapses that delivery; see
+	// reducer.cronFire.
+	TaskID     string `json:"taskId"`
+	Prompt     string `json:"prompt"`
 	Attachment struct {
 		Type   string `json:"type"`
 		Prompt string `json:"prompt"`
@@ -789,6 +796,44 @@ type reducer struct {
 	// midTurnSeen on purpose — see queuedAlready for the measured
 	// over-suppression a shared set caused.
 	delivered map[string]struct{}
+	// cronArmed/cronTask/cronPrompt hold the most recent `scheduled_task_fire`
+	// system record until the user record that delivers its prompt arrives
+	// (bookkeeping records such as `last-prompt`, and harness traffic such as
+	// a task notification, sit between the two and do not disarm it).
+	// cronSeen is every cron prompt text already emitted in full, so the Nth
+	// fire of one cron renders as a one-line marker rather than the whole
+	// prompt again: measured 2026-11-11 over the previous day's transcripts,
+	// a 2.5 KB merge-watch prompt fired 164 times in one session and 109 in
+	// another, each time printed whole as [user], so the reduced view was
+	// mostly the same paragraph and a reader could not tell the cron's words
+	// from the operator's.
+	cronArmed  bool
+	cronTask   string
+	cronPrompt string
+	cronSeen   map[string]struct{}
+	// pendingEnq holds the LAST queue-operation enqueue's text until the
+	// record after it says what it was. A cron fire is written as enqueue,
+	// dequeue, then the scheduled_task_fire system record (1,497 of 1,506
+	// fires in the local corpus, measured 2026-11-12), so emitting the
+	// enqueue at once labelled every cron prompt [user mid-turn] before the
+	// fire record could claim it. The text is held across the queue records
+	// that follow it, dropped when the fire's preview is a prefix of it, and
+	// flushed through midTurn on any other record or at end of input
+	// (reducer.flush, which every driver calls after its last line).
+	pendingEnq string
+	hasPending bool
+	// cronClaimed is set when a fire claimed (dropped) the pending enqueue,
+	// so the prompt now lives nowhere in the view until its delivery is
+	// rendered; cronClaimedText is that prompt. A claimed fire stays armed
+	// through an unrelated user record (an operator steer or a kraken bump
+	// does land between a fire and its delivery: 4 of 1,515 real fires),
+	// since disarming there would print the delivery as [user]. If the
+	// delivery never comes — end of input on a live file, or the next fire
+	// arriving first — cronLost prints a one-line marker instead of losing
+	// the fire altogether, and records the text in midTurnSeen so a delivery
+	// that does turn up late is suppressed once rather than relabelled.
+	cronClaimed     bool
+	cronClaimedText string
 }
 
 // reduceSink receives the reducer's output one labelled SECTION at a time:
@@ -814,9 +859,15 @@ func (s bufSink) section(label, body string) {
 	s.buf.WriteString("\n")
 }
 
-func (r *reducer) line(out reduceSink, line []byte, since int64) {
+// line reduces one transcript record into out. It returns the number of
+// sections emitted at the START of the call that belong to an EARLIER record
+// — a pending enqueue flushed because this record did not claim it — so a
+// driver that attributes sections to records by position (operator.go) can
+// add it to the position it snapshotted before the call. Every driver calls
+// end after its last line.
+func (r *reducer) line(out reduceSink, line []byte, since int64) (carried int) {
 	if len(bytes.TrimSpace(line)) == 0 {
-		return
+		return 0
 	}
 	var rec mineRecord
 	if err := json.Unmarshal(line, &rec); err != nil {
@@ -829,11 +880,15 @@ func (r *reducer) line(out reduceSink, line []byte, since int64) {
 		// file's error rules exist to prevent.
 		var typeErr *json.UnmarshalTypeError
 		if !errors.As(err, &typeErr) {
-			return
+			return 0
 		}
 	}
-	if ts := isoMillis(rec.Timestamp); ts > 0 && ts < since {
-		return
+	// A system record emits nothing itself, so a scheduled_task_fire stamped
+	// just before the window is still allowed to ARM: its delivery lands
+	// milliseconds later, inside the window, and would otherwise render as
+	// [user]. Every other pre-window record is dropped as before.
+	if ts := isoMillis(rec.Timestamp); ts > 0 && ts < since && rec.Type != "system" {
+		return 0
 	}
 	// A message typed while a turn is RUNNING is stored as a `queue-operation`
 	// (enqueue) and/or an `attachment` carrying a `queued_command` — and is
@@ -844,20 +899,54 @@ func (r *reducer) line(out reduceSink, line []byte, since int64) {
 	// distinct from [user] because kraken's own daemon bumps (PR-watch and
 	// colour sends into a busy pane) queue through this same channel with
 	// nothing in the record to tell them apart — the text itself says which.
+	// A scheduled task's own prompt ALSO arrives through this channel, right
+	// before its fire record, so an enqueue is held pending until the next
+	// record that emits something, or the fire that claims it, arrives (see
+	// pendingEnq). Records that emit nothing leave it in place.
 	switch rec.Type {
 	case "queue-operation":
 		if rec.Operation == "enqueue" {
-			r.midTurn(out, rec.Content)
+			carried = r.flush(out)
+			r.pendingEnq, r.hasPending = rec.Content, true
 		}
-		return
+		return carried // dequeue/remove: the enqueue stays pending
+	case "system":
+		// A scheduled task (CronCreate) firing is a `system` record naming
+		// the task and previewing its prompt; the prompt itself is the next
+		// user record. The enqueue just before it is the same prompt and is
+		// dropped rather than flushed when the preview says so.
+		if rec.Subtype != "scheduled_task_fire" {
+			return 0 // emits nothing, so the pending enqueue stays pending
+		}
+		preview := strings.TrimSpace(rec.Prompt)
+		r.cronLost(out) // a still-armed claimed fire is replaced: leave its line
+		if r.hasPending && preview != "" && strings.HasPrefix(strings.TrimSpace(r.pendingEnq), preview) {
+			r.hasPending = false
+			r.cronClaimed, r.cronClaimedText = true, strings.TrimSpace(r.pendingEnq)
+		} else {
+			carried = r.flush(out)
+			r.cronClaimed = false
+		}
+		r.cronArmed = true
+		r.cronTask = strings.TrimSpace(rec.TaskID)
+		r.cronPrompt = preview
+		return carried
 	case "attachment":
+		carried = r.flush(out)
 		if rec.Attachment.Type == "queued_command" {
 			r.midTurn(out, rec.Attachment.Prompt)
 		}
-		return
+		return carried
 	case "assistant", "user":
+		carried = r.flush(out)
 	default:
-		return // mode, file-history, system bookkeeping
+		// mode, file-history, last-prompt, api-request and other bookkeeping:
+		// nothing is emitted, so a pending enqueue is held across them. A
+		// cron queued while a turn was still ending is followed by the
+		// turn's own stop_hook_summary and turn_duration records before its
+		// fire (91 of 1,515 real fires), and flushing at those printed the
+		// prompt as the operator's before the fire could claim it.
+		return 0
 	}
 	if rec.Type == "user" {
 		// A queued message the harness later DELIVERS becomes a real user
@@ -869,21 +958,29 @@ func (r *reducer) line(out reduceSink, line []byte, since int64) {
 		// a third of the session's whole reduced view). The mid-turn emission
 		// keeps the earlier, queued position; ONE delivered copy is dropped
 		// per queued text — consume-once, see queuedAlready for why a bare
-		// membership test erased real repetition.
+		// membership test erased real repetition. An armed cron's delivery
+		// is claimed first (cronFire), since its enqueue was never emitted.
 		if text, ok := mineUserString(rec.Message.Content); ok {
+			if r.cronFire(out, text) {
+				return carried
+			}
 			if !r.queuedAlready(text) {
 				writeUserish(out, text)
 			}
-			return
+			return carried
 		}
 		for _, b := range mineBlocks(rec.Message.Content) {
-			if b.Type == "text" && !r.queuedAlready(b.Text) {
+			if b.Type != "text" {
+				continue // tool_result blocks are the dropped mass: the call above already named what was attempted
+			}
+			if r.cronFire(out, b.Text) {
+				continue
+			}
+			if !r.queuedAlready(b.Text) {
 				writeUserish(out, b.Text)
 			}
-			// tool_result blocks are the dropped mass — the call above
-			// already named what was attempted.
 		}
-		return
+		return carried
 	}
 	for _, b := range mineBlocks(rec.Message.Content) {
 		switch b.Type {
@@ -896,6 +993,58 @@ func (r *reducer) line(out reduceSink, line []byte, since int64) {
 		}
 		// "thinking" falls through: dropped.
 	}
+	return carried
+}
+
+// flush emits the pending enqueue, if any, through midTurn and reports how
+// many sections that produced (0 or 1).
+func (r *reducer) flush(out reduceSink) int {
+	if !r.hasPending {
+		return 0
+	}
+	r.hasPending = false
+	if r.midTurn(out, r.pendingEnq) {
+		return 1
+	}
+	return 0
+}
+
+// end is what every reducer driver calls after its last line: it flushes a
+// pending enqueue (one that is the file's final record would otherwise never
+// be seen) and marks a claimed cron fire whose delivery the input never
+// reached — a live transcript read between the fire and its delivery — so the
+// fire is a line in the view rather than nothing.
+func (r *reducer) end(out reduceSink) {
+	r.flush(out)
+	r.cronLost(out)
+}
+
+// cronLost prints the one-line marker for a claimed fire whose prompt will
+// not be rendered by a delivery, disarms it, and enters the claimed text in
+// midTurnSeen so a delivery that arrives after all is suppressed once by
+// queuedAlready (its enqueue was never shown, so one hidden copy is the
+// pre-change behaviour) rather than printed as [user]. A no-op unless a fire
+// has claimed the pending enqueue and is still armed.
+func (r *reducer) cronLost(out reduceSink) {
+	if !r.cronArmed || !r.cronClaimed {
+		return
+	}
+	r.cronArmed, r.cronClaimed = false, false
+	if r.midTurnSeen == nil {
+		r.midTurnSeen = make(map[string]struct{})
+	}
+	r.midTurnSeen[r.cronClaimedText] = struct{}{}
+	out.section(r.cronLabel()+" fired, delivery not in this view", "")
+}
+
+// cronLabel is `[cron <task id>]`, or a bare `[cron]` when the id is not the
+// plain shape the harness mints (cronTaskIDRE), so no label can break the
+// section layout.
+func (r *reducer) cronLabel() string {
+	if r.cronTask != "" && cronTaskIDRE.MatchString(r.cronTask) {
+		return "[cron " + r.cronTask + "]"
+	}
+	return "[cron]"
 }
 
 // backgroundAgentsNoticeRE matches the harness's own "N background agents
@@ -936,6 +1085,105 @@ func (r *reducer) queuedAlready(text string) bool {
 	return true
 }
 
+// cronFire consumes the user record that delivers an armed scheduled-task
+// prompt and reports whether it did. The delivery is recognised by the fire
+// record's prompt PREVIEW being a prefix of the delivered text; a slash-command
+// cron (`/loop 5m /poll`) is delivered as a <command-message> envelope, so
+// that envelope is first folded back to the `/name args` line the preview
+// was taken from (cronCommandText). A user record that does not match is
+// treated as the ordinary user record it is, and disarms the cron unless the
+// cron had claimed its enqueue (then the delivery is still owed, and the
+// fire stays armed for it) or the record is harness traffic rather than the
+// operator (a <task-notification> before 7 of 1,506 real fires, an interrupt
+// or bump marker before 5; a <system-reminder> is listed for completeness,
+// none was seen).
+//
+// The first delivery of a given prompt text is emitted in full under
+// `[cron <task id>]`, so a reader still sees what the cron asked; every later
+// delivery of the same text, under any task id, is a one-line marker that
+// says so without pointing anywhere, because the prompt is fixed at
+// CronCreate and repeating it adds nothing a reader can use. Keyed on the
+// text rather than the task id: a cron re-created under a new id with the
+// same prompt is the same words. Never routed through writeUserish — a
+// cron's words are the harness replaying a stored prompt, not the operator
+// speaking, and `[user]` means the operator.
+//
+// Known gaps, each a relabel and never a loss: two crons firing in one tick
+// (fire A, fire B, delivery A, delivery B — not seen in the corpus) share one
+// armed slot; ReduceJSONLBytes called on a span cut between fire and
+// delivery renders that delivery as [user]; and a cron queued mid-turn whose
+// enqueue is followed by assistant output before its fire is flushed as
+// [user mid-turn] once per file, since holding it past emitted sections
+// would reorder the view (11 sections in 10 of 39 real files).
+func (r *reducer) cronFire(out reduceSink, text string) bool {
+	if !r.cronArmed {
+		return false
+	}
+	t := strings.TrimSpace(text)
+	if cronHarnessTraffic(t) {
+		return false // stays armed; the record renders as it always did
+	}
+	if cmd, ok := cronCommandText(t); ok {
+		t = cmd
+	}
+	if r.cronPrompt == "" || !strings.HasPrefix(t, r.cronPrompt) {
+		// Not the delivery. A fire that claimed its enqueue is still owed
+		// one, so it stays armed; an unclaimed fire is disarmed.
+		if !r.cronClaimed {
+			r.cronArmed = false
+		}
+		return false
+	}
+	r.cronArmed, r.cronClaimed = false, false
+	label := r.cronLabel()
+	if r.cronSeen == nil {
+		r.cronSeen = make(map[string]struct{})
+	}
+	if _, dup := r.cronSeen[t]; dup {
+		out.section(label+" fired: same prompt as an earlier cron fire, not repeated", "")
+		return true
+	}
+	r.cronSeen[t] = struct{}{}
+	writeReduced(out, label, t)
+	return true
+}
+
+// cronTaskIDRE is the shape of a harness-minted task id (see cronLabel).
+var cronTaskIDRE = regexp.MustCompile(`^[A-Za-z0-9_-]{1,64}$`)
+
+// cronHarnessTraffic reports whether a user record's text is the harness
+// talking rather than the operator: these may land between a cron's fire and
+// its delivery and must not disarm it.
+func cronHarnessTraffic(t string) bool {
+	return strings.HasPrefix(t, "<task-notification>") ||
+		strings.HasPrefix(t, "<system-reminder>") ||
+		strings.HasPrefix(t, "[Request interrupted")
+}
+
+var (
+	cronCommandNameRE = regexp.MustCompile(`<command-name>([^<]*)</command-name>`)
+	cronCommandArgsRE = regexp.MustCompile(`(?s)<command-args>(.*?)</command-args>`)
+)
+
+// cronCommandText folds a slash command's delivery envelope back to the
+// `/name args` line it was typed as, which is what a scheduled task's
+// prompt preview holds for a `/loop`-made cron. ok is false for any other
+// text.
+func cronCommandText(t string) (string, bool) {
+	if !strings.HasPrefix(t, "<command-message>") {
+		return "", false
+	}
+	m := cronCommandNameRE.FindStringSubmatch(t)
+	if m == nil {
+		return "", false
+	}
+	name := strings.TrimSpace(m[1])
+	if a := cronCommandArgsRE.FindStringSubmatch(t); a != nil && strings.TrimSpace(a[1]) != "" {
+		return name + " " + strings.TrimSpace(a[1]), true
+	}
+	return name, true
+}
+
 // midTurn emits one queued mid-turn message as [user mid-turn] — or as
 // [teammate <id> mid-turn] when it carries a teammate envelope, the same
 // routing writeUserish gives ordinary user records, since mislabelling
@@ -945,23 +1193,23 @@ func (r *reducer) queuedAlready(text string) bool {
 // exists to drop), the harness's stopped-agents notice, and ANY text
 // already emitted (the enqueue/attachment double-write of one message —
 // see midTurnSeen for why a set rather than adjacency).
-func (r *reducer) midTurn(out reduceSink, text string) {
+// It reports whether a section was emitted (flush counts on it).
+func (r *reducer) midTurn(out reduceSink, text string) bool {
 	t := strings.TrimSpace(text)
 	if t == "" || strings.HasPrefix(t, "<task-notification>") || backgroundAgentsNoticeRE.MatchString(t) {
-		return
+		return false
 	}
 	if r.midTurnSeen == nil {
 		r.midTurnSeen = make(map[string]struct{})
 	}
 	if _, dup := r.midTurnSeen[t]; dup {
-		return
+		return false
 	}
 	r.midTurnSeen[t] = struct{}{}
 	if b, ok := teammateBlock(t); ok {
-		writeReduced(out, "[teammate "+b.From+" mid-turn]", b.Text)
-		return
+		return writeReduced(out, "[teammate "+b.From+" mid-turn]", b.Text)
 	}
-	writeReduced(out, "[user mid-turn]", t)
+	return writeReduced(out, "[user mid-turn]", t)
 }
 
 // ReduceJSONLBytes reduces a JSONL span already in memory, per reducer.line's
@@ -974,6 +1222,7 @@ func ReduceJSONLBytes(data []byte) []byte {
 	for _, line := range bytes.Split(data, []byte("\n")) {
 		r.line(bufSink{&out}, line, 0)
 	}
+	r.end(bufSink{&out})
 	return bytes.TrimSpace(out.Bytes())
 }
 
@@ -1000,6 +1249,9 @@ func ReduceJSONLBytes(data []byte) []byte {
 //	[teammate zeus-demo]
 //	implement the slice described in …
 //
+//	[cron task0001]
+//	poll the pull request and act on anything new
+//
 // The [user] label means CARL, and only carl. A message another agent sent
 // into this session — every brief zeus hands hephaestus/athena/hermes, every
 // idle heartbeat — arrives inside a user record wrapped in a
@@ -1012,6 +1264,9 @@ func ReduceJSONLBytes(data []byte) []byte {
 // deliberately rather than a second regex — a divergent copy of that
 // envelope rule is exactly how this went wrong once — which also collapses
 // idle-poll heartbeats to a single "idle" line.
+// A scheduled task's prompt (CronCreate) is also delivered as a user record;
+// it is labelled [cron <task id>] instead, printed whole on the first delivery
+// of that text and as a one-line marker after (see reducer.cronFire).
 //
 // The dropped mass is tool RESULTS (whole files, whole command outputs,
 // inlined attachments) plus thinking, none of which a reader needs to
@@ -1039,6 +1294,7 @@ func ReduceTranscript(path string, since int64) ([]byte, error) {
 	for sc.Scan() {
 		r.line(bufSink{&out}, sc.Bytes(), since)
 	}
+	r.end(bufSink{&out})
 	// Fail closed on a truncated scan. A scout handed the first 3% of a
 	// session with no error would reason about it as if it were the whole
 	// thing, and nothing downstream could tell. Returning nil bytes makes
@@ -1126,13 +1382,15 @@ func RedactSecrets(s string) string { return redactSecrets(s) }
 // writeReduced appends one labelled section, skipping blanks and the
 // harness-injected <system-reminder> parts that ride along in user records
 // but are not the user speaking.
-func writeReduced(out reduceSink, label, text string) {
+// It reports whether a section was emitted.
+func writeReduced(out reduceSink, label, text string) bool {
 	t := redactSecrets(strings.TrimSpace(text))
 	if t == "" || strings.HasPrefix(t, "<system-reminder>") {
-		return
+		return false
 	}
 	if r := []rune(t); len(r) > mineTextCap {
 		t = string(r[:mineTextCap]) + fmt.Sprintf("\n… [%d more characters elided]", len(r)-mineTextCap)
 	}
 	out.section(label, t)
+	return true
 }
