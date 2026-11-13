@@ -19,6 +19,7 @@ _k() {
         'watchlist:cell-side verb — read/write the dream loop'"'"'s watch items, via kraken serve'
         'load:read a blocked job'"'"'s unblock/scope estimate (the daemon'"'"'s Jev judgment), via kraken serve'
         'stack:cell-side verb — register the manual-test URLs a cell spun up, via kraken serve'
+        'periodic:jobs kraken creates and starts on a schedule (add/list/run/pause/resume/rm), via kraken serve'
         'mm:the mental model — carl'"'"'s mark/drop/note, the drill-down reads, mind runs and read marks, contradiction flags'
         'slack:iris-side verb — read/ack the Slack intake inbox via kraken serve'
         'job:iris-side verb — list/read jobs and write a draft via kraken serve'
@@ -195,6 +196,36 @@ _k() {
                 )
                 _describe -t flags 'flag' stackflags
             fi
+            ;;
+        periodic)
+            if (( CURRENT == 3 )); then
+                local -a ops
+                ops=(
+                    'add:store a scheduled job template (add <name> --prefix <slug> --at <HH:MM> [--days <list>] [--file <path>])'
+                    'list:print every periodic job as JSON, the dream pass first'
+                    'run:fire one now, as <prefix>-<date>-run'
+                    'pause:stop one firing until it is resumed'
+                    'resume:restart a paused one'
+                    'rm:delete one; the jobs it created stay'
+                )
+                _describe -t ops 'op' ops
+            elif [[ $words[3] == add ]] && (( CURRENT > 4 )); then
+                # word 4 is the <name> positional; flags are offered past it.
+                if [[ $words[CURRENT-1] == --file ]]; then
+                    _files
+                else
+                    local -a periodicflags
+                    periodicflags=(
+                        '--prefix:slug every created job starts with (<prefix>-<YYYY-MM-DD>)'
+                        '--at:local time of day, HH:MM on a 24-hour clock'
+                        '--days:daily, weekdays, or a list like mon,wed,fri (default daily)'
+                        '--file:the job template; read from stdin when omitted'
+                    )
+                    _describe -t flags 'flag' periodicflags
+                fi
+            fi
+            # <name> completion is not offered: the names live only in
+            # kraken.db, behind kraken serve.
             ;;
         mm)
             if (( CURRENT == 3 )); then

@@ -88,6 +88,8 @@ func main() {
 		cmdLoad(rest)
 	case "stack":
 		cmdStack(rest)
+	case "periodic":
+		cmdPeriodic(rest)
 	case "artifacts":
 		cmdArtifacts(rest)
 	case "mm":
@@ -235,6 +237,20 @@ Commands:
                       <url-or-label> drops one; clear <slug> drops them all
                       (do this after the manual-test gate passes — teardown
                       does it anyway). get prints {"stack": [...]} as JSON.
+  k periodic add|list|run|pause|resume|rm ...
+                      jobs kraken creates and starts by itself on a schedule,
+                      once per day on the days you pick, proxied the same
+                      way as 'k questions'. add <name> --prefix <slug>
+                      --at <HH:MM> [--days daily|weekdays|mon,wed,fri]
+                      [--file <template>] stores a job template (read from
+                      stdin without --file); each firing creates the job
+                      <prefix>-<YYYY-MM-DD>, with {{slug}} and {{date}} in
+                      the template filled in. list prints them as JSON, the
+                      nightly dream pass first. run <name> fires one now as
+                      <prefix>-<date>-run. pause <name> and resume <name>
+                      stop and restart the schedule, and a resumed job skips
+                      a time that passed while it was paused. rm <name>
+                      deletes the schedule and leaves its jobs alone.
   k artifacts get <slug> [name]
   k artifacts get --archived <slug> [name]
                       read any job's artifacts — a sibling's, or a torn-down

@@ -759,8 +759,8 @@ func TestAskEdgeMigrationFromV35DefaultsEveryRow(t *testing.T) {
 	if err := s.db.QueryRow(`PRAGMA user_version`).Scan(&version); err != nil {
 		t.Fatal(err)
 	}
-	if version != 41 {
-		t.Fatalf("user_version = %d after migrating from v35, want 41", version)
+	if version != 42 {
+		t.Fatalf("user_version = %d after migrating from v35, want 42", version)
 	}
 	list, err := s.ListThreads(jobID)
 	if err != nil {
@@ -820,9 +820,9 @@ func TestAskEdgeMigrationReplayIsNoOp(t *testing.T) {
 			s2.Close()
 			t.Fatal(err)
 		}
-		if version != 41 {
+		if version != 42 {
 			s2.Close()
-			t.Fatalf("user_version after Open #%d = %d, want 41", i+1, version)
+			t.Fatalf("user_version after Open #%d = %d, want 42", i+1, version)
 		}
 		got, err := s2.GetThread(jobID, row.TID)
 		if err != nil {
@@ -843,15 +843,15 @@ func TestAskEdgeMigrationReplayIsNoOp(t *testing.T) {
 // 37 since the nightly mind pass (schemaV37), 38 since the spawn links
 // (jobSpawnsTable).
 func TestAskEdgeSchemaVersionConstant(t *testing.T) {
-	if schemaVersion != 41 {
-		t.Fatalf("schemaVersion = %d, want 41", schemaVersion)
+	if schemaVersion != 42 {
+		t.Fatalf("schemaVersion = %d, want 42", schemaVersion)
 	}
 	s := askEdgeOpen(t)
 	var version int
 	if err := s.db.QueryRow(`PRAGMA user_version`).Scan(&version); err != nil {
 		t.Fatal(err)
 	}
-	if version != 41 {
-		t.Fatalf("fresh user_version = %d, want 41", version)
+	if version != 42 {
+		t.Fatalf("fresh user_version = %d, want 42", version)
 	}
 }

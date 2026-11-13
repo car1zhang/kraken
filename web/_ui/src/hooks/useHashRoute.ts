@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 
 import { readLS, writeLS } from "./useLocalStorage.ts";
 
-export const VIEWS = ["board", "memory", "dream", "log"] as const;
+export const VIEWS = ["board", "memory", "dream", "periodic", "log"] as const;
 export type View = (typeof VIEWS)[number];
 
 const LEGACY_KEY = "kraken-view";
@@ -75,7 +75,8 @@ function parseHash(): View | null {
 }
 
 /**
- * The four views as real URLs (#/board, #/memory, #/dream, #/log) — Q6.
+ * The five views as real URLs (#/board, #/memory, #/dream, #/periodic,
+ * #/log) — Q6.
  * VIEWS' order IS the tab order the chrome renders (log last), and `memory`
  * is the former graph view's renamed tab (RENAMED, above).
  *

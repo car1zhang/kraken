@@ -29,8 +29,8 @@ beforeEach(() => {
 });
 
 describe("VIEWS", () => {
-  it("is board · memory · dream · log (carl's tab order, graph renamed), with no dag", () => {
-    expect([...VIEWS]).toEqual(["board", "memory", "dream", "log"]);
+  it("is board · memory · dream · periodic · log (carl's tab order, graph renamed), with no dag", () => {
+    expect([...VIEWS]).toEqual(["board", "memory", "dream", "periodic", "log"]);
     expect(VIEWS as readonly string[]).not.toContain("dag");
   });
 });

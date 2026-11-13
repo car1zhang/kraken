@@ -2023,6 +2023,11 @@ var sleepSpec = map[string]fieldSpec{
 	"disabled": {kind: wireBool, required: true},
 }
 
+// --- /api/periodic (periodic.go periodicHandler) ---
+//
+// The list envelope, a webPeriodic element and each op's 200 body are pinned
+// in periodic_contract_test.go with this file's assertShape and fieldSpec.
+
 // editorOpenRepo makes a checkout under ~/Developer that jobs.ResolveRepo can
 // find (a dir with a .git entry), and returns its path.
 func editorOpenRepo(t *testing.T) string {

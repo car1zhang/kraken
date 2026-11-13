@@ -1260,27 +1260,29 @@ func (d *daemonState) tick(mirror bool) (int, error) {
 	// daily run is queued and the oldest queued run started, never under
 	// --mirror. A mind run is a headless child, not a job, so it starts no cell.
 	//
-	// The dream job is the ONLY start the daemon makes. Every other job on the
-	// board starts from carl's own submit, synchronously inside that request;
-	// a dream job has no human in the loop by construction, so the
-	// creator starts what it created, here, on the same tick it created it. The
-	// attempt is single-shot on purpose: a failure notifies loudly and leaves
-	// a DRAFT on the board, which carl can submit by hand, rather than a
-	// background retry loop re-attempting a broken start every 15s forever
-	// with nothing on screen (which is precisely what the queue pass did).
+	// The dream job and the periodic jobs (periodicPass, periodic.go) are the
+	// ONLY starts the daemon makes. Every other job on the board starts from
+	// carl's own submit, synchronously inside that request; these have no
+	// human in the loop by construction, so the creator starts what it
+	// created, here, on the same tick it created it. The attempt is
+	// single-shot on purpose: a failure notifies loudly and leaves a DRAFT on
+	// the board, which carl can submit by hand, rather than a background
+	// retry loop re-attempting a broken start every 15s forever with nothing
+	// on screen (which is precisely what the queue pass did).
 	if !mirror {
 		if created := kickDream(now); created != nil && d.startCreatedJob(created) {
 			cells++
 		}
+		cells += periodicPass(now, d.startCreatedJob)
 		d.mindRunPass(ActiveStore(), now)
 	}
 	return cells, nil
 }
 
 // startCreatedJob submits a job the tick just created for itself (the dream
-// job) and reports whether the cell came up. Success logs and notifies
-// exactly as the old queue pass did; failure logs, notifies, and returns
-// false — the job stays draft, and nothing retries it.
+// job or a periodic job) and reports whether the cell came up. Success logs
+// and notifies exactly as the old queue pass did; failure logs, notifies,
+// and returns false — the job stays draft, and nothing retries it.
 //
 // It goes through SubmitJob rather than calling StartCell directly so the
 // creators get the same validation carl's own submit gets: a dream job whose

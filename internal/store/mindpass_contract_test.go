@@ -184,8 +184,8 @@ func mpcSnap(t *testing.T, s *Store, id int64) mpcItemSnap {
 // DEFAULT 'unknown'; and after it `nightly` is an accepted source.
 func TestMpcMigrateV37OverAnAgedV36Database(t *testing.T) {
 	s, dbPath := mpcOpenStore(t)
-	if v := mpcUserVersion(t, s); v != 41 {
-		t.Fatalf("fresh user_version = %d, want 41", v)
+	if v := mpcUserVersion(t, s); v != 42 {
+		t.Fatalf("fresh user_version = %d, want 42", v)
 	}
 	jobID, err := s.CreateJob(&Job{Slug: "pre-v37", Repo: "kraken", Body: "spec"})
 	if err != nil {
@@ -213,8 +213,8 @@ func TestMpcMigrateV37OverAnAgedV36Database(t *testing.T) {
 	}
 	defer s2.Close()
 
-	if v := mpcUserVersion(t, s2); v != 41 {
-		t.Errorf("migrated user_version = %d, want 41", v)
+	if v := mpcUserVersion(t, s2); v != 42 {
+		t.Errorf("migrated user_version = %d, want 42", v)
 	}
 	for _, id := range ids {
 		if got := mpcSnap(t, s2, id); got != before[id] {

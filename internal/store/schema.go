@@ -127,7 +127,9 @@ import (
 // Version 41 adds jobs.frozen_at: the operator's "on hold" mark on a blocked
 // job, cleared by the same write that moves the job off blocked (see
 // schemaV41Frozen).
-const schemaVersion = 41
+// Version 42 adds periodic_jobs: the stored templates the daemon tick turns
+// into one job per cadence day (see periodicJobsTable and store/periodic.go).
+const schemaVersion = 42
 
 // schemaV1 creates all nine tables plus kv. Exact DDL (types, indexes) was
 // left to this package by the spec; shapes below mirror the spec's Data
@@ -2402,6 +2404,7 @@ var migrations = map[int]migrationStep{
 	39: {sql: schemaV39MindRuns, hook: migrateV39MindRuns},
 	40: {sql: jobMessagesTable},
 	41: {hook: migrateV41Frozen},
+	42: {sql: periodicJobsTable},
 }
 
 // schemaV41Frozen is v41's one ALTER: jobs.frozen_at, the unix-millis stamp
@@ -3638,6 +3641,32 @@ CREATE TABLE IF NOT EXISTS job_messages (
 	first_at INTEGER NOT NULL,
 	last_at  INTEGER NOT NULL,
 	PRIMARY KEY (from_id, to_id)
+);
+`
+
+// periodicJobsTable is migration 42: one row per periodic job, a template the
+// daemon tick turns into a job on each of its cadence days. name and prefix
+// are each UNIQUE because the name is what every verb addresses and the
+// prefix is what the fired slugs (`<prefix>-<date>`) are built from, so two
+// rows sharing one would fire into each other's slugs. IF NOT EXISTS because
+// several migration tests age a database by resetting user_version alone.
+// No FK to jobs: a fired job is linked only by its slug, and removing the row
+// leaves every job it fired alone.
+const periodicJobsTable = `
+CREATE TABLE IF NOT EXISTS periodic_jobs (
+	id         INTEGER PRIMARY KEY AUTOINCREMENT,
+	name       TEXT NOT NULL UNIQUE,
+	prefix     TEXT NOT NULL UNIQUE,
+	template   TEXT NOT NULL DEFAULT '',
+	at_minute  INTEGER NOT NULL DEFAULT 0, -- minutes after local midnight
+	days       INTEGER NOT NULL DEFAULT 0, -- bit 1<<time.Weekday; 0 = every day
+	enabled    INTEGER NOT NULL DEFAULT 1,
+	armed_at   INTEGER NOT NULL DEFAULT 0, -- unix millis
+	last_date  TEXT NOT NULL DEFAULT '',
+	last_slug  TEXT NOT NULL DEFAULT '',
+	last_note  TEXT NOT NULL DEFAULT '',
+	last_at    INTEGER NOT NULL DEFAULT 0, -- unix millis
+	created_at INTEGER NOT NULL DEFAULT 0  -- unix millis
 );
 `
 

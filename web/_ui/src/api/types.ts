@@ -766,6 +766,50 @@ export interface WebSleep {
   disabled: boolean;
 }
 
+/**
+ * One periodic job on the wire: GET /api/periodic's rows and the row an
+ * add/pause/resume answers with (internal/api/periodic.go). Every key is
+ * always present; `days` is an empty array for every day, never null, and
+ * `next_due` is 0 when the row has no next firing.
+ */
+export interface WebPeriodic {
+  name: string;
+  prefix: string;
+  at: string;
+  days: string[];
+  cadence: string;
+  enabled: boolean;
+  builtin: boolean;
+  template: string;
+  last_date: string;
+  last_slug: string;
+  last_note: string;
+  last_at: number;
+  next_due: number;
+  created_at: number;
+}
+
+export interface PeriodicList {
+  periodic: WebPeriodic[];
+}
+
+/** POST /api/periodic op `run`: the job it created, and whether it started. */
+export interface PeriodicRunResult {
+  ok: true;
+  slug: string;
+  started: boolean;
+  note: string;
+}
+
+/** The five strings op `add` sends; `days` is the comma-separated form. */
+export interface PeriodicAddFields {
+  name: string;
+  prefix: string;
+  at: string;
+  days: string;
+  template: string;
+}
+
 export interface WebBoard {
   daemon: DaemonStatus;
   daemon_ok: boolean;

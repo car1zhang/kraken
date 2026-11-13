@@ -77,8 +77,10 @@ afterEach(() => {
 });
 
 describe("VIEWS (slice W)", () => {
-  it("KronosRemoval: VIEWS is exactly board · memory · dream · log, in order", () => {
-    expect([...VIEWS]).toEqual(["board", "memory", "dream", "log"]);
+  // periodic was added after kronos left (job 828); the kronos pin is that it
+  // stays out, which the exact list still says
+  it("KronosRemoval: VIEWS is exactly board · memory · dream · periodic · log, in order", () => {
+    expect([...VIEWS]).toEqual(["board", "memory", "dream", "periodic", "log"]);
   });
 });
 
@@ -100,7 +102,7 @@ describe("useHashRoute (slice W)", () => {
 });
 
 describe("Chrome (slice W)", () => {
-  it("KronosRemoval: renders exactly four .viewtab elements — BOARD, MEMORY, DREAM, LOG", () => {
+  it("KronosRemoval: renders exactly five .viewtab elements — BOARD, MEMORY, DREAM, PERIODIC, LOG", () => {
     vi.spyOn(Date, "now").mockReturnValue(contractNow);
     const props = {
       board: contractModel([]),
@@ -112,7 +114,7 @@ describe("Chrome (slice W)", () => {
     };
     const { container } = contractRender(<Chrome {...props} />);
     const tabs = [...container.querySelectorAll(".viewtab")];
-    expect(tabs.map((t) => t.textContent)).toEqual(["BOARD", "MEMORY", "DREAM", "LOG"]);
+    expect(tabs.map((t) => t.textContent)).toEqual(["BOARD", "MEMORY", "DREAM", "PERIODIC", "LOG"]);
   });
 });
 

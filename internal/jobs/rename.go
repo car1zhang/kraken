@@ -130,6 +130,19 @@ func RenameJob(j *Job, to string) (*RenameResult, error) {
 		// a slug that is not in the active namespace at all.
 		return nil, fmt.Errorf("%s is archived — unarchive it first, then rename it", j.Slug)
 	}
+	// A periodic row's fired slugs are `<prefix>-<date>`, and its firing
+	// skips the day when that slug is already taken, so a hand-renamed job
+	// landing on one would silently stand in for a day's firing. Renaming a
+	// fired job AWAY is fine: the row never looks its jobs up again.
+	periodic, err := st.ListPeriodicJobs()
+	if err != nil {
+		return nil, fmt.Errorf("could not read periodic jobs to check the name: %w", err)
+	}
+	for _, p := range periodic {
+		if strings.HasPrefix(newSlug, p.Prefix+"-") {
+			return nil, fmt.Errorf("%q starts with %q, the prefix of periodic job %q, which names the jobs it creates that way", newSlug, p.Prefix+"-", p.Name)
+		}
+	}
 	if err := checkRenameTarget(st, j, newSlug); err != nil {
 		return nil, err
 	}

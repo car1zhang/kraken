@@ -285,6 +285,10 @@ func registerRoutes(mux routeMux) {
 	// sleep is disabled, POST sets it. The POST gates itself inline so the
 	// GET stays reachable under --mirror.
 	mux.HandleFunc("/api/sleep", sleepHandler)
+	// Periodic jobs (periodic.go): GET lists them with the built-in dream
+	// pass first, POST adds, pauses, resumes, runs or removes one. The POST
+	// gates itself inline so the list stays readable under --mirror.
+	mux.HandleFunc("/api/periodic", periodicHandler)
 	// Visibility is a one-field route for colour's reasons (jobvisibility.go):
 	// usable on a live cell, and never cleared by a form save from a client
 	// that predates it. Not mirror-gated: it writes a row and types nothing.
