@@ -949,6 +949,144 @@ func TestReduceTranscriptDedupesDeliveredQueuedPrompt(t *testing.T) {
 	}
 }
 
+// TestReduceTranscriptCollapsesCronFires: a scheduled task (CronCreate)
+// firing is written as a `queue-operation` enqueue of its prompt, a dequeue,
+// a `system`/`scheduled_task_fire` record naming the task and previewing the
+// prompt, then a `user` record carrying the whole prompt (1,497 of 1,506 real
+// fires on this machine take exactly that shape). Unlabelled, every fire of a
+// merge-watch cron rendered its full prompt as [user] (164 times in one
+// measured session) and the enqueue as [user mid-turn], so the reduced view
+// was mostly one paragraph and the cron's words read as the operator's. The
+// first delivery of a prompt text renders in full under [cron <task id>] and
+// nowhere else; later deliveries of the same text, under any task id, are a
+// one-line marker; the turn-end system records a mid-turn queueing puts
+// between the enqueue and the fire do not flush the enqueue; harness traffic
+// between fire and delivery (a task notification) leaves the cron armed, and
+// so does an operator steer when the fire has claimed its enqueue; a
+// claimed fire whose delivery is past the end of the input leaves a line; a slash-command cron's envelope is
+// matched through its command name and args; a user record that is not the
+// delivery disarms the cron and renders as the ordinary [user] it is, and so
+// does a later operator text that merely begins like the preview; and an
+// enqueue no cron claims still renders as [user mid-turn] where it was.
+func TestReduceTranscriptCollapsesCronFires(t *testing.T) {
+	projects := mineHome(t)
+	now := time.Now().UnixMilli()
+	since := now - int64(time.Hour/time.Millisecond)
+
+	const full = "CRON-PROMPT-HEAD poll the pull request and act on anything new CRON-PROMPT-TAIL"
+	preview := full[:16] // the harness stores a prefix, not the whole text
+	fire := func(ts int64, task, prompt string) string {
+		return mineJSON(t, map[string]any{
+			"type": "system", "subtype": "scheduled_task_fire", "timestamp": mineISO(ts),
+			"taskId": task, "cron": "*/5 * * * *", "prompt": prompt,
+			"content": "Scheduled task fired",
+		})
+	}
+	enqueue := func(ts int64, text string) string {
+		return mineJSON(t, map[string]any{"type": "queue-operation", "timestamp": mineISO(ts), "operation": "enqueue", "content": text})
+	}
+	dequeue := func(ts int64) string {
+		return mineJSON(t, map[string]any{"type": "queue-operation", "timestamp": mineISO(ts), "operation": "dequeue"})
+	}
+	bookkeeping := func(ts int64) string {
+		return mineJSON(t, map[string]any{"type": "last-prompt", "timestamp": mineISO(ts), "lastPrompt": "x"})
+	}
+	turnEnd := func(ts int64) []string { // what the harness writes when a cron is queued while a turn is still ending
+		return []string{
+			mineJSON(t, map[string]any{"type": "system", "subtype": "stop_hook_summary", "timestamp": mineISO(ts), "content": "x"}),
+			mineJSON(t, map[string]any{"type": "system", "subtype": "turn_duration", "timestamp": mineISO(ts + 1), "durationMs": 1200}),
+		}
+	}
+	const slash = "/poll-watch 4242 fast"
+	slashEnvelope := "<command-message>poll-watch</command-message>\n<command-name>/poll-watch</command-name>\n<command-args>4242 fast</command-args>"
+
+	path := mineWrite(t, projects, "-Users-carl-Developer-monolith", "sess.jsonl",
+		// the real four-record shape, with the turn-end records a mid-turn
+		// queueing puts between the dequeue and the fire
+		enqueue(now-9100, full), dequeue(now-9050), turnEnd(now - 9030)[0], turnEnd(now - 9030)[1], fire(now-9000, "task0001", preview),
+		bookkeeping(now-8950),
+		mineUser(t, now-8900, full),
+		mineAssistant(t, now-8800, "m", map[string]any{"type": "text", "text": "nothing new"}),
+		enqueue(now-8100, full), dequeue(now-8050), fire(now-8000, "task0001", preview),
+		mineUser(t, now-7900, []any{map[string]any{"type": "text", "text": full}}),
+		// a task notification lands between the fire and its delivery
+		enqueue(now-7100, full), dequeue(now-7050), fire(now-7000, "task0001", preview),
+		mineUser(t, now-6950, "<task-notification>agent finished</task-notification>"),
+		mineUser(t, now-6900, full),
+		// the same prompt under a re-created task id is the same words
+		enqueue(now-6600, full), dequeue(now-6550), fire(now-6500, "task0002", preview),
+		mineUser(t, now-6400, full),
+		// a slash-command cron: preview is the typed line, delivery the envelope
+		enqueue(now-6100, slash), dequeue(now-6050), fire(now-6000, "task0003", slash),
+		mineUser(t, now-5900, slashEnvelope),
+		enqueue(now-5600, slash), dequeue(now-5550), fire(now-5500, "task0003", slash),
+		mineUser(t, now-5400, slashEnvelope),
+		// an operator steer between a claimed fire and its delivery: the
+		// steer is the operator's, the delivery is still the cron's
+		enqueue(now-5300, full), dequeue(now-5250), fire(now-5200, "task0001", preview),
+		mineUser(t, now-5150, "OPERATOR-STEER-BETWEEN-FIRE-AND-DELIVERY"),
+		mineUser(t, now-5100, full),
+		// the operator types after an UNCLAIMED fire (no enqueue before it):
+		// not the cron, and the cron is disarmed, so a later text that
+		// begins like the preview is the operator's too
+		fire(now-5000, "task0001", preview),
+		mineUser(t, now-4900, "OPERATOR-TYPED-THIS"),
+		mineUser(t, now-4800, "CRON-PROMPT-HEAD but the operator wrote this one"),
+		// a genuine mid-turn steer, queued then delivered, no cron involved
+		enqueue(now-4100, "STEER-QUEUED-BY-THE-OPERATOR"),
+		mineUser(t, now-4000, "STEER-QUEUED-BY-THE-OPERATOR"),
+		// an enqueue as the very last record still shows, and a claimed fire
+		// whose delivery is past the end of the file leaves a line
+		enqueue(now-3000, "LAST-RECORD-STEER"),
+		enqueue(now-2100, full), dequeue(now-2050), fire(now-2000, "task0001", preview),
+	)
+
+	out, err := ReduceTranscript(path, since)
+	if err != nil {
+		t.Fatalf("ReduceTranscript: %v", err)
+	}
+	got := string(out)
+
+	if n := strings.Count(got, full); n != 1 {
+		t.Errorf("cron prompt emitted in full %d times, want exactly 1:\n%s", n, got)
+	}
+	if !strings.Contains(got, "[cron task0001]\n"+full) {
+		t.Errorf("the one full copy must carry the cron label and task id:\n%s", got)
+	}
+	marker := " fired: same prompt as an earlier cron fire, not repeated"
+	if n := strings.Count(got, "[cron task0001]"+marker); n != 3 {
+		t.Errorf("task0001 repeat marker emitted %d times, want 3 (text-block delivery, the one past a task notification, the one past an operator steer):\n%s", n, got)
+	}
+	if n := strings.Count(got, "[cron task0002]"+marker); n != 1 {
+		t.Errorf("a re-created task id with the same prompt must render as a marker, got %d:\n%s", n, got)
+	}
+	if !strings.Contains(got, "[cron task0003]\n"+slash) || strings.Count(got, "[cron task0003]"+marker) != 1 {
+		t.Errorf("slash-command cron: want one full [cron task0003] copy of %q and one marker:\n%s", slash, got)
+	}
+	for _, sec := range strings.Split(got, "\n\n") {
+		if strings.HasPrefix(sec, "[user") && (strings.Contains(sec, "CRON-PROMPT-TAIL") || strings.Contains(sec, "<command-name>/poll-watch") || strings.Contains(sec, slash)) {
+			t.Errorf("a cron delivery or its enqueue rendered under an operator label:\n%s", sec)
+		}
+	}
+	for _, typed := range []string{"OPERATOR-STEER-BETWEEN-FIRE-AND-DELIVERY", "OPERATOR-TYPED-THIS", "CRON-PROMPT-HEAD but the operator wrote this one"} {
+		if !strings.Contains(got, "[user]\n"+typed) {
+			t.Errorf("operator text %q must render as [user]:\n%s", typed, got)
+		}
+	}
+	if !strings.Contains(got, "[user mid-turn]\nSTEER-QUEUED-BY-THE-OPERATOR") || strings.Count(got, "STEER-QUEUED-BY-THE-OPERATOR") != 1 {
+		t.Errorf("an unclaimed enqueue must still render once as [user mid-turn]:\n%s", got)
+	}
+	if !strings.Contains(got, "[user mid-turn]\nLAST-RECORD-STEER") {
+		t.Errorf("an enqueue that is the file's last record must be flushed:\n%s", got)
+	}
+	if !strings.HasSuffix(strings.TrimSpace(got), "[cron task0001] fired, delivery not in this view") {
+		t.Errorf("a claimed fire with no delivery before end of input must leave a marker as the last section:\n%s", got)
+	}
+	if n := strings.Count(got, "[cron"); n != 8 {
+		t.Errorf("want exactly 8 cron sections (2 full + 5 repeat markers + 1 lost-delivery marker), got %d:\n%s", n, got)
+	}
+}
+
 // TestReduceTranscriptSeparatesTeammateFromUser is the label that matters
 // most: [user] means carl. A brief zeus sends hephaestus arrives inside a
 // user record wrapped in a <teammate-message> envelope, and emitting it as

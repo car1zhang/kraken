@@ -672,7 +672,9 @@ func operatorFile(path string, opts OperatorOptions, seen map[string]bool, res *
 	for sc.Scan() {
 		line := sc.Bytes()
 		pos := len(sink.secs)
-		r.line(sink, line, 0)
+		// A pending enqueue flushed at the start of the call belongs to the
+		// earlier record, not this one.
+		pos += r.line(sink, line, 0)
 		rec, ok := decodeOperatorLine(line)
 		if !ok || !rec.prompt() {
 			continue
@@ -723,6 +725,7 @@ func operatorFile(path string, opts OperatorOptions, seen map[string]bool, res *
 			end: len(sink.secs),
 		})
 	}
+	r.end(sink)
 	if sc.Err() != nil {
 		res.Truncated++ // records read so far are kept
 	}
@@ -820,7 +823,7 @@ func AroundRecord(path, uuid string, radius int, raw bool) (blocks []ContextBloc
 		line, rerr := rd.ReadBytes('\n')
 		if len(line) > 0 {
 			p := len(sink.secs)
-			r.line(sink, line, 0)
+			p += r.line(sink, line, 0) // same carried-section correction as operatorFile
 			if pos < 0 {
 				if rec, ok := decodeOperatorLine(line); ok && rec.UUID == uuid {
 					pos, end = p, len(sink.secs)
@@ -829,6 +832,7 @@ func AroundRecord(path, uuid string, radius int, raw bool) (blocks []ContextBloc
 			}
 		}
 		if rerr == io.EOF {
+			r.end(sink)
 			break
 		}
 		if rerr != nil {
