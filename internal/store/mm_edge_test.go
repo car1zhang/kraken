@@ -920,7 +920,7 @@ func TestEdgeMMAddWatchItemFoldPreservesTheCarlTrio(t *testing.T) {
 	for _, c := range []struct{ name, got, want string }{
 		{"Class", got.Class, "correctness"},
 		{"State", got.State, "shipped"},
-		{"Evidence", got.Evidence, "session def"},
+		{"Evidence", got.Evidence, "session def" + watchEvidencePriorSep + "session abc"},
 		{"SuggestedFix", got.SuggestedFix, "add the check"},
 		{"PRURL", got.PRURL, "https://example.invalid/pr/1"},
 	} {

@@ -67,7 +67,7 @@ type WatchItem struct {
 	Class                          string // feedback|correction|repetition|waste|prompting
 	State                          string // watching|shipped|declined
 	Sightings, FirstSeen, LastSeen int64  // unix millis for the two stamps
-	Evidence                       string // JSON, local-only — never committed
+	Evidence                       string // free text, newest first, local-only — never committed
 	SuggestedFix, PRURL            string
 	UpdatedAt                      int64 // unix millis: the AGENT's last write
 	Verdict, Comment, CommentedAt  string
@@ -144,6 +144,10 @@ func scanWatchItem(row interface{ Scan(...any) error }) (WatchItem, error) {
 	return w, err
 }
 
+// watchEvidencePriorSep separates a fold's new evidence from the evidence the
+// row already held.
+const watchEvidencePriorSep = " || PRIOR: "
+
 // AddWatchItem records an observation, FOLDING it onto the live row that
 // already carries the same one rather than storing it twice.
 //
@@ -172,7 +176,14 @@ func scanWatchItem(row interface{ Scan(...any) error }) (WatchItem, error) {
 // ON A FOLD the row's sightings go up by one, last_seen and updated_at move to
 // now, and each of the agent's descriptive fields is overwritten only when the
 // caller supplied a non-empty one — a partial restatement leaves the rest
-// alone, UpdateWatchItem's rule and for its reason. first_seen is untouched,
+// alone, UpdateWatchItem's rule and for its reason. Evidence is the one field
+// a fold does not overwrite: the sent text goes in front and the stored text
+// is kept behind watchEvidencePriorSep, because a row's evidence is its
+// history across nights and the caller rebuilding it from a copy is where
+// that history gets cut. A sent text that already contains the stored one is
+// stored as sent, so a caller that restates the history does not double it.
+// UpdateWatchItem still replaces evidence outright, which is the way to
+// rewrite or trim it on purpose. first_seen is untouched,
 // which is the whole point of a first-seen column, and so is the carl-owned
 // trio. Newest live row wins when several match, so a fold lands on the live
 // one rather than the stalest copy.
@@ -217,11 +228,16 @@ func (s *Store) AddWatchItem(w WatchItem) (int64, bool, error) {
 				updated_at    = ?,
 				class         = COALESCE(NULLIF(?, ''), class),
 				state         = COALESCE(NULLIF(?, ''), state),
-				evidence      = COALESCE(NULLIF(?, ''), evidence),
+				evidence      = CASE
+					WHEN ? = '' THEN evidence
+					WHEN evidence = '' OR instr(?, evidence) > 0 THEN ?
+					ELSE ? || ? || evidence END,
 				suggested_fix = COALESCE(NULLIF(?, ''), suggested_fix),
 				pr_url        = COALESCE(NULLIF(?, ''), pr_url)
 				WHERE id = ?`,
-			now, now, w.Class, w.State, w.Evidence, w.SuggestedFix, w.PRURL, id,
+			now, now, w.Class, w.State,
+			w.Evidence, w.Evidence, w.Evidence, w.Evidence, watchEvidencePriorSep,
+			w.SuggestedFix, w.PRURL, id,
 		); uerr != nil {
 			return 0, false, fmt.Errorf("fold watch item %d: %w", id, uerr)
 		}

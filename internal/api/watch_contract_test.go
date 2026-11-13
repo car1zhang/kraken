@@ -472,8 +472,8 @@ func TestContractWatchItemAddFoldsRepeat(t *testing.T) {
 	if got.Sightings != 2 {
 		t.Fatalf("sightings = %d, want 2", got.Sightings)
 	}
-	if got.Evidence != "sighting two" {
-		t.Fatalf("evidence = %q, want it replaced wholesale", got.Evidence)
+	if want := "sighting two || PRIOR: sighting one"; got.Evidence != want {
+		t.Fatalf("evidence = %q, want the new sighting in front of the stored one (%q)", got.Evidence, want)
 	}
 	if got.SuggestedFix != "cache it" || got.Class != "repetition" || got.State != "shipped" {
 		t.Fatalf("row = %+v, want suggested_fix/class/state applied on a fold", got)
