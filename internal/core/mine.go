@@ -1086,6 +1086,22 @@ const mineTextCap = 64 * 1024
 // three can START a match, so admitting them only extends redaction.
 var secretRE = regexp.MustCompile(`\b(?:xox[a-z]-[A-Za-z0-9%+/=.\-]{8,}|sk-[A-Za-z0-9_\-]{16,}|gh[pousr]_[A-Za-z0-9]{16,}|github_pat_[A-Za-z0-9_]{16,}|AKIA[0-9A-Z]{16}|eyJ[A-Za-z0-9_\-]{10,}\.[A-Za-z0-9_\-.]{20,})`)
 
+// emailRE matches an email address: a local part, `@`, and a dotted domain
+// whose last label is two or more letters. A person's address is an
+// identifier, not a credential, so it gets no vendor-prefix treatment and
+// nothing of the value survives: the whole match becomes the literal
+// emailRedactMarker. The shape is deliberately narrow on the right (a final
+// label of letters only, two or more) so a `user@host` in a shell command,
+// a `price@2x` asset name or a bare `@handle` are left alone, and
+// deliberately indifferent on the left to ssh remotes (`git@github.com` is
+// masked; the host is not the interesting half of that string). It is
+// applied after secretRE, and the marker carries no `@`, so a second pass
+// over already-masked text changes nothing.
+var emailRE = regexp.MustCompile(`[A-Za-z0-9._%+\-]+@[A-Za-z0-9\-]+(?:\.[A-Za-z0-9\-]+)*\.[A-Za-z]{2,}`)
+
+// emailRedactMarker replaces every email-shaped match whole.
+const emailRedactMarker = "[email]"
+
 // mineRedactKeep is how many runes of a matched credential the marker keeps:
 // long enough to show the vendor prefix (`xoxc-`, `AKIAI`), short enough
 // that no shape's value bytes survive — every arm's minimum match is 13+
@@ -1108,14 +1124,22 @@ const mineRedactKeep = 5
 // kraken.db, on every later sweep that touches the session. Redacting at
 // emission cannot claw back the original transcript — Claude Code owns that
 // file — but it ends the propagation.
+//
+// Email addresses ride the same seam, masked whole as emailRedactMarker:
+// staged reduced views carried every address a transcript mentioned, and a
+// scout's ordinary page read copied each one forward into its own
+// transcript, from where the next night's views carried them again (six
+// sightings across five passes). A reader who needs the address has the
+// raw transcript; the view and the digest only need to know one was there.
 func redactSecrets(s string) string {
-	return secretRE.ReplaceAllStringFunc(s, func(m string) string {
+	s = secretRE.ReplaceAllStringFunc(s, func(m string) string {
 		r := []rune(m)
 		if len(r) > mineRedactKeep {
 			r = r[:mineRedactKeep]
 		}
 		return string(r) + "…[redacted]"
 	})
+	return emailRE.ReplaceAllLiteralString(s, emailRedactMarker)
 }
 
 // RedactSecrets is redactSecrets for callers outside core: the Jev dialog
