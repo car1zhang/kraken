@@ -128,7 +128,8 @@ import (
 // job, cleared by the same write that moves the job off blocked (see
 // schemaV41Frozen).
 // Version 42 adds periodic_jobs: the stored templates the daemon tick turns
-// into one job per cadence day (see periodicJobsTable and store/periodic.go).
+// into a job on each cadence day or every fixed interval (see
+// periodicJobsTable and store/periodic.go).
 const schemaVersion = 42
 
 // schemaV1 creates all nine tables plus kv. Exact DDL (types, indexes) was
@@ -3645,7 +3646,8 @@ CREATE TABLE IF NOT EXISTS job_messages (
 `
 
 // periodicJobsTable is migration 42: one row per periodic job, a template the
-// daemon tick turns into a job on each of its cadence days. name and prefix
+// daemon tick turns into a job on each of its cadence days, or every
+// every_minutes when that is set. name and prefix
 // are each UNIQUE because the name is what every verb addresses and the
 // prefix is what the fired slugs (`<prefix>-<date>`) are built from, so two
 // rows sharing one would fire into each other's slugs. IF NOT EXISTS because
@@ -3660,6 +3662,7 @@ CREATE TABLE IF NOT EXISTS periodic_jobs (
 	template   TEXT NOT NULL DEFAULT '',
 	at_minute  INTEGER NOT NULL DEFAULT 0, -- minutes after local midnight
 	days       INTEGER NOT NULL DEFAULT 0, -- bit 1<<time.Weekday; 0 = every day
+	every_minutes INTEGER NOT NULL DEFAULT 0, -- > 0: fire every N minutes, at_minute and days unused
 	enabled    INTEGER NOT NULL DEFAULT 1,
 	armed_at   INTEGER NOT NULL DEFAULT 0, -- unix millis
 	last_date  TEXT NOT NULL DEFAULT '',

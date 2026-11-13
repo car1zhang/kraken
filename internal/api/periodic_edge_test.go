@@ -197,14 +197,47 @@ func TestPeriodicEdgeUnknownName404(t *testing.T) {
 	}
 }
 
-// Contract: "The name `dream` on `pause`, `resume`, `run` or `remove` is 409."
+// Contract (amended in revision 2): "The name `dream` on `run` or `remove` is
+// 409." Neither creates the dream row.
 func TestPeriodicEdgeDream409(t *testing.T) {
 	mux, st, _ := periodicEdgeMux(t)
-	for _, op := range []string{"pause", "resume", "run", "remove"} {
+	for _, op := range []string{"run", "remove"} {
 		periodicEdgeWantError(t, op+" dream", periodicEdgePost(t, mux, map[string]string{"op": op, "name": "dream"}), http.StatusConflict)
 	}
 	if rows := periodicEdgeRows(t, st); len(rows) != 0 {
 		t.Fatalf("dream requests stored rows: %+v", rows)
+	}
+}
+
+// Contract (revision 2): pause and resume on `dream` answer 200 with the
+// dream row, `builtin` true, and the row is stored with the state asked for.
+func TestPeriodicEdgeDreamPauseResume(t *testing.T) {
+	mux, st, _ := periodicEdgeMux(t)
+	for _, tc := range []struct {
+		op      string
+		enabled bool
+	}{{"pause", false}, {"resume", true}} {
+		rec := periodicEdgePost(t, mux, map[string]string{"op": tc.op, "name": "dream"})
+		if rec.Code != http.StatusOK {
+			t.Fatalf("%s dream: status %d (%s)", tc.op, rec.Code, rec.Body.String())
+		}
+		var got struct {
+			Periodic struct {
+				Name    string `json:"name"`
+				Builtin bool   `json:"builtin"`
+				Enabled bool   `json:"enabled"`
+			} `json:"periodic"`
+		}
+		if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+			t.Fatalf("%s dream: decode: %v", tc.op, err)
+		}
+		if got.Periodic.Name != "dream" || !got.Periodic.Builtin || got.Periodic.Enabled != tc.enabled {
+			t.Errorf("%s dream answered %+v, want dream, builtin, enabled %v", tc.op, got.Periodic, tc.enabled)
+		}
+		rows := periodicEdgeRows(t, st)
+		if len(rows) != 1 || rows[0].Name != "dream" || rows[0].Enabled != tc.enabled {
+			t.Errorf("%s dream stored %+v, want one dream row with enabled %v", tc.op, rows, tc.enabled)
+		}
 	}
 }
 

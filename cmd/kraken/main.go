@@ -155,8 +155,9 @@ Commands:
                       the scheduler tick loop (derives working/blocked from
                       cell activity, tracks each job's PRs — merge =
                       notification + board chip, never teardown; it starts
-                      nothing on its own but the nightly dream job it
-                      creates itself, since submitting a job on the board is
+                      nothing on its own but the periodic jobs it creates
+                      itself, the nightly dream job among them, since
+                      submitting a job on the board is
                       what starts its cell) + nightly backup rotation as
                       background goroutines, and serves the web UI/API (default
                       127.0.0.1:7777) in the foreground: jobs as a kanban
@@ -239,15 +240,19 @@ Commands:
                       does it anyway). get prints {"stack": [...]} as JSON.
   k periodic add|list|run|pause|resume|rm ...
                       jobs kraken creates and starts by itself on a schedule,
-                      once per day on the days you pick, proxied the same
-                      way as 'k questions'. add <name> --prefix <slug>
-                      --at <HH:MM> [--days daily|weekdays|mon,wed,fri]
-                      [--file <template>] stores a job template (read from
-                      stdin without --file); each firing creates the job
-                      <prefix>-<YYYY-MM-DD>, with {{slug}} and {{date}} in
-                      the template filled in. list prints them as JSON, the
-                      nightly dream pass first. run <name> fires one now as
-                      <prefix>-<date>-run. pause <name> and resume <name>
+                      proxied the same way as 'k questions'. add <name>
+                      --prefix <slug> stores a job template (--file
+                      <template>, or stdin) with one of two schedules:
+                      --at <HH:MM> [--days daily|weekdays|mon,wed,fri] fires
+                      once a day on those days and creates
+                      <prefix>-<YYYY-MM-DD>; --every <30m|2h|3d|1w> fires
+                      that long after the previous firing (5 minutes at the
+                      least) and creates <prefix>-<YYYY-MM-DD>-<HHMM>.
+                      {{slug}} and {{date}} in the template are filled in.
+                      list prints them as JSON, the nightly dream pass
+                      first; dream is a row too and can be paused and
+                      resumed, not run or removed. run <name> fires one now
+                      as <prefix>-<date>-run. pause <name> and resume <name>
                       stop and restart the schedule, and a resumed job skips
                       a time that passed while it was paused. rm <name>
                       deletes the schedule and leaves its jobs alone.

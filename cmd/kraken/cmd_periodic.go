@@ -12,9 +12,10 @@ import (
 )
 
 // cmd_periodic.go — `k periodic add|list|run|pause|resume|rm`: periodic jobs,
-// the stored templates the daemon turns into one job per cadence day
-// (internal/jobs/periodic.go), proxied to kraken serve's GET/POST
-// /api/periodic (internal/api/periodic.go).
+// the stored templates the daemon turns into jobs on a cadence (a time of
+// day on chosen days, or a fixed interval; internal/jobs/periodic.go),
+// proxied to kraken serve's GET/POST /api/periodic
+// (internal/api/periodic.go).
 //
 // Behavior contract, cmd_stack.go's:
 //   - success: `list` prints the server's JSON to stdout verbatim, exit 0; a
@@ -28,7 +29,7 @@ import (
 
 const periodicUsage = "usage: k periodic add|list|run|pause|resume|rm ..."
 
-const periodicAddUsage = "usage: k periodic add <name> --prefix <slug> --at <HH:MM> [--days daily|weekdays|mon,wed,...] [--file <template.md>] (template on stdin when no --file)"
+const periodicAddUsage = "usage: k periodic add <name> --prefix <slug> (--at <HH:MM> [--days daily|weekdays|mon,wed,...] | --every <30m|2h|3d|1w>) [--file <template.md>] (template on stdin when no --file)"
 
 // periodicRunTimeout is the run op's client timeout. The server submits the
 // job inside the request, and starting a cell (worktree, tmux, spawn) can
@@ -37,7 +38,7 @@ const periodicRunTimeout = 60 * time.Second
 
 // periodicAddArgs is one parsed `add`.
 type periodicAddArgs struct {
-	name, prefix, at, days, file string
+	name, prefix, at, days, every, file string
 }
 
 func cmdPeriodic(args []string) {
@@ -67,7 +68,7 @@ func cmdPeriodic(args []string) {
 			util.Die("%v", err)
 		}
 		if _, err := qfPost("/api/periodic", map[string]any{
-			"op": "add", "name": a.name, "prefix": a.prefix, "at": a.at, "days": a.days, "template": template,
+			"op": "add", "name": a.name, "prefix": a.prefix, "at": a.at, "days": a.days, "every": a.every, "template": template,
 		}); err != nil {
 			util.Die("%v", err)
 		}
@@ -118,9 +119,10 @@ func cmdPeriodic(args []string) {
 	}
 }
 
-// parsePeriodicAdd reads `<name> --prefix <p> --at <HH:MM> [--days <list>]
-// [--file <path>]`, each flag as `--flag value` or `--flag=value`. It checks
-// shape only; kraken serve validates every value.
+// parsePeriodicAdd reads `<name> --prefix <p>`, then either `--at <HH:MM>
+// [--days <list>]` or `--every <interval>`, and an optional `--file <path>`,
+// each flag as `--flag value` or `--flag=value`. It checks shape only;
+// kraken serve validates every value.
 func parsePeriodicAdd(args []string) (periodicAddArgs, error) {
 	var a periodicAddArgs
 	if len(args) == 0 || strings.TrimSpace(args[0]) == "" || strings.HasPrefix(args[0], "-") {
@@ -142,6 +144,8 @@ func parsePeriodicAdd(args []string) (periodicAddArgs, error) {
 			dst = &a.at
 		case "--days":
 			dst = &a.days
+		case "--every":
+			dst = &a.every
 		case "--file":
 			dst = &a.file
 		default:
@@ -165,8 +169,11 @@ func parsePeriodicAdd(args []string) (periodicAddArgs, error) {
 	if !seen["--prefix"] {
 		return a, fmt.Errorf("%s (missing --prefix)", periodicAddUsage)
 	}
-	if !seen["--at"] {
-		return a, fmt.Errorf("%s (missing --at)", periodicAddUsage)
+	switch {
+	case seen["--every"] && (seen["--at"] || seen["--days"]):
+		return a, fmt.Errorf("%s (--every is an interval and takes neither --at nor --days)", periodicAddUsage)
+	case !seen["--every"] && !seen["--at"]:
+		return a, fmt.Errorf("%s (missing --at, or --every for an interval)", periodicAddUsage)
 	}
 	return a, nil
 }

@@ -775,10 +775,14 @@ export interface WebSleep {
 export interface WebPeriodic {
   name: string;
   prefix: string;
+  /** `HH:MM`; empty for an interval row. */
   at: string;
   days: string[];
+  /** An interval row's interval (`30m`, `2h`, `3d`, `1w`); empty for a calendar row. */
+  every: string;
   cadence: string;
   enabled: boolean;
+  /** True for the dream row, which can be paused and resumed but not run or deleted. */
   builtin: boolean;
   template: string;
   last_date: string;
@@ -801,12 +805,16 @@ export interface PeriodicRunResult {
   note: string;
 }
 
-/** The five strings op `add` sends; `days` is the comma-separated form. */
+/**
+ * The strings op `add` sends; `days` is the comma-separated form. A row is
+ * scheduled by `at` (with optional `days`) or by `every`, never both.
+ */
 export interface PeriodicAddFields {
   name: string;
   prefix: string;
   at: string;
   days: string;
+  every: string;
   template: string;
 }
 

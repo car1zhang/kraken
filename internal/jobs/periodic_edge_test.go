@@ -495,15 +495,18 @@ func TestPeriodicEdgeAddTaken(t *testing.T) {
 
 // ---------------------------------------------------------------- SetPeriodicPaused / RemovePeriodic
 
-// Contract: SetPeriodicPaused — "`dream`: `ErrPeriodicBuiltin`. No such row:
-// `store.ErrNotFound`." RemovePeriodic — the same two. Both directions of
-// pause, with no stored row of either name.
+// Contract (amended in revision 2, when the dream pass became a stored row):
+// SetPeriodicPaused — "The dream row pauses and resumes like any other, and
+// is created first when the table has none. No such row: `store.ErrNotFound`."
+// RemovePeriodic — "`dream`: `ErrPeriodicBuiltin`. No such row:
+// `store.ErrNotFound`."
 func TestPeriodicEdgeBuiltinAndMissing(t *testing.T) {
 	periodicEdgeEnv(t)
 	now := periodicEdgeDate(2026, time.November, 13, 8, 0)
 	for _, paused := range []bool{true, false} {
-		if _, err := SetPeriodicPaused(PeriodicBuiltinDream, paused, now); !errors.Is(err, ErrPeriodicBuiltin) {
-			t.Errorf("SetPeriodicPaused(dream, %v): err = %v, want ErrPeriodicBuiltin", paused, err)
+		p, err := SetPeriodicPaused(PeriodicBuiltinDream, paused, now)
+		if err != nil || p == nil || p.Name != PeriodicBuiltinDream || p.Enabled == paused {
+			t.Errorf("SetPeriodicPaused(dream, %v) = %+v, %v; want the dream row with Enabled %v", paused, p, err, !paused)
 		}
 		if _, err := SetPeriodicPaused("ghost", paused, now); !errors.Is(err, store.ErrNotFound) {
 			t.Errorf("SetPeriodicPaused(ghost, %v): err = %v, want store.ErrNotFound", paused, err)

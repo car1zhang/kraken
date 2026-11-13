@@ -38,6 +38,7 @@ const periodicEdgeRow = (over: Partial<WebPeriodic> = {}): WebPeriodic => ({
   prefix: "nightly",
   at: "09:00",
   days: [],
+  every: "",
   cadence: "daily 09:00",
   enabled: true,
   builtin: false,
@@ -175,7 +176,7 @@ describe("client rejections", () => {
       [409, "prefix nightly is taken"],
     ] as const) {
       vi.stubGlobal("fetch", periodicEdgeErrorFetch(status, msg));
-      const p = real.addPeriodic({ name: "n", prefix: "nightly", at: "09:00", days: "", template: "t" });
+      const p = real.addPeriodic({ name: "n", prefix: "nightly", at: "09:00", days: "", every: "", template: "t" });
       await expect(p).rejects.toBeInstanceOf(Error);
       await expect(p).rejects.toThrow(msg);
     }
@@ -245,12 +246,39 @@ describe("<PeriodicView> edges", () => {
   });
 
   // Contract: "A `builtin: true` row has none of them."
-  it("renders no pause, resume, run now or delete button on the built-in row", async () => {
+  // Amended in revision 2: the dream row pauses and resumes like a stored row.
+  it("renders no run now or delete button on the built-in row, and one pause", async () => {
     const { container } = periodicEdgeView();
     const dream = await periodicEdgeRowEl(container, "dream");
-    for (const name of ["pause", "resume", "run now", "delete", "confirm delete"]) {
+    for (const name of ["run now", "delete", "confirm delete"]) {
       expect(within(dream).queryByRole("button", { name })).toBeNull();
     }
+    expect(within(dream).getAllByRole("button")).toHaveLength(1);
+  });
+
+  // Revision 2: an interval row names its jobs with the time as well, and the
+  // add form sends the interval.
+  it("shows an interval row's cadence and sends `every` from the form", async () => {
+    periodicEdgeFetch.mockResolvedValue({
+      periodic: [periodicEdgeDream, periodicEdgeRow({ name: "pulse", prefix: "pulse", at: "", every: "2h", cadence: "every 2h" })],
+    });
+    const { container } = periodicEdgeView();
+    const row = await periodicEdgeRowEl(container, "pulse");
+    expect(row.textContent).toContain("every 2h");
+    expect(row.textContent).toContain("pulse-YYYY-MM-DD-HHMM");
+
+    const form = container.querySelector<HTMLFormElement>("#periodic-add")!;
+    const set = (name: string, value: string) =>
+      fireEvent.change(form.querySelector(`[name="${name}"]`)!, { target: { value } });
+    set("name", "beat");
+    set("prefix", "beat");
+    set("every", "30m");
+    set("template", "t");
+    periodicEdgeAdd.mockResolvedValue({ ok: true });
+    fireEvent.click(within(form).getByRole("button", { name: "add" }));
+    await waitFor(() =>
+      expect(periodicEdgeAdd).toHaveBeenCalledWith({ name: "beat", prefix: "beat", at: "", days: "", every: "30m", template: "t" }),
+    );
   });
 
   // Contract: "`pause` when enabled or `resume` when not" — never both.
@@ -331,6 +359,7 @@ describe("<PeriodicView> edges", () => {
       prefix: "nightly",
       at: "7:30",
       days: "mon,fri",
+      every: "",
       template: "---\nrepo: kraken\n---\n{{date}}\n",
     };
     for (const [n, v] of Object.entries(values)) fireEvent.change(field(n), { target: { value: v } });

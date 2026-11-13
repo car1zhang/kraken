@@ -28,6 +28,7 @@ const EMPTY_FORM: PeriodicAddFields = {
   prefix: "",
   at: "",
   days: "",
+  every: "",
   template: "",
 };
 
@@ -73,16 +74,20 @@ function PeriodicRow({
         <span className={"pd-state" + (row.enabled ? " on" : "")}>
           {row.enabled ? "on" : "paused"}
         </span>
-        {row.builtin ? <span className="pd-tag">built in</span> : null}
+        {row.builtin ? <span className="pd-tag">kraken's own</span> : null}
         <span className="spacer" />
-        <span className="pd-cadence" title="the days and local time it fires">
+        <span
+          className="pd-cadence"
+          title="when it fires: a local time on certain days, or a fixed interval"
+        >
           {row.cadence}
         </span>
       </div>
       <div className="pd-meta">
         <span className="k">job names</span>
         <span className="v">
-          <span className="pd-prefix">{row.prefix}</span>-YYYY-MM-DD
+          <span className="pd-prefix">{row.prefix}</span>
+          {row.every ? "-YYYY-MM-DD-HHMM" : "-YYYY-MM-DD"}
         </span>
         <span className="k">last fired</span>
         <span className="v">{lastFiringLabel(row)}</span>
@@ -90,10 +95,17 @@ function PeriodicRow({
         <span className="v">{nextDueLabel(row, nowMs)}</span>
       </div>
       {row.builtin ? (
-        <div className="pd-note">
-          The nightly dream pass. It is managed by kraken itself, so it cannot be
-          paused, run or deleted here.
-        </div>
+        <>
+          <div className="pd-note">
+            The nightly dream pass. Kraken writes its job text itself, so it can be
+            paused and resumed here but not run on demand or deleted.
+          </div>
+          <div className="pd-ctrl">
+            <button type="button" className="wl-btn" disabled={busy} onClick={onPause}>
+              {row.enabled ? "pause" : "resume"}
+            </button>
+          </div>
+        </>
       ) : (
         <>
           <div className="pd-ctrl">
@@ -251,8 +263,9 @@ export function PeriodicView({ active, onToast }: PeriodicViewProps) {
         <div className="dream-panehdr">add a periodic job</div>
         <form id="periodic-add" className="dream-scroll pd-form" onSubmit={onSubmit}>
           <p className="pd-help">
-            On each day it is scheduled, at the time given, kraken creates a job from
-            the template and starts it. Times are this Mac's local time.
+            Kraken creates a job from the template and starts it on a schedule:
+            either at a time of day (this Mac's local time) on the days you pick, or
+            every fixed interval. Fill in time and days, or the interval.
           </p>
           <label>
             <span>name</span>
@@ -291,6 +304,16 @@ export function PeriodicView({ active, onToast }: PeriodicViewProps) {
               value={form.days}
               onChange={field("days")}
               placeholder="blank for every day, or weekdays, or mon,wed,fri"
+              autoComplete="off"
+            />
+          </label>
+          <label>
+            <span>or every</span>
+            <input
+              name="every"
+              value={form.every}
+              onChange={field("every")}
+              placeholder="30m, 2h, 3d or 1w (leave time and days blank)"
               autoComplete="off"
             />
           </label>

@@ -201,7 +201,7 @@ _k() {
             if (( CURRENT == 3 )); then
                 local -a ops
                 ops=(
-                    'add:store a scheduled job template (add <name> --prefix <slug> --at <HH:MM> [--days <list>] [--file <path>])'
+                    'add:store a scheduled job template (add <name> --prefix <slug> (--at <HH:MM> [--days <list>] | --every <interval>) [--file <path>])'
                     'list:print every periodic job as JSON, the dream pass first'
                     'run:fire one now, as <prefix>-<date>-run'
                     'pause:stop one firing until it is resumed'
@@ -216,9 +216,10 @@ _k() {
                 else
                     local -a periodicflags
                     periodicflags=(
-                        '--prefix:slug every created job starts with (<prefix>-<YYYY-MM-DD>)'
+                        '--prefix:slug every created job starts with (<prefix>-<YYYY-MM-DD>, plus -<HHMM> for --every)'
                         '--at:local time of day, HH:MM on a 24-hour clock'
                         '--days:daily, weekdays, or a list like mon,wed,fri (default daily)'
+                        '--every:an interval instead of --at, like 30m, 2h, 3d or 1w'
                         '--file:the job template; read from stdin when omitted'
                     )
                     _describe -t flags 'flag' periodicflags

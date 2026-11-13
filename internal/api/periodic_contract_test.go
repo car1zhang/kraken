@@ -37,6 +37,7 @@ var periodicContractWebPeriodicSpec = map[string]fieldSpec{
 	"prefix":     {kind: wireString, required: true},
 	"at":         {kind: wireString, required: true},
 	"days":       {kind: wireArray, required: true},
+	"every":      {kind: wireString, required: true},
 	"cadence":    {kind: wireString, required: true},
 	"enabled":    {kind: wireBool, required: true},
 	"builtin":    {kind: wireBool, required: true},

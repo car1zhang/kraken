@@ -8,25 +8,30 @@ import (
 
 // periodic.go — schema v42's periodic_jobs table: one row per periodic job,
 // a stored job template that the daemon tick (internal/jobs/periodic.go)
-// turns into a job on each of its cadence days. The store holds the row and
+// turns into a job on each of its cadence days or every fixed interval. The
+// dream pass's row lives here too (name `dream`). The store holds the row and
 // its last-firing watermark; every cadence and validation rule lives in jobs.
 
 // PeriodicJob is one row. Tag-free like every type in this package: the API
 // layer owns the wire shape (internal/api/periodic.go's webPeriodic).
 type PeriodicJob struct {
-	ID        int64
-	Name      string
-	Prefix    string
-	Template  string
-	AtMinute  int // minutes after local midnight, 0..1439
-	Days      int // weekday bitmask, bit 1<<time.Weekday (Sunday is bit 0); 0 means every day
-	Enabled   bool
-	ArmedAt   int64  // unix millis: when the row was created or last resumed
-	LastDate  string // local date of the last scheduled firing attempt, "" when never
-	LastSlug  string // slug that attempt created, "" when it created none
-	LastNote  string // why that attempt created or started nothing, "" when it went fine
-	LastAt    int64  // unix millis of that attempt, 0 when never
-	CreatedAt int64  // unix millis
+	ID       int64
+	Name     string
+	Prefix   string
+	Template string
+	AtMinute int // minutes after local midnight, 0..1439
+	Days     int // weekday bitmask, bit 1<<time.Weekday (Sunday is bit 0); 0 means every day
+	// EveryMinutes > 0 makes the row an interval row: it fires that many
+	// minutes after its last firing (or its arming), and AtMinute and Days
+	// are unused. 0 is a calendar row.
+	EveryMinutes int
+	Enabled      bool
+	ArmedAt      int64  // unix millis: when the row was created or last resumed
+	LastDate     string // local date of the last scheduled firing attempt, "" when never
+	LastSlug     string // slug that attempt created, "" when it created none
+	LastNote     string // why that attempt created or started nothing, "" when it went fine
+	LastAt       int64  // unix millis of that attempt, 0 when never
+	CreatedAt    int64  // unix millis
 }
 
 // ErrPeriodicTaken is CreatePeriodicJob's refusal when another row already
@@ -34,11 +39,11 @@ type PeriodicJob struct {
 // answer 409 without matching on text.
 var ErrPeriodicTaken = errors.New("store: periodic job name or prefix taken")
 
-const periodicColumns = `id, name, prefix, template, at_minute, days, enabled, armed_at, last_date, last_slug, last_note, last_at, created_at`
+const periodicColumns = `id, name, prefix, template, at_minute, days, every_minutes, enabled, armed_at, last_date, last_slug, last_note, last_at, created_at`
 
 func scanPeriodic(sc interface{ Scan(...any) error }) (PeriodicJob, error) {
 	var p PeriodicJob
-	err := sc.Scan(&p.ID, &p.Name, &p.Prefix, &p.Template, &p.AtMinute, &p.Days, &p.Enabled,
+	err := sc.Scan(&p.ID, &p.Name, &p.Prefix, &p.Template, &p.AtMinute, &p.Days, &p.EveryMinutes, &p.Enabled,
 		&p.ArmedAt, &p.LastDate, &p.LastSlug, &p.LastNote, &p.LastAt, &p.CreatedAt)
 	return p, err
 }
@@ -47,9 +52,9 @@ func scanPeriodic(sc interface{ Scan(...any) error }) (PeriodicJob, error) {
 // not written: a new row has never fired, whatever the caller's struct says.
 func (s *Store) CreatePeriodicJob(p *PeriodicJob) (int64, error) {
 	res, err := s.db.Exec(
-		`INSERT INTO periodic_jobs (name, prefix, template, at_minute, days, enabled, armed_at, created_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-		p.Name, p.Prefix, p.Template, p.AtMinute, p.Days, p.Enabled, p.ArmedAt, p.CreatedAt,
+		`INSERT INTO periodic_jobs (name, prefix, template, at_minute, days, every_minutes, enabled, armed_at, created_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		p.Name, p.Prefix, p.Template, p.AtMinute, p.Days, p.EveryMinutes, p.Enabled, p.ArmedAt, p.CreatedAt,
 	)
 	if err != nil {
 		if isUniqueConstraintErr(err) {

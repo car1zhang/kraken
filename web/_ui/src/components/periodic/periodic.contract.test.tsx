@@ -46,6 +46,7 @@ function contractRow(over: Partial<WebPeriodic>): WebPeriodic {
     prefix: "standup",
     at: "09:00",
     days: [],
+    every: "",
     cadence: "daily 09:00",
     enabled: true,
     builtin: false,
@@ -233,7 +234,7 @@ describe("periodic client calls (contract, api/client.ts)", () => {
   // ...fields}".
   it("addPeriodic POSTs op add with the five fields", async () => {
     contractStubFetch(200, { ok: true, periodic: contractStandup });
-    const fields = { name: "Standup Notes", prefix: "standup", at: "09:05", days: "mon,wed,fri", template: "t {{slug}}" };
+    const fields = { name: "Standup Notes", prefix: "standup", at: "09:05", days: "mon,wed,fri", every: "", template: "t {{slug}}" };
     await actual.addPeriodic(fields);
     const c = contractCall();
     expect(c.path).toBe("/api/periodic");
@@ -269,7 +270,7 @@ describe("periodic client calls (contract, api/client.ts)", () => {
   it("each write rejects with an Error carrying the server's error text", async () => {
     contractStubFetch(409, { error: "name standup is taken" });
     await expect(
-      actual.addPeriodic({ name: "standup", prefix: "standup", at: "09:00", days: "", template: "t" }),
+      actual.addPeriodic({ name: "standup", prefix: "standup", at: "09:00", days: "", every: "", template: "t" }),
     ).rejects.toThrow("name standup is taken");
 
     contractStubFetch(404, { error: "no periodic job named ghost" });
@@ -334,7 +335,9 @@ describe("PeriodicView (contract)", () => {
   // Contract: "A row with builtin: false has three buttons inside that element
   // ...: pause when enabled or resume when not, run now, and delete. A
   // builtin: true row has none of them."
-  it("gives stored rows pause|resume, run now and delete, and the dream row none", async () => {
+  // Amended in revision 2: the dream row is a stored row that pauses and
+  // resumes, so it has that one button and still no run now or delete.
+  it("gives stored rows pause|resume, run now and delete, and the dream row pause only", async () => {
     await contractRenderView(true);
     const standup = within(contractRowEl("Standup Notes"));
     expect(standup.getByRole("button", { name: "pause" })).toBeTruthy();
@@ -349,9 +352,12 @@ describe("PeriodicView (contract)", () => {
     expect(paused.getByRole("button", { name: "delete" })).toBeTruthy();
 
     const dream = within(contractRowEl("dream"));
-    for (const name of ["pause", "resume", "run now", "delete", "confirm delete"]) {
+    expect(dream.getByRole("button", { name: "pause" })).toBeTruthy();
+    for (const name of ["resume", "run now", "delete", "confirm delete"]) {
       expect(dream.queryByRole("button", { name })).toBeNull();
     }
+    await userEvent.click(dream.getByRole("button", { name: "pause" }));
+    await waitFor(() => expect(contractClient.periodicOp).toHaveBeenCalledWith("pause", "dream"));
   });
 
   // Contract: "Clicking pause or resume calls periodicOp with that op and the
@@ -450,6 +456,7 @@ describe("PeriodicView (contract)", () => {
     prefix: "nightly",
     at: "23:30",
     days: "mon,fri",
+    every: "",
     template: "---\nrepo: kraken\n---\nNotes for {{date}}.\n",
   };
 

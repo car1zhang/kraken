@@ -12,8 +12,8 @@ import (
 )
 
 // periodic.go — GET/POST /api/periodic: the periodic jobs the daemon fires
-// on a cadence (internal/jobs/periodic.go), listed with the built-in dream
-// pass first. Read by the board's periodic view and proxied by
+// on a cadence (internal/jobs/periodic.go), listed with the dream pass's
+// row first. Read by the board's periodic view and proxied by
 // `kraken periodic`. The POST is per-op ({op, name, ...}) like
 // /api/job/stack's, so each write names the one row it changes.
 
@@ -22,8 +22,9 @@ import (
 type webPeriodic struct {
 	Name      string   `json:"name"`
 	Prefix    string   `json:"prefix"`
-	At        string   `json:"at"`
-	Days      []string `json:"days"`
+	At        string   `json:"at"`    // HH:MM; "" for an interval row
+	Days      []string `json:"days"`  // empty for every day and for an interval row
+	Every     string   `json:"every"` // an interval row's `2h`; "" for a calendar row
 	Cadence   string   `json:"cadence"`
 	Enabled   bool     `json:"enabled"`
 	Builtin   bool     `json:"builtin"`
@@ -44,6 +45,7 @@ type webPeriodicReq struct {
 	Prefix   string `json:"prefix"`
 	At       string `json:"at"`
 	Days     string `json:"days"`
+	Every    string `json:"every"`
 	Template string `json:"template"`
 }
 
@@ -55,9 +57,13 @@ var periodicNow = time.Now
 
 func webPeriodicFrom(p store.PeriodicJob, builtin bool, nextDue int64) webPeriodic {
 	c := jobs.Cadence{AtMinute: p.AtMinute, Days: p.Days}
+	at, days := c.At(), c.DayNames()
+	if p.EveryMinutes > 0 {
+		at, days = "", []string{}
+	}
 	return webPeriodic{
 		Name: p.Name, Prefix: p.Prefix,
-		At: c.At(), Days: c.DayNames(), Cadence: c.String(),
+		At: at, Days: days, Every: jobs.FormatInterval(p.EveryMinutes), Cadence: jobs.PeriodicCadenceString(p),
 		Enabled: p.Enabled, Builtin: builtin, Template: p.Template,
 		LastDate: p.LastDate, LastSlug: p.LastSlug, LastNote: p.LastNote, LastAt: p.LastAt,
 		NextDue: nextDue, CreatedAt: p.CreatedAt,
@@ -71,7 +77,7 @@ func webPeriodicStored(p *store.PeriodicJob, now time.Time) webPeriodic {
 	if t := jobs.PeriodicNextDue(*p, now); !t.IsZero() {
 		next = t.UnixMilli()
 	}
-	return webPeriodicFrom(*p, false, next)
+	return webPeriodicFrom(*p, p.Name == jobs.PeriodicBuiltinDream, next)
 }
 
 // periodicHandler serves the list (GET, open under --mirror) and the writes
@@ -102,7 +108,7 @@ func periodicHandler(w http.ResponseWriter, r *http.Request) {
 
 func periodicPost(w http.ResponseWriter, r *http.Request) {
 	var req webPeriodicReq
-	if !decodeStrictBody(w, r, &req, "this route takes op, name, prefix, at, days and template") {
+	if !decodeStrictBody(w, r, &req, "this route takes op, name, prefix, at, days, every and template") {
 		return
 	}
 	// Trimmed once for every op: add stores the trimmed name, so the other
@@ -115,7 +121,17 @@ func periodicPost(w http.ResponseWriter, r *http.Request) {
 	now := periodicNow()
 	switch req.Op {
 	case "add":
-		p, err := jobs.AddPeriodic(req.Name, req.Prefix, req.At, req.Days, req.Template, now)
+		var p *store.PeriodicJob
+		var err error
+		switch every := strings.TrimSpace(req.Every); {
+		case every == "":
+			p, err = jobs.AddPeriodic(req.Name, req.Prefix, req.At, req.Days, req.Template, now)
+		case strings.TrimSpace(req.At) != "" || strings.TrimSpace(req.Days) != "":
+			webJSON(w, http.StatusBadRequest, map[string]string{"error": "give either every (an interval, like 2h) or at with optional days (a time of day), not both"})
+			return
+		default:
+			p, err = jobs.AddPeriodicEvery(req.Name, req.Prefix, every, req.Template, now)
+		}
 		if err != nil {
 			periodicError(w, "add", req.Name, err)
 			return

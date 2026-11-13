@@ -14,33 +14,35 @@ import (
 )
 
 // periodic.go — periodic jobs: a stored job template (store.PeriodicJob) that
-// the daemon tick turns into one job per cadence day, at or after a local
-// time of day. It is kickDream's cadence generalized: the gate is the same
-// LOCAL DATE comparison ("the last firing's date sorts before today"), so a
-// Mac asleep through the occurrence fires on the first tick after it wakes
-// and a day is never fired twice. What dream.go owns that this file does not
-// is the evidence gate and the sweep window; a periodic row always fires on a
-// due day, and its job carries whatever its template says.
+// the daemon tick turns into jobs on a cadence. A calendar row fires once
+// per cadence day, at or after a local time of day: kickDream's cadence
+// generalized, the same LOCAL DATE comparison ("the last firing's date sorts
+// before today"), so a Mac asleep through the occurrence fires on the first
+// tick after it wakes and a day is never fired twice. An interval row fires
+// every N minutes, counted from its last firing.
 //
-// The built-in dream pass is listed beside the stored rows (ListPeriodic) so
-// the operator sees every scheduled job in one place, but it is not a row:
-// it keeps its own watermark and its own trigger, and every write aimed at
-// the name `dream` is refused with ErrPeriodicBuiltin.
+// The dream pass is a row of the same table (name `dream`, seeded by
+// ensureDreamRow), so it is listed, paused and resumed like any other. The
+// row owns only when the pass is asked; dream.go still owns the evidence
+// gate, the sweep window and the job text (fireDream calls kickDream). The
+// row cannot be removed or run on demand: both answer ErrPeriodicBuiltin.
 
 // PeriodicDateLayout is the local calendar date a periodic row compares on,
 // and the date part of every slug it fires.
 const PeriodicDateLayout = "2006-01-02"
 
-// PeriodicBuiltinDream is the name the built-in dream pass is listed under.
+// PeriodicBuiltinDream is the name and prefix of the dream pass's row, which
+// kraken seeds itself (ensureDreamRow).
 const PeriodicBuiltinDream = "dream"
 
 // ErrPeriodicInvalid wraps every validation refusal (a bad cadence, name,
 // prefix or template), so the API layer can answer 400 without matching text.
 var ErrPeriodicInvalid = errors.New("invalid periodic job")
 
-// ErrPeriodicBuiltin refuses a write aimed at the built-in dream row, which
-// lives in dream.go and has no stored row to pause, run or remove.
-var ErrPeriodicBuiltin = errors.New("the dream pass is built in and cannot be changed here")
+// ErrPeriodicBuiltin refuses removing the dream row or running it on demand:
+// kraken seeds that row itself and its job text comes from dream.go, not
+// from a template. Pausing and resuming it are allowed.
+var ErrPeriodicBuiltin = errors.New("the dream row is kraken's own: it can be paused and resumed, not removed or run on demand")
 
 // maxPeriodicNameRunes and maxPeriodicPrefixRunes bound the two names. The
 // prefix bound leaves room for "-YYYY-MM-DD-run-NN" under RenameJob's 100-rune
@@ -64,8 +66,8 @@ type PeriodicRun struct {
 	Note    string
 }
 
-// PeriodicRow is one entry of ListPeriodic: a stored row, or the built-in
-// dream pass dressed as one.
+// PeriodicRow is one entry of ListPeriodic: a stored row, or, before the
+// dream row is seeded, the default ListPeriodic stands in for it.
 type PeriodicRow struct {
 	store.PeriodicJob
 	Builtin bool
@@ -164,6 +166,90 @@ func (c Cadence) String() string {
 	return strings.Join(c.DayNames(), ",") + " " + c.At()
 }
 
+// Interval rows. An interval is a count and one unit (m, h, d, w), stored in
+// minutes. The floor keeps a typo from starting a cell every minute; the
+// ceiling is a year, past which a row is a reminder and not a cadence.
+const (
+	minPeriodicEveryMinutes = 5
+	maxPeriodicEveryMinutes = 366 * 24 * 60
+)
+
+var periodicIntervalUnits = []struct {
+	suffix  string
+	minutes int
+}{{"w", 7 * 24 * 60}, {"d", 24 * 60}, {"h", 60}, {"m", 1}}
+
+// ParseInterval reads `30m`, `2h`, `3d` or `1w` into minutes.
+func ParseInterval(every string) (int, error) {
+	s := strings.ToLower(strings.TrimSpace(every))
+	if len(s) < 2 || !allDigits(s[:len(s)-1]) {
+		return 0, invalidf("interval %q is not a number and a unit (30m, 2h, 3d, 1w)", every)
+	}
+	n, err := strconv.Atoi(s[:len(s)-1])
+	if err != nil {
+		return 0, invalidf("interval %q is out of range", every)
+	}
+	for _, u := range periodicIntervalUnits {
+		if s[len(s)-1:] != u.suffix {
+			continue
+		}
+		if n > maxPeriodicEveryMinutes/u.minutes {
+			return 0, invalidf("interval %q is longer than a year", every)
+		}
+		if minutes := n * u.minutes; minutes >= minPeriodicEveryMinutes {
+			return minutes, nil
+		}
+		return 0, invalidf("interval %q is shorter than %d minutes", every, minPeriodicEveryMinutes)
+	}
+	return 0, invalidf("interval %q needs a unit: m, h, d or w", every)
+}
+
+// FormatInterval is ParseInterval's inverse, in the largest unit that
+// divides the minutes exactly (`90m`, `2h`, `1w`). "" for a calendar row's 0.
+func FormatInterval(minutes int) string {
+	if minutes <= 0 {
+		return ""
+	}
+	for _, u := range periodicIntervalUnits {
+		if minutes%u.minutes == 0 {
+			return strconv.Itoa(minutes/u.minutes) + u.suffix
+		}
+	}
+	return strconv.Itoa(minutes) + "m"
+}
+
+// PeriodicCadenceString describes when p fires: `every 2h` for an interval
+// row, else its Cadence's `daily 09:00` or `mon,wed 09:00`.
+func PeriodicCadenceString(p store.PeriodicJob) string {
+	if p.EveryMinutes > 0 {
+		return "every " + FormatInterval(p.EveryMinutes)
+	}
+	return Cadence{AtMinute: p.AtMinute, Days: p.Days}.String()
+}
+
+// periodicIntervalDue is when an interval row next fires: one interval after
+// its last firing attempt, or after its arming when that is later (a new or
+// resumed row waits a full interval). It is an elapsed-time rule on purpose:
+// a Mac asleep past the moment fires once on the first tick after it wakes,
+// and the next firing counts from there, so missed firings are never replayed.
+func periodicIntervalDue(p store.PeriodicJob) time.Time {
+	anchor := p.ArmedAt
+	if p.LastAt > anchor {
+		anchor = p.LastAt
+	}
+	return time.UnixMilli(anchor).Add(time.Duration(p.EveryMinutes) * time.Minute)
+}
+
+// periodicSlug is the job a scheduled firing at now creates. A calendar row
+// fires at most once a day, so the date alone is unique; an interval row can
+// fire many times a day and takes the local time as well.
+func periodicSlug(p store.PeriodicJob, now time.Time) string {
+	if p.EveryMinutes > 0 {
+		return p.Prefix + "-" + now.Format(PeriodicDateLayout) + "-" + now.Format("1504")
+	}
+	return p.Prefix + "-" + now.Format(PeriodicDateLayout)
+}
+
 // periodicOccurrence is the row's firing time on the date of day, in day's
 // location. time.Date normalizes, so a minute that a DST jump skips lands on
 // the next real instant instead of failing.
@@ -178,9 +264,16 @@ func periodicDayOK(days int, day time.Time) bool {
 // PeriodicDue reports whether p should fire on this tick. The ArmedAt rule
 // is what keeps a row from firing the moment it is created or resumed after
 // its occurrence has already passed today: the first firing is the first
-// occurrence at or after the arming.
+// occurrence at or after the arming. An interval row is due from
+// periodicIntervalDue on; ArmedAt counts there as a firing.
 func PeriodicDue(p store.PeriodicJob, now time.Time) bool {
-	if !p.Enabled || !periodicDayOK(p.Days, now) {
+	if !p.Enabled {
+		return false
+	}
+	if p.EveryMinutes > 0 {
+		return !now.Before(periodicIntervalDue(p))
+	}
+	if !periodicDayOK(p.Days, now) {
 		return false
 	}
 	occ := periodicOccurrence(p.AtMinute, now)
@@ -194,10 +287,14 @@ func PeriodicDue(p store.PeriodicJob, now time.Time) bool {
 // now, else the earliest later occurrence on a cadence day that is not before
 // the arming. A LastDate later than today (a clock that jumped backwards)
 // also pushes the answer past that date, since PeriodicDue refuses every day
-// up to it.
+// up to it. An interval row's answer is periodicIntervalDue, whether or not
+// that is already past.
 func PeriodicNextDue(p store.PeriodicJob, now time.Time) time.Time {
 	if !p.Enabled {
 		return time.Time{}
+	}
+	if p.EveryMinutes > 0 {
+		return periodicIntervalDue(p).In(now.Location())
 	}
 	if PeriodicDue(p, now) {
 		return periodicOccurrence(p.AtMinute, now)
@@ -300,6 +397,24 @@ func isBuiltinPeriodic(name string) bool {
 // AddPeriodic validates and stores a new row. It creates no job: the first
 // firing is the first occurrence at or after now.
 func AddPeriodic(name, prefix, at, days, template string, now time.Time) (*store.PeriodicJob, error) {
+	return addPeriodic(name, prefix, template, now, func() (store.PeriodicJob, error) {
+		c, err := ParseCadence(at, days)
+		return store.PeriodicJob{AtMinute: c.AtMinute, Days: c.Days}, err
+	})
+}
+
+// AddPeriodicEvery is AddPeriodic for an interval row: it fires every
+// `every` (ParseInterval's form), the first time one interval after now.
+func AddPeriodicEvery(name, prefix, every, template string, now time.Time) (*store.PeriodicJob, error) {
+	return addPeriodic(name, prefix, template, now, func() (store.PeriodicJob, error) {
+		minutes, err := ParseInterval(every)
+		return store.PeriodicJob{EveryMinutes: minutes}, err
+	})
+}
+
+// addPeriodic is the validation both adds share. cadence is called after the
+// name and prefix checks and returns a row carrying only its cadence fields.
+func addPeriodic(name, prefix, template string, now time.Time, cadence func() (store.PeriodicJob, error)) (*store.PeriodicJob, error) {
 	name = strings.TrimSpace(name)
 	switch {
 	case name == "":
@@ -324,7 +439,7 @@ func AddPeriodic(name, prefix, at, days, template string, now time.Time) (*store
 			return nil, invalidf("prefix %q collides with %q, which kraken mints itself", prefix, p)
 		}
 	}
-	c, err := ParseCadence(at, days)
+	row, err := cadence()
 	if err != nil {
 		return nil, err
 	}
@@ -336,27 +451,30 @@ func AddPeriodic(name, prefix, at, days, template string, now time.Time) (*store
 	if err != nil {
 		return nil, err
 	}
-	p := &store.PeriodicJob{
-		Name: name, Prefix: prefix, Template: template,
-		AtMinute: c.AtMinute, Days: c.Days, Enabled: true,
-		ArmedAt: now.UnixMilli(), CreatedAt: now.UnixMilli(),
-	}
+	p := &row
+	p.Name, p.Prefix, p.Template = name, prefix, template
+	p.Enabled, p.ArmedAt, p.CreatedAt = true, now.UnixMilli(), now.UnixMilli()
 	if _, err := st.CreatePeriodicJob(p); err != nil {
 		return nil, err
 	}
-	dlogEvent("info", "periodic-add", "periodic %s: added (prefix %s, %s)", name, prefix, c)
+	dlogEvent("info", "periodic-add", "periodic %s: added (prefix %s, %s)", name, prefix, PeriodicCadenceString(*p))
 	return st.GetPeriodicJob(name)
 }
 
 // SetPeriodicPaused pauses a row, or resumes it armed at now: a resumed row
 // does not fire for an occurrence that passed while it was paused.
 func SetPeriodicPaused(name string, paused bool, now time.Time) (*store.PeriodicJob, error) {
-	if isBuiltinPeriodic(name) {
-		return nil, ErrPeriodicBuiltin
-	}
 	st, err := periodicStore()
 	if err != nil {
 		return nil, err
+	}
+	if isBuiltinPeriodic(name) {
+		// the dream row is a real row and pauses like any other; it is
+		// addressed by its canonical name whatever case the caller used
+		name = PeriodicBuiltinDream
+		if err := ensureDreamRow(st, now); err != nil {
+			return nil, err
+		}
 	}
 	if err := st.SetPeriodicEnabled(name, !paused, now.UnixMilli()); err != nil {
 		return nil, err
@@ -444,27 +562,61 @@ func periodicSlugTaken(st *store.Store, slug string, err error) bool {
 	return gerr == nil && existing != nil
 }
 
-// ListPeriodic is the built-in dream row followed by every stored row. With
-// no store wired it degrades to the dream row alone, the way ReadDreamRun
-// degrades to a blank watermark.
+// ensureDreamRow creates the dream pass's row when the table has none: daily
+// at local midnight, enabled, never armed (so the first tick finds it due and
+// kickDream's own watermark decides whether tonight already ran). It is
+// seeded here and not in the migration so the store stays ignorant of what a
+// dream is. RemovePeriodic refuses the row, so a missing one always means a
+// database that has not been seeded yet.
+func ensureDreamRow(st *store.Store, now time.Time) error {
+	_, err := st.GetPeriodicJob(PeriodicBuiltinDream)
+	if !errors.Is(err, store.ErrNotFound) {
+		return err
+	}
+	_, err = st.CreatePeriodicJob(&store.PeriodicJob{
+		Name: PeriodicBuiltinDream, Prefix: PeriodicBuiltinDream,
+		Enabled: true, CreatedAt: now.UnixMilli(),
+	})
+	if errors.Is(err, store.ErrPeriodicTaken) {
+		return nil // another caller seeded it between the read and the insert
+	}
+	return err
+}
+
+// ListPeriodic is the dream row followed by every other stored row. The
+// dream row's last firing is read from dream.go's own watermark, which is
+// the record of what the pass did (its row is stamped from it). With no
+// store wired, or before the row is seeded, the dream row is the default an
+// unseeded one would get, the way ReadDreamRun degrades to a blank watermark.
 func ListPeriodic(now time.Time) ([]PeriodicRow, error) {
 	dr := ReadDreamRun()
 	dream := PeriodicRow{
-		PeriodicJob: store.PeriodicJob{
-			Name: PeriodicBuiltinDream, Prefix: PeriodicBuiltinDream, Enabled: true,
-			LastDate: dr.Date, LastSlug: dr.Job,
-		},
-		Builtin: true,
+		PeriodicJob: store.PeriodicJob{Name: PeriodicBuiltinDream, Prefix: PeriodicBuiltinDream, Enabled: true},
+		Builtin:     true,
 	}
 	out := []PeriodicRow{dream}
 	if st := ActiveStore(); st != nil {
+		// A read never seeds the dream row (a --mirror serve lists and must
+		// not write): until the tick's pass has created it, the default
+		// above stands in for it.
 		rows, err := st.ListPeriodicJobs()
 		if err != nil {
 			return nil, err
 		}
 		for _, r := range rows {
+			if r.Name == PeriodicBuiltinDream {
+				out[0].PeriodicJob = r
+				continue
+			}
 			out = append(out, PeriodicRow{PeriodicJob: r})
 		}
+	}
+	// The dream watermark wins whenever it is at least as recent as the
+	// row's stamp. The row's own stamp stands only for a night kickDream
+	// settled without writing its watermark (no kraken checkout), so that
+	// night does not read as still due.
+	if dr.Date >= out[0].LastDate {
+		out[0].LastDate, out[0].LastSlug = dr.Date, dr.Job
 	}
 	for i := range out {
 		if t := PeriodicNextDue(out[i].PeriodicJob, now); !t.IsZero() {
@@ -475,13 +627,13 @@ func ListPeriodic(now time.Time) ([]PeriodicRow, error) {
 }
 
 // periodicFired is the in-memory backstop for the stored watermark, the
-// reason lastDreamDate exists: a stamp that fails to write leaves LastDate
-// behind today, and PeriodicDue would then fire the row again on every tick.
-// It records a row only when its stamp failed, keyed on the store as well as
-// the id since ids restart in every fresh database.
+// reason lastDreamDate exists: a stamp that fails to write leaves the
+// watermark behind, and PeriodicDue would then fire the row again on every
+// tick. It records when a row fired, only when its stamp failed, keyed on
+// the store as well as the id since ids restart in every fresh database.
 var (
 	periodicFiredMu sync.Mutex
-	periodicFired   = map[periodicFiredKey]string{}
+	periodicFired   = map[periodicFiredKey]time.Time{}
 )
 
 type periodicFiredKey struct {
@@ -489,12 +641,28 @@ type periodicFiredKey struct {
 	id int64
 }
 
-// periodicPass fires every due row once for today, starting each created job
-// through start (the tick's startCreatedJob). Returns how many cells started.
+// periodicFiredBlocks reports whether a firing at firedAt, whose stamp never
+// landed, still covers now: the rest of that local date for a calendar row,
+// one interval for an interval row.
+func periodicFiredBlocks(p store.PeriodicJob, firedAt, now time.Time) bool {
+	if firedAt.IsZero() {
+		return false
+	}
+	if p.EveryMinutes > 0 {
+		return now.Before(firedAt.Add(time.Duration(p.EveryMinutes) * time.Minute))
+	}
+	return firedAt.In(now.Location()).Format(PeriodicDateLayout) == now.Format(PeriodicDateLayout)
+}
+
+// periodicPass fires every due row once, starting each created job through
+// start (the tick's startCreatedJob). Returns how many cells started.
 func periodicPass(now time.Time, start func(*Job) bool) int {
 	st := ActiveStore()
 	if st == nil {
 		return 0
+	}
+	if err := ensureDreamRow(st, now); err != nil {
+		dlogErr("periodic: seeding the dream row failed: %v", err)
 	}
 	rows, err := st.ListPeriodicJobs()
 	if err != nil {
@@ -506,7 +674,7 @@ func periodicPass(now time.Time, start func(*Job) bool) int {
 	for _, p := range rows {
 		key := periodicFiredKey{st, p.ID}
 		periodicFiredMu.Lock()
-		fired := periodicFired[key] == today
+		fired := periodicFiredBlocks(p, periodicFired[key], now)
 		periodicFiredMu.Unlock()
 		if fired || !PeriodicDue(p, now) {
 			continue
@@ -522,7 +690,16 @@ func periodicPass(now time.Time, start func(*Job) bool) int {
 			continue
 		}
 		p = *fresh
-		slug, note, ok := firePeriodic(st, p, now, start)
+		var slug, note string
+		var ok bool
+		if p.Name == PeriodicBuiltinDream {
+			var decided bool
+			if slug, note, ok, decided = fireDream(now, start); !decided {
+				continue // the pass could not answer; the next tick asks again
+			}
+		} else {
+			slug, note, ok = firePeriodic(st, p, now, start)
+		}
 		if ok {
 			started++
 		}
@@ -536,7 +713,7 @@ func periodicPass(now time.Time, start func(*Job) bool) int {
 		if err != nil {
 			dlogErr("periodic %s: watermark write failed: %v", p.Name, err)
 			periodicFiredMu.Lock()
-			periodicFired[key] = today
+			periodicFired[key] = now
 			periodicFiredMu.Unlock()
 		} else {
 			periodicFiredMu.Lock()
@@ -547,6 +724,35 @@ func periodicPass(now time.Time, start func(*Job) bool) int {
 	return started
 }
 
+// fireDream is the dream row's firing: the row supplies the cadence and the
+// pause switch, and kickDream (dream.go) still decides everything else, its
+// once-per-local-date watermark included, so a dream row never fires more
+// than once a day whatever cadence it carries. decided is false when the
+// pass could not answer tonight (an unreadable watermark, a failed evidence
+// query or create); the row is then left unstamped and the next tick asks
+// again, which is the retry kickDream has always had.
+func fireDream(now time.Time, start func(*Job) bool) (slug, note string, ok, decided bool) {
+	today := now.Format(PeriodicDateLayout)
+	if j := kickDream(now); j != nil {
+		if start(j) {
+			return j.Slug, "", true, true
+		}
+		return j.Slug, "created but could not start; it is a draft on the board", false, true
+	}
+	if run := ReadDreamRun(); run.Date == today {
+		if run.Job != "" {
+			return run.Job, "", false, true
+		}
+		return "", "no job tonight: nothing to read, or " + PeriodicBuiltinDream + "-" + today + " already exists", false, true
+	}
+	if loadLastDreamDate() == today {
+		// kickDream settled the night in memory without a stored date for
+		// it: no kraken checkout to work on, or a watermark write that failed.
+		return "", "settled for tonight in this process (no kraken checkout, or the dream watermark did not save)", false, true
+	}
+	return "", "", false, false
+}
+
 // firePeriodic is one scheduled firing. slug is the job created ("" when
 // none was), note why nothing was created or started ("" when it started),
 // and ok whether start brought the cell up. Every outcome but a clean start
@@ -555,7 +761,7 @@ func periodicPass(now time.Time, start func(*Job) bool) int {
 // gets a note here.
 func firePeriodic(st *store.Store, p store.PeriodicJob, now time.Time, start func(*Job) bool) (slug, note string, ok bool) {
 	today := now.Format(PeriodicDateLayout)
-	want := p.Prefix + "-" + today
+	want := periodicSlug(p, now)
 	if existing, err := st.GetJobBySlug(want); err == nil && existing != nil {
 		note = "skipped: " + want + " already exists"
 		dlogEvent("info", "periodic-skip", "periodic %s: %s", p.Name, note)
