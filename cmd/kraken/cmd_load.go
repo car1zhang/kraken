@@ -44,9 +44,20 @@ func cmdLoad(args []string) {
 		if _, err := os.Stdout.Write(out); err != nil {
 			util.Die("write stdout: %v", err)
 		}
+	case "set", "clear":
+		util.Die("%s", loadRetiredMessage(op))
 	default:
 		util.Die("k load: unknown op %q (want get)", op)
 	}
+}
+
+// loadRetiredMessage is what a retired write op answers. A cell whose brief
+// and skills were staged before the estimate moved to the daemon can still
+// type `set` or `clear`, and a bare "unknown op" reads there as a broken
+// install. The refusal says where the estimate comes from now and that the
+// step is over.
+func loadRetiredMessage(op string) string {
+	return fmt.Sprintf("k load: %q is retired; the daemon judges the load estimate from your final message after every turn, so there is nothing for a cell to record. Skip this step and do not report the estimate as missing; `k load get <slug>` reads it.", op)
 }
 
 // runLoadGet fetches GET /api/job/load?slug=<slug> and returns the body —

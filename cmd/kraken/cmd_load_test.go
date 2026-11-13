@@ -126,3 +126,24 @@ func TestCmdLoadRetiredOpsDieNonZero(t *testing.T) {
 		}
 	}
 }
+
+// TestCmdLoadRetiredOpsSayTheStepIsOver: a retired write op's refusal tells
+// the cell the daemon owns the estimate and that nothing is missing, where an
+// op that never existed keeps the plain unknown-op wording.
+func TestCmdLoadRetiredOpsSayTheStepIsOver(t *testing.T) {
+	for _, op := range []string{"set", "clear"} {
+		stderrOut, _ := runDispatchSubprocess(t, "load", []string{op, "demo-job", "--unblock", "1", "--scope", "1"})
+		for _, want := range []string{"is retired", "the daemon judges", "do not report the estimate as missing", "k load get"} {
+			if !strings.Contains(stderrOut, want) {
+				t.Fatalf("%s: stderr = %q, want it to contain %q", op, stderrOut, want)
+			}
+		}
+		if strings.Contains(stderrOut, "unknown op") {
+			t.Fatalf("%s: stderr = %q, want the retired wording, not unknown op", op, stderrOut)
+		}
+	}
+	stderrOut, _ := runDispatchSubprocess(t, "load", []string{"bogus", "demo-job"})
+	if !strings.Contains(stderrOut, "unknown op") || strings.Contains(stderrOut, "is retired") {
+		t.Fatalf("bogus: stderr = %q, want the unknown-op wording", stderrOut)
+	}
+}
