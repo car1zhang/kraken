@@ -563,11 +563,17 @@ func periodicSlugTaken(st *store.Store, slug string, err error) bool {
 }
 
 // ensureDreamRow creates the dream pass's row when the table has none: daily
-// at local midnight, enabled, never armed (so the first tick finds it due and
+// at local midnight, never armed (so the first tick finds it due and
 // kickDream's own watermark decides whether tonight already ran). It is
-// seeded here and not in the migration so the store stays ignorant of what a
-// dream is. RemovePeriodic refuses the row, so a missing one always means a
-// database that has not been seeded yet.
+// seeded enabled unless KRAKEN_DREAM=off (DreamEnabled); then it is seeded
+// paused, so the board shows the operator's standing choice. The knob stays
+// in force even on an enabled row: fireDream skips a due row while it is set,
+// so turning the pass back on means removing the line from ~/.kraken/env,
+// restarting kraken serve, and resuming the row if it was seeded paused. A
+// row seeded before the knob was read keeps its enabled state and shows the
+// skip note each night instead. It is seeded here and not in the migration so
+// the store stays ignorant of what a dream is. RemovePeriodic refuses the
+// row, so a missing one always means a database that has not been seeded yet.
 func ensureDreamRow(st *store.Store, now time.Time) error {
 	_, err := st.GetPeriodicJob(PeriodicBuiltinDream)
 	if !errors.Is(err, store.ErrNotFound) {
@@ -575,7 +581,7 @@ func ensureDreamRow(st *store.Store, now time.Time) error {
 	}
 	_, err = st.CreatePeriodicJob(&store.PeriodicJob{
 		Name: PeriodicBuiltinDream, Prefix: PeriodicBuiltinDream,
-		Enabled: true, CreatedAt: now.UnixMilli(),
+		Enabled: DreamEnabled(), CreatedAt: now.UnixMilli(),
 	})
 	if errors.Is(err, store.ErrPeriodicTaken) {
 		return nil // another caller seeded it between the read and the insert
@@ -591,7 +597,7 @@ func ensureDreamRow(st *store.Store, now time.Time) error {
 func ListPeriodic(now time.Time) ([]PeriodicRow, error) {
 	dr := ReadDreamRun()
 	dream := PeriodicRow{
-		PeriodicJob: store.PeriodicJob{Name: PeriodicBuiltinDream, Prefix: PeriodicBuiltinDream, Enabled: true},
+		PeriodicJob: store.PeriodicJob{Name: PeriodicBuiltinDream, Prefix: PeriodicBuiltinDream, Enabled: DreamEnabled()},
 		Builtin:     true,
 	}
 	out := []PeriodicRow{dream}
@@ -730,9 +736,18 @@ func periodicPass(now time.Time, start func(*Job) bool) int {
 // than once a day whatever cadence it carries. decided is false when the
 // pass could not answer tonight (an unreadable watermark, a failed evidence
 // query or create); the row is then left unstamped and the next tick asks
-// again, which is the retry kickDream has always had.
+// again, which is the retry kickDream has always had. Under KRAKEN_DREAM=off
+// the night is decided before kickDream is asked: nothing is created, the
+// row is stamped with DreamOffNote (so it is not asked again today and the
+// board shows why), and the stored watermark is left where the last pass
+// stopped, so the first night back on sweeps from there (clamped to
+// dreamMaxWindow like any other gap).
 func fireDream(now time.Time, start func(*Job) bool) (slug, note string, ok, decided bool) {
 	today := now.Format(PeriodicDateLayout)
+	if !DreamEnabled() {
+		dlogEvent("info", "dream-skipped", "dream: skipped for %s — KRAKEN_DREAM=off", today)
+		return "", DreamOffNote, false, true
+	}
 	if j := kickDream(now); j != nil {
 		if start(j) {
 			return j.Slug, "", true, true
