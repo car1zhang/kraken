@@ -56,6 +56,25 @@ const dreamFirstWindow = 24 * time.Hour
 // into the job body rather than clamping silently.
 const dreamMaxWindow = 7 * 24 * time.Hour
 
+// DreamEnabled reports whether the nightly pass may run on this machine:
+// false only when KRAKEN_DREAM is `off` (case-insensitive, whitespace
+// trimmed), set in the environment or in ~/.kraken/env. Unset, empty or any
+// other value leaves the pass on, so a typo cannot silently turn it off. It
+// is read on every call; ApplyEnvFile copies ~/.kraken/env into the
+// environment once, at process start, so a flip made in the file takes a
+// serve restart. The knob is honoured where the pass is scheduled, on the
+// periodic dream row (periodic.go): a row seeded while it is off is seeded
+// paused, and a due row is skipped with a note while it is off, whatever the
+// row's own enabled state. It gates creation only; a dream cell already
+// running is not stopped.
+func DreamEnabled() bool {
+	return !strings.EqualFold(strings.TrimSpace(os.Getenv("KRAKEN_DREAM")), "off")
+}
+
+// DreamOffNote is the note stamped on the periodic dream row for a night
+// skipped under the knob, which the board's PERIODIC view shows.
+const DreamOffNote = "skipped: KRAKEN_DREAM=off"
+
 // DreamRun is the nightly pass' watermark: what the last pass decided, and
 // the floor the next sweep starts from.
 type DreamRun struct {
