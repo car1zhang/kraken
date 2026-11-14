@@ -192,6 +192,46 @@ type operatorLine struct {
 	Message struct {
 		Content json.RawMessage `json:"content"`
 	} `json:"message"`
+	// Operation, Reason and CommandUUID are a `queue-operation` record's
+	// fields; Attachment is an `attachment` record's body. Together they are
+	// how a prompt absorbed into a running turn is stored (absorbedPrompt).
+	Operation   string `json:"operation"`
+	Reason      string `json:"reason"`
+	CommandUUID string `json:"commandUuid"`
+	Attachment  struct {
+		Type        string          `json:"type"`
+		Prompt      json.RawMessage `json:"prompt"`
+		SourceUUID  string          `json:"source_uuid"`
+		CommandMode string          `json:"commandMode"`
+		Origin      struct {
+			Kind string `json:"kind"`
+		} `json:"origin"`
+	} `json:"attachment"`
+}
+
+// absorbedReason is the `queue-operation` remove reason the harness writes
+// when it hands a queued prompt to the turn that is still running.
+const absorbedReason = "absorbed_mid_turn"
+
+// absorbedRemoval reports whether a record is the queue removal of a prompt
+// the running turn absorbed, the one removal that leaves no `user` record.
+func (rec operatorLine) absorbedRemoval() bool {
+	return rec.Type == "queue-operation" && rec.Operation == "remove" && rec.Reason == absorbedReason && rec.CommandUUID != ""
+}
+
+// absorbedPrompt reports whether a record is the delivery of a queued human
+// prompt to a running turn. A prompt typed mid-turn is delivered one of two
+// ways: at the turn's end, as a `user` record with promptSource "queued"
+// (prompt() admits it), or INTO the running turn, as an `attachment` record
+// of type `queued_command` and no `user` record at all. The second is
+// admitted only when the file also holds the matching absorbedRemoval, keyed
+// on source_uuid, so a prompt delivered both ways is never emitted twice.
+func (rec operatorLine) absorbedPrompt() bool {
+	if rec.Type != "attachment" || rec.IsMeta || rec.IsSidechain || rec.AgentName != "" {
+		return false
+	}
+	a := rec.Attachment
+	return a.Type == "queued_command" && a.CommandMode == "prompt" && a.Origin.Kind == "human" && a.SourceUUID != ""
 }
 
 // decodeOperatorLine decodes one line, keeping whatever decoded when a single
@@ -536,6 +576,10 @@ func cellNameParts(projectDir string) (slug, repo string) {
 type operatorHit struct {
 	rec           OperatorRecord
 	pos, end, own int
+	// source is an absorbed prompt's queue command uuid; the hit is kept
+	// only when the file holds that command's absorbedRemoval. "" for a
+	// `user` record's hit, which is always kept.
+	source string
 }
 
 // queuedOwnSection finds a delivered queued prompt's own section. The reducer
@@ -666,6 +710,7 @@ func operatorFile(path string, opts OperatorOptions, seen map[string]bool, res *
 	sink := &sectionSink{}
 	var r reducer
 	var hits []operatorHit
+	absorbed := map[string]bool{} // queue command uuids the running turn absorbed
 	firstPrompt := true
 	sc := bufio.NewScanner(f)
 	sc.Buffer(make([]byte, 0, mineScanBufInit), mineScanBufMax)
@@ -674,18 +719,31 @@ func operatorFile(path string, opts OperatorOptions, seen map[string]bool, res *
 		pos := len(sink.secs)
 		r.line(sink, line, 0)
 		rec, ok := decodeOperatorLine(line)
-		if !ok || !rec.prompt() {
+		if !ok {
 			continue
 		}
-		// A zeus transcript's first prompt is the staged job spec, not a
-		// keystroke. "First" is counted over prompts regardless of the
-		// window, so a spec written before the window cannot pass the
-		// distinction on to the operator's first in-window message.
-		if zeus && firstPrompt {
+		if rec.absorbedRemoval() {
+			absorbed[rec.CommandUUID] = true
+			continue
+		}
+		// An absorbed prompt is never the staged job spec, so it neither
+		// counts as the zeus first prompt nor consumes that skip.
+		source := ""
+		if rec.absorbedPrompt() {
+			source = rec.Attachment.SourceUUID
+			rec.PromptSource = "queued"
+		} else if !rec.prompt() {
+			continue
+		} else if zeus && firstPrompt {
+			// A zeus transcript's first prompt is the staged job spec, not a
+			// keystroke. "First" is counted over prompts regardless of the
+			// window, so a spec written before the window cannot pass the
+			// distinction on to the operator's first in-window message.
 			firstPrompt = false
 			continue
+		} else {
+			firstPrompt = false
 		}
-		firstPrompt = false
 		ts := isoMillis(rec.Timestamp)
 		if ts < opts.Since || (opts.Until > 0 && ts > opts.Until) {
 			continue
@@ -694,11 +752,16 @@ func operatorFile(path string, opts OperatorOptions, seen map[string]bool, res *
 			continue // a fork's replay of its parent's record
 		}
 		raw := recordText(rec.Message.Content)
+		if source != "" {
+			raw = recordText(rec.Attachment.Prompt)
+		}
 		text, form, ok := operatorText(raw, rec, opts.Login)
 		if !ok || (rec.UUID != "" && seen[rec.UUID]) {
 			continue
 		}
-		if rec.UUID != "" {
+		// An absorbed prompt's uuid is claimed only once its removal is
+		// confirmed (below), so a dropped candidate cannot shadow a kept one.
+		if rec.UUID != "" && source == "" {
 			seen[rec.UUID] = true
 		}
 		own := -1
@@ -706,7 +769,8 @@ func operatorFile(path string, opts OperatorOptions, seen map[string]bool, res *
 			own = queuedOwnSection(sink.secs, pos, raw)
 		}
 		hits = append(hits, operatorHit{
-			own: own,
+			source: source,
+			own:    own,
 			rec: OperatorRecord{
 				Session:        stem,
 				UUID:           rec.UUID,
@@ -727,6 +791,16 @@ func operatorFile(path string, opts OperatorOptions, seen map[string]bool, res *
 		res.Truncated++ // records read so far are kept
 	}
 	for _, h := range hits {
+		if h.source != "" {
+			// The removal can sit on either side of the delivery in the
+			// file, so absorbed prompts are settled after the whole scan.
+			if !absorbed[h.source] || (h.rec.UUID != "" && seen[h.rec.UUID]) {
+				continue
+			}
+			if h.rec.UUID != "" {
+				seen[h.rec.UUID] = true
+			}
+		}
 		h.rec.Context = operatorContext(sink.secs, h.pos, h.end, h.own, opts.Before, opts.After)
 		res.Records = append(res.Records, h.rec)
 	}
