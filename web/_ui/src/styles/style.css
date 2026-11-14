@@ -3218,6 +3218,74 @@ button.spawn-chip.spawn-draft:hover { background: color-mix(in srgb, var(--ac) 1
 
 @media (max-width: 900px) { .dreamview { grid-template-columns: 1fr; height: auto; } }
 
+/* ---- PERIODIC view ----
+   The DREAM view's two-pane recipe (.dream-pane / .dream-panehdr /
+   .dream-scroll / .dream-empty), reused by class: the list of rows on the
+   left, the add form on the right. Row buttons reuse .wl-btn. */
+
+.periodicview {
+  height: calc(100vh - 64px);
+  display: grid; grid-template-columns: 1.3fr 1fr;
+  gap: 14px; padding: 12px 16px 16px;
+  position: relative; z-index: 3;
+}
+.pd { border: 1px solid var(--border); background: color-mix(in srgb, var(--ac) 2%, var(--b0)); font-size: 10px; }
+.pd + .pd { margin-top: 9px; }
+.pd.off { opacity: 0.7; }
+.pd.off:hover { opacity: 1; }
+.pd-h {
+  display: flex; align-items: center; gap: 8px;
+  padding: 8px 11px; background: color-mix(in srgb, var(--ac) 6%, var(--b1));
+}
+.pd-name { font: 600 11px var(--mono); color: var(--fg); overflow-wrap: anywhere; }
+.pd-state, .pd-tag {
+  font: 8.5px var(--mono); letter-spacing: 0.06em; flex: none;
+  padding: 1px 5px; border: 1px solid var(--border-strong); color: var(--muted);
+}
+.pd-state.on { color: var(--ok); border-color: color-mix(in srgb, var(--ok) 45%, transparent); }
+.pd-cadence { font: 10px var(--mono); color: var(--ac); flex: none; }
+.pd-meta {
+  display: grid; grid-template-columns: max-content 1fr;
+  gap: 3px 12px; padding: 8px 11px 0;
+}
+.pd-meta .k {
+  font: 700 8px var(--display); letter-spacing: 0.14em; text-transform: uppercase;
+  color: var(--muted); padding-top: 1px;
+}
+.pd-meta .v { font: 9.5px var(--mono); color: var(--body); overflow-wrap: anywhere; }
+.pd-prefix { color: var(--fg); }
+.pd-note { font-size: 9.5px; color: var(--muted); font-style: italic; padding: 8px 11px 10px; }
+.pd-ctrl { display: flex; align-items: center; gap: 6px; padding: 9px 11px; }
+.wl-btn.pd-del.armed { color: var(--ac2); border-color: var(--ac2); background: color-mix(in srgb, var(--ac2) 9%, transparent); }
+.pd-tpl { border-top: 1px solid var(--divider); }
+.pd-tpl summary {
+  cursor: pointer; padding: 6px 11px;
+  font: 700 8px var(--display); letter-spacing: 0.14em; text-transform: uppercase; color: var(--muted);
+}
+.pd-tpl summary:hover { color: var(--fg); }
+.pd-tpl pre {
+  margin: 0 11px 11px; padding: 7px 9px; max-height: 260px; overflow: auto;
+  font: 9.5px/1.55 var(--mono); color: var(--fg); white-space: pre-wrap; overflow-wrap: anywhere;
+  background: color-mix(in srgb, var(--ac) 4%, var(--b1)); border: 1px solid var(--border);
+}
+.pd-form { display: flex; flex-direction: column; gap: 9px; }
+.pd-help { margin: 0; font-size: 10px; line-height: 1.55; color: var(--body); }
+.pd-form label { display: flex; flex-direction: column; gap: 4px; }
+.pd-form label > span {
+  font: 700 8px var(--display); letter-spacing: 0.14em; text-transform: uppercase; color: var(--muted);
+}
+.pd-form input, .pd-form textarea {
+  font: 10px/1.6 var(--mono); color: var(--fg);
+  background: color-mix(in srgb, var(--ac) 4%, var(--b1)); border: 1px solid var(--border-strong);
+  padding: 5px 8px;
+}
+.pd-form textarea { resize: vertical; min-height: 140px; }
+.pd-form input:focus, .pd-form textarea:focus { outline: none; border-color: var(--ac); box-shadow: var(--glow); }
+.pd-form input::placeholder, .pd-form textarea::placeholder { color: var(--muted); opacity: 1; }
+.pd-form .pd-ctrl { padding: 0; }
+
+@media (max-width: 900px) { .periodicview { grid-template-columns: 1fr; height: auto; } }
+
 /* ---- MEMORY view: LIBRARY | MODEL ----
    Two list panes at the log/dream view's height. --skill-graph is the accent
    throughout (the token outlived the retired graph view and its /graph chip;

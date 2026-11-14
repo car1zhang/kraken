@@ -386,6 +386,7 @@ describe("the view tabs", () => {
       // the memory view's tab (a legacy `#/graph` hash still lands on it)
       "MEMORY",
       "DREAM",
+      "PERIODIC",
       "LOG",
     ]);
     expect(tabs.find((t) => t.classList.contains("active"))).toHaveTextContent(

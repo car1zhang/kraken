@@ -26,6 +26,9 @@ import type {
   LibraryPage,
   LogPage,
   PeersRead,
+  PeriodicAddFields,
+  PeriodicList,
+  PeriodicRunResult,
   RenameResult,
   ThreadOp,
   ThreadRead,
@@ -909,6 +912,26 @@ export const fetchSleep = (signal?: AbortSignal) =>
 
 export const setSleepDisabled = (disabled: boolean) =>
   postJSON<import("./types.ts").WebSleep>("/api/sleep", { disabled });
+
+// ------------------------------------------------------------ periodic jobs
+//
+// The PERIODIC view's one route. Every op is a POST of one JSON object to the
+// same path, and postJSON's parseError already turns a refusal into an
+// ApiError carrying the server's `error` text, which the view toasts.
+
+export const fetchPeriodic = (signal?: AbortSignal) =>
+  getJSON<PeriodicList>("/api/periodic", signal);
+
+export const addPeriodic = (fields: PeriodicAddFields): Promise<unknown> =>
+  postJSON<unknown>("/api/periodic", { op: "add", ...fields });
+
+export const periodicOp = (
+  op: "pause" | "resume" | "remove",
+  name: string,
+): Promise<unknown> => postJSON<unknown>("/api/periodic", { op, name });
+
+export const runPeriodic = (name: string) =>
+  postJSON<PeriodicRunResult>("/api/periodic", { op: "run", name });
 
 // ------------------------------------------------------------ uploads
 

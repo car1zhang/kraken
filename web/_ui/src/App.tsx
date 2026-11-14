@@ -10,6 +10,7 @@ import { Chrome } from "./components/chrome/Chrome.tsx";
 import MindButton from "./components/chrome/MindButton.tsx";
 import { DreamView } from "./components/dream/DreamView.tsx";
 import { LogView } from "./components/log/LogView.tsx";
+import { PeriodicView } from "./components/periodic/PeriodicView.tsx";
 import { MemoryView } from "./components/memory/MemoryView.tsx";
 import { ArtifactOverlay } from "./components/overlays/ArtifactOverlay.tsx";
 import { EditorOverlay } from "./components/overlays/EditorOverlay.tsx";
@@ -420,15 +421,17 @@ export function App() {
         />
       </DragProvider>
 
-      {/* All three stay MOUNTED across view switches, hidden rather than
+      {/* All four stay MOUNTED across view switches, hidden rather than
           unmounted: LogView keeps its paged history and scroll position,
           DreamView keeps which report dates are expanded plus any half-typed
-          watchlist comment, and MemoryView keeps its segment, its library
+          watchlist comment, PeriodicView keeps a half-filled add form, and
+          MemoryView keeps its segment, its library
           filter and any half-typed note. Unmounting would throw all of that
           away on every tab switch — the vanilla board kept them in module
           state for the same reason. */}
       <LogView active={view === "log"} />
       <DreamView active={view === "dream"} mutate={mutate} onToast={showToast} />
+      <PeriodicView active={view === "periodic"} onToast={showToast} />
       <MemoryView
         active={view === "memory"}
         library={library}

@@ -25,13 +25,14 @@ import (
 // unhealthy zeuses (auto-retrying with backoff), watch PRs, and write a
 // heartbeat the viewer renders.
 //
-// It STARTS nothing on its own initiative — submitting a job starts
+// It starts only what it created itself — submitting a job starts
 // its cell in that same HTTP request (jobs.SubmitJob), so there is no queue
-// pass and no cell cap; the tick's only start attempt is the one it makes for
-// a dream job it just created itself, and that attempt is
-// single-shot. It owns no state that can't be re-derived from files +
-// discovery — the in-memory dedup maps only suppress duplicate
-// notifications, and losing them on restart merely re-notifies once.
+// pass and no cell cap; the tick's only start attempts are the ones it makes
+// for the jobs its periodic pass just created (periodic.go, the dream job
+// among them), and each attempt is single-shot. It owns no state that can't
+// be re-derived from files + discovery — the in-memory dedup maps only
+// suppress duplicate notifications, and losing them on restart merely
+// re-notifies once.
 
 const (
 	DaemonInterval = 15 * time.Second
@@ -1250,37 +1251,37 @@ func (d *daemonState) tick(mirror bool) (int, error) {
 		}
 	}
 
-	// dream loop: at most one corroboration pass per local calendar day (see
-	// kickDream — the first wall-clock cadence in this binary). Gated on
-	// !mirror because creating a real job row — and, below, STARTING its cell
-	// — is exactly the class of side effect a read-only scheduler variant must
-	// never have.
+	// periodic jobs (periodicPass, periodic.go): every row of periodic_jobs
+	// that is due fires here. The dream loop is one of those rows: its row
+	// decides when the pass is asked, and kickDream still allows at most one
+	// corroboration pass per local calendar day. Gated on !mirror because
+	// creating a real job row — and STARTING its cell — is exactly the class
+	// of side effect a read-only scheduler variant must never have.
 	//
 	// The mind runs (mindRunPass, mindrun.go) follow under the same gate: the
 	// daily run is queued and the oldest queued run started, never under
 	// --mirror. A mind run is a headless child, not a job, so it starts no cell.
 	//
-	// The dream job is the ONLY start the daemon makes. Every other job on the
-	// board starts from carl's own submit, synchronously inside that request;
-	// a dream job has no human in the loop by construction, so the
-	// creator starts what it created, here, on the same tick it created it. The
-	// attempt is single-shot on purpose: a failure notifies loudly and leaves
-	// a DRAFT on the board, which carl can submit by hand, rather than a
-	// background retry loop re-attempting a broken start every 15s forever
-	// with nothing on screen (which is precisely what the queue pass did).
+	// The periodic jobs, the dream job among them, are the ONLY starts the
+	// daemon makes. Every other job on the board starts from
+	// carl's own submit, synchronously inside that request; these have no
+	// human in the loop by construction, so the creator starts what it
+	// created, here, on the same tick it created it. The attempt is
+	// single-shot on purpose: a failure notifies loudly and leaves a DRAFT on
+	// the board, which carl can submit by hand, rather than a background
+	// retry loop re-attempting a broken start every 15s forever with nothing
+	// on screen (which is precisely what the queue pass did).
 	if !mirror {
-		if created := kickDream(now); created != nil && d.startCreatedJob(created) {
-			cells++
-		}
+		cells += periodicPass(now, d.startCreatedJob)
 		d.mindRunPass(ActiveStore(), now)
 	}
 	return cells, nil
 }
 
 // startCreatedJob submits a job the tick just created for itself (the dream
-// job) and reports whether the cell came up. Success logs and notifies
-// exactly as the old queue pass did; failure logs, notifies, and returns
-// false — the job stays draft, and nothing retries it.
+// job or a periodic job) and reports whether the cell came up. Success logs
+// and notifies exactly as the old queue pass did; failure logs, notifies,
+// and returns false — the job stays draft, and nothing retries it.
 //
 // It goes through SubmitJob rather than calling StartCell directly so the
 // creators get the same validation carl's own submit gets: a dream job whose

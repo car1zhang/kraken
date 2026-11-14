@@ -16,7 +16,8 @@ import { makeBoard, makeDaemon, makeJob } from "./test/fixtures.ts";
 // artifacts/50-contract.md (kronos removal): every stale way a browser can
 // still ask for the kronos view (URL hash in several spellings, a legacy
 // localStorage value) lands on the board rather than on a view no <main>
-// matches; VIEWS has exactly four entries; the board renders no dock in any
+// matches; VIEWS has exactly five entries (four until periodic was added in
+// job 828); the board renders no dock in any
 // job state; the stylesheet carries no kronos selector. Written blind.
 
 const LEGACY_KEY = "kraken-view";
@@ -27,11 +28,12 @@ beforeEach(() => {
 });
 
 describe("KronosRemoval VIEWS boundary", () => {
-  it("KronosRemoval: VIEWS has exactly four entries and none is kronos", () => {
-    expect(VIEWS.length).toBe(4);
-    expect([...VIEWS]).toEqual(["board", "memory", "dream", "log"]);
+  // five since periodic was added (job 828); the kronos pin is unchanged
+  it("KronosRemoval: VIEWS has exactly five entries and none is kronos", () => {
+    expect(VIEWS.length).toBe(5);
+    expect([...VIEWS]).toEqual(["board", "memory", "dream", "periodic", "log"]);
     expect(VIEWS as readonly string[]).not.toContain("kronos");
-    expect(new Set(VIEWS).size).toBe(4);
+    expect(new Set(VIEWS).size).toBe(5);
   });
 });
 

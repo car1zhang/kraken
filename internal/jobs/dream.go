@@ -17,8 +17,10 @@ import (
 // dream.go — the nightly corroboration pass' TRIGGER. It owns none of the
 // thinking: all it does is decide that a night is due, decide that the night
 // had any evidence worth reading, and create the `dream-<date>` job row whose
-// spec sends zeus into `.claude/skills/dream/SKILL.md`. The existing queue
-// pass then starts its cell like any other job's.
+// spec sends zeus into `.claude/skills/dream/SKILL.md`. The `dream` row of
+// the periodic table decides WHEN it is asked: periodic.go's fireDream calls
+// kickDream on that row's cadence, and not at all while the row is paused.
+// The tick's periodic pass then starts the job it returns.
 //
 // Two things here are firsts for this binary and both are deliberate:
 //
@@ -161,7 +163,7 @@ var dreamPass = runDreamPass
 
 // kickDream runs at most one corroboration pass per LOCAL CALENDAR DAY,
 // returning the job it created (nil when the night was skipped, not due, or
-// failed) so the caller can queue it on this same tick.
+// failed) so the caller can start it on this same tick.
 //
 // The cadence rule is "today's local date is later than the watermark's
 // stored local date" — a DATE comparison, not an elapsed duration, and that
@@ -172,7 +174,8 @@ var dreamPass = runDreamPass
 // matter, with no catch-up logic at all: it fires shortly after midnight when
 // the machine is awake, and it fires on the FIRST tick after the machine
 // wakes when it was asleep through midnight. A night is never skipped and a
-// night is never doubled.
+// night is never doubled. (A paused dream row is never asked, so its nights
+// are skipped by design.)
 func kickDream(now time.Time) *Job {
 	today := now.Format(dreamDateLayout)
 	// in-memory guard first — see lastDreamDate: this is the gate that holds
@@ -185,8 +188,9 @@ func kickDream(now time.Time) *Job {
 	// skip the night with one event instead of creating a job whose submit
 	// can only fail. Only the in-memory date is stamped — the stored
 	// watermark keeps its sweep floor, so the night's evidence is still in
-	// the window once a checkout appears (and a restart re-checks, logging
-	// at most once more).
+	// the window once a checkout appears. The dream row's own stamp
+	// (periodic.go's fireDream) holds the night, so a checkout that appears
+	// later the same day is picked up by the next night's pass.
 	if _, err := ResolveRepo("kraken"); err != nil {
 		lastDreamDate.Store(today)
 		dlogEvent("info", "dream-skipped", "dream: skipped for %s — no kraken checkout: %v", today, err)
