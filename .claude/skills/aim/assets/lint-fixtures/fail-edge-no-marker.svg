@@ -1,0 +1,15 @@
+<svg viewBox="0 0 860 160" role="img" aria-label="Two processes joined by an edge that carries no arrowhead, in a fragment that defines no marker.">
+  <text class="title" x="16" y="26">an edge drawn with no marker defined still fails the marker check</text>
+
+  <g class="proc">
+    <rect x="40" y="60" width="200" height="56" rx="6"/>
+    <text x="140" y="94">intake</text>
+  </g>
+
+  <g class="proc">
+    <rect x="330" y="60" width="200" height="56" rx="6"/>
+    <text x="430" y="94">ledger</text>
+  </g>
+
+  <path class="edge" d="M 240,88 H 330"/>
+</svg>

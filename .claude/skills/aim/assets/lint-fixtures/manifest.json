@@ -211,5 +211,26 @@
     "expect": "fail",
     "warnings": 0,
     "note": "data-code=\"internal/api/board.go#37\" -> exactly one CODE_REF_FORMAT failure. The hash is the mistake the convention exists to prevent: the separator is a colon, and a hash followed by 3-8 hex digits would ALSO fail the fragment as a COLOR_LITERAL, with a message about paint. This one's \"37\" is two digits, so it stays under that scan and the failure is isolated to the rule under test"
+  },
+  {
+    "file": "pass-no-edge-marker-id.svg",
+    "expect": "pass",
+    "marker_id": "arrow-no-edge",
+    "warnings": 0,
+    "note": "a type box holding two cells and no edge at all, linted WITH a marker id -> clean. A figure that draws no arrow has nothing to put a marker on, so the absent <marker> is not a MARKER_ID failure"
+  },
+  {
+    "file": "fail-marker-missing.svg",
+    "expect": "fail",
+    "marker_id": "arrow-marker-missing",
+    "warnings": 0,
+    "note": "one edge carrying marker-end and no <marker> in the fragment -> exactly one MARKER_ID failure, reported at the edge's line. The counterpart of pass-no-edge-marker-id.svg: the missing marker fails once something points at one"
+  },
+  {
+    "file": "fail-edge-no-marker.svg",
+    "expect": "fail",
+    "marker_id": "arrow-edge-no-marker",
+    "warnings": 0,
+    "note": "one class=\"edge\" path with no marker-end and no <marker> in the fragment -> exactly one MARKER_ID failure at the edge's line. A renderer that forgot both the marker and the arrowhead must not lint clean: an edge counts as a marker user whether or not it carries the attribute"
   }
 ]
