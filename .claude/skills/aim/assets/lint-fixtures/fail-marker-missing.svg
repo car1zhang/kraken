@@ -1,0 +1,15 @@
+<svg viewBox="0 0 860 160" role="img" aria-label="Two processes joined by an arrow whose marker is never defined.">
+  <text class="title" x="16" y="26">an arrow that points at a marker needs the marker defined</text>
+
+  <g class="proc">
+    <rect x="40" y="60" width="200" height="56" rx="6"/>
+    <text x="140" y="94">intake</text>
+  </g>
+
+  <g class="proc">
+    <rect x="330" y="60" width="200" height="56" rx="6"/>
+    <text x="430" y="94">ledger</text>
+  </g>
+
+  <path class="edge" d="M 240,88 H 330" marker-end="url(#arrow-marker-missing)"/>
+</svg>

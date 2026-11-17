@@ -1,0 +1,17 @@
+<svg viewBox="0 0 860 160" role="img" aria-label="A type drawn as a stack of two cells, with no edge anywhere in the figure.">
+  <text class="title" x="16" y="26">a figure with no arrow needs no arrow marker</text>
+
+  <g class="type">
+    <rect x="40" y="50" width="200" height="90" rx="2"/>
+    <path d="M 40,72 H 240"/>
+    <text x="140" y="64">Order</text>
+    <g class="cell head">
+      <rect x="56" y="80" width="168" height="24" rx="3"/>
+      <text x="140" y="96">field</text>
+    </g>
+    <g class="cell">
+      <rect x="56" y="108" width="168" height="24" rx="3"/>
+      <text x="140" y="124">Total int</text>
+    </g>
+  </g>
+</svg>

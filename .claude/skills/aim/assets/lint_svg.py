@@ -286,6 +286,8 @@ _NUM = r"-?\d*\.?\d+(?:[eE][-+]?\d+)?"
 _PATH_TOKEN_RE = re.compile(r"[MmLlHhVvCcSsQqTtAaZz]|" + _NUM)
 _IS_CMD_RE = re.compile(r"^[MmLlHhVvCcSsQqTtAaZz]$")
 _TIME_RE = re.compile(r"^(-?" + r"\d*\.?\d+" + r")\s*m?s?$")
+# The attributes through which an element uses an arrow marker.
+_MARKER_REF_ATTRS = ("marker-start", "marker-mid", "marker-end")
 
 # Argument count consumed per repetition of each path command (uppercase key).
 _PARAM_COUNTS = {
@@ -994,8 +996,16 @@ def lint(path, marker_id=None, prefix=None, code_refs=False):
     if marker_id:
         markers = [el for el in elements if el.tag == "marker"]
         if not markers:
-            failures.append((root.line, "MARKER_ID",
-                              f'no <marker> element found; expected id="{marker_id}"'))
+            # A figure that draws no arrow needs no marker: a grid of cells has
+            # no edge to put one on. The missing <marker> is a failure only when
+            # an element points at one or is an edge, which the contract draws
+            # with an arrowhead.
+            marker_users = [el for el in elements
+                            if any(el.attrib.get(a) for a in _MARKER_REF_ATTRS)
+                            or "edge" in el.attrib.get("class", "").split()]
+            if marker_users:
+                failures.append((marker_users[0].line, "MARKER_ID",
+                                  f'no <marker> element found; expected id="{marker_id}"'))
         else:
             for m in markers:
                 mid = m.attrib.get("id")
