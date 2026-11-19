@@ -2,7 +2,6 @@ package jobs
 
 import (
 	"encoding/json"
-	"errors"
 	"go/ast"
 	"go/parser"
 	"go/token"
@@ -1141,10 +1140,13 @@ func TestSpawnCommandReportsWriteFailure(t *testing.T) {
 func TestCellSpawnEnvPutsTheToolchainOnPath(t *testing.T) {
 	stubLookPath(t, func(name string) (string, error) {
 		if name != "go" {
-			return "", errors.New("a cell spawn resolves only go")
+			return "", exec.ErrNotFound
 		}
 		return "/usr/local/go/bin/go", nil
 	})
+	// No node anywhere: the fallback rungs must find nothing on any machine.
+	t.Setenv("HOME", t.TempDir())
+	stubToolDirs(t, filepath.Join(t.TempDir(), "nowhere"))
 	t.Setenv("PATH", "/usr/bin:/bin")
 	t.Setenv("KRAKEN_TEST_MARKER", "kept")
 
@@ -1165,6 +1167,63 @@ func TestCellSpawnEnvPutsTheToolchainOnPath(t *testing.T) {
 		// A cell spawn inherits everything else: HOME, LANG, and whatever the
 		// daemon was given, all of which claude itself reads.
 		t.Error("cellSpawnEnv dropped the rest of the environment")
+	}
+}
+
+// spawnEnvPath is the PATH entry of a cellSpawnEnv result, "" when it has none.
+func spawnEnvPath(env []string) string {
+	for _, kv := range env {
+		if strings.HasPrefix(kv, "PATH=") {
+			return strings.TrimPrefix(kv, "PATH=")
+		}
+	}
+	return ""
+}
+
+// TestCellSpawnEnvPutsNodeOnPath: a machine whose node lives only under nvm
+// hands its cells a PATH with no node, npm or npx, because launchd's PATH
+// reaches no nvm dir. The spawn resolves node through the same ladder the
+// updater uses and prepends its directory behind go's.
+func TestCellSpawnEnvPutsNodeOnPath(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	bin := filepath.Join(home, ".nvm", "versions", "node", "v30.1.0", "bin")
+	if err := os.MkdirAll(bin, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(bin, "node"), []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	stubLookPath(t, func(name string) (string, error) {
+		if name == "go" {
+			return "/usr/local/go/bin/go", nil
+		}
+		return "", exec.ErrNotFound
+	})
+	stubToolDirs(t, filepath.Join(t.TempDir(), "nowhere"))
+	t.Setenv("PATH", "/usr/bin:/bin")
+
+	want := "/usr/local/go/bin:" + bin + ":/usr/bin:/bin"
+	if got := spawnEnvPath(cellSpawnEnv()); got != want {
+		t.Errorf("cell spawn PATH = %q, want %q (go's dir, then node's, then the inherited one)", got, want)
+	}
+}
+
+// TestCellSpawnEnvResolvesEachToolAlone: node found and go missing still
+// yields node's directory, since one missing tool must not cost the other.
+func TestCellSpawnEnvResolvesEachToolAlone(t *testing.T) {
+	stubLookPath(t, func(name string) (string, error) {
+		if name == "node" {
+			return "/opt/tools/node/bin/node", nil
+		}
+		return "", exec.ErrNotFound
+	})
+	t.Setenv("HOME", t.TempDir())
+	stubToolDirs(t, filepath.Join(t.TempDir(), "nowhere"))
+	t.Setenv("PATH", "/usr/bin:/bin")
+
+	if got, want := spawnEnvPath(cellSpawnEnv()), "/opt/tools/node/bin:/usr/bin:/bin"; got != want {
+		t.Errorf("cell spawn PATH = %q, want %q", got, want)
 	}
 }
 
