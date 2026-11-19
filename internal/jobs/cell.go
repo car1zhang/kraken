@@ -1079,8 +1079,21 @@ func zeusLaunchBrief(j *Job) string {
 
 // cellSpawnEnv is the environment the `tmux new-session` that creates a cell
 // runs under: this process' own, with the directory holding the resolved `go`
-// prepended to PATH. nil means "changed nothing" — an exec.Cmd with a nil Env
-// inherits, so the spawn is byte-for-byte what it was before this existed.
+// prepended to PATH and, when PATH reaches no `node`, the directory holding
+// the resolved `node` appended to it. nil means "changed nothing" — an
+// exec.Cmd with a nil Env inherits, so the spawn is byte-for-byte what it was
+// before this existed.
+//
+// node rides along for the same launchd reason go does. On a machine whose
+// node lives only under nvm, the daemon's PATH reaches no `node`, `npm` or
+// `npx`, so inside a cell an npx-launched MCP server never starts and a tool
+// that shells out to node fails at its first call. Its directory goes at the
+// END of PATH, and only when PATH has no node at all: go's directory holds
+// go and gofmt alone, but node's is a general bin dir (every npm global lives
+// in an nvm one), and in front it could shadow the `claude` a pane launches
+// on, or `kraken`, `gh` and `codex`. Appended, it supplies only the names
+// nothing earlier on PATH has. Each tool is resolved on its own: a machine
+// with go and no node gets go's directory alone, and the other way round.
 //
 // The problem it fixes. `kraken serve` is a launchd agent, and launchd hands
 // its jobs their own PATH rather than a login shell's; on this machine the only
@@ -1109,13 +1122,23 @@ func zeusLaunchBrief(j *Job) string {
 // preference, and everything else a cell shells out to — git, gh, claude,
 // kraken itself in ~/.local/bin — still has to be findable.
 func cellSpawnEnv() []string {
-	goPath, err := lookToolchain("go") // PATH first, then the known install dirs
-	if err != nil {
-		// Best effort by construction. A cell that refused to start because a
-		// toolchain probe failed would be far worse than the papercut above.
-		return nil
+	// Best effort by construction. A cell that refused to start because a
+	// toolchain probe failed would be far worse than the papercut above, so a
+	// tool that cannot be found is skipped and none found changes nothing.
+	var env []string
+	if p, err := lookToolchain("go"); err == nil { // PATH first, then the known install dirs
+		env = util.ToolchainEnv(os.Environ(), p)
 	}
-	return util.ToolchainEnv(os.Environ(), goPath)
+	// A node PATH already reaches is left exactly where it is.
+	if _, err := toolLookPath("node"); err != nil {
+		if p, err := lookToolchain("node"); err == nil {
+			if env == nil {
+				env = os.Environ()
+			}
+			env = util.ToolchainEnvAppend(env, p)
+		}
+	}
+	return env
 }
 
 // jobPrompt is the spec portion of the job body — everything up to the

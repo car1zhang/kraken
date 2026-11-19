@@ -44,6 +44,44 @@ func PrependToolDir(path, toolPath string) string {
 	return dir + ":" + path
 }
 
+// AppendToolDir returns path with the directory holding toolPath at its END,
+// for a tool whose directory is a general bin dir. Prepending such a directory
+// would let anything else installed in it shadow a name the caller already
+// resolved; appended, it supplies only names nothing earlier on path has. A
+// directory already anywhere on path is not repeated, and a toolPath with no
+// meaningful directory leaves path alone, as in PrependToolDir.
+func AppendToolDir(path, toolPath string) string {
+	dir := filepath.Dir(toolPath)
+	if toolPath == "" || dir == "" || dir == "." || dir == string(filepath.Separator) {
+		return path
+	}
+	if path == "" {
+		return dir
+	}
+	for _, d := range strings.Split(path, ":") {
+		if d == dir {
+			return path
+		}
+	}
+	return path + ":" + dir
+}
+
+// ToolchainEnvAppend is ToolchainEnv with AppendToolDir in place of
+// PrependToolDir: env copied, its PATH entry extended at the end.
+func ToolchainEnvAppend(env []string, toolPath string) []string {
+	out := append([]string(nil), env...)
+	for i, kv := range out {
+		if strings.HasPrefix(kv, "PATH=") {
+			out[i] = "PATH=" + AppendToolDir(strings.TrimPrefix(kv, "PATH="), toolPath)
+			return out
+		}
+	}
+	if p := AppendToolDir("", toolPath); p != "" {
+		out = append(out, "PATH="+p)
+	}
+	return out
+}
+
 // ToolchainEnv is env (normally os.Environ()) with PrependToolDir applied to
 // its PATH entry, for handing to a subprocess. env is copied, so the caller's
 // slice is never written through; an env with no PATH at all gains one.

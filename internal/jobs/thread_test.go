@@ -1169,10 +1169,12 @@ func TestReviveOpensTheWindowWithTheToolchainOnPath(t *testing.T) {
 	j, row := reviveFixture(t, st, "revive-path")
 	stubLookPath(t, func(name string) (string, error) {
 		if name != "go" {
-			return "", errors.New("a thread window resolves only go")
+			return "", exec.ErrNotFound
 		}
 		return "/usr/local/go/bin/go", nil
 	})
+	// No node on any fallback rung, whatever the machine running this has.
+	stubToolDirs(t, filepath.Join(t.TempDir(), "nowhere"))
 	t.Setenv("PATH", "/usr/bin:/bin")
 
 	var gotEnv []string
