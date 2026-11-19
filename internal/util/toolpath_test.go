@@ -33,6 +33,36 @@ func TestPrependToolDir(t *testing.T) {
 	}
 }
 
+func TestAppendToolDir(t *testing.T) {
+	cases := []struct{ name, path, tool, want string }{
+		{"appended at the end", "/usr/bin:/bin", "/opt/tools/bin/node", "/usr/bin:/bin:/opt/tools/bin"},
+		{"already present is not repeated", "/usr/bin:/opt/tools/bin:/bin", "/opt/tools/bin/node", "/usr/bin:/opt/tools/bin:/bin"},
+		{"empty path becomes the dir", "", "/opt/tools/bin/node", "/opt/tools/bin"},
+		{"bare name leaves path alone", "/usr/bin", "node", "/usr/bin"},
+		{"empty tool leaves path alone", "/usr/bin", "", "/usr/bin"},
+		{"root dir leaves path alone", "/usr/bin", "/node", "/usr/bin"},
+	}
+	for _, c := range cases {
+		if got := AppendToolDir(c.path, c.tool); got != c.want {
+			t.Errorf("%s: AppendToolDir(%q, %q) = %q, want %q", c.name, c.path, c.tool, got, c.want)
+		}
+	}
+}
+
+func TestToolchainEnvAppend(t *testing.T) {
+	env := []string{"HOME=/h", "PATH=/usr/bin:/bin"}
+	got := ToolchainEnvAppend(env, "/opt/tools/bin/node")
+	if len(got) != 2 || got[0] != "HOME=/h" || got[1] != "PATH=/usr/bin:/bin:/opt/tools/bin" {
+		t.Errorf("ToolchainEnvAppend = %v", got)
+	}
+	if env[1] != "PATH=/usr/bin:/bin" {
+		t.Errorf("ToolchainEnvAppend wrote through its input: %v", env)
+	}
+	if got := ToolchainEnvAppend([]string{"HOME=/h"}, "/opt/tools/bin/node"); len(got) != 2 || got[1] != "PATH=/opt/tools/bin" {
+		t.Errorf("ToolchainEnvAppend with no PATH = %v, want one added", got)
+	}
+}
+
 func TestToolchainEnv(t *testing.T) {
 	env := []string{"HOME=/Users/x", "PATH=/usr/bin:/bin", "LANG=en_US.UTF-8"}
 	got := ToolchainEnv(env, "/opt/go/bin/go")

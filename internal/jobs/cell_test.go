@@ -1183,7 +1183,8 @@ func spawnEnvPath(env []string) string {
 // TestCellSpawnEnvPutsNodeOnPath: a machine whose node lives only under nvm
 // hands its cells a PATH with no node, npm or npx, because launchd's PATH
 // reaches no nvm dir. The spawn resolves node through the same ladder the
-// updater uses and prepends its directory behind go's.
+// updater uses and appends its directory to the end of PATH, where it cannot
+// shadow a name an earlier directory already supplies.
 func TestCellSpawnEnvPutsNodeOnPath(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
@@ -1203,26 +1204,48 @@ func TestCellSpawnEnvPutsNodeOnPath(t *testing.T) {
 	stubToolDirs(t, filepath.Join(t.TempDir(), "nowhere"))
 	t.Setenv("PATH", "/usr/bin:/bin")
 
-	want := "/usr/local/go/bin:" + bin + ":/usr/bin:/bin"
+	want := "/usr/local/go/bin:/usr/bin:/bin:" + bin
 	if got := spawnEnvPath(cellSpawnEnv()); got != want {
-		t.Errorf("cell spawn PATH = %q, want %q (go's dir, then node's, then the inherited one)", got, want)
+		t.Errorf("cell spawn PATH = %q, want %q (go's dir, the inherited PATH, then node's)", got, want)
 	}
 }
 
-// TestCellSpawnEnvResolvesEachToolAlone: node found and go missing still
-// yields node's directory, since one missing tool must not cost the other.
-func TestCellSpawnEnvResolvesEachToolAlone(t *testing.T) {
+// TestCellSpawnEnvLeavesAReachableNodeAlone: when PATH already reaches a node,
+// its directory is neither moved nor repeated, so nothing else in that
+// directory changes rank. go's directory is still prepended.
+func TestCellSpawnEnvLeavesAReachableNodeAlone(t *testing.T) {
 	stubLookPath(t, func(name string) (string, error) {
-		if name == "node" {
-			return "/opt/tools/node/bin/node", nil
+		switch name {
+		case "go":
+			return "/usr/local/go/bin/go", nil
+		case "node":
+			return "/opt/tools/bin/node", nil
 		}
 		return "", exec.ErrNotFound
 	})
 	t.Setenv("HOME", t.TempDir())
 	stubToolDirs(t, filepath.Join(t.TempDir(), "nowhere"))
+	t.Setenv("PATH", "/usr/bin:/opt/tools/bin:/bin")
+
+	if got, want := spawnEnvPath(cellSpawnEnv()), "/usr/local/go/bin:/usr/bin:/opt/tools/bin:/bin"; got != want {
+		t.Errorf("cell spawn PATH = %q, want %q", got, want)
+	}
+}
+
+// TestCellSpawnEnvResolvesEachToolAlone: node found off PATH and go missing
+// still yields node's directory, since one missing tool must not cost the
+// other.
+func TestCellSpawnEnvResolvesEachToolAlone(t *testing.T) {
+	stubLookPath(t, func(string) (string, error) { return "", exec.ErrNotFound })
+	t.Setenv("HOME", t.TempDir())
+	tools := t.TempDir()
+	if err := os.WriteFile(filepath.Join(tools, "node"), []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	stubToolDirs(t, tools)
 	t.Setenv("PATH", "/usr/bin:/bin")
 
-	if got, want := spawnEnvPath(cellSpawnEnv()), "/opt/tools/node/bin:/usr/bin:/bin"; got != want {
+	if got, want := spawnEnvPath(cellSpawnEnv()), "/usr/bin:/bin:"+tools; got != want {
 		t.Errorf("cell spawn PATH = %q, want %q", got, want)
 	}
 }
@@ -1239,7 +1262,7 @@ func TestCellSpawnEnvIsBestEffort(t *testing.T) {
 	t.Cleanup(func() { toolDirs = prev })
 
 	if got := cellSpawnEnv(); got != nil {
-		t.Fatalf("cellSpawnEnv() = %v with no resolvable go, want nil so the spawn is unchanged", got)
+		t.Fatalf("cellSpawnEnv() = %v with no resolvable go or node, want nil so the spawn is unchanged", got)
 	}
 }
 
