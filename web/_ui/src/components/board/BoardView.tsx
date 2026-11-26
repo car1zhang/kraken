@@ -97,6 +97,14 @@ export interface BoardActions {
    * has.
    */
   onFreeze?(slug: string, frozen: boolean): void;
+  /**
+   * POST /api/done for each slug, one at a time; a job that refuses does not
+   * stop the ones after it. The map's "done N" button calls it with the
+   * selected cards it may complete, once its second click has confirmed.
+   * Returning the promise lets the button stay disabled until the batch has
+   * settled. Optional: without it the map offers no such button.
+   */
+  onDoneMany?(slugs: readonly string[]): void | Promise<unknown>;
 }
 
 export interface BoardViewProps {

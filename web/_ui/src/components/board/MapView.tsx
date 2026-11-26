@@ -91,6 +91,7 @@ import {
   type XY,
 } from "../../lib/agentmap/scene.ts";
 import { COLUMNS, type Column } from "../../lib/columns.ts";
+import { canMarkDone } from "../../lib/doneMany.ts";
 import { jobKey } from "../../lib/jobKey.ts";
 import type { BoardActions } from "./BoardView.tsx";
 import { JobCard } from "./JobCard.tsx";
@@ -637,9 +638,17 @@ export interface MapViewProps {
  * other cards make way, in one save. A plain drag of an unselected card moves
  * it alone and empties the selection; an Escape nothing else handled (no
  * overlay closing, no text field), or a plain click on the background,
- * empties it too. The selection lives in this component only: it is never
- * saved, and a card that leaves the map leaves it (a group member that leaves
- * mid-drag goes back to where it stood at the press).
+ * empties it too. While the selection holds a card that can be marked done
+ * (lib/doneMany.ts canMarkDone: this machine's, working or blocked), the
+ * corner's button row ends in `#map-done-selected`, "✓ done N" with N the
+ * count of those cards. Its first click arms it ("really done N?", with the
+ * slugs in its title) and its second hands those slugs to
+ * `actions.onDoneMany` and empties the selection; a blur, or any change to
+ * the list it was armed for, disarms it, the second click of a double-click
+ * does not count, and it is disabled while a batch is in flight. The other selected cards are left alone. The selection
+ * lives in this component only: it is never saved, and a card that leaves
+ * the map leaves it (a group member that leaves mid-drag goes back to where
+ * it stood at the press).
  *
  * Zooming never moves a card. Below a zoom of 1 the card layer stays laid
  * out at 1 and is only scaled (`layoutZoom`), so no card re-wraps or grows;
@@ -713,6 +722,10 @@ export function MapView({ search, actions, boardNodeID, hidden }: MapViewProps) 
   // way a filtered-out one is; `fade` is style.css' for the cards and the
   // frame loop's for the overview.
   const [doneLevel, setDoneLevel] = useState<DoneMode>(doneMode);
+  // The "done N" button's two pieces of state (see doneSelected): the slug
+  // list its first click armed it for, and whether a batch is in flight.
+  const [doneArmed, setDoneArmed] = useState<string | null>(null);
+  const [doneBusy, setDoneBusy] = useState(false);
   const entries = useMemo(() => {
     const out: Entry[] = [];
     for (const col of COLUMNS) {
@@ -976,6 +989,48 @@ export function MapView({ search, actions, boardNodeID, hidden }: MapViewProps) 
   if ([...selRef.current].some((k) => !byKey.has(k))) {
     selRef.current = new Set([...selRef.current].filter((k) => byKey.has(k)));
   }
+  // The selected cards the "done N" button would complete (canMarkDone), in
+  // the map's card order. Read from selRef at render, like each card's
+  // `selected` prop: every selection change re-renders.
+  const doneSlugs: string[] = [];
+  if (selRef.current.size) {
+    for (const e of entries) {
+      if (selRef.current.has(e.key) && canMarkDone(e.job)) doneSlugs.push(e.job.slug);
+    }
+  }
+  // The button asks before it acts, in the page rather than with confirm():
+  // the Mac app's web view implements no confirm panel, so a confirm() there
+  // answers false at once. The first click arms it for exactly the slugs it
+  // then lists (`doneArmed` holds them, sorted and joined, so a card changing
+  // column between the clicks is not a change), and the arm is dropped as
+  // soon as the list is any other, so the second click can only send what
+  // the button showed, and a list that comes back is not armed again.
+  const doneKey = [...doneSlugs].sort().join("\n");
+  if (doneArmed !== null && doneArmed !== doneKey) setDoneArmed(null);
+  const armed = doneKey !== "" && doneArmed === doneKey;
+  const doneSelected = (ev: ReactMouseEvent<HTMLButtonElement>) => {
+    const run = actionsRef.current.onDoneMany;
+    if (!run || !doneSlugs.length || doneBusy) return;
+    if (!armed) {
+      setDoneArmed(doneKey);
+      return;
+    }
+    // the second half of a double-click is not a second decision
+    if (ev.detail > 1) return;
+    setDoneArmed(null);
+    setSelection(new Set());
+    // one batch at a time: a second one over cards the board has not yet
+    // redrawn as done would tear the same cells down twice
+    setDoneBusy(true);
+    const idle = () => setDoneBusy(false);
+    try {
+      // a host may answer with a promise or with nothing, and either way
+      // the button comes back once the batch has settled
+      void Promise.resolve(run(doneSlugs)).then(idle, idle);
+    } catch {
+      idle();
+    }
+  };
   const talkRef = useRef(talkLinks);
   talkRef.current = talkLinks;
   /**
@@ -3076,6 +3131,26 @@ export function MapView({ search, actions, boardNodeID, hidden }: MapViewProps) 
           >
             <ToolIcon>{TOOLS_TOGGLE_ICON}</ToolIcon>
           </button>
+          {/* only while the selection holds a card that can be marked done:
+              the count is of those cards, not of the whole selection */}
+          {actions.onDoneMany && doneSlugs.length > 0 && (
+            <button
+              type="button"
+              className="map-hud-btn map-hud-act"
+              id="map-done-selected"
+              data-armed={armed ? "true" : undefined}
+              disabled={doneBusy}
+              title={
+                doneBusy
+                  ? "the last batch is still being marked done"
+                  : `${armed ? "click again to mark done" : "mark done"} (each cell is torn down): ${doneSlugs.join(", ")}`
+              }
+              onClick={doneSelected}
+              onBlur={() => setDoneArmed(null)}
+            >
+              {armed ? `really done ${doneSlugs.length}?` : `✓ done ${doneSlugs.length}`}
+            </button>
+          )}
         </div>
         {entries.length > 0 && (
           <canvas

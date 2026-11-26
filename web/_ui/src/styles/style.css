@@ -4198,6 +4198,11 @@ button.spawn-chip.spawn-draft:hover { background: color-mix(in srgb, var(--ac) 1
 .map-hud-btn:hover { color: var(--fg); border-color: var(--ac); }
 /* the one button in the row that makes something rather than moving the view */
 .map-hud-btn.map-hud-new { color: var(--ac); border-color: var(--ac); }
+/* the button that acts on the selected jobs (done N); once its first click
+   has armed it, it is filled, so the second click is plainly a different one */
+.map-hud-btn.map-hud-act { color: var(--ac); border-color: var(--ac); }
+.map-hud-btn.map-hud-act[data-armed="true"] { color: var(--surface); background: var(--ac); }
+.map-hud-btn.map-hud-act:disabled { color: var(--muted); border-color: var(--border); }
 /* a toggle that is off (the characters switch, the done button at `hide`) reads struck out */
 .map-hud-btn[aria-pressed="false"] { color: var(--muted); text-decoration: line-through; }
 /* the done button's middle level: its label is faded, as the done cards are */
