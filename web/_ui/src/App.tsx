@@ -33,6 +33,7 @@ import { useLocalStorageSet } from "./hooks/useLocalStorage.ts";
 import { useMM } from "./hooks/useMM.ts";
 import { usePoll } from "./hooks/usePoll.ts";
 import { stampBackground } from "./lib/background.ts";
+import { doneMany } from "./lib/doneMany.ts";
 import { columnFor } from "./lib/format.ts";
 import { jobKey } from "./lib/jobKey.ts";
 import { installSfxListeners } from "./lib/sfx.ts";
@@ -41,6 +42,7 @@ import {
   answerQuestion,
   deleteFeedback,
   deleteJob,
+  doneJob,
   editFeedback,
   freezeJob,
   openTmux,
@@ -328,6 +330,7 @@ export function App() {
       onAnswerQuestion: (slug, i) => void board.mutate(() => answerQuestion(slug, i)),
       onRetry: (slug) => void board.mutate(() => retryJob(slug)),
       onFreeze: (slug, frozen) => void board.mutate(() => freezeJob(slug, frozen)),
+      onDoneMany: (slugs) => board.mutate(() => doneMany(slugs, doneJob)),
       onOpenTmux: (slug) => board.mutate(() => openTmux({ slug })),
       onSaveFeedback: (slug, id, note) =>
         board.mutate(() => editFeedback(slug, id, note)),
